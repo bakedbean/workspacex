@@ -54,6 +54,28 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     Ok(CreatedWorkspace { workspace: ws, setup_result })
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ArchiveOpts {
+    pub keep_worktree: bool,
+    pub force_branch_delete: bool,
+}
+
+pub async fn archive<F: FnMut(SetupLine) + Send>(
+    store: &Store,
+    repo: &Repo,
+    ws: &Workspace,
+    opts: ArchiveOpts,
+    on_archive_line: F,
+) -> Result<SetupResult> {
+    let archive_result = setup::run_archive(&repo.path, &ws.worktree_path, on_archive_line).await?;
+    if !opts.keep_worktree && ws.worktree_path.exists() {
+        git::remove_worktree(&repo.path, &ws.worktree_path).await?;
+    }
+    let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
+    store.delete_workspace(ws.id)?;
+    Ok(archive_result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +132,19 @@ mod tests {
         let created = create(&store, &repo, Some("a"), base.path(), |_| {}).await.unwrap();
         assert_eq!(created.workspace.state, WorkspaceState::Ready);
         assert_eq!(created.workspace.setup_status, SetupStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn archive_removes_row_and_worktree() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "").await.unwrap();
+        let repo = store.repos().unwrap().into_iter().find(|r| r.id == id).unwrap();
+        let base = TempDir::new().unwrap();
+        let created = create(&store, &repo, Some("doomed"), base.path(), |_| {}).await.unwrap();
+        archive(&store, &repo, &created.workspace, ArchiveOpts { force_branch_delete: true, ..Default::default() }, |_| {})
+            .await.unwrap();
+        assert!(store.workspaces(repo.id).unwrap().is_empty());
+        assert!(!created.workspace.worktree_path.exists());
     }
 }

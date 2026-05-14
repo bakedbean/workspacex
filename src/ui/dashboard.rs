@@ -91,6 +91,7 @@ mod tests {
             name: "demo".into(),
             path: PathBuf::from("/r"),
             branch_prefix: "".into(),
+            custom_instructions: None,
             created_at: 0,
         };
         let ws = Workspace {

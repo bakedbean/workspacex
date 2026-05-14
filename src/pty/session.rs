@@ -133,9 +133,12 @@ pub struct RenameContext {
 #[derive(Debug, Clone)]
 pub enum SpawnMode {
     /// Brand-new session. Apply rename system prompt if context provided.
-    Fresh { rename_ctx: Option<RenameContext> },
+    Fresh {
+        rename_ctx: Option<RenameContext>,
+        custom_instructions: Option<String>,
+    },
     /// Resume the most recent prior session in this worktree via `--continue`.
-    Continue,
+    Continue { custom_instructions: Option<String> },
 }
 
 /// Build a `CommandBuilder` for `claude` (or whatever `WSX_CLAUDE_BIN`
@@ -155,25 +158,55 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
         cmd.env(k, v);
     }
 
-    match mode {
-        SpawnMode::Continue => {
+    let (rename_prompt, custom, allow_git_branch) = match mode {
+        SpawnMode::Continue {
+            custom_instructions,
+        } => {
             cmd.arg("--continue");
+            (None, custom_instructions.clone(), false)
         }
         SpawnMode::Fresh {
-            rename_ctx: Some(ctx),
+            rename_ctx,
+            custom_instructions,
         } => {
             let rename_mode =
                 std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
-            if rename_mode == "claude" {
-                let prompt = render_rename_system_prompt(&ctx.current_branch, &ctx.branch_prefix);
-                cmd.arg("--append-system-prompt");
-                cmd.arg(prompt);
-                cmd.arg("--allowedTools");
-                cmd.arg("Bash(git branch:*)");
-            }
+            let (rp, allow) = if let Some(ctx) = rename_ctx {
+                if rename_mode == "claude" {
+                    (
+                        Some(render_rename_system_prompt(
+                            &ctx.current_branch,
+                            &ctx.branch_prefix,
+                        )),
+                        true,
+                    )
+                } else {
+                    (None, false)
+                }
+            } else {
+                (None, false)
+            };
+            (rp, custom_instructions.clone(), allow)
         }
-        SpawnMode::Fresh { rename_ctx: None } => {}
+    };
+
+    if allow_git_branch {
+        cmd.arg("--allowedTools");
+        cmd.arg("Bash(git branch:*)");
     }
+
+    let combined = match (rename_prompt, custom) {
+        (None, None) => None,
+        (Some(r), None) => Some(r),
+        (None, Some(c)) => Some(c),
+        (Some(r), Some(c)) => Some(format!("{r}\n\n{c}")),
+    };
+
+    if let Some(prompt) = combined {
+        cmd.arg("--append-system-prompt");
+        cmd.arg(prompt);
+    }
+
     cmd
 }
 
@@ -359,7 +392,16 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", echo_bin());
         }
         let cwd = PathBuf::from(".");
-        let s = spawn_session(&cwd, 80, 24, SpawnMode::Fresh { rename_ctx: None }).unwrap();
+        let s = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+            },
+        )
+        .unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
         // Give cat a moment to echo and the reader to process.
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -376,7 +418,15 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", "/no/such/binary/wsx-test");
         }
         let cwd = PathBuf::from(".");
-        let result = spawn_session(&cwd, 80, 24, SpawnMode::Fresh { rename_ctx: None });
+        let result = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+            },
+        );
         assert!(result.is_err());
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
@@ -396,7 +446,16 @@ mod tests {
         let mut mgr = SessionManager::new();
         let id = crate::store::WorkspaceId(1);
         let session = mgr
-            .spawn(id, &cwd, 80, 24, SpawnMode::Fresh { rename_ctx: None })
+            .spawn(
+                id,
+                &cwd,
+                80,
+                24,
+                SpawnMode::Fresh {
+                    rename_ctx: None,
+                    custom_instructions: None,
+                },
+            )
             .unwrap();
         // sh -i would run forever; we just check the session was Running.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -426,7 +485,16 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
         }
         let cwd = std::path::PathBuf::from(".");
-        let session = spawn_session(&cwd, 80, 24, SpawnMode::Fresh { rename_ctx: None }).unwrap();
+        let session = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+            },
+        )
+        .unwrap();
 
         // First "Enter" before typing — must NOT latch.
         assert!(session.take_first_prompt().is_none());
@@ -444,6 +512,81 @@ mod tests {
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
+    }
+
+    #[test]
+    fn system_prompt_combines_rename_and_custom() {
+        let ctx = RenameContext {
+            current_branch: "wsx/bold-fern".into(),
+            branch_prefix: "wsx".into(),
+        };
+        let mode = SpawnMode::Fresh {
+            rename_ctx: Some(ctx),
+            custom_instructions: Some("Use tabs not spaces".into()),
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(&cwd, &mode);
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+            .expect("--append-system-prompt should be present");
+        let prompt = argv
+            .get(idx + 1)
+            .expect("system prompt value should follow")
+            .to_string_lossy();
+        assert!(
+            prompt.contains("git branch -m wsx/bold-fern"),
+            "rename block missing"
+        );
+        assert!(
+            prompt.contains("Use tabs not spaces"),
+            "custom instructions missing"
+        );
+        let rename_pos = prompt.find("git branch -m").unwrap();
+        let custom_pos = prompt.find("Use tabs not spaces").unwrap();
+        assert!(
+            custom_pos > rename_pos,
+            "custom instructions must come after rename block"
+        );
+    }
+
+    #[test]
+    fn system_prompt_continue_passes_custom_only() {
+        let mode = SpawnMode::Continue {
+            custom_instructions: Some("Use ruff".into()),
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(&cwd, &mode);
+        let argv = cmd.get_argv();
+        assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+            .expect("--append-system-prompt should be present");
+        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
+        assert!(prompt.contains("Use ruff"));
+        assert!(
+            !prompt.contains("git branch -m"),
+            "rename should not appear on Continue"
+        );
+    }
+
+    #[test]
+    fn system_prompt_omitted_when_nothing_to_say() {
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(&cwd, &mode);
+        let argv = cmd.get_argv();
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+        );
+        assert!(!argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
     }
 
     #[test]

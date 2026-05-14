@@ -200,18 +200,28 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             // the rename system prompt when the workspace name is still a
             // generated slug.
             let info = app.selected_workspace().map(|(repo, ws)| {
+                let custom = crate::repo::resolve_custom_instructions(repo, &app.store)
+                    .ok()
+                    .flatten();
                 let mode = if crate::pty::session::has_prior_session(&ws.worktree_path) {
-                    crate::pty::session::SpawnMode::Continue
+                    crate::pty::session::SpawnMode::Continue {
+                        custom_instructions: custom,
+                    }
                 } else {
                     let rename_ctx = if crate::names::is_generated_slug(&ws.name) {
+                        let resolved_prefix = crate::repo::resolve_branch_prefix(repo, &app.store)
+                            .unwrap_or_default();
                         Some(crate::pty::session::RenameContext {
                             current_branch: ws.branch.clone(),
-                            branch_prefix: repo.branch_prefix.clone(),
+                            branch_prefix: resolved_prefix,
                         })
                     } else {
                         None
                     };
-                    crate::pty::session::SpawnMode::Fresh { rename_ctx }
+                    crate::pty::session::SpawnMode::Fresh {
+                        rename_ctx,
+                        custom_instructions: custom,
+                    }
                 };
                 (ws.id, ws.worktree_path.clone(), mode)
             });
@@ -468,12 +478,9 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 .iter()
                 .filter_map(|(_, w)| {
                     let repo = g.repos.iter().find(|r| r.id == w.repo_id)?;
-                    Some((
-                        w.id,
-                        w.worktree_path.clone(),
-                        w.branch.clone(),
-                        repo.branch_prefix.clone(),
-                    ))
+                    let prefix =
+                        crate::repo::resolve_branch_prefix(repo, &g.store).unwrap_or_default();
+                    Some((w.id, w.worktree_path.clone(), w.branch.clone(), prefix))
                 })
                 .collect()
         };

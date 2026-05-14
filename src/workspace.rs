@@ -26,10 +26,11 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         Some(s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => names::generate(),
     };
-    let branch = if repo.branch_prefix.is_empty() {
+    let prefix = crate::repo::resolve_branch_prefix(repo, store)?;
+    let branch = if prefix.is_empty() {
         name.clone()
     } else {
-        format!("{}/{}", repo.branch_prefix.trim_end_matches('/'), name)
+        format!("{}/{}", prefix.trim_end_matches('/'), name)
     };
     let worktree_path = worktree_base.join(&repo.name).join(&name);
 
@@ -157,10 +158,11 @@ pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) 
     if new_name == ws.name {
         return Ok(());
     }
-    let new_branch = if repo.branch_prefix.is_empty() {
+    let prefix = crate::repo::resolve_branch_prefix(repo, store)?;
+    let new_branch = if prefix.is_empty() {
         new_name.to_string()
     } else {
-        format!("{}/{}", repo.branch_prefix.trim_end_matches('/'), new_name)
+        format!("{}/{}", prefix.trim_end_matches('/'), new_name)
     };
     // Branch rename first — if it fails (e.g. name collision), DB stays intact.
     git::rename_branch(&repo.path, &ws.branch, &new_branch).await?;

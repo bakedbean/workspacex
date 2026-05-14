@@ -1,5 +1,5 @@
 use crate::error::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,6 +31,7 @@ pub struct Repo {
     pub name: String,
     pub path: PathBuf,
     pub branch_prefix: String,
+    pub custom_instructions: Option<String>,
     pub created_at: i64,
 }
 
@@ -80,6 +81,25 @@ impl Store {
 
     fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(SCHEMA_V1)?;
+
+        let v: i64 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if v < 2 {
+            self.conn.execute_batch(SCHEMA_V2_SETTINGS)?;
+            // ALTER TABLE only if the column doesn't already exist (handles
+            // partial-migration retries cleanly).
+            let has_col: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'custom_instructions'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_col == 0 {
+                self.conn
+                    .execute("ALTER TABLE repos ADD COLUMN custom_instructions TEXT", [])?;
+            }
+            self.conn.execute("PRAGMA user_version = 2", [])?;
+        }
         Ok(())
     }
 
@@ -101,18 +121,72 @@ impl Store {
     }
 
     pub fn repos(&self) -> Result<Vec<Repo>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, path, branch_prefix, created_at FROM repos ORDER BY id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, path, branch_prefix, custom_instructions, created_at \
+             FROM repos ORDER BY id",
+        )?;
         let rows = stmt.query_map([], |r| {
             Ok(Repo {
                 id: RepoId(r.get(0)?),
                 name: r.get(1)?,
                 path: PathBuf::from(r.get::<_, String>(2)?),
                 branch_prefix: r.get(3)?,
-                created_at: r.get(4)?,
+                custom_instructions: r.get(4)?,
+                created_at: r.get(5)?,
             })
         })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn set_repo_branch_prefix(&self, id: RepoId, prefix: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET branch_prefix = ?1 WHERE id = ?2",
+            rusqlite::params![prefix, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_repo_custom_instructions(
+        &self,
+        id: RepoId,
+        instructions: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET custom_instructions = ?1 WHERE id = ?2",
+            rusqlite::params![instructions, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM settings WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    pub fn list_settings(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, value FROM settings ORDER BY key")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
@@ -218,6 +292,13 @@ CREATE TABLE IF NOT EXISTS workspaces (
 
 PRAGMA user_version = 1;
 "#;
+
+const SCHEMA_V2_SETTINGS: &str = "
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+";
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -328,6 +409,46 @@ mod tests {
 
         store.delete_workspace(id).unwrap();
         assert!(store.workspaces(repo).unwrap().is_empty());
+    }
+
+    #[test]
+    fn settings_crud_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.get_setting("foo").unwrap().is_none());
+        store.set_setting("foo", "bar").unwrap();
+        assert_eq!(store.get_setting("foo").unwrap().as_deref(), Some("bar"));
+        store.set_setting("foo", "baz").unwrap(); // upsert
+        assert_eq!(store.get_setting("foo").unwrap().as_deref(), Some("baz"));
+        let all = store.list_settings().unwrap();
+        assert_eq!(all, vec![("foo".to_string(), "baz".to_string())]);
+        store.delete_setting("foo").unwrap();
+        assert!(store.get_setting("foo").unwrap().is_none());
+    }
+
+    #[test]
+    fn repo_custom_instructions_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/r"), "demo", "").unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(repos[0].custom_instructions, None);
+        store
+            .set_repo_custom_instructions(id, Some("Use ruff"))
+            .unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(repos[0].custom_instructions.as_deref(), Some("Use ruff"));
+        store.set_repo_custom_instructions(id, None).unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(repos[0].custom_instructions, None);
+    }
+
+    #[test]
+    fn set_repo_branch_prefix_updates_value() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/r"), "demo", "old").unwrap();
+        store.set_repo_branch_prefix(id, "new").unwrap();
+        assert_eq!(store.repos().unwrap()[0].branch_prefix, "new");
+        store.set_repo_branch_prefix(id, "").unwrap();
+        assert_eq!(store.repos().unwrap()[0].branch_prefix, "");
     }
 
     #[test]

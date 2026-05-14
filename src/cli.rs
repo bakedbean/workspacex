@@ -69,6 +69,8 @@ fn known_setting_key(k: &str) -> bool {
             | "terminal_cmd"
             | "notifications"
             | "theme"
+            | "pm_enabled"
+            | "pm_custom_instructions"
     )
 }
 
@@ -346,6 +348,12 @@ mod tests {
     fn rejects_unknown_setting_key() {
         assert!(parse(&["config", "set", "nope", "val"]).is_err());
         assert!(parse(&["config", "get", "nope"]).is_err());
+    }
+
+    #[test]
+    fn accepts_pm_enabled_and_pm_custom_instructions() {
+        assert!(known_setting_key("pm_enabled"));
+        assert!(known_setting_key("pm_custom_instructions"));
     }
 
     #[test]

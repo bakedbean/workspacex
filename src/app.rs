@@ -27,6 +27,23 @@ pub enum SelectionTarget {
     Workspace(crate::store::WorkspaceId),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityState {
+    Active,  // < 2s since last output
+    Idle,    // 2-30s
+    Waiting, // > 30s
+    Off,     // no session at all
+}
+
+fn classify_activity(secs: Option<u64>) -> ActivityState {
+    match secs {
+        Some(s) if s < 2 => ActivityState::Active,
+        Some(s) if s < 30 => ActivityState::Idle,
+        Some(_) => ActivityState::Waiting,
+        None => ActivityState::Off,
+    }
+}
+
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
@@ -43,6 +60,10 @@ pub struct App {
         std::collections::HashMap<crate::store::WorkspaceId, crate::git::WorkspaceStatus>,
     pub workspace_events:
         std::collections::HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
+    /// Per-workspace tracking for attention-alert state.
+    pub workspace_activity: std::collections::HashMap<crate::store::WorkspaceId, ActivityState>,
+    /// Workspaces whose alert hasn't been acknowledged (cleared on attach).
+    pub workspace_needs_attention: std::collections::HashSet<crate::store::WorkspaceId>,
 }
 
 impl App {
@@ -61,6 +82,8 @@ impl App {
             quit: false,
             workspace_status: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
+            workspace_activity: std::collections::HashMap::new(),
+            workspace_needs_attention: std::collections::HashSet::new(),
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -137,6 +160,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let area = f.area();
     match &app.view {
         View::Dashboard => {
+            let notifications_on = notifications_enabled(&app.store);
             let mut items: Vec<dashboard::Item> = Vec::new();
             for repo in &app.repos {
                 items.push(dashboard::Item::Header { repo });
@@ -162,6 +186,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         now.saturating_sub(last) / 1000
                     });
                     let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
+                    let needs_attention = app.workspace_needs_attention.contains(&ws.id);
                     items.push(dashboard::Item::Workspace {
                         repo,
                         workspace: ws,
@@ -173,6 +198,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .workspace_events
                             .get(&ws.id)
                             .and_then(|e| e.latest.clone()),
+                        needs_attention,
                     });
                 }
                 if count == 0 {
@@ -180,6 +206,52 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 }
                 items.push(dashboard::Item::Spacer);
             }
+
+            // Commit the new activity states + fire bell on
+            // active|idle -> waiting transitions. Done after the immutable
+            // iteration above so we don't conflict with the &app borrow.
+            let mut should_ring = false;
+            for (_rid, ws) in &app.workspaces {
+                let session = app.sessions.get(ws.id);
+                let running = session.as_ref().is_some_and(|s| {
+                    matches!(
+                        *s.status.read().unwrap(),
+                        crate::pty::session::SessionStatus::Running { .. }
+                    )
+                });
+                let secs = session.as_ref().map(|s| {
+                    let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    now.saturating_sub(last) / 1000
+                });
+                let activity = if running {
+                    classify_activity(secs)
+                } else {
+                    ActivityState::Off
+                };
+                let prev = app.workspace_activity.get(&ws.id).copied();
+                if matches!(
+                    (prev, activity),
+                    (
+                        Some(ActivityState::Active) | Some(ActivityState::Idle),
+                        ActivityState::Waiting
+                    )
+                ) && notifications_on
+                {
+                    app.workspace_needs_attention.insert(ws.id);
+                    should_ring = true;
+                }
+                app.workspace_activity.insert(ws.id, activity);
+            }
+            if should_ring {
+                use std::io::Write;
+                let _ = std::io::stdout().write_all(b"\x07");
+                let _ = std::io::stdout().flush();
+            }
+
             let selected = app.selected_target();
             let nerd_fonts = nerd_fonts_enabled(&app.store);
             dashboard::render(f, area, &items, selected, nerd_fonts, &mut app.dashboard);
@@ -214,6 +286,13 @@ fn nerd_fonts_enabled(store: &crate::store::Store) -> bool {
     }
 }
 
+fn notifications_enabled(store: &crate::store::Store) -> bool {
+    match store.get_setting("notifications").ok().flatten().as_deref() {
+        Some("off") | Some("false") | Some("0") | Some("no") => false,
+        _ => true, // default ON
+    }
+}
+
 async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
     match evt {
         CtEvent::Key(k) if k.kind == KeyEventKind::Press => {
@@ -244,6 +323,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         }
         (KeyCode::Enter, _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
+                app.workspace_needs_attention.remove(&id);
                 if let Some((id, path, mode)) = build_spawn_info(app, id) {
                     let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
                     app.view = View::Attached(id);

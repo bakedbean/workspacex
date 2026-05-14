@@ -75,6 +75,7 @@ Known keys:
 | `nerd_fonts` | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable. |
 | `editor_cmd` | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`. |
 | `terminal_cmd` | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`. |
+| `notifications` | Ring the terminal bell and show a `!` marker when a workspace transitions to `waiting` (claude paused for ≥30s). Default ON; set to `off` / `false` / `0` / `no` to disable. |
 
 Value sources:
 
@@ -208,6 +209,22 @@ Compact summary of `git status` per workspace, refreshed every 2 seconds:
 | `↓N` | `N` | Commits behind upstream |
 
 Zero values omitted. Clean workspaces show nothing in this column.
+
+### Attention alerts
+
+When a workspace's claude session goes ≥30 seconds without producing output
+(state flips from `active` or `idle` to `waiting`), wsx considers the
+workspace to need attention:
+
+- A terminal bell (`\x07`) is written to stdout. Your terminal config decides
+  whether to beep, flash, or ignore.
+- A `!` marker appears at the start of the workspace's row on the dashboard.
+
+The marker clears the moment you attach to the workspace (Enter on the row).
+The first observation of any workspace establishes a baseline; no bell rings
+for workspaces that are already in `waiting` state when wsx launches.
+
+Turn off both via `wsx config set notifications off`.
 
 ## Auto-rename modes
 

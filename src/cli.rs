@@ -62,7 +62,12 @@ impl ValueSource {
 fn known_setting_key(k: &str) -> bool {
     matches!(
         k,
-        "branch_prefix" | "custom_instructions" | "nerd_fonts" | "editor_cmd" | "terminal_cmd"
+        "branch_prefix"
+            | "custom_instructions"
+            | "nerd_fonts"
+            | "editor_cmd"
+            | "terminal_cmd"
+            | "notifications"
     )
 }
 

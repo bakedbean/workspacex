@@ -18,6 +18,7 @@ pub enum Item<'a> {
         has_prior_session: bool,
         status: Option<crate::git::WorkspaceStatus>,
         latest_event: Option<crate::events::EventSnapshot>,
+        needs_attention: bool,
     },
     EmptyHint,
     Spacer,
@@ -70,6 +71,7 @@ pub fn render(
                 has_prior_session,
                 status,
                 latest_event,
+                needs_attention,
             } => {
                 if let Some(SelectionTarget::Workspace(id)) = selected
                     && id == workspace.id
@@ -99,8 +101,9 @@ pub fn render(
                 let status_str = status
                     .map(|s| format_status(&s, nerd_fonts))
                     .unwrap_or_default();
+                let attn = if *needs_attention { "!" } else { " " };
                 let line = format!(
-                    "  {dot} {name}  [{branch_label}]  {status_str:<14} {activity}{setup_badge}",
+                    "{attn} {dot} {name}  [{branch_label}]  {status_str:<14} {activity}{setup_badge}",
                     name = workspace.name,
                 );
                 list_items.push(ListItem::new(line));
@@ -250,6 +253,7 @@ mod tests {
                 has_prior_session: false,
                 status: None,
                 latest_event: None,
+                needs_attention: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -300,6 +304,7 @@ mod tests {
                 has_prior_session: false,
                 status: None,
                 latest_event: None,
+                needs_attention: false,
             },
             Item::Spacer,
             Item::Header { repo: &r2 },
@@ -311,6 +316,7 @@ mod tests {
                 has_prior_session: false,
                 status: None,
                 latest_event: None,
+                needs_attention: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -348,6 +354,7 @@ mod tests {
                 has_prior_session: false,
                 status: Some(st),
                 latest_event: None,
+                needs_attention: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -384,6 +391,7 @@ mod tests {
                 has_prior_session: false,
                 status: Some(st),
                 latest_event: None,
+                needs_attention: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -420,6 +428,7 @@ mod tests {
                 has_prior_session: false,
                 status: None,
                 latest_event: Some(ev),
+                needs_attention: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -462,6 +471,7 @@ mod tests {
                 has_prior_session: false,
                 status: None,
                 latest_event: Some(ev),
+                needs_attention: false,
             },
             Item::Workspace {
                 repo: &r,
@@ -471,6 +481,7 @@ mod tests {
                 has_prior_session: false,
                 status: None,
                 latest_event: None,
+                needs_attention: false,
             },
         ];
         let mut term = Terminal::new(TestBackend::new(120, 10)).unwrap();
@@ -507,6 +518,7 @@ mod tests {
                 has_prior_session: false,
                 status: Some(st),
                 latest_event: None,
+                needs_attention: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -517,5 +529,76 @@ mod tests {
         // Clean workspace should not show any count markers.
         assert!(!text.contains("~"));
         assert!(!text.contains("?"));
+    }
+
+    /// Strip leading list/border decoration so tests can assert on the
+    /// rendered row's own first character.
+    fn strip_border_prefix(line: &str) -> &str {
+        // Skip the left border glyph (│) and any whitespace immediately after it.
+        line.trim_start_matches('\u{2502}').trim_start_matches(' ')
+    }
+
+    #[test]
+    fn renders_attention_mark_when_needs_attention() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: true,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        // Look for the row that has the alpha workspace; assert ! is in the leading column.
+        let line = text
+            .lines()
+            .find(|l| l.contains("alpha"))
+            .expect("alpha row");
+        let trimmed = strip_border_prefix(line);
+        assert!(
+            trimmed.starts_with("!"),
+            "expected leading ! in: {trimmed:?}"
+        );
+    }
+
+    #[test]
+    fn no_attention_mark_by_default() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let line = text
+            .lines()
+            .find(|l| l.contains("alpha"))
+            .expect("alpha row");
+        let trimmed = strip_border_prefix(line);
+        assert!(!trimmed.starts_with("!"));
     }
 }

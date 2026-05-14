@@ -902,6 +902,11 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = None;
             }
         }
+        Modal::UpdatesPanel => {
+            if k.code == KeyCode::Esc {
+                app.modal = None;
+            }
+        }
     }
     Ok(())
 }
@@ -1100,5 +1105,37 @@ mod pm_state_tests {
             .await
             .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_esc_closes() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+        handle_key_modal(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "Esc should close UpdatesPanel");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_swallows_other_keys() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+        handle_key_modal(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            app.modal.is_some(),
+            "q should not dismiss UpdatesPanel"
+        );
+        assert!(!app.quit, "q should not propagate to App::quit");
     }
 }

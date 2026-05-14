@@ -20,6 +20,7 @@ pub enum Modal {
     Error {
         message: String,
     },
+    UpdatesPanel,
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -42,6 +43,12 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
+    // UpdatesPanel is rendered by `render_updates_panel` directly from
+    // `draw()` because it needs live App state. This function should
+    // never be called with UpdatesPanel; guard defensively.
+    if matches!(modal, Modal::UpdatesPanel) {
+        return;
+    }
     let rect = centered(area, 60, 12);
     f.render_widget(Clear, rect);
     let (title, body) = match modal {
@@ -59,6 +66,9 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             ("setup running", body)
         }
         Modal::Error { message } => ("error", message.clone()),
+        // UpdatesPanel is handled by the early-return above; this arm is
+        // unreachable but required for exhaustiveness.
+        Modal::UpdatesPanel => unreachable!("UpdatesPanel must not reach render()"),
     };
     let style = if matches!(modal, Modal::Error { .. }) {
         theme.err_style()

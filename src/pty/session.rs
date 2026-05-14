@@ -386,6 +386,7 @@ fn now_ms() -> u64 {
 
 pub struct SessionManager {
     sessions: HashMap<WorkspaceId, Arc<Session>>,
+    pm: Option<Arc<Session>>,
 }
 
 impl Default for SessionManager {
@@ -398,6 +399,7 @@ impl SessionManager {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
+            pm: None,
         }
     }
 
@@ -424,11 +426,36 @@ impl SessionManager {
         self.sessions.get(&id).cloned()
     }
 
+    pub fn spawn_pm(
+        &mut self,
+        cwd: &Path,
+        cols: u16,
+        rows: u16,
+        mode: SpawnMode,
+    ) -> Result<Arc<Session>> {
+        if let Some(existing) = &self.pm {
+            if matches!(*existing.status.read().unwrap(), SessionStatus::Running { .. }) {
+                return Ok(existing.clone());
+            }
+        }
+        let session = Arc::new(spawn_session(cwd, cols, rows, mode)?);
+        self.pm = Some(session.clone());
+        Ok(session)
+    }
+
+    pub fn pm(&self) -> Option<Arc<Session>> {
+        self.pm.clone()
+    }
+
     pub fn kill_all(&mut self) {
         for s in self.sessions.values() {
             s.kill();
         }
         self.sessions.clear();
+        if let Some(pm) = &self.pm {
+            pm.kill();
+        }
+        self.pm = None;
     }
 }
 
@@ -786,6 +813,42 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("AUTO_MSG"), "screen contents: {screen:?}");
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_manager_pm_spawn_get_kill() {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let cwd = PathBuf::from(".");
+        let mut mgr = SessionManager::new();
+        assert!(mgr.pm().is_none());
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/wsx-test-pm/workspaces.json"),
+            custom_instructions: None,
+            resume: false,
+        };
+        let s = mgr.spawn_pm(&cwd, 80, 24, mode).unwrap();
+        assert!(mgr.pm().is_some());
+        // Second spawn while running is a no-op (returns existing).
+        let mode2 = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/wsx-test-pm/workspaces.json"),
+            custom_instructions: None,
+            resume: false,
+        };
+        let s2 = mgr.spawn_pm(&cwd, 80, 24, mode2).unwrap();
+        assert!(Arc::ptr_eq(&s, &s2));
+        // kill_all also kills PM.
+        mgr.kill_all();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(matches!(
+            *s.status.read().unwrap(),
+            SessionStatus::Exited { .. }
+        ));
+        assert!(mgr.pm().is_none(), "kill_all should clear pm slot");
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }

@@ -166,11 +166,52 @@ pub const PM_AUTO_SUMMARY_MESSAGE: &str =
 pub const PM_REFRESH_MESSAGE: &str =
     "Refresh: workspaces.json has been updated. Re-summarize the current state of all workspaces.";
 
+/// Open or resume the PM session. Initializes the PM directory, refreshes
+/// `workspaces.json`, spawns the PM PTY (Fresh or Continue depending on
+/// whether claude has a prior session for the PM cwd), and stores it on
+/// the manager. Caller decides whether to send the auto-summary message.
+pub async fn open_pm(
+    mgr: &mut crate::pty::session::SessionManager,
+    store: &Store,
+    pm_dir: &Path,
+    custom_instructions: Option<String>,
+) -> Result<()> {
+    init_pm_dir(pm_dir)?;
+    let workspaces_json = pm_dir.join("workspaces.json");
+    write_workspaces_json(store, &workspaces_json)?;
+    let resume = crate::pty::session::has_prior_session(pm_dir);
+    let mode = crate::pty::session::SpawnMode::ProjectManager {
+        workspaces_json_path: workspaces_json,
+        custom_instructions,
+        resume,
+    };
+    mgr.spawn_pm(pm_dir, 80, 24, mode)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::{NewWorkspace, Store, WorkspaceState};
     use tempfile::TempDir;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_pm_spawns_session_and_writes_workspaces_json() {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let dir = TempDir::new().unwrap();
+        let pm_root = dir.path().join("pm");
+        let store = Store::open_in_memory().unwrap();
+        store.add_repo(Path::new("/tmp/r"), "r", "").unwrap();
+        let mut mgr = crate::pty::session::SessionManager::new();
+        open_pm(&mut mgr, &store, &pm_root, None).await.unwrap();
+        assert!(mgr.pm().is_some(), "expected pm session");
+        assert!(pm_root.join("workspaces.json").exists());
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
 
     #[test]
     fn workspaces_json_includes_only_ready_filters_failed_and_pending() {

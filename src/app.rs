@@ -367,6 +367,16 @@ fn nerd_fonts_enabled(store: &crate::store::Store) -> bool {
     }
 }
 
+fn pm_enabled(store: &Store) -> bool {
+    match store.get_setting("pm_enabled").ok().flatten() {
+        None => true,
+        Some(v) => !matches!(
+            v.trim().to_lowercase().as_str(),
+            "false" | "0" | "off" | "no"
+        ),
+    }
+}
+
 fn notifications_enabled(store: &crate::store::Store) -> bool {
     match store.get_setting("notifications").ok().flatten().as_deref() {
         Some("off") | Some("false") | Some("0") | Some("no") => false,
@@ -486,6 +496,34 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 }
             }
             // 'd' on a Repo header is intentionally a no-op.
+        }
+        (KeyCode::Char('p'), _) => {
+            if pm_enabled(&app.store) {
+                if app.pm_visible {
+                    // Hide pane; session stays alive.
+                    app.pm_visible = false;
+                    app.focus = crate::ui::PaneFocus::Dashboard;
+                } else {
+                    // Open pane. Spawn if not yet spawned this run.
+                    let dirs = crate::config::Dirs::discover();
+                    let pm_dir = dirs.pm_dir();
+                    let custom = app
+                        .store
+                        .get_setting("pm_custom_instructions")
+                        .ok()
+                        .flatten();
+                    if let Err(e) =
+                        crate::pm::open_pm(&mut app.sessions, &app.store, &pm_dir, custom).await
+                    {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                        return Ok(());
+                    }
+                    app.pm = app.sessions.pm();
+                    app.pm_visible = true;
+                }
+            }
         }
         _ => {}
     }

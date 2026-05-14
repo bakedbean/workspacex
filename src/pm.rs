@@ -93,6 +93,30 @@ fn compute_session_log_dir(worktree: &Path) -> PathBuf {
     home.join(".claude/projects").join(encoded)
 }
 
+/// Initialize the PM working directory. Creates `dir` if needed and
+/// runs `git init` inside it so Claude Code is happy. Idempotent — if
+/// the directory already contains a git repo, this is a no-op.
+pub fn init_pm_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    if dir.join(".git").is_dir() {
+        return Ok(());
+    }
+    let status = std::process::Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .current_dir(dir)
+        .status()
+        .map_err(|e| Error::Io(std::io::Error::other(format!("git init pm dir: {e}"))))?;
+    if !status.success() {
+        return Err(Error::Git(format!(
+            "git init failed in {} (exit {:?})",
+            dir.display(),
+            status.code()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +160,17 @@ mod tests {
         assert!(!text.contains("\"name\": \"broken\""), "{text}");
         assert!(text.contains("\"generated_at_epoch_seconds\""), "{text}");
         assert!(text.contains("\"workspaces\": ["), "{text}");
+    }
+
+    #[test]
+    fn init_pm_dir_creates_dir_and_git_init() {
+        let dir = TempDir::new().unwrap();
+        let pm_root = dir.path().join("pm");
+        init_pm_dir(&pm_root).unwrap();
+        assert!(pm_root.is_dir());
+        assert!(pm_root.join(".git").is_dir(), "expected git repo init");
+        // Idempotent: second call should not error.
+        init_pm_dir(&pm_root).unwrap();
     }
 
     #[test]

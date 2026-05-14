@@ -117,6 +117,55 @@ pub fn init_pm_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+const PM_SYSTEM_PROMPT: &str = "\
+You are a project manager for a developer running multiple parallel coding \
+workspaces under wsx. Each workspace is a git worktree with its own Claude \
+Code session. Your job: when asked, inspect their active workspaces and \
+report (1) what each was created for, (2) where it left off, (3) what's \
+next to close it out.\n\
+\n\
+Where to find information:\n\
+  - ./workspaces.json lists all active workspaces with: name, branch,\n\
+    worktree_path, session_log_dir, git counts.\n\
+  - For the original prompt: read the FIRST user message in the earliest\n\
+    *.jsonl under session_log_dir.\n\
+  - For recent activity: read the LAST several entries in the most recent\n\
+    *.jsonl under session_log_dir.\n\
+  - For code state: cd to worktree_path; use git status / log / diff.\n\
+\n\
+Constraints:\n\
+  - Read-only. You cannot modify workspaces.\n\
+  - Be concise — the developer is glancing at a small pane. Default to a\n\
+    per-workspace block:\n\
+        <name>: <one-line status>\n\
+          - Created for: <one-line>\n\
+          - Last activity: <one-line>\n\
+          - Next: <one-line>\n\
+  - If you're uncertain about \"next\", say so; don't fabricate.\n\
+  - workspaces.json refreshes when the developer asks. Trust its contents\n\
+    over stale memory.";
+
+/// Build the PM system prompt, optionally appending custom instructions.
+pub fn pm_system_prompt(custom: Option<&str>) -> String {
+    match custom.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        None => PM_SYSTEM_PROMPT.to_string(),
+        Some(extra) => format!("{PM_SYSTEM_PROMPT}\n\n{extra}"),
+    }
+}
+
+/// Comma-separated read-only tool allowlist for the PM session.
+pub fn pm_allowed_tools() -> &'static str {
+    "Read,Bash(git status:*),Bash(git log:*),Bash(git diff:*),Bash(git branch:*),Bash(cat:*),Bash(ls:*)"
+}
+
+/// The initial user message wsx sends to PM after a Fresh spawn.
+pub const PM_AUTO_SUMMARY_MESSAGE: &str =
+    "Give me a status summary of all active workspaces per your instructions.";
+
+/// The user message wsx sends to PM on `r` refresh.
+pub const PM_REFRESH_MESSAGE: &str =
+    "Refresh: workspaces.json has been updated. Re-summarize the current state of all workspaces.";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +234,36 @@ mod tests {
         let text = std::fs::read_to_string(&target).unwrap();
         assert!(text.contains("\"name\": \"empty\""), "{text}");
         assert!(text.contains("\"workspaces\": []"), "{text}");
+    }
+
+    #[test]
+    fn system_prompt_contains_distinctive_phrases() {
+        let p = pm_system_prompt(None);
+        assert!(p.contains("project manager"), "{p}");
+        assert!(p.contains("./workspaces.json"), "{p}");
+        assert!(p.contains("session_log_dir"), "{p}");
+    }
+
+    #[test]
+    fn system_prompt_appends_custom_instructions() {
+        let p = pm_system_prompt(Some("Be extra terse."));
+        assert!(p.contains("project manager"), "{p}");
+        assert!(p.ends_with("Be extra terse."), "{p}");
+        assert!(p.contains("\n\nBe extra terse."), "{p}");
+    }
+
+    #[test]
+    fn allowed_tools_is_read_only_set() {
+        let tools = pm_allowed_tools();
+        assert!(tools.contains("Read"));
+        assert!(tools.contains("Bash(git status:*)"));
+        assert!(tools.contains("Bash(git log:*)"));
+        assert!(tools.contains("Bash(git diff:*)"));
+        assert!(tools.contains("Bash(cat:*)"));
+        assert!(tools.contains("Bash(ls:*)"));
+        assert!(!tools.contains("Write"));
+        assert!(!tools.contains("Edit"));
+        // Catch any inadvertent broad bash variant.
+        assert!(!tools.split(',').any(|t| t.trim() == "Bash(*)"), "{tools}");
     }
 }

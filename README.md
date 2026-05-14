@@ -73,6 +73,8 @@ Known keys:
 | `branch_prefix` | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`. |
 | `custom_instructions` | Free-text appended to claude's system prompt on every workspace spawn. |
 | `nerd_fonts` | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable. |
+| `editor_cmd` | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg. Examples: `code`, `cursor`, `alacritty -e nvim`. |
+| `terminal_cmd` | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree, no extra args. Examples: `alacritty`, `kitty`, `gnome-terminal`. |
 
 Value sources:
 
@@ -92,6 +94,8 @@ Value sources:
 | `enter` on a workspace | Attach to its claude session (spawns or resumes) |
 | `enter` on a repo header | Open the New Workspace modal targeting that repo |
 | `n` | New workspace in the selected row's repo |
+| `e` | Open the selected workspace in your editor (no-op on repo header) |
+| `t` | Open the selected workspace in a terminal (no-op on repo header) |
 | `d` | Archive the selected workspace (no-op on repo header) |
 | `q` | Quit (kills all running sessions) |
 
@@ -112,6 +116,29 @@ Keystrokes are forwarded to the running `claude` session, except:
 |---|---|
 | `Ctrl-a d` | Detach back to the dashboard (session keeps running) |
 | `Ctrl-a a` | Send a literal `Ctrl-a` to claude |
+
+## Editor and terminal integration
+
+`[e]` and `[t]` on the dashboard launch your editor or terminal in the selected workspace's worktree directory. Both spawn detached so wsx keeps running.
+
+Resolution chain (first non-empty wins):
+
+- Editor: `editor_cmd` setting → `$VISUAL` → `$EDITOR`
+- Terminal: `terminal_cmd` setting → `$TERMINAL`
+
+**TUI editors (vim, nvim, helix, emacs -nw) need to be wrapped in a terminal command** because the spawned editor has no controlling TTY of its own. Example:
+
+```
+wsx config set editor_cmd "alacritty -e nvim"
+```
+
+GUI editors (VS Code, Cursor, Zed) work directly:
+
+```
+wsx config set editor_cmd "code"
+```
+
+If neither the setting nor the env-var fallback is set, an error modal explains how to configure.
 
 ## Dashboard status indicators
 
@@ -163,6 +190,8 @@ The rename only fires on workspaces whose name still matches the generated `<adj
 | `WSX_RENAME_MODE` | Auto-rename mode: `claude` (default) / `local` / `off` |
 | `WSX_CLAUDE_BIN` | Path to the `claude` binary (default: looked up via `PATH`). Used by tests to substitute `cat`. |
 | `EDITOR` | Editor invoked by `wsx config edit` (default: `vi`) |
+| `VISUAL` / `EDITOR` | Fallback when `editor_cmd` is unset |
+| `TERMINAL` | Fallback when `terminal_cmd` is unset |
 | `XDG_STATE_HOME` | Base for the wsx state directory (default: `~/.local/state`) |
 | `RUST_LOG` | `tracing` filter (default: `info`); set `wsx=debug` for verbose logs |
 | `HOME` | Fallback for resolving the state directory |

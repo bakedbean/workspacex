@@ -115,8 +115,10 @@ pub fn render(
         .highlight_style(theme::selected());
     f.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
-    let footer =
-        Paragraph::new("[enter] attach   [n] new   [d] archive   [q] quit").style(theme::dim());
+    let footer = Paragraph::new(
+        "[enter] attach   [n] new   [e] edit   [t] terminal   [d] archive   [q] quit",
+    )
+    .style(theme::dim());
     f.render_widget(footer, chunks[2]);
 }
 

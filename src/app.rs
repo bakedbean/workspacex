@@ -269,6 +269,40 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 });
             }
         }
+        (KeyCode::Char('e'), _) => {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let info = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(rid, w)| (*rid, w.worktree_path.clone()));
+                if let Some((_, path)) = info {
+                    let cmd = app.store.get_setting("editor_cmd").ok().flatten();
+                    if let Err(e) = crate::external::open_in_editor(&path, cmd.as_deref()) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        (KeyCode::Char('t'), _) => {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let info = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(rid, w)| (*rid, w.worktree_path.clone()));
+                if let Some((_, path)) = info {
+                    let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
+                    if let Err(e) = crate::external::open_in_terminal(&path, cmd.as_deref()) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+        }
         (KeyCode::Char('d'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
                 let name = app

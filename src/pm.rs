@@ -153,11 +153,6 @@ pub fn pm_system_prompt(custom: Option<&str>) -> String {
     }
 }
 
-/// Comma-separated read-only tool allowlist for the PM session.
-pub fn pm_allowed_tools() -> &'static str {
-    "Read,Bash(git status:*),Bash(git log:*),Bash(git diff:*),Bash(git branch:*),Bash(cat:*),Bash(ls:*)"
-}
-
 /// The initial user message wsx sends to PM after a Fresh spawn.
 pub const PM_AUTO_SUMMARY_MESSAGE: &str =
     "Give me a status summary of all active workspaces per your instructions.";
@@ -335,21 +330,6 @@ mod tests {
         assert!(p.contains("project manager"), "{p}");
         assert!(p.ends_with("Be extra terse."), "{p}");
         assert!(p.contains("\n\nBe extra terse."), "{p}");
-    }
-
-    #[test]
-    fn allowed_tools_is_read_only_set() {
-        let tools = pm_allowed_tools();
-        assert!(tools.contains("Read"));
-        assert!(tools.contains("Bash(git status:*)"));
-        assert!(tools.contains("Bash(git log:*)"));
-        assert!(tools.contains("Bash(git diff:*)"));
-        assert!(tools.contains("Bash(cat:*)"));
-        assert!(tools.contains("Bash(ls:*)"));
-        assert!(!tools.contains("Write"));
-        assert!(!tools.contains("Edit"));
-        // Catch any inadvertent broad bash variant.
-        assert!(!tools.split(',').any(|t| t.trim() == "Bash(*)"), "{tools}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

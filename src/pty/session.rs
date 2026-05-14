@@ -141,9 +141,13 @@ impl Session {
                     .unwrap_or(0);
                 let since_last = now_ms.saturating_sub(last);
                 if since_last >= quiet_ms {
-                    let mut payload = text.as_bytes().to_vec();
-                    payload.push(b'\r');
-                    let _ = self.writer.send(payload).await;
+                    // Two writes so claude's TUI sees the text as typed input
+                    // and the trailing CR as a separate Enter (submit). A
+                    // single payload "<text>\r" can look like a bracketed
+                    // paste and not auto-submit.
+                    let _ = self.writer.send(text.as_bytes().to_vec()).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                    let _ = self.writer.send(b"\r".to_vec()).await;
                     return;
                 }
             }
@@ -204,10 +208,10 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
         cmd.env(k, v);
     }
 
-    let (rename_prompt, custom, allow_git_branch, allow_tools_override, add_continue) = match mode {
+    let (rename_prompt, custom, allow_git_branch, add_continue, skip_permissions) = match mode {
         SpawnMode::Continue {
             custom_instructions,
-        } => (None, custom_instructions.clone(), false, None, true),
+        } => (None, custom_instructions.clone(), false, true, false),
         SpawnMode::Fresh {
             rename_ctx,
             custom_instructions,
@@ -229,7 +233,7 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
             } else {
                 (None, false)
             };
-            (rp, custom_instructions.clone(), allow, None, false)
+            (rp, custom_instructions.clone(), allow, false, false)
         }
         SpawnMode::ProjectManager {
             workspaces_json_path: _,
@@ -239,8 +243,8 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
             Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
             None,
             false,
-            Some(crate::pm::pm_allowed_tools().to_string()),
             *resume,
+            true,
         ),
     };
 
@@ -248,9 +252,8 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
         cmd.arg("--continue");
     }
 
-    if let Some(tools) = allow_tools_override {
-        cmd.arg("--allowedTools");
-        cmd.arg(tools);
+    if skip_permissions {
+        cmd.arg("--dangerously-skip-permissions");
     } else if allow_git_branch {
         cmd.arg("--allowedTools");
         cmd.arg("Bash(git branch:*)");
@@ -746,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn project_manager_mode_adds_allowed_tools_and_system_prompt() {
+    fn project_manager_mode_adds_skip_permissions_and_system_prompt() {
         unsafe {
             std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
         }
@@ -758,9 +761,8 @@ mod tests {
         };
         let cmd = build_claude_command(&cwd, &mode);
         let dbg = format!("{cmd:?}");
-        assert!(dbg.contains("--allowedTools"), "{dbg}");
-        assert!(dbg.contains("Read"), "{dbg}");
-        assert!(dbg.contains("Bash(git status:*)"), "{dbg}");
+        assert!(dbg.contains("--dangerously-skip-permissions"), "{dbg}");
+        assert!(!dbg.contains("--allowedTools"), "{dbg}");
         assert!(dbg.contains("--append-system-prompt"), "{dbg}");
         assert!(dbg.contains("project manager"), "{dbg}");
         assert!(!dbg.contains("--continue"), "should be Fresh-style: {dbg}");

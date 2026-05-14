@@ -600,6 +600,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     app.pm_auto_summary_sent = true;
                     app.pm = app.sessions.pm();
                     app.pm_visible = true;
+                    app.focus = crate::ui::PaneFocus::ProjectManager;
                 }
             }
         }

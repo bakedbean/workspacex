@@ -282,24 +282,25 @@ answer three questions about each of your active workspaces:
 - Where have things been left off?
 - What's next to close it out?
 
-`Tab` swaps focus into the PM pane (keystrokes then go to PM, like the
-attached view). `Tab` or `Esc` swaps focus back to the dashboard. `r`
-(while PM is focused) refreshes `workspaces.json` and asks PM to
-re-summarize.
+`p` opens the pane and focuses it immediately — keystrokes go to PM (like
+the attached view). `Tab` or `Esc` swaps focus back to the dashboard;
+`Tab` from the dashboard swaps back into the PM pane. `r` (while PM is
+focused) refreshes `workspaces.json` and asks PM to re-summarize.
 
 PM lives at `$XDG_STATE_HOME/wsx/project-manager/` and persists across wsx
 restarts via Claude Code's `--continue`. On the first `p` of a wsx run with
-no prior PM session, wsx auto-sends a status-summary request. On subsequent
-runs (resuming via `--continue`), wsx stays silent — type your own
-question or press `r` for a fresh summary.
+no prior PM session, wsx auto-sends a status-summary request (and submits
+it for you). On subsequent runs (resuming via `--continue`), wsx stays
+silent — type your own question or press `r` for a fresh summary.
 
 PM only sees workspaces wsx knows about (registered repos and their `Ready`
-workspaces). It gets read-only access:
+workspaces). PM runs with `--dangerously-skip-permissions` so its tool
+calls don't prompt you — convenient for an inspection-only sidekick, but
+note that PM can technically write/edit files (the system prompt steers
+it toward read-only inspection but doesn't enforce it). If you don't want
+that, disable PM entirely.
 
-- `Read` for inspecting files (including `~/.claude/projects/.../<session>.jsonl`).
-- Narrow `Bash` for `git status` / `log` / `diff` / `branch`, `cat`, `ls`.
-
-Disable the feature entirely with `wsx config set pm_enabled off`.
+Disable the feature with `wsx config set pm_enabled off`.
 Customize PM's behavior with `wsx config set pm_custom_instructions @./pm.md`.
 
 ## Environment variables

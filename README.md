@@ -105,6 +105,7 @@ Value sources:
 | `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
 | `Tab` | Swap focus between dashboard and the PM pane (when visible) |
 | `r` (when PM focused) | Refresh `workspaces.json` and ask PM to re-summarize |
+| `Ctrl-O` (when PM focused) | Expand PM to full screen (use `Ctrl-a d` to detach back) |
 
 ### New Workspace / Confirm Archive / Setup Running modals
 
@@ -285,7 +286,14 @@ answer three questions about each of your active workspaces:
 `p` opens the pane and focuses it immediately — keystrokes go to PM (like
 the attached view). `Tab` or `Esc` swaps focus back to the dashboard;
 `Tab` from the dashboard swaps back into the PM pane. `r` (while PM is
-focused) refreshes `workspaces.json` and asks PM to re-summarize.
+focused) refreshes `workspaces.json` and asks PM to re-summarize. `Ctrl-O`
+(while PM is focused) expands PM to a full-screen attached view so you
+can scroll through claude's history naturally; `Ctrl-a d` detaches back
+to the dashboard with the pane state preserved.
+
+PM only summarizes workspaces where claude has been started at least once
+(i.e., a session log exists under `~/.claude/projects/...`). Workspaces
+you created but never opened are skipped — nothing for PM to report on.
 
 PM lives at `$XDG_STATE_HOME/wsx/project-manager/` and persists across wsx
 restarts via Claude Code's `--continue`. On the first `p` of a wsx run with

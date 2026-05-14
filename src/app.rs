@@ -376,6 +376,15 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 attached::render(f, area, &session, &label, &app.theme);
             }
         }
+        View::AttachedPm => {
+            if let Some(session) = app.pm.as_ref() {
+                attached::resize_session(session, area);
+                attached::render(f, area, session, "project-manager", &app.theme);
+            } else {
+                // PM session went away; bounce to dashboard on next event.
+                app.view = View::Dashboard;
+            }
+        }
     }
     if let Some(m) = &app.modal {
         modal::render(f, area, m, &app.theme);
@@ -420,6 +429,7 @@ async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
                 match &app.view {
                     View::Dashboard => handle_key_dashboard(app, k).await?,
                     View::Attached(id) => handle_key_attached(app, *id, k).await?,
+                    View::AttachedPm => handle_key_attached_pm(app, k).await?,
                 }
             }
         }
@@ -437,6 +447,14 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         match (k.code, k.modifiers) {
             (KeyCode::Tab, _) | (KeyCode::Esc, _) => {
                 app.focus = crate::ui::PaneFocus::Dashboard;
+                return Ok(());
+            }
+            (KeyCode::Char('o'), m) if m.contains(KeyModifiers::CONTROL) => {
+                // Ctrl-O: expand PM to a full-screen attached view so the
+                // user can scroll through claude's history naturally.
+                if app.pm.is_some() {
+                    app.view = View::AttachedPm;
+                }
                 return Ok(());
             }
             (KeyCode::Char('p'), _) | (KeyCode::Char('r'), _) => {
@@ -740,6 +758,39 @@ fn encode_key(k: crossterm::event::KeyEvent) -> Vec<u8> {
         Down => b"\x1b[B".to_vec(),
         _ => vec![],
     }
+}
+
+async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    let session = match app.pm.clone() {
+        Some(s) => s,
+        None => {
+            app.view = View::Dashboard;
+            return Ok(());
+        }
+    };
+    if app.ctrl_a_pending {
+        app.ctrl_a_pending = false;
+        match k.code {
+            KeyCode::Char('d') => {
+                app.view = View::Dashboard;
+                return Ok(());
+            }
+            KeyCode::Char('a') => {
+                let _ = session.writer.send(vec![0x01]).await;
+                return Ok(());
+            }
+            _ => return Ok(()),
+        }
+    }
+    if k.code == KeyCode::Char('a') && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.ctrl_a_pending = true;
+        return Ok(());
+    }
+    let bytes = encode_key(k);
+    if !bytes.is_empty() {
+        let _ = session.writer.send(bytes).await;
+    }
+    Ok(())
 }
 
 async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {

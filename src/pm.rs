@@ -53,6 +53,11 @@ pub fn write_workspaces_json(store: &Store, target: &Path) -> Result<()> {
             if ws.state != WorkspaceState::Ready {
                 continue;
             }
+            // Skip workspaces where claude has never been started: nothing
+            // for PM to summarize, and they pollute the list.
+            if !crate::pty::session::has_prior_session(&ws.worktree_path) {
+                continue;
+            }
             let session_log_dir = compute_session_log_dir(&ws.worktree_path);
             workspaces.push(WorkspaceEntry {
                 name: ws.name,
@@ -120,30 +125,26 @@ pub fn init_pm_dir(dir: &Path) -> Result<()> {
 const PM_SYSTEM_PROMPT: &str = "\
 You are a project manager for a developer running multiple parallel coding \
 workspaces under wsx. Each workspace is a git worktree with its own Claude \
-Code session. Your job: when asked, inspect their active workspaces and \
-report (1) what each was created for, (2) where it left off, (3) what's \
-next to close it out.\n\
+Code session. When asked, inspect active workspaces and report what each \
+was created for, where it left off, and what's next.\n\
 \n\
-Where to find information:\n\
-  - ./workspaces.json lists all active workspaces with: name, branch,\n\
-    worktree_path, session_log_dir, git counts.\n\
-  - For the original prompt: read the FIRST user message in the earliest\n\
-    *.jsonl under session_log_dir.\n\
-  - For recent activity: read the LAST several entries in the most recent\n\
-    *.jsonl under session_log_dir.\n\
-  - For code state: cd to worktree_path; use git status / log / diff.\n\
+Data sources:\n\
+  - ./workspaces.json — name, branch, worktree_path, session_log_dir.\n\
+  - First user message of earliest *.jsonl in session_log_dir → original ask.\n\
+  - Last entries of most recent *.jsonl in session_log_dir → recent activity.\n\
+  - `cd <worktree_path> && git status/log/diff` → code state.\n\
 \n\
-Constraints:\n\
-  - Read-only. You cannot modify workspaces.\n\
-  - Be concise — the developer is glancing at a small pane. Default to a\n\
-    per-workspace block:\n\
-        <name>: <one-line status>\n\
-          - Created for: <one-line>\n\
-          - Last activity: <one-line>\n\
-          - Next: <one-line>\n\
-  - If you're uncertain about \"next\", say so; don't fabricate.\n\
-  - workspaces.json refreshes when the developer asks. Trust its contents\n\
-    over stale memory.";
+OUTPUT FORMAT (strict, no exceptions):\n\
+  - Bullet points ONLY. No headers, no preamble, no closing summary, no prose.\n\
+  - One bullet per workspace. Maximum 20 words per bullet.\n\
+  - Format: `- <name>: <what it's for>; <where it left off>; <next step>`\n\
+    Semicolons separate the three facts. Omit any field you can't determine.\n\
+  - Example: `- fix-auth: cookie expiry bug from #42; tests added but failing; debug session token regex`\n\
+  - Be ruthless about brevity. The developer reads at a glance, not paragraphs.\n\
+  - Do not say \"unclear\" or \"unknown\" — just omit the field.\n\
+\n\
+workspaces.json is refreshed by the developer on demand. Trust its contents \
+over stale memory.";
 
 /// Build the PM system prompt, optionally appending custom instructions.
 pub fn pm_system_prompt(custom: Option<&str>) -> String {
@@ -253,42 +254,80 @@ mod tests {
     }
 
     #[test]
-    fn workspaces_json_includes_only_ready_filters_failed_and_pending() {
+    fn workspaces_json_filters_failed_pending_and_never_started() {
+        // Point HOME at a tempdir so `has_prior_session` looks at our stubbed
+        // session log dirs, not the developer's real ~/.claude/projects/.
+        let home = TempDir::new().unwrap();
+        let saved_home = std::env::var("HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+
+        let wt_root = TempDir::new().unwrap();
+        let ready_with_session = wt_root.path().join("ready-with-session");
+        let ready_no_session = wt_root.path().join("ready-no-session");
+        let failed = wt_root.path().join("broken");
+        std::fs::create_dir_all(&ready_with_session).unwrap();
+        std::fs::create_dir_all(&ready_no_session).unwrap();
+        std::fs::create_dir_all(&failed).unwrap();
+
+        // Stub a session log for `ready-with-session` so has_prior_session
+        // returns true for it. Path encoding mirrors events::encode_cwd.
+        let canon = std::fs::canonicalize(&ready_with_session).unwrap();
+        let encoded = canon.to_string_lossy().replace(['/', '.'], "-");
+        let log_dir = home.path().join(".claude/projects").join(&encoded);
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("session.jsonl"), "{}\n").unwrap();
+
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(Path::new("/tmp/fake-repo"), "demo", "")
             .unwrap();
-        let ws_ready = store
+        let ws1 = store
             .insert_workspace(&NewWorkspace {
                 repo_id,
-                name: "ready-one",
-                branch: "demo/ready-one",
-                worktree_path: Path::new("/tmp/wsx-wt/ready-one"),
+                name: "ready-with-session",
+                branch: "demo/ready-with-session",
+                worktree_path: &ready_with_session,
             })
             .unwrap();
-        store
-            .set_workspace_state(ws_ready, WorkspaceState::Ready)
+        store.set_workspace_state(ws1, WorkspaceState::Ready).unwrap();
+        let ws2 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ready-no-session",
+                branch: "demo/ready-no-session",
+                worktree_path: &ready_no_session,
+            })
             .unwrap();
-        let ws_failed = store
+        store.set_workspace_state(ws2, WorkspaceState::Ready).unwrap();
+        let ws3 = store
             .insert_workspace(&NewWorkspace {
                 repo_id,
                 name: "broken",
                 branch: "demo/broken",
-                worktree_path: Path::new("/tmp/wsx-wt/broken"),
+                worktree_path: &failed,
             })
             .unwrap();
         store
-            .set_workspace_state(ws_failed, WorkspaceState::Failed)
+            .set_workspace_state(ws3, WorkspaceState::Failed)
             .unwrap();
 
-        let dir = TempDir::new().unwrap();
-        let target = dir.path().join("workspaces.json");
+        let target_dir = TempDir::new().unwrap();
+        let target = target_dir.path().join("workspaces.json");
         write_workspaces_json(&store, &target).unwrap();
         let text = std::fs::read_to_string(&target).unwrap();
-        assert!(text.contains("\"name\": \"ready-one\""), "{text}");
+        assert!(text.contains("\"name\": \"ready-with-session\""), "{text}");
+        assert!(!text.contains("\"name\": \"ready-no-session\""), "{text}");
         assert!(!text.contains("\"name\": \"broken\""), "{text}");
         assert!(text.contains("\"generated_at_epoch_seconds\""), "{text}");
-        assert!(text.contains("\"workspaces\": ["), "{text}");
+
+        unsafe {
+            match saved_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
     }
 
     #[test]

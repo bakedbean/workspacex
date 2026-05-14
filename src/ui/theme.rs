@@ -61,6 +61,29 @@ impl Theme {
         }
     }
 
+    pub fn jellybeans() -> Self {
+        // https://github.com/nanotech/jellybeans.vim
+        let bg = Color::Rgb(0x15, 0x15, 0x15);
+        let blue = Color::Rgb(0x81, 0x97, 0xbf); // keyword
+        let yellow = Color::Rgb(0xfa, 0xd0, 0x7a); // function
+        let orange = Color::Rgb(0xff, 0xb9, 0x64); // type / warning
+        let red = Color::Rgb(0xcf, 0x6a, 0x4c); // number / error
+        let green = Color::Rgb(0x99, 0xad, 0x6a); // string
+        let purple = Color::Rgb(0xc6, 0xb6, 0xee); // variable
+        let gray = Color::Rgb(0x88, 0x88, 0x88); // comment
+        Self {
+            header_fg: blue,
+            header_bg: None,
+            selected_fg: bg,
+            selected_bg: yellow,
+            dim: gray,
+            ok: green,
+            warn: orange,
+            err: red,
+            attention: purple,
+        }
+    }
+
     pub fn nord() -> Self {
         // https://www.nordtheme.com/docs/colors-and-palettes
         let polar0 = Color::Rgb(0x2e, 0x34, 0x40); // background
@@ -87,6 +110,7 @@ impl Theme {
     pub fn by_name(name: &str) -> Self {
         match name {
             "dracula" => Self::dracula(),
+            "jellybeans" => Self::jellybeans(),
             "nord" => Self::nord(),
             _ => Self::default_theme(),
         }
@@ -140,6 +164,10 @@ mod tests {
         assert!(matches!(
             Theme::by_name("nord").header_fg,
             Color::Rgb(0x88, 0xc0, 0xd0)
+        ));
+        assert!(matches!(
+            Theme::by_name("jellybeans").header_fg,
+            Color::Rgb(0x81, 0x97, 0xbf)
         ));
     }
 

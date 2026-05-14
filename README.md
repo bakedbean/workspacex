@@ -76,7 +76,7 @@ Known keys:
 | `editor_cmd` | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`. |
 | `terminal_cmd` | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`. |
 | `notifications` | Ring the terminal bell and show a `!` marker when a workspace transitions to `waiting` (claude paused for ≥30s). Default ON; set to `off` / `false` / `0` / `no` to disable. |
-| `theme` | Color theme. One of `default` (palette-adaptive ANSI), `dracula` (RGB), `nord` (RGB). Unknown values fall back to `default`. Restart wsx after changing. |
+| `theme` | Color theme. One of `default` (palette-adaptive ANSI), `dracula` (RGB), `jellybeans` (RGB), `nord` (RGB). Unknown values fall back to `default`. Restart wsx after changing. |
 
 Value sources:
 
@@ -241,6 +241,7 @@ Pick a color theme with:
 
 ```
 wsx config set theme dracula
+wsx config set theme jellybeans
 wsx config set theme nord
 wsx config set theme default
 ```
@@ -250,7 +251,7 @@ error modal. The state indicators (status dots, activity labels, attention
 marks) are not yet per-state coloured — that's a planned follow-up.
 
 The `default` theme uses ANSI-named colors that adapt to your terminal's
-palette. `dracula` and `nord` are fixed RGB palettes.
+palette. `dracula`, `jellybeans`, and `nord` are fixed RGB palettes.
 
 Restart wsx after changing — themes are loaded once at startup.
 

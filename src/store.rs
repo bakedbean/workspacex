@@ -101,6 +101,68 @@ impl Store {
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
+
+    pub fn insert_workspace(&self, w: &NewWorkspace) -> Result<WorkspaceId> {
+        let now = now_ms();
+        self.conn.execute(
+            "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5)",
+            rusqlite::params![w.repo_id.0, w.name, w.branch, w.worktree_path.to_string_lossy(), now],
+        )?;
+        Ok(WorkspaceId(self.conn.last_insert_rowid()))
+    }
+
+    pub fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
+        self.conn.execute("DELETE FROM workspaces WHERE id = ?1", [id.0])?;
+        Ok(())
+    }
+
+    pub fn rename_workspace(&self, id: WorkspaceId, name: &str) -> Result<()> {
+        self.conn.execute("UPDATE workspaces SET name = ?1 WHERE id = ?2", rusqlite::params![name, id.0])?;
+        Ok(())
+    }
+
+    pub fn set_workspace_state(&self, id: WorkspaceId, state: WorkspaceState) -> Result<()> {
+        self.conn.execute("UPDATE workspaces SET state = ?1 WHERE id = ?2",
+            rusqlite::params![state_label(&state), id.0])?;
+        Ok(())
+    }
+
+    pub fn set_setup_status(&self, id: WorkspaceId, status: SetupStatus) -> Result<()> {
+        self.conn.execute("UPDATE workspaces SET setup_status = ?1 WHERE id = ?2",
+            rusqlite::params![setup_label(&status), id.0])?;
+        Ok(())
+    }
+
+    pub fn workspaces(&self, repo_id: RepoId) -> Result<Vec<Workspace>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at
+             FROM workspaces WHERE repo_id = ?1 ORDER BY id"
+        )?;
+        let rows = stmt.query_map([repo_id.0], |r| {
+            Ok(Workspace {
+                id: WorkspaceId(r.get(0)?),
+                repo_id: RepoId(r.get(1)?),
+                name: r.get(2)?,
+                branch: r.get(3)?,
+                worktree_path: PathBuf::from(r.get::<_, String>(4)?),
+                state: parse_state(&r.get::<_, String>(5)?),
+                setup_status: parse_setup(&r.get::<_, String>(6)?),
+                created_at: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn sweep_stale_pending(&self, older_than: std::time::Duration) -> Result<usize> {
+        let cutoff = now_ms() - older_than.as_millis() as i64;
+        let n = self.conn.execute(
+            "UPDATE workspaces SET state = 'Orphaned'
+             WHERE state = 'Pending' AND created_at < ?1",
+            [cutoff],
+        )?;
+        Ok(n)
+    }
 }
 
 const SCHEMA_V1: &str = r#"
@@ -132,6 +194,23 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn state_label(s: &WorkspaceState) -> &'static str {
+    match s { WorkspaceState::Pending => "Pending", WorkspaceState::Ready => "Ready",
+              WorkspaceState::Failed => "Failed", WorkspaceState::Orphaned => "Orphaned" }
+}
+fn parse_state(s: &str) -> WorkspaceState {
+    match s { "Pending" => WorkspaceState::Pending, "Ready" => WorkspaceState::Ready,
+              "Failed" => WorkspaceState::Failed, _ => WorkspaceState::Orphaned }
+}
+fn setup_label(s: &SetupStatus) -> &'static str {
+    match s { SetupStatus::NotRun => "NotRun", SetupStatus::Skipped => "Skipped",
+              SetupStatus::Ok => "Ok", SetupStatus::Failed => "Failed" }
+}
+fn parse_setup(s: &str) -> SetupStatus {
+    match s { "Ok" => SetupStatus::Ok, "Failed" => SetupStatus::Failed,
+              "Skipped" => SetupStatus::Skipped, _ => SetupStatus::NotRun }
 }
 
 #[cfg(test)]
@@ -169,5 +248,52 @@ mod tests {
         store.add_repo(Path::new("/a"), "first", "").unwrap();
         let err = store.add_repo(Path::new("/a"), "second", "");
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn workspace_lifecycle() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
+        let id = store.insert_workspace(&NewWorkspace {
+            repo_id: repo,
+            name: "fix-bug",
+            branch: "wsx/fix-bug",
+            worktree_path: Path::new("/wts/fix-bug"),
+        }).unwrap();
+
+        let ws = store.workspaces(repo).unwrap();
+        assert_eq!(ws.len(), 1);
+        assert_eq!(ws[0].state, WorkspaceState::Pending);
+        assert_eq!(ws[0].setup_status, SetupStatus::NotRun);
+
+        store.set_workspace_state(id, WorkspaceState::Ready).unwrap();
+        store.set_setup_status(id, SetupStatus::Ok).unwrap();
+
+        let ws = store.workspaces(repo).unwrap();
+        assert_eq!(ws[0].state, WorkspaceState::Ready);
+        assert_eq!(ws[0].setup_status, SetupStatus::Ok);
+
+        store.delete_workspace(id).unwrap();
+        assert!(store.workspaces(repo).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sweep_stale_pending_marks_orphaned() {
+        use std::time::Duration;
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
+        let id = store.insert_workspace(&NewWorkspace {
+            repo_id: repo,
+            name: "stuck",
+            branch: "wsx/stuck",
+            worktree_path: Path::new("/wts/stuck"),
+        }).unwrap();
+        // Backdate the row to look stale.
+        store.conn.execute("UPDATE workspaces SET created_at = 0 WHERE id = ?1", [id.0]).unwrap();
+
+        let swept = store.sweep_stale_pending(Duration::from_secs(60)).unwrap();
+        assert_eq!(swept, 1);
+        let ws = &store.workspaces(repo).unwrap()[0];
+        assert_eq!(ws.state, WorkspaceState::Orphaned);
     }
 }

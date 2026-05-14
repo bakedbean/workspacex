@@ -1,3 +1,4 @@
+mod config;
 mod error;
 
 fn main() -> error::Result<()> {

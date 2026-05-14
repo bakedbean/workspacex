@@ -202,6 +202,18 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let area = f.area();
     match &app.view {
         View::Dashboard => {
+            let (dashboard_area, pm_area) = if app.pm_visible {
+                let chunks = ratatui::layout::Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([
+                        ratatui::layout::Constraint::Percentage(60),
+                        ratatui::layout::Constraint::Percentage(40),
+                    ])
+                    .split(area);
+                (chunks[0], Some(chunks[1]))
+            } else {
+                (area, None)
+            };
             let notifications_on = notifications_enabled(&app.store);
             let mut items: Vec<dashboard::Item> = Vec::new();
             for repo in &app.repos {
@@ -311,13 +323,19 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let nerd_fonts = nerd_fonts_enabled(&app.store);
             dashboard::render(
                 f,
-                area,
+                dashboard_area,
                 &items,
                 selected,
                 nerd_fonts,
                 &app.theme,
                 &mut app.dashboard,
             );
+            if let Some(pm_area) = pm_area {
+                if let Some(session) = app.pm.as_ref() {
+                    crate::ui::pm_pane::resize_session(session, pm_area);
+                }
+                crate::ui::pm_pane::render(f, pm_area, app.pm.as_ref(), app.focus, &app.theme);
+            }
         }
         View::Attached(id) => {
             if let Some(session) = app.sessions.get(*id) {
@@ -823,5 +841,55 @@ mod pm_state_tests {
         assert!(app.pm.is_none());
         assert!(!app.pm_visible);
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn dashboard_renders_full_area_when_pm_hidden() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(!app.pm_visible);
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!rendered.contains("Project Manager"), "{rendered}");
+    }
+
+    #[test]
+    fn dashboard_renders_split_with_pm_title_when_visible_even_without_session() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.pm_visible = true; // No session yet — the pane shows a placeholder.
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Project Manager"),
+            "expected pane title in rendered buffer:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Tab to focus"),
+            "expected unfocused hint:\n{rendered}"
+        );
     }
 }

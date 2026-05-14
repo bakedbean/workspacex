@@ -76,6 +76,28 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     Ok(archive_result)
 }
 
+/// Untracked worktrees discovered on disk that the store doesn't know about.
+pub async fn discover_untracked(repo: &Repo, store: &Store) -> Result<Vec<git::WorktreeInfo>> {
+    let live = git::list_worktrees(&repo.path).await?;
+    let tracked: std::collections::HashSet<PathBuf> = store.workspaces(repo.id)?
+        .into_iter().map(|w| w.worktree_path).collect();
+    Ok(live.into_iter()
+        .filter(|w| w.path != repo.path)        // exclude main worktree
+        .filter(|w| !tracked.contains(&w.path))
+        .collect())
+}
+
+/// Import an existing worktree into the registry.
+pub fn import_existing(store: &Store, repo: &Repo, info: &git::WorktreeInfo, name: &str) -> Result<WorkspaceId> {
+    let branch = info.branch.clone().unwrap_or_else(|| "(detached)".into());
+    let id = store.insert_workspace(&NewWorkspace {
+        repo_id: repo.id, name, branch: &branch, worktree_path: &info.path,
+    })?;
+    store.set_workspace_state(id, WorkspaceState::Ready)?;
+    store.set_setup_status(id, SetupStatus::Skipped)?;
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +168,18 @@ mod tests {
             .await.unwrap();
         assert!(store.workspaces(repo.id).unwrap().is_empty());
         assert!(!created.workspace.worktree_path.exists());
+    }
+
+    #[tokio::test]
+    async fn discover_finds_untracked_worktree() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "").await.unwrap();
+        let repo = store.repos().unwrap().into_iter().find(|r| r.id == id).unwrap();
+        let base = TempDir::new().unwrap();
+        let wt = base.path().join("orphan");
+        git::create_worktree(&repo.path, "orphan", &wt).await.unwrap();
+        let found = discover_untracked(&repo, &store).await.unwrap();
+        assert!(found.iter().any(|w| w.path == wt));
     }
 }

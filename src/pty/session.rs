@@ -112,6 +112,44 @@ impl Session {
             Some(text)
         }
     }
+
+    /// Write `text` (with a trailing `\r`) to the PTY after the activity
+    /// stream has been quiet for `quiet_ms` milliseconds following some
+    /// output. If the overall window of `timeout_ms` elapses without ever
+    /// seeing both output AND a quiet window, log a warning and return
+    /// without writing.
+    ///
+    /// Used to gate the PM auto-summary message on claude having finished
+    /// rendering its banner + input prompt.
+    pub async fn send_text_when_settled(&self, text: &str, quiet_ms: u64, timeout_ms: u64) {
+        use std::sync::atomic::Ordering;
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        loop {
+            if start.elapsed() >= timeout {
+                tracing::warn!(
+                    text = %text,
+                    "send_text_when_settled: timed out waiting for PTY to settle"
+                );
+                return;
+            }
+            let last = self.activity_ms.load(Ordering::Relaxed);
+            if last > 0 {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let since_last = now_ms.saturating_sub(last);
+                if since_last >= quiet_ms {
+                    let mut payload = text.as_bytes().to_vec();
+                    payload.push(b'\r');
+                    let _ = self.writer.send(payload).await;
+                    return;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
 }
 
 impl Drop for Session {
@@ -278,7 +316,7 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16, mode: SpawnMode) -> Resul
     let pid = child.process_id().unwrap_or(0);
     let parser = Arc::new(Mutex::new(Parser::new(rows, cols, 1000)));
     let status = Arc::new(RwLock::new(SessionStatus::Running { pid }));
-    let activity_ms = Arc::new(AtomicU64::new(now_ms()));
+    let activity_ms = Arc::new(AtomicU64::new(0));
 
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
 
@@ -718,6 +756,66 @@ mod tests {
         let cmd = build_claude_command(&cwd, &mode);
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--continue"), "{dbg}");
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_text_when_settled_writes_after_quiet_window() {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let cwd = PathBuf::from(".");
+        let s = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+            },
+        )
+        .unwrap();
+        // Prime cat with some output so activity_ms is populated, then let it settle.
+        s.writer.send(b"prime\n".to_vec()).await.unwrap();
+        // The helper waits for the quiet window, then writes the payload.
+        // With cat, the payload echoes back into the screen buffer.
+        s.send_text_when_settled("AUTO_MSG", 200, 3_000).await;
+        // Allow cat to echo.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let screen = s.parser.lock().unwrap().screen().contents();
+        assert!(screen.contains("AUTO_MSG"), "screen contents: {screen:?}");
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_text_when_settled_times_out_when_no_output() {
+        unsafe {
+            // cat with no input produces no spontaneous output, so activity_ms
+            // stays 0 and the quiet-window condition is never met.
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let cwd = PathBuf::from(".");
+        let s = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+            },
+        )
+        .unwrap();
+        // Do NOT send any input — cat stays silent, activity_ms never gets set.
+        let start = std::time::Instant::now();
+        s.send_text_when_settled("NEVER_SENT", 200, 500).await;
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(450), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
+        s.kill();
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }

@@ -215,6 +215,9 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     });
                     let secs = session.as_ref().map(|s| {
                         let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+                        if last == 0 {
+                            return 0;
+                        }
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
@@ -259,6 +262,9 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 });
                 let secs = session.as_ref().map(|s| {
                     let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+                    if last == 0 {
+                        return 0;
+                    }
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as u64)

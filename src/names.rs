@@ -274,6 +274,16 @@ pub fn generate_from_seed(seed: u64) -> String {
     format!("{}-{}", ADJECTIVES[a_idx], PLANTS[p_idx])
 }
 
+/// True if `name` looks like a slug we generated (adj-plant from our wordlists).
+/// Used as a guard: we only auto-rename workspaces whose name is still generated.
+pub fn is_generated_slug(name: &str) -> bool {
+    let (a, p) = match name.split_once('-') {
+        Some(pair) => pair,
+        None => return false,
+    };
+    ADJECTIVES.contains(&a) && PLANTS.contains(&p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +301,15 @@ mod tests {
     fn generate_from_seed_is_deterministic() {
         assert_eq!(generate_from_seed(42), generate_from_seed(42));
         assert_ne!(generate_from_seed(42), generate_from_seed(43));
+    }
+
+    #[test]
+    fn detects_generated_slug() {
+        // Pick a known pair from the wordlists.
+        let example = generate_from_seed(42);
+        assert!(is_generated_slug(&example));
+        assert!(!is_generated_slug("fix-login-bug"));
+        assert!(!is_generated_slug("single"));
+        assert!(!is_generated_slug(""));
     }
 }

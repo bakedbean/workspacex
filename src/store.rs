@@ -140,6 +140,14 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_workspace_branch(&self, id: WorkspaceId, branch: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+            rusqlite::params![branch, id.0],
+        )?;
+        Ok(())
+    }
+
     pub fn set_workspace_state(&self, id: WorkspaceId, state: WorkspaceState) -> Result<()> {
         self.conn.execute(
             "UPDATE workspaces SET state = ?1 WHERE id = ?2",

@@ -11,6 +11,12 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use vt100::Parser;
 
+#[derive(Default)]
+pub struct PromptCapture {
+    buffer: String,
+    pub done: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum SessionStatus {
     Running { pid: u32 },
@@ -24,6 +30,7 @@ pub struct Session {
     pub activity_ms: Arc<AtomicU64>,
     master: Box<dyn MasterPty + Send>,
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
+    pub prompt: Arc<Mutex<PromptCapture>>,
 }
 
 impl Session {
@@ -44,6 +51,36 @@ impl Session {
     /// Idempotent; safe to call multiple times.
     pub fn kill(&self) {
         let _ = self.killer.lock().unwrap().kill();
+    }
+
+    pub fn capture_char(&self, c: char) {
+        let mut p = self.prompt.lock().unwrap();
+        if !p.done && p.buffer.chars().count() < 200 {
+            p.buffer.push(c);
+        }
+    }
+
+    pub fn capture_backspace(&self) {
+        let mut p = self.prompt.lock().unwrap();
+        if !p.done {
+            p.buffer.pop();
+        }
+    }
+
+    /// Take the captured prompt and mark capture as done. Returns None if
+    /// already taken or buffer is empty/whitespace.
+    pub fn take_first_prompt(&self) -> Option<String> {
+        let mut p = self.prompt.lock().unwrap();
+        if p.done {
+            return None;
+        }
+        p.done = true;
+        let text = std::mem::take(&mut p.buffer);
+        if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        }
     }
 }
 
@@ -133,6 +170,8 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
         }
     });
 
+    let prompt = Arc::new(Mutex::new(PromptCapture::default()));
+
     Ok(Session {
         parser,
         writer: tx,
@@ -140,6 +179,7 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
         activity_ms,
         master: pair.master,
         killer: Mutex::new(killer),
+        prompt,
     })
 }
 

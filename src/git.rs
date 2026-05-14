@@ -161,6 +161,11 @@ pub async fn branch_delete(repo: &Path, branch: &str, force: bool) -> Result<()>
     Ok(())
 }
 
+pub async fn rename_branch(repo: &Path, old: &str, new: &str) -> Result<()> {
+    run(repo, &["branch", "-m", old, new]).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod worktree_tests {
     use super::tests::init_repo;

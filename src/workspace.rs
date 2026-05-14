@@ -121,6 +121,54 @@ pub fn import_existing(
     Ok(id)
 }
 
+/// Slugify a free-text prompt into a kebab-case workspace name.
+/// Returns None if the result is too short to be useful.
+pub fn slugify_prompt(text: &str) -> Option<String> {
+    let cleaned: String = text
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let words: Vec<&str> = cleaned.split('-').filter(|s| !s.is_empty()).collect();
+    if words.is_empty() {
+        return None;
+    }
+
+    // Drop stopwords from the front so "fix the bug" -> "fix-bug" not "fix-the".
+    const STOP: &[&str] = &[
+        "the", "a", "an", "to", "for", "of", "and", "or", "is", "in", "on",
+    ];
+    let picked: Vec<&&str> = words.iter().filter(|w| !STOP.contains(w)).take(5).collect();
+    if picked.is_empty() {
+        return None;
+    }
+
+    let mut slug = picked.iter().map(|s| **s).collect::<Vec<&str>>().join("-");
+    if slug.len() > 32 {
+        slug.truncate(32);
+        slug = slug.trim_end_matches('-').to_string();
+    }
+    if slug.len() < 6 { None } else { Some(slug) }
+}
+
+/// Rename a workspace's name AND its git branch. Idempotent.
+/// Caller is responsible for refreshing App state after.
+pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) -> Result<()> {
+    if new_name == ws.name {
+        return Ok(());
+    }
+    let new_branch = if repo.branch_prefix.is_empty() {
+        new_name.to_string()
+    } else {
+        format!("{}/{}", repo.branch_prefix.trim_end_matches('/'), new_name)
+    };
+    // Branch rename first — if it fails (e.g. name collision), DB stays intact.
+    git::rename_branch(&repo.path, &ws.branch, &new_branch).await?;
+    store.rename_workspace(ws.id, new_name)?;
+    store.set_workspace_branch(ws.id, &new_branch)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +295,64 @@ mod tests {
         .unwrap();
         assert!(store.workspaces(repo.id).unwrap().is_empty());
         assert!(!created.workspace.worktree_path.exists());
+    }
+
+    #[test]
+    fn slugify_basic() {
+        assert_eq!(
+            slugify_prompt("fix the login form validation bug"),
+            Some("fix-login-form-validation-bug".into())
+        );
+        assert_eq!(slugify_prompt("hi"), None);
+        assert_eq!(slugify_prompt("..."), None);
+        assert_eq!(
+            slugify_prompt("Fix Issue #123!!"),
+            Some("fix-issue-123".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_updates_name_and_branch() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let created = create(&store, &repo, Some("alpha"), base.path(), |_| {})
+            .await
+            .unwrap();
+
+        rename(&store, &repo, &created.workspace, "fix-bug")
+            .await
+            .unwrap();
+
+        let refreshed = store.workspaces(repo.id).unwrap();
+        let ws = refreshed
+            .iter()
+            .find(|w| w.id == created.workspace.id)
+            .unwrap();
+        assert_eq!(ws.name, "fix-bug");
+        assert_eq!(ws.branch, "wsx/fix-bug");
+
+        // Confirm the git branch was actually renamed.
+        let branches = std::process::Command::new("git")
+            .current_dir(&repo.path)
+            .args(["branch", "--list", "--format=%(refname:short)"])
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&branches.stdout);
+        assert!(
+            out.lines().any(|b| b == "wsx/fix-bug"),
+            "expected wsx/fix-bug branch, got: {out}"
+        );
+        assert!(!out.lines().any(|b| b == "wsx/alpha"));
     }
 
     #[tokio::test]

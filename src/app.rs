@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use crate::error::Result;
 use crate::pty::session::SessionManager;
 use crate::store::{Repo, Store, Workspace, WorkspaceId};
@@ -258,6 +260,35 @@ async fn handle_key_attached(
     let bytes = encode_key(k);
     if !bytes.is_empty() {
         let _ = session.writer.send(bytes).await;
+    }
+    // Auto-rename capture: buffer printable chars; on Enter, attempt rename if
+    // the workspace name is still a generated slug.
+    match k.code {
+        KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => session.capture_char(c),
+        KeyCode::Backspace => session.capture_backspace(),
+        KeyCode::Enter => {
+            if let Some(prompt) = session.take_first_prompt() {
+                if let Some(slug) = crate::workspace::slugify_prompt(&prompt) {
+                    let ws_info = app
+                        .workspaces
+                        .iter()
+                        .find(|(_, w)| w.id == id)
+                        .map(|(_, w)| w.clone());
+                    if let Some(ws) = ws_info {
+                        if crate::names::is_generated_slug(&ws.name) {
+                            let repo = app.repos.iter().find(|r| r.id == ws.repo_id).cloned();
+                            if let Some(repo) = repo {
+                                // Fire-and-forget: rename failure shouldn't disrupt the keystroke.
+                                let _ =
+                                    crate::workspace::rename(&app.store, &repo, &ws, &slug).await;
+                                app.refresh()?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {} // arrows, function keys, etc. — not part of the prompt
     }
     Ok(())
 }

@@ -18,12 +18,20 @@ impl Dirs {
 
     #[cfg(test)]
     pub fn for_test(root: impl AsRef<Path>) -> Self {
-        Self { state_root: root.as_ref().to_path_buf() }
+        Self {
+            state_root: root.as_ref().to_path_buf(),
+        }
     }
 
-    pub fn app_dir(&self) -> PathBuf { self.state_root.join("wsx") }
-    pub fn db_path(&self) -> PathBuf { self.app_dir().join("state.db") }
-    pub fn log_dir(&self) -> PathBuf { self.app_dir().join("logs") }
+    pub fn app_dir(&self) -> PathBuf {
+        self.state_root.join("wsx")
+    }
+    pub fn db_path(&self) -> PathBuf {
+        self.app_dir().join("state.db")
+    }
+    pub fn log_dir(&self) -> PathBuf {
+        self.app_dir().join("logs")
+    }
 
     pub fn ensure(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(self.log_dir())
@@ -37,7 +45,13 @@ mod tests {
     #[test]
     fn db_path_under_state_dir() {
         let dirs = Dirs::for_test("/tmp/wsx-test-home");
-        assert_eq!(dirs.db_path(), std::path::PathBuf::from("/tmp/wsx-test-home/wsx/state.db"));
-        assert_eq!(dirs.log_dir(), std::path::PathBuf::from("/tmp/wsx-test-home/wsx/logs"));
+        assert_eq!(
+            dirs.db_path(),
+            std::path::PathBuf::from("/tmp/wsx-test-home/wsx/state.db")
+        );
+        assert_eq!(
+            dirs.log_dir(),
+            std::path::PathBuf::from("/tmp/wsx-test-home/wsx/logs")
+        );
     }
 }

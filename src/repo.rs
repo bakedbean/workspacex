@@ -11,9 +11,13 @@ pub async fn add(store: &Store, path: &Path, name: &str, branch_prefix: &str) ->
     store.add_repo(path, name, branch_prefix)
 }
 
-pub fn list(store: &Store) -> Result<Vec<Repo>> { store.repos() }
+pub fn list(store: &Store) -> Result<Vec<Repo>> {
+    store.repos()
+}
 
-pub fn remove(store: &Store, id: RepoId) -> Result<()> { store.remove_repo(id) }
+pub fn remove(store: &Store, id: RepoId) -> Result<()> {
+    store.remove_repo(id)
+}
 
 #[cfg(test)]
 mod tests {
@@ -23,7 +27,11 @@ mod tests {
     fn init_git_repo() -> TempDir {
         let dir = TempDir::new().unwrap();
         let run = |args: &[&str]| {
-            let s = std::process::Command::new("git").current_dir(dir.path()).args(args).status().unwrap();
+            let s = std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .status()
+                .unwrap();
             assert!(s.success());
         };
         run(&["init", "-q", "-b", "main"]);

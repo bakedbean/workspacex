@@ -20,10 +20,11 @@ pub struct RepoConfig {
 
 pub fn load_repo_config(repo_root: &Path) -> Result<RepoConfig> {
     let path = repo_root.join(".claudette.json");
-    if !path.exists() { return Ok(RepoConfig::default()); }
+    if !path.exists() {
+        return Ok(RepoConfig::default());
+    }
     let text = std::fs::read_to_string(&path)?;
-    serde_json::from_str(&text)
-        .map_err(|e| Error::Setup(format!(".claudette.json parse: {e}")))
+    serde_json::from_str(&text).map_err(|e| Error::Setup(format!(".claudette.json parse: {e}")))
 }
 
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -80,9 +81,13 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    for (k, v) in &spec.env { cmd.env(k, v); }
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
 
-    let mut child = cmd.spawn().map_err(|e| Error::Setup(format!("spawn: {e}")))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| Error::Setup(format!("spawn: {e}")))?;
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
 
@@ -104,12 +109,24 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
         }
     }
     // Drain any remaining stderr after stdout closes (and vice versa).
-    while let Ok(Some(l)) = out_reader.next_line().await { on_line(SetupLine::Stdout(l)); }
-    while let Ok(Some(l)) = err_reader.next_line().await { on_line(SetupLine::Stderr(l)); }
+    while let Ok(Some(l)) = out_reader.next_line().await {
+        on_line(SetupLine::Stdout(l));
+    }
+    while let Ok(Some(l)) = err_reader.next_line().await {
+        on_line(SetupLine::Stderr(l));
+    }
 
-    let status = child.wait().await.map_err(|e| Error::Setup(format!("wait: {e}")))?;
-    if status.success() { Ok(SetupResult::Ok) }
-    else { Ok(SetupResult::Failed { exit_code: status.code().unwrap_or(-1) }) }
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| Error::Setup(format!("wait: {e}")))?;
+    if status.success() {
+        Ok(SetupResult::Ok)
+    } else {
+        Ok(SetupResult::Failed {
+            exit_code: status.code().unwrap_or(-1),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -128,10 +145,14 @@ mod tests {
     #[test]
     fn parses_setup_and_archive() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join(".claudette.json"), r#"{
+        std::fs::write(
+            dir.path().join(".claudette.json"),
+            r#"{
             "setup":   { "command": "bash", "args": ["-c", "echo hi"] },
             "archive": { "command": "true" }
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let cfg = load_repo_config(dir.path()).unwrap();
         assert_eq!(cfg.setup.as_ref().unwrap().command, "bash");
         assert_eq!(cfg.setup.as_ref().unwrap().args, vec!["-c", "echo hi"]);
@@ -149,11 +170,15 @@ mod tests {
     #[test]
     fn ignores_unknown_fields() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join(".claudette.json"), r#"{
+        std::fs::write(
+            dir.path().join(".claudette.json"),
+            r#"{
             "setup": { "command": "true" },
             "env_providers": ["direnv"],
             "mcp": {"servers": []}
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let cfg = load_repo_config(dir.path()).unwrap();
         assert!(cfg.setup.is_some());
     }
@@ -180,23 +205,39 @@ mod run_tests {
     #[tokio::test]
     async fn setup_streams_output_and_succeeds() {
         let repo = TempDir::new().unwrap();
-        write_cfg(repo.path(), r#"{"setup":{"command":"sh","args":["-c","echo hello; echo bye 1>&2"]}}"#);
+        write_cfg(
+            repo.path(),
+            r#"{"setup":{"command":"sh","args":["-c","echo hello; echo bye 1>&2"]}}"#,
+        );
         let wt = TempDir::new().unwrap();
         let lines = Arc::new(Mutex::new(Vec::new()));
         let lines2 = lines.clone();
         let r = run_setup(repo.path(), wt.path(), move |l| {
             lines2.lock().unwrap().push(l);
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         matches!(r, SetupResult::Ok);
         let lines = lines.lock().unwrap();
-        assert!(lines.iter().any(|l| matches!(l, SetupLine::Stdout(s) if s == "hello")));
-        assert!(lines.iter().any(|l| matches!(l, SetupLine::Stderr(s) if s == "bye")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| matches!(l, SetupLine::Stdout(s) if s == "hello"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| matches!(l, SetupLine::Stderr(s) if s == "bye"))
+        );
     }
 
     #[tokio::test]
     async fn setup_reports_nonzero_exit() {
         let repo = TempDir::new().unwrap();
-        write_cfg(repo.path(), r#"{"setup":{"command":"sh","args":["-c","exit 7"]}}"#);
+        write_cfg(
+            repo.path(),
+            r#"{"setup":{"command":"sh","args":["-c","exit 7"]}}"#,
+        );
         let wt = TempDir::new().unwrap();
         let r = run_setup(repo.path(), wt.path(), |_| {}).await.unwrap();
         match r {
@@ -208,14 +249,25 @@ mod run_tests {
     #[tokio::test]
     async fn setup_injects_env_vars() {
         let repo = TempDir::new().unwrap();
-        write_cfg(repo.path(), r#"{"setup":{"command":"sh","args":["-c","echo $WSX_WORKTREE"]}}"#);
+        write_cfg(
+            repo.path(),
+            r#"{"setup":{"command":"sh","args":["-c","echo $WSX_WORKTREE"]}}"#,
+        );
         let wt = TempDir::new().unwrap();
         let lines = Arc::new(Mutex::new(Vec::new()));
         let lines2 = lines.clone();
         run_setup(repo.path(), wt.path(), move |l| {
             lines2.lock().unwrap().push(l);
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         let expected = wt.path().to_string_lossy().to_string();
-        assert!(lines.lock().unwrap().iter().any(|l| matches!(l, SetupLine::Stdout(s) if *s == expected)));
+        assert!(
+            lines
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|l| matches!(l, SetupLine::Stdout(s) if *s == expected))
+        );
     }
 }

@@ -10,10 +10,20 @@ pub struct RepoId(pub i64);
 pub struct WorkspaceId(pub i64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkspaceState { Pending, Ready, Failed, Orphaned }
+pub enum WorkspaceState {
+    Pending,
+    Ready,
+    Failed,
+    Orphaned,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SetupStatus { NotRun, Skipped, Ok, Failed }
+pub enum SetupStatus {
+    NotRun,
+    Skipped,
+    Ok,
+    Failed,
+}
 
 #[derive(Debug, Clone)]
 pub struct Repo {
@@ -44,7 +54,9 @@ pub struct NewWorkspace<'a> {
     pub worktree_path: &'a Path,
 }
 
-pub struct Store { conn: Connection }
+pub struct Store {
+    conn: Connection,
+}
 
 impl Store {
     pub fn open_in_memory() -> Result<Self> {
@@ -81,15 +93,17 @@ impl Store {
     }
 
     pub fn remove_repo(&self, id: RepoId) -> Result<()> {
-        self.conn.execute("DELETE FROM workspaces WHERE repo_id = ?1", [id.0])?;
-        self.conn.execute("DELETE FROM repos WHERE id = ?1", [id.0])?;
+        self.conn
+            .execute("DELETE FROM workspaces WHERE repo_id = ?1", [id.0])?;
+        self.conn
+            .execute("DELETE FROM repos WHERE id = ?1", [id.0])?;
         Ok(())
     }
 
     pub fn repos(&self) -> Result<Vec<Repo>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, branch_prefix, created_at FROM repos ORDER BY id"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, path, branch_prefix, created_at FROM repos ORDER BY id")?;
         let rows = stmt.query_map([], |r| {
             Ok(Repo {
                 id: RepoId(r.get(0)?),
@@ -113,31 +127,39 @@ impl Store {
     }
 
     pub fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
-        self.conn.execute("DELETE FROM workspaces WHERE id = ?1", [id.0])?;
+        self.conn
+            .execute("DELETE FROM workspaces WHERE id = ?1", [id.0])?;
         Ok(())
     }
 
     pub fn rename_workspace(&self, id: WorkspaceId, name: &str) -> Result<()> {
-        self.conn.execute("UPDATE workspaces SET name = ?1 WHERE id = ?2", rusqlite::params![name, id.0])?;
+        self.conn.execute(
+            "UPDATE workspaces SET name = ?1 WHERE id = ?2",
+            rusqlite::params![name, id.0],
+        )?;
         Ok(())
     }
 
     pub fn set_workspace_state(&self, id: WorkspaceId, state: WorkspaceState) -> Result<()> {
-        self.conn.execute("UPDATE workspaces SET state = ?1 WHERE id = ?2",
-            rusqlite::params![state_label(&state), id.0])?;
+        self.conn.execute(
+            "UPDATE workspaces SET state = ?1 WHERE id = ?2",
+            rusqlite::params![state_label(&state), id.0],
+        )?;
         Ok(())
     }
 
     pub fn set_setup_status(&self, id: WorkspaceId, status: SetupStatus) -> Result<()> {
-        self.conn.execute("UPDATE workspaces SET setup_status = ?1 WHERE id = ?2",
-            rusqlite::params![setup_label(&status), id.0])?;
+        self.conn.execute(
+            "UPDATE workspaces SET setup_status = ?1 WHERE id = ?2",
+            rusqlite::params![setup_label(&status), id.0],
+        )?;
         Ok(())
     }
 
     pub fn workspaces(&self, repo_id: RepoId) -> Result<Vec<Workspace>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at
-             FROM workspaces WHERE repo_id = ?1 ORDER BY id"
+             FROM workspaces WHERE repo_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([repo_id.0], |r| {
             Ok(Workspace {
@@ -197,20 +219,36 @@ fn now_ms() -> i64 {
 }
 
 fn state_label(s: &WorkspaceState) -> &'static str {
-    match s { WorkspaceState::Pending => "Pending", WorkspaceState::Ready => "Ready",
-              WorkspaceState::Failed => "Failed", WorkspaceState::Orphaned => "Orphaned" }
+    match s {
+        WorkspaceState::Pending => "Pending",
+        WorkspaceState::Ready => "Ready",
+        WorkspaceState::Failed => "Failed",
+        WorkspaceState::Orphaned => "Orphaned",
+    }
 }
 fn parse_state(s: &str) -> WorkspaceState {
-    match s { "Pending" => WorkspaceState::Pending, "Ready" => WorkspaceState::Ready,
-              "Failed" => WorkspaceState::Failed, _ => WorkspaceState::Orphaned }
+    match s {
+        "Pending" => WorkspaceState::Pending,
+        "Ready" => WorkspaceState::Ready,
+        "Failed" => WorkspaceState::Failed,
+        _ => WorkspaceState::Orphaned,
+    }
 }
 fn setup_label(s: &SetupStatus) -> &'static str {
-    match s { SetupStatus::NotRun => "NotRun", SetupStatus::Skipped => "Skipped",
-              SetupStatus::Ok => "Ok", SetupStatus::Failed => "Failed" }
+    match s {
+        SetupStatus::NotRun => "NotRun",
+        SetupStatus::Skipped => "Skipped",
+        SetupStatus::Ok => "Ok",
+        SetupStatus::Failed => "Failed",
+    }
 }
 fn parse_setup(s: &str) -> SetupStatus {
-    match s { "Ok" => SetupStatus::Ok, "Failed" => SetupStatus::Failed,
-              "Skipped" => SetupStatus::Skipped, _ => SetupStatus::NotRun }
+    match s {
+        "Ok" => SetupStatus::Ok,
+        "Failed" => SetupStatus::Failed,
+        "Skipped" => SetupStatus::Skipped,
+        _ => SetupStatus::NotRun,
+    }
 }
 
 #[cfg(test)]
@@ -223,7 +261,10 @@ mod tests {
         // Calling migrate again should not fail.
         store.migrate().unwrap();
         // Tables exist by querying their count.
-        let count: i64 = store.conn.query_row("SELECT count(*) FROM repos", [], |r| r.get(0)).unwrap();
+        let count: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM repos", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 0);
     }
 
@@ -254,19 +295,23 @@ mod tests {
     fn workspace_lifecycle() {
         let store = Store::open_in_memory().unwrap();
         let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
-        let id = store.insert_workspace(&NewWorkspace {
-            repo_id: repo,
-            name: "fix-bug",
-            branch: "wsx/fix-bug",
-            worktree_path: Path::new("/wts/fix-bug"),
-        }).unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "fix-bug",
+                branch: "wsx/fix-bug",
+                worktree_path: Path::new("/wts/fix-bug"),
+            })
+            .unwrap();
 
         let ws = store.workspaces(repo).unwrap();
         assert_eq!(ws.len(), 1);
         assert_eq!(ws[0].state, WorkspaceState::Pending);
         assert_eq!(ws[0].setup_status, SetupStatus::NotRun);
 
-        store.set_workspace_state(id, WorkspaceState::Ready).unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
         store.set_setup_status(id, SetupStatus::Ok).unwrap();
 
         let ws = store.workspaces(repo).unwrap();
@@ -282,14 +327,19 @@ mod tests {
         use std::time::Duration;
         let store = Store::open_in_memory().unwrap();
         let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
-        let id = store.insert_workspace(&NewWorkspace {
-            repo_id: repo,
-            name: "stuck",
-            branch: "wsx/stuck",
-            worktree_path: Path::new("/wts/stuck"),
-        }).unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "stuck",
+                branch: "wsx/stuck",
+                worktree_path: Path::new("/wts/stuck"),
+            })
+            .unwrap();
         // Backdate the row to look stale.
-        store.conn.execute("UPDATE workspaces SET created_at = 0 WHERE id = ?1", [id.0]).unwrap();
+        store
+            .conn
+            .execute("UPDATE workspaces SET created_at = 0 WHERE id = ?1", [id.0])
+            .unwrap();
 
         let swept = store.sweep_stale_pending(Duration::from_secs(60)).unwrap();
         assert_eq!(swept, 1);

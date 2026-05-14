@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if, clippy::arc_with_non_send_sync)]
+
 use crate::error::{Error, Result};
 use crate::store::WorkspaceId;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -26,7 +28,13 @@ pub struct Session {
 
 impl Session {
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        self.master.resize(PtySize { cols, rows, pixel_width: 0, pixel_height: 0 })
+        self.master
+            .resize(PtySize {
+                cols,
+                rows,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(|e| Error::Pty(format!("resize: {e}")))?;
         self.parser.lock().unwrap().set_size(rows, cols);
         Ok(())
@@ -51,16 +59,26 @@ pub fn build_claude_command(cwd: &Path) -> CommandBuilder {
     let bin = std::env::var("WSX_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
     let mut cmd = CommandBuilder::new(bin);
     cmd.cwd(cwd);
-    for (k, v) in std::env::vars() { cmd.env(k, v); }
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
     cmd
 }
 
 pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
     let pty_system = native_pty_system();
-    let pair = pty_system.openpty(PtySize { cols, rows, pixel_width: 0, pixel_height: 0 })
+    let pair = pty_system
+        .openpty(PtySize {
+            cols,
+            rows,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
 
-    let mut child = pair.slave.spawn_command(build_claude_command(cwd))
+    let mut child = pair
+        .slave
+        .spawn_command(build_claude_command(cwd))
         .map_err(|e| Error::Pty(format!("spawn: {e}")))?;
     drop(pair.slave);
 
@@ -73,7 +91,9 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
 
     // Reader thread (blocking I/O on PTY master clone).
-    let mut reader = pair.master.try_clone_reader()
+    let mut reader = pair
+        .master
+        .try_clone_reader()
         .map_err(|e| Error::Pty(format!("clone reader: {e}")))?;
     let parser_r = parser.clone();
     let activity_r = activity_ms.clone();
@@ -100,11 +120,15 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
     });
 
     // Writer task on tokio.
-    let mut writer = pair.master.take_writer()
+    let mut writer = pair
+        .master
+        .take_writer()
         .map_err(|e| Error::Pty(format!("take writer: {e}")))?;
     tokio::spawn(async move {
         while let Some(bytes) = rx.recv().await {
-            if writer.write_all(&bytes).is_err() { break; }
+            if writer.write_all(&bytes).is_err() {
+                break;
+            }
             let _ = writer.flush();
         }
     });
@@ -121,17 +145,36 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
 
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub struct SessionManager {
     sessions: HashMap<WorkspaceId, Arc<Session>>,
 }
 
-impl SessionManager {
-    pub fn new() -> Self { Self { sessions: HashMap::new() } }
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-    pub fn spawn(&mut self, id: WorkspaceId, cwd: &Path, cols: u16, rows: u16) -> Result<Arc<Session>> {
+impl SessionManager {
+    pub fn new() -> Self {
+        Self {
+            sessions: HashMap::new(),
+        }
+    }
+
+    pub fn spawn(
+        &mut self,
+        id: WorkspaceId,
+        cwd: &Path,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Arc<Session>> {
         if let Some(s) = self.sessions.get(&id) {
             if matches!(*s.status.read().unwrap(), SessionStatus::Running { .. }) {
                 return Ok(s.clone());
@@ -143,7 +186,9 @@ impl SessionManager {
         Ok(session)
     }
 
-    pub fn get(&self, id: WorkspaceId) -> Option<Arc<Session>> { self.sessions.get(&id).cloned() }
+    pub fn get(&self, id: WorkspaceId) -> Option<Arc<Session>> {
+        self.sessions.get(&id).cloned()
+    }
 
     pub fn kill_all(&mut self) {
         for s in self.sessions.values() {
@@ -160,13 +205,19 @@ mod tests {
     use std::time::Duration;
 
     fn echo_bin() -> &'static str {
-        if std::path::Path::new("/usr/bin/cat").exists() { "/usr/bin/cat" } else { "cat" }
+        if std::path::Path::new("/usr/bin/cat").exists() {
+            "/usr/bin/cat"
+        } else {
+            "cat"
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_echo() {
         // Substitute claude with `cat` via the env-var seam.
-        unsafe { std::env::set_var("WSX_CLAUDE_BIN", echo_bin()); }
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", echo_bin());
+        }
         let cwd = PathBuf::from(".");
         let s = spawn_session(&cwd, 80, 24).unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
@@ -174,35 +225,56 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("hello"), "screen contents: {screen:?}");
-        unsafe { std::env::remove_var("WSX_CLAUDE_BIN"); }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn missing_binary_returns_pty_error() {
-        unsafe { std::env::set_var("WSX_CLAUDE_BIN", "/no/such/binary/wsx-test"); }
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/no/such/binary/wsx-test");
+        }
         let cwd = PathBuf::from(".");
         let result = spawn_session(&cwd, 80, 24);
         assert!(result.is_err());
-        unsafe { std::env::remove_var("WSX_CLAUDE_BIN"); }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn kill_all_terminates_child() {
-        unsafe { std::env::set_var("WSX_CLAUDE_BIN", "sleep"); }
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "sleep");
+        }
         // sleep needs an arg; we use sh as a wrapper instead.
-        unsafe { std::env::set_var("WSX_CLAUDE_BIN", "/bin/sh"); }
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/bin/sh");
+        }
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
         let id = crate::store::WorkspaceId(1);
         let session = mgr.spawn(id, &cwd, 80, 24).unwrap();
         // sh -i would run forever; we just check the session was Running.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(matches!(*session.status.read().unwrap(), SessionStatus::Running { .. }));
+        assert!(matches!(
+            *session.status.read().unwrap(),
+            SessionStatus::Running { .. }
+        ));
         mgr.kill_all();
         // Give the reader thread time to observe the kill and update status.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert!(matches!(*session.status.read().unwrap(), SessionStatus::Exited { .. }),
-            "expected Exited after kill_all, got {:?}", *session.status.read().unwrap());
-        unsafe { std::env::remove_var("WSX_CLAUDE_BIN"); }
+        assert!(
+            matches!(
+                *session.status.read().unwrap(),
+                SessionStatus::Exited { .. }
+            ),
+            "expected Exited after kill_all, got {:?}",
+            *session.status.read().unwrap()
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 }

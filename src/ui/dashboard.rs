@@ -1,4 +1,4 @@
-use crate::store::{Repo, Workspace, WorkspaceState, SetupStatus};
+use crate::store::{Repo, SetupStatus, Workspace, WorkspaceState};
 use crate::ui::theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
@@ -21,44 +21,54 @@ pub struct DashboardState {
 pub fn render(f: &mut Frame, area: Rect, rows: &[Row], state: &mut DashboardState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(area);
 
     let header = Paragraph::new("wsx — Workspaces").style(theme::header());
     f.render_widget(header, chunks[0]);
 
-    let items: Vec<ListItem> = rows.iter().map(|r| {
-        let dot = match (r.session_running, &r.workspace.state) {
-            (true, _) => "●",
-            (false, WorkspaceState::Failed) => "✕",
-            _ => "○",
-        };
-        let setup_badge = match r.workspace.setup_status {
-            SetupStatus::Ok | SetupStatus::Skipped | SetupStatus::NotRun => "",
-            SetupStatus::Failed => " [setup-failed]",
-        };
-        let activity = match r.seconds_since_activity {
-            Some(s) if s < 2 => "active",
-            Some(s) if s < 30 => "idle",
-            Some(_) => "waiting",
-            None => "off",
-        };
-        let line = format!(
-            "{dot} {repo}/{name}  [{branch}]  {activity}{setup_badge}",
-            repo = r.repo.name,
-            name = r.workspace.name,
-            branch = r.workspace.branch,
-        );
-        ListItem::new(line)
-    }).collect();
+    let items: Vec<ListItem> = rows
+        .iter()
+        .map(|r| {
+            let dot = match (r.session_running, &r.workspace.state) {
+                (true, _) => "●",
+                (false, WorkspaceState::Failed) => "✕",
+                _ => "○",
+            };
+            let setup_badge = match r.workspace.setup_status {
+                SetupStatus::Ok | SetupStatus::Skipped | SetupStatus::NotRun => "",
+                SetupStatus::Failed => " [setup-failed]",
+            };
+            let activity = match r.seconds_since_activity {
+                Some(s) if s < 2 => "active",
+                Some(s) if s < 30 => "idle",
+                Some(_) => "waiting",
+                None => "off",
+            };
+            let line = format!(
+                "{dot} {repo}/{name}  [{branch}]  {activity}{setup_badge}",
+                repo = r.repo.name,
+                name = r.workspace.name,
+                branch = r.workspace.branch,
+            );
+            ListItem::new(line)
+        })
+        .collect();
 
-    state.list_state.select(Some(state.selected.min(items.len().saturating_sub(1))));
+    state
+        .list_state
+        .select(Some(state.selected.min(items.len().saturating_sub(1))));
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL))
         .highlight_style(theme::selected());
     f.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
-    let footer = Paragraph::new("[enter] attach   [n] new   [d] archive   [q] quit").style(theme::dim());
+    let footer =
+        Paragraph::new("[enter] attach   [n] new   [d] archive   [q] quit").style(theme::dim());
     f.render_widget(footer, chunks[2]);
 }
 
@@ -66,21 +76,39 @@ pub fn render(f: &mut Frame, area: Rect, rows: &[Row], state: &mut DashboardStat
 mod tests {
     use super::*;
     use crate::store::{RepoId, WorkspaceId};
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use std::path::PathBuf;
 
     #[test]
     fn renders_one_row_with_active_status() {
         let mut term = Terminal::new(TestBackend::new(60, 5)).unwrap();
-        let repo = Repo { id: RepoId(1), name: "demo".into(), path: PathBuf::from("/r"),
-                          branch_prefix: "".into(), created_at: 0 };
-        let ws = Workspace { id: WorkspaceId(1), repo_id: RepoId(1), name: "alpha".into(),
-                             branch: "alpha".into(), worktree_path: PathBuf::from("/w"),
-                             state: WorkspaceState::Ready, setup_status: SetupStatus::Ok, created_at: 0 };
-        let rows = vec![Row { repo: &repo, workspace: &ws, session_running: true, seconds_since_activity: Some(0) }];
+        let repo = Repo {
+            id: RepoId(1),
+            name: "demo".into(),
+            path: PathBuf::from("/r"),
+            branch_prefix: "".into(),
+            created_at: 0,
+        };
+        let ws = Workspace {
+            id: WorkspaceId(1),
+            repo_id: RepoId(1),
+            name: "alpha".into(),
+            branch: "alpha".into(),
+            worktree_path: PathBuf::from("/w"),
+            state: WorkspaceState::Ready,
+            setup_status: SetupStatus::Ok,
+            created_at: 0,
+        };
+        let rows = vec![Row {
+            repo: &repo,
+            workspace: &ws,
+            session_running: true,
+            seconds_since_activity: Some(0),
+        }];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &rows, &mut state)).unwrap();
+        term.draw(|f| render(f, f.area(), &rows, &mut state))
+            .unwrap();
         let buf = term.backend().buffer();
         let line1: String = (0..60).map(|x| buf[(x, 2)].symbol().to_string()).collect();
         assert!(line1.contains("demo/alpha"));

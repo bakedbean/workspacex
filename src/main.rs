@@ -1,11 +1,15 @@
-use wsx::{app, cli, config, error::Result, git, store};
+#![allow(clippy::arc_with_non_send_sync)]
+
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use wsx::{app, cli, config, error::Result, git, store};
 
 fn install_panic_hook() {
     let default = std::panic::take_hook();
@@ -31,9 +35,12 @@ async fn main() -> Result<()> {
 
     let file_appender = tracing_appender::rolling::daily(dirs.log_dir(), "wsx.log");
     let (nb, _guard) = tracing_appender::non_blocking(file_appender);
-    tracing_subscriber::fmt().with_writer(nb)
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")))
+    tracing_subscriber::fmt()
+        .with_writer(nb)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
     git::preflight().await?;

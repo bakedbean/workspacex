@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
@@ -5,11 +7,19 @@ use tokio::process::Command;
 /// Run `git -C <cwd> <args...>` and return stdout on success, mapping
 /// non-zero exit + stderr into `Error::Git`.
 async fn run(cwd: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git").arg("-C").arg(cwd).args(args)
-        .output().await.map_err(|e| Error::Git(format!("spawn git: {e}")))?;
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| Error::Git(format!("spawn git: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(Error::Git(format!("git {} failed: {stderr}", args.join(" "))));
+        return Err(Error::Git(format!(
+            "git {} failed: {stderr}",
+            args.join(" ")
+        )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -17,7 +27,10 @@ async fn run(cwd: &Path, args: &[&str]) -> Result<String> {
 pub async fn validate_repo(path: &Path) -> Result<()> {
     let out = run(path, &["rev-parse", "--is-inside-work-tree"]).await?;
     if out.trim() != "true" {
-        return Err(Error::Git(format!("{} is not a git work tree", path.display())));
+        return Err(Error::Git(format!(
+            "{} is not a git work tree",
+            path.display()
+        )));
     }
     Ok(())
 }
@@ -33,7 +46,10 @@ pub async fn head_commit(path: &Path) -> Result<String> {
 }
 
 pub async fn preflight() -> Result<()> {
-    let out = Command::new("git").arg("--version").output().await
+    let out = Command::new("git")
+        .arg("--version")
+        .output()
+        .await
         .map_err(|e| Error::Git(format!("git not found on PATH: {e}")))?;
     if !out.status.success() {
         return Err(Error::Git("git --version failed".into()));
@@ -50,7 +66,11 @@ pub(super) mod tests {
     pub(super) fn init_repo() -> TempDir {
         let dir = TempDir::new().unwrap();
         let run = |args: &[&str]| {
-            let status = StdCmd::new("git").current_dir(dir.path()).args(args).status().unwrap();
+            let status = StdCmd::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .status()
+                .unwrap();
             assert!(status.success(), "git {:?} failed", args);
         };
         run(&["init", "-q", "-b", "main"]);
@@ -111,17 +131,27 @@ pub async fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeInfo>> {
     let mut cur: Option<WorktreeInfo> = None;
     for line in out.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
-            if let Some(w) = cur.take() { result.push(w); }
-            cur = Some(WorktreeInfo { path: PathBuf::from(p), branch: None, head: None });
+            if let Some(w) = cur.take() {
+                result.push(w);
+            }
+            cur = Some(WorktreeInfo {
+                path: PathBuf::from(p),
+                branch: None,
+                head: None,
+            });
         } else if let Some(h) = line.strip_prefix("HEAD ") {
-            if let Some(c) = cur.as_mut() { c.head = Some(h.to_string()); }
+            if let Some(c) = cur.as_mut() {
+                c.head = Some(h.to_string());
+            }
         } else if let Some(b) = line.strip_prefix("branch ") {
             if let Some(c) = cur.as_mut() {
                 c.branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
             }
         }
     }
-    if let Some(w) = cur.take() { result.push(w); }
+    if let Some(w) = cur.take() {
+        result.push(w);
+    }
     Ok(result)
 }
 
@@ -133,8 +163,8 @@ pub async fn branch_delete(repo: &Path, branch: &str, force: bool) -> Result<()>
 
 #[cfg(test)]
 mod worktree_tests {
-    use super::*;
     use super::tests::init_repo;
+    use super::*;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -144,7 +174,11 @@ mod worktree_tests {
         let wt = wt_root.path().join("feature");
         create_worktree(repo.path(), "feature", &wt).await.unwrap();
         let listed = list_worktrees(repo.path()).await.unwrap();
-        assert!(listed.iter().any(|w| w.path == wt && w.branch.as_deref() == Some("feature")));
+        assert!(
+            listed
+                .iter()
+                .any(|w| w.path == wt && w.branch.as_deref() == Some("feature"))
+        );
     }
 
     #[tokio::test]

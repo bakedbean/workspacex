@@ -22,7 +22,10 @@ pub fn render(f: &mut Frame, area: Rect, session: &Arc<Session>, label: &str) {
     drop(parser);
 
     let footer = format!(" {label}   [Ctrl-a d] detach   [Ctrl-a a] send Ctrl-a ");
-    f.render_widget(Paragraph::new(footer).style(crate::ui::theme::dim()), chunks[1]);
+    f.render_widget(
+        Paragraph::new(footer).style(crate::ui::theme::dim()),
+        chunks[1],
+    );
 }
 
 pub fn resize_session(session: &Arc<Session>, area: Rect) {

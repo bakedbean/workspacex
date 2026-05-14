@@ -1,3 +1,5 @@
+#![allow(clippy::arc_with_non_send_sync)]
+
 use std::process::Command as StdCmd;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -8,11 +10,20 @@ use ratatui::backend::TestBackend;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dashboard_renders_with_one_repo_one_workspace() {
-    unsafe { std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat"); }
+    unsafe {
+        std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+    }
 
     let repo_dir = TempDir::new().unwrap();
     let r = |args: &[&str]| {
-        assert!(StdCmd::new("git").current_dir(repo_dir.path()).args(args).status().unwrap().success());
+        assert!(
+            StdCmd::new("git")
+                .current_dir(repo_dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
     };
     r(&["init", "-q", "-b", "main"]);
     r(&["config", "user.email", "t@e"]);
@@ -20,12 +31,23 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
     r(&["commit", "--allow-empty", "-q", "-m", "init"]);
 
     let store = wsx::store::Store::open_in_memory().unwrap();
-    let repo_id = wsx::repo::add(&store, repo_dir.path(), "demo", "wsx").await.unwrap();
-    let repo = store.repos().unwrap().into_iter().find(|r| r.id == repo_id).unwrap();
+    let repo_id = wsx::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        .await
+        .unwrap();
+    let repo = store
+        .repos()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == repo_id)
+        .unwrap();
     let base = TempDir::new().unwrap();
-    wsx::workspace::create(&store, &repo, Some("alpha"), base.path(), |_| {}).await.unwrap();
+    wsx::workspace::create(&store, &repo, Some("alpha"), base.path(), |_| {})
+        .await
+        .unwrap();
 
-    let app = Arc::new(Mutex::new(wsx::app::App::new(store, base.path().to_path_buf()).unwrap()));
+    let app = Arc::new(Mutex::new(
+        wsx::app::App::new(store, base.path().to_path_buf()).unwrap(),
+    ));
     let backend = TestBackend::new(80, 10);
     let mut term = Terminal::new(backend).unwrap();
 
@@ -39,9 +61,14 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
     let mut found = false;
     for y in 0..10 {
         let line: String = (0..80).map(|x| buf[(x, y)].symbol().to_string()).collect();
-        if line.contains("demo/alpha") { found = true; break; }
+        if line.contains("demo/alpha") {
+            found = true;
+            break;
+        }
     }
     assert!(found, "dashboard did not show demo/alpha");
 
-    unsafe { std::env::remove_var("WSX_CLAUDE_BIN"); }
+    unsafe {
+        std::env::remove_var("WSX_CLAUDE_BIN");
+    }
 }

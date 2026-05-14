@@ -20,7 +20,11 @@ pub fn render_screen(screen: &Screen, buf: &mut Buffer, area: Rect) {
                 continue;
             };
             let glyph = cell.contents();
-            cell_buf.set_symbol(if glyph.is_empty() { " " } else { glyph.as_str() });
+            cell_buf.set_symbol(if glyph.is_empty() {
+                " "
+            } else {
+                glyph.as_str()
+            });
             cell_buf.set_style(convert_style(cell));
         }
     }

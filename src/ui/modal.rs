@@ -6,18 +6,38 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 #[derive(Debug, Clone)]
 pub enum Modal {
-    NewWorkspace { repo_id: RepoId, name_buffer: String },
-    ConfirmArchive { workspace_id: crate::store::WorkspaceId, name: String },
-    SetupRunning { log: Vec<String> },
-    Error { message: String },
+    NewWorkspace {
+        repo_id: RepoId,
+        name_buffer: String,
+    },
+    ConfirmArchive {
+        workspace_id: crate::store::WorkspaceId,
+        name: String,
+    },
+    SetupRunning {
+        log: Vec<String>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
-    let popup = Layout::default().direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(h), Constraint::Min(0)])
+    let popup = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(h),
+            Constraint::Min(0),
+        ])
         .split(area)[1];
-    Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(w), Constraint::Min(0)])
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(w),
+            Constraint::Min(0),
+        ])
         .split(popup)[1]
 }
 
@@ -40,9 +60,18 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal) {
         }
         Modal::Error { message } => ("error", message.clone()),
     };
-    let style = if matches!(modal, Modal::Error { .. }) { theme::err() } else { theme::header() };
+    let style = if matches!(modal, Modal::Error { .. }) {
+        theme::err()
+    } else {
+        theme::header()
+    };
     let para = Paragraph::new(body)
-        .block(Block::default().borders(Borders::ALL).title(title).title_alignment(Alignment::Left))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_alignment(Alignment::Left),
+        )
         .style(style);
     f.render_widget(para, rect);
 }

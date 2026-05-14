@@ -1,7 +1,7 @@
-pub mod theme;
-pub mod dashboard;
 pub mod attached;
+pub mod dashboard;
 pub mod modal;
+pub mod theme;
 
 use crate::store::WorkspaceId;
 

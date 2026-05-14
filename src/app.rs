@@ -41,6 +41,8 @@ pub struct App {
     pub quit: bool,
     pub workspace_status:
         std::collections::HashMap<crate::store::WorkspaceId, crate::git::WorkspaceStatus>,
+    pub workspace_events:
+        std::collections::HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
 }
 
 impl App {
@@ -58,6 +60,7 @@ impl App {
             ctrl_a_pending: false,
             quit: false,
             workspace_status: std::collections::HashMap::new(),
+            workspace_events: std::collections::HashMap::new(),
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -166,6 +169,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         seconds_since_activity: secs,
                         has_prior_session: has_prior,
                         status: app.workspace_status.get(&ws.id).copied(),
+                        latest_event: app
+                            .workspace_events
+                            .get(&ws.id)
+                            .and_then(|e| e.latest.clone()),
                     });
                 }
                 if count == 0 {
@@ -615,6 +622,36 @@ pub async fn branch_drift_poll(app: SharedApp) {
             if let Ok(status) = crate::git::workspace_status(&path).await {
                 let mut g = app.lock().await;
                 g.workspace_status.insert(id, status);
+            }
+
+            // 3) Tail Claude Code session JSONL for events.
+            //
+            // Lock-ordering: snapshot the previous offset under the lock,
+            // do the file I/O without the lock held, then re-acquire to
+            // commit the new offset + events. This keeps the UI responsive
+            // even when sessions grow large.
+            let current_file = crate::events::locate_session_file(&path);
+            let prev_offset = {
+                let g = app.lock().await;
+                match (g.workspace_events.get(&id), current_file.as_ref()) {
+                    (Some(evt), Some(f)) if evt.file_path.as_deref() == Some(f.as_path()) => {
+                        evt.byte_offset
+                    }
+                    _ => 0,
+                }
+            };
+            if let Some(file) = current_file {
+                if let Ok((new_offset, new_events)) =
+                    crate::events::tail_session(&file, prev_offset)
+                {
+                    let mut g = app.lock().await;
+                    let evt = g.workspace_events.entry(id).or_default();
+                    evt.file_path = Some(file);
+                    evt.byte_offset = new_offset;
+                    for e in new_events {
+                        crate::events::push_event(evt, e);
+                    }
+                }
             }
         }
     }

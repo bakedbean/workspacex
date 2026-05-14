@@ -17,6 +17,7 @@ pub enum Item<'a> {
         seconds_since_activity: Option<u64>,
         has_prior_session: bool,
         status: Option<crate::git::WorkspaceStatus>,
+        latest_event: Option<crate::events::EventSnapshot>,
     },
     EmptyHint,
     Spacer,
@@ -49,18 +50,17 @@ pub fn render(
     f.render_widget(header_text, chunks[0]);
 
     let mut selected_idx: Option<usize> = None;
-    let list_items: Vec<ListItem> = items
-        .iter()
-        .enumerate()
-        .map(|(idx, item)| match item {
+    let mut list_items: Vec<ListItem> = Vec::with_capacity(items.len());
+    for item in items.iter() {
+        match item {
             Item::Header { repo } => {
                 if let Some(SelectionTarget::Repo(id)) = selected
                     && id == repo.id
                 {
-                    selected_idx = Some(idx);
+                    selected_idx = Some(list_items.len());
                 }
                 let line = format!("▌ {}    {}", repo.name, repo.path.display());
-                ListItem::new(line).style(theme::header())
+                list_items.push(ListItem::new(line).style(theme::header()));
             }
             Item::Workspace {
                 repo: _,
@@ -69,11 +69,14 @@ pub fn render(
                 seconds_since_activity,
                 has_prior_session,
                 status,
+                latest_event,
             } => {
                 if let Some(SelectionTarget::Workspace(id)) = selected
                     && id == workspace.id
                 {
-                    selected_idx = Some(idx);
+                    // The main workspace row is selectable; the sub-line
+                    // below it is not.
+                    selected_idx = Some(list_items.len());
                 }
                 let dot = match (*session_running, &workspace.state, *has_prior_session) {
                     (true, _, _) => "●",
@@ -100,14 +103,21 @@ pub fn render(
                     "  {dot} {name}  [{branch_label}]  {status_str:<14} {activity}{setup_badge}",
                     name = workspace.name,
                 );
-                ListItem::new(line)
+                list_items.push(ListItem::new(line));
+                if let Some(ev) = latest_event {
+                    let age = format_age(ev.timestamp_ms);
+                    let sub = format!("    \u{2514} {} ({})", ev.display, age);
+                    list_items.push(ListItem::new(sub).style(theme::dim()));
+                }
             }
             Item::EmptyHint => {
-                ListItem::new("  (no workspaces — press n to create one)").style(theme::dim())
+                list_items.push(
+                    ListItem::new("  (no workspaces — press n to create one)").style(theme::dim()),
+                );
             }
-            Item::Spacer => ListItem::new(""),
-        })
-        .collect();
+            Item::Spacer => list_items.push(ListItem::new("")),
+        }
+    }
 
     state.list_state.select(selected_idx);
     let list = List::new(list_items)
@@ -156,6 +166,22 @@ fn format_status(status: &crate::git::WorkspaceStatus, nerd: bool) -> String {
         });
     }
     parts.join(" ")
+}
+
+/// Relative time label for an event timestamp ("3s ago", "2m ago", "1h ago").
+fn format_age(timestamp_ms: i64) -> String {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let secs = ((now_ms - timestamp_ms) / 1000).max(0);
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else {
+        format!("{}h ago", secs / 3600)
+    }
 }
 
 fn format_branch_label(branch: &str, nerd: bool) -> String {
@@ -223,6 +249,7 @@ mod tests {
                 seconds_since_activity: Some(0),
                 has_prior_session: false,
                 status: None,
+                latest_event: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -272,6 +299,7 @@ mod tests {
                 seconds_since_activity: None,
                 has_prior_session: false,
                 status: None,
+                latest_event: None,
             },
             Item::Spacer,
             Item::Header { repo: &r2 },
@@ -282,6 +310,7 @@ mod tests {
                 seconds_since_activity: None,
                 has_prior_session: false,
                 status: None,
+                latest_event: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -318,6 +347,7 @@ mod tests {
                 seconds_since_activity: None,
                 has_prior_session: false,
                 status: Some(st),
+                latest_event: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -353,6 +383,7 @@ mod tests {
                 seconds_since_activity: None,
                 has_prior_session: false,
                 status: Some(st),
+                latest_event: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -362,6 +393,102 @@ mod tests {
         assert!(text.contains("\u{e0a0}"), "missing branch glyph: {text}");
         assert!(text.contains("\u{f459}"), "missing modified glyph: {text}");
         assert!(text.contains("\u{f063}"), "missing behind glyph: {text}");
+    }
+
+    #[test]
+    fn renders_event_subline_when_event_present() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        // Timestamp ~5s ago to exercise the seconds branch of format_age.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let ev = crate::events::EventSnapshot {
+            kind: crate::events::EventKind::AssistantToolUse,
+            display: "ran `cargo test`".into(),
+            timestamp_ms: now_ms - 5_000,
+        };
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: Some(ev),
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        assert!(text.contains("\u{2514}"), "missing └ glyph: {text}");
+        assert!(
+            text.contains("ran `cargo test`"),
+            "missing event body: {text}"
+        );
+        assert!(text.contains("s ago"), "missing relative time: {text}");
+    }
+
+    #[test]
+    fn selection_skips_event_subline() {
+        // When a workspace has a sub-line, the second workspace's main row
+        // should still get the correct selection highlight index — i.e.
+        // selecting workspace 2 highlights row 3 (header=0, ws1=1, sub=2, ws2=3),
+        // not row 2 (the sub-line).
+        let r = repo(1, "demo");
+        let w1 = workspace(1, 1, "alpha", "wsx/alpha");
+        let w2 = workspace(2, 1, "beta", "wsx/beta");
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let ev = crate::events::EventSnapshot {
+            kind: crate::events::EventKind::AssistantText,
+            display: "thinking…".into(),
+            timestamp_ms: now_ms - 1_000,
+        };
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w1,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: None,
+                latest_event: Some(ev),
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w2,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+            },
+        ];
+        let mut term = Terminal::new(TestBackend::new(120, 10)).unwrap();
+        let mut state = DashboardState::default();
+        term.draw(|f| {
+            render(
+                f,
+                f.area(),
+                &items,
+                Some(SelectionTarget::Workspace(WorkspaceId(2))),
+                false,
+                &mut state,
+            )
+        })
+        .unwrap();
+        // The second workspace becomes the 4th list item (index 3): header,
+        // ws1 row, ws1 sub-line, ws2 row.
+        assert_eq!(state.list_state.selected(), Some(3));
     }
 
     #[test]
@@ -379,6 +506,7 @@ mod tests {
                 seconds_since_activity: None,
                 has_prior_session: false,
                 status: Some(st),
+                latest_event: None,
             },
         ];
         let mut state = DashboardState::default();

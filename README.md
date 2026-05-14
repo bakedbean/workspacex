@@ -176,6 +176,26 @@ Activity column for running sessions:
 - `off` — no current session
 - `resumable` — prior session exists, not currently running
 
+### Activity sub-line
+
+Below each workspace row, wsx shows the most recent event from claude's
+session log (tailed from `~/.claude/projects/<encoded-cwd>/`):
+
+```
+  ● fix-bug    bakedbean/fix-bug   ~3 ?1   active
+    └ ran `cargo test --workspace` (3s ago)
+```
+
+The sub-line updates on the 2-second poll tick. Workspaces with no
+claude session yet show no sub-line. Recognized events:
+
+- User message → `user: <text>`
+- Assistant text → `<text>`
+- Assistant tool use (Bash) → ``ran `<command>` ``
+- Assistant tool use (other) → `using <ToolName>`
+
+Lines longer than ~70 characters are truncated with an ellipsis.
+
 ### Diff counts column
 
 Compact summary of `git status` per workspace, refreshed every 2 seconds:

@@ -77,6 +77,8 @@ Known keys:
 | `terminal_cmd` | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`. |
 | `notifications` | Ring the terminal bell and show a `!` marker when a workspace transitions to `waiting` (claude paused for ≥30s). Default ON; set to `off` / `false` / `0` / `no` to disable. |
 | `theme` | Color theme. One of `default` (palette-adaptive ANSI), `dracula` (RGB), `jellybeans` (RGB), `nord` (RGB). Unknown values fall back to `default`. Restart wsx after changing. |
+| `pm_enabled` | Enable the Project Manager pane (`p` keybind). Default ON; set to `off` / `false` / `0` / `no` to disable. |
+| `pm_custom_instructions` | Free-text appended to the project manager's system prompt. Same `@file` / empty-clears semantics as `custom_instructions`. |
 
 Value sources:
 
@@ -100,6 +102,9 @@ Value sources:
 | `t` | Open the selected workspace in a terminal (no-op on repo header) |
 | `d` | Archive the selected workspace (no-op on repo header) |
 | `q` | Quit (kills all running sessions) |
+| `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
+| `Tab` | Swap focus between dashboard and the PM pane (when visible) |
+| `r` (when PM focused) | Refresh `workspaces.json` and ask PM to re-summarize |
 
 ### New Workspace / Confirm Archive / Setup Running modals
 
@@ -267,6 +272,36 @@ After your first prompt in a freshly-created workspace, wsx renames the workspac
 
 The rename only fires on workspaces whose name still matches the generated `<adjective>-<plant>` pattern.
 
+## Project manager pane
+
+Press `p` on the dashboard to open a horizontal pane below the workspace list
+hosting a dedicated Claude Code "project manager" session. PM's job is to
+answer three questions about each of your active workspaces:
+
+- What was this workspace created for?
+- Where have things been left off?
+- What's next to close it out?
+
+`Tab` swaps focus into the PM pane (keystrokes then go to PM, like the
+attached view). `Tab` or `Esc` swaps focus back to the dashboard. `r`
+(while PM is focused) refreshes `workspaces.json` and asks PM to
+re-summarize.
+
+PM lives at `$XDG_STATE_HOME/wsx/project-manager/` and persists across wsx
+restarts via Claude Code's `--continue`. On the first `p` of a wsx run with
+no prior PM session, wsx auto-sends a status-summary request. On subsequent
+runs (resuming via `--continue`), wsx stays silent — type your own
+question or press `r` for a fresh summary.
+
+PM only sees workspaces wsx knows about (registered repos and their `Ready`
+workspaces). It gets read-only access:
+
+- `Read` for inspecting files (including `~/.claude/projects/.../<session>.jsonl`).
+- Narrow `Bash` for `git status` / `log` / `diff` / `branch`, `cat`, `ls`.
+
+Disable the feature entirely with `wsx config set pm_enabled off`.
+Customize PM's behavior with `wsx config set pm_custom_instructions @./pm.md`.
+
 ## Environment variables
 
 | Variable | Purpose |
@@ -287,6 +322,7 @@ The rename only fires on workspaces whose name still matches the generated `<adj
 | `$XDG_STATE_HOME/wsx/state.db` | SQLite database: repos, workspaces, settings |
 | `$XDG_STATE_HOME/wsx/worktrees/<repo>/<workspace>/` | Worktree directories created by `wsx` |
 | `$XDG_STATE_HOME/wsx/logs/wsx.log` | Daily-rotated `tracing` logs |
+| `$XDG_STATE_HOME/wsx/project-manager/` | PM Claude Code session cwd; contains `workspaces.json` and PM's own git init. Auto-created on first `p`. |
 | `~/.claude/projects/<encoded-cwd>/<session>.jsonl` | Claude Code's own session files (wsx probes these to detect resumable workspaces) |
 
 ## Per-repo setup scripts

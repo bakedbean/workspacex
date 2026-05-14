@@ -54,14 +54,18 @@ fn resolve_terminal_cmd(configured: Option<&str>) -> Result<String> {
 }
 
 fn spawn_with_path_arg(cmd: &str, path: &Path) -> Result<()> {
-    let mut parts = shlex::split(cmd)
-        .ok_or_else(|| Error::UserInput(format!("could not parse command: {cmd}")))?;
-    if parts.is_empty() {
-        return Err(Error::UserInput("command is empty".into()));
-    }
+    spawn_resolved(cmd, path, /* append_when_no_placeholder = */ true)
+}
+
+fn spawn_with_cwd(cmd: &str, cwd: &Path) -> Result<()> {
+    spawn_resolved(cmd, cwd, /* append_when_no_placeholder = */ false)
+}
+
+fn spawn_resolved(cmd: &str, path: &Path, append_when_no_placeholder: bool) -> Result<()> {
+    let mut parts = resolve_argv(cmd, path, append_when_no_placeholder)?;
     let program = parts.remove(0);
     let mut command = std::process::Command::new(&program);
-    command.args(&parts).arg(path);
+    command.args(&parts).current_dir(path);
     detach_io(&mut command);
     command
         .spawn()
@@ -69,20 +73,25 @@ fn spawn_with_path_arg(cmd: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn spawn_with_cwd(cmd: &str, cwd: &Path) -> Result<()> {
+/// Pure helper: resolve a command + path into the program + argv that would be spawned.
+/// If any token contains `{path}`, substitute it there. Otherwise, optionally append
+/// the path as the final argument (controlled by `append_when_no_placeholder`).
+fn resolve_argv(cmd: &str, path: &Path, append_when_no_placeholder: bool) -> Result<Vec<String>> {
     let mut parts = shlex::split(cmd)
         .ok_or_else(|| Error::UserInput(format!("could not parse command: {cmd}")))?;
     if parts.is_empty() {
         return Err(Error::UserInput("command is empty".into()));
     }
-    let program = parts.remove(0);
-    let mut command = std::process::Command::new(&program);
-    command.args(&parts).current_dir(cwd);
-    detach_io(&mut command);
-    command
-        .spawn()
-        .map_err(|e| Error::UserInput(format!("spawn {program}: {e}")))?;
-    Ok(())
+    let path_str = path.to_string_lossy().to_string();
+    let has_placeholder = parts.iter().any(|p| p.contains("{path}"));
+    if has_placeholder {
+        for part in &mut parts {
+            *part = part.replace("{path}", &path_str);
+        }
+    } else if append_when_no_placeholder {
+        parts.push(path_str);
+    }
+    Ok(parts)
 }
 
 fn detach_io(cmd: &mut std::process::Command) {
@@ -163,5 +172,57 @@ mod tests {
         let dir = std::env::temp_dir();
         let r = spawn_with_path_arg("/no/such/wsx-test-binary", &dir);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn placeholder_substituted_when_present() {
+        let dir = std::env::temp_dir();
+        let r = spawn_with_path_arg("/bin/true --dir={path}", &dir);
+        assert!(r.is_ok(), "spawn failed: {r:?}");
+    }
+
+    #[test]
+    fn no_placeholder_appends_path_for_editor() {
+        let dir = std::env::temp_dir();
+        let r = spawn_with_path_arg("/bin/true", &dir);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn no_placeholder_does_not_append_for_terminal() {
+        let dir = std::env::temp_dir();
+        let r = spawn_with_cwd("/bin/true", &dir);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn resolve_argv_substitutes_placeholder() {
+        let path = std::path::Path::new("/tmp/wtree");
+        let argv = resolve_argv("xdg-terminal-exec --dir={path} nvim", path, true).unwrap();
+        assert_eq!(argv, vec!["xdg-terminal-exec", "--dir=/tmp/wtree", "nvim"]);
+    }
+
+    #[test]
+    fn resolve_argv_appends_when_no_placeholder_and_flag_set() {
+        let path = std::path::Path::new("/tmp/wtree");
+        let argv = resolve_argv("code", path, true).unwrap();
+        assert_eq!(argv, vec!["code", "/tmp/wtree"]);
+    }
+
+    #[test]
+    fn resolve_argv_omits_when_no_placeholder_and_flag_unset() {
+        let path = std::path::Path::new("/tmp/wtree");
+        let argv = resolve_argv("alacritty", path, false).unwrap();
+        assert_eq!(argv, vec!["alacritty"]);
+    }
+
+    #[test]
+    fn resolve_argv_substitutes_multiple_occurrences() {
+        let path = std::path::Path::new("/tmp/wtree");
+        let argv = resolve_argv("editor --cwd={path} --file={path}/main.rs", path, true).unwrap();
+        assert_eq!(
+            argv,
+            vec!["editor", "--cwd=/tmp/wtree", "--file=/tmp/wtree/main.rs"]
+        );
     }
 }

@@ -73,8 +73,8 @@ Known keys:
 | `branch_prefix` | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`. |
 | `custom_instructions` | Free-text appended to claude's system prompt on every workspace spawn. |
 | `nerd_fonts` | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable. |
-| `editor_cmd` | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg. Examples: `code`, `cursor`, `alacritty -e nvim`. |
-| `terminal_cmd` | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree, no extra args. Examples: `alacritty`, `kitty`, `gnome-terminal`. |
+| `editor_cmd` | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`. |
+| `terminal_cmd` | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`. |
 
 Value sources:
 
@@ -137,6 +137,24 @@ GUI editors (VS Code, Cursor, Zed) work directly:
 ```
 wsx config set editor_cmd "code"
 ```
+
+### `{path}` placeholder
+
+If your command contains `{path}`, the worktree path is substituted there
+instead of being appended. Useful when the editor expects the path as a flag
+value, or when launching a TUI editor inside a terminal where you want the
+terminal's cwd to be set rather than passing the path to the editor:
+
+```
+wsx config set editor_cmd "xdg-terminal-exec --dir={path} nvim"
+```
+
+Result: `xdg-terminal-exec --dir=/path/to/worktree nvim` (nvim starts in the
+worktree directory with no file argument — avoids triggering netrw / tree
+plugins on a directory open).
+
+For terminal commands the same substitution applies, though most terminals
+honor the spawned process's cwd already so you typically don't need it.
 
 If neither the setting nor the env-var fallback is set, an error modal explains how to configure.
 

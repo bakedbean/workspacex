@@ -32,6 +32,15 @@ pub async fn head_commit(path: &Path) -> Result<String> {
     Ok(out.trim().to_string())
 }
 
+pub async fn preflight() -> Result<()> {
+    let out = Command::new("git").arg("--version").output().await
+        .map_err(|e| Error::Git(format!("git not found on PATH: {e}")))?;
+    if !out.status.success() {
+        return Err(Error::Git("git --version failed".into()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
@@ -69,6 +78,11 @@ pub(super) mod tests {
         assert_eq!(current_branch(dir.path()).await.unwrap(), "main");
         let head = head_commit(dir.path()).await.unwrap();
         assert_eq!(head.len(), 40);
+    }
+
+    #[tokio::test]
+    async fn preflight_succeeds_when_git_on_path() {
+        preflight().await.unwrap();
     }
 }
 

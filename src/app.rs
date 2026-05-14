@@ -222,5 +222,56 @@ fn encode_key(k: crossterm::event::KeyEvent) -> Vec<u8> {
     }
 }
 
-// Defined in Task 24; stub for now.
-async fn handle_key_modal(_app: &mut App, _k: crossterm::event::KeyEvent) -> Result<()> { Ok(()) }
+async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    let modal = app.modal.clone().unwrap();
+    match modal {
+        Modal::NewWorkspace { repo_id, mut name_buffer } => match k.code {
+            KeyCode::Esc => { app.modal = None; }
+            KeyCode::Enter => {
+                // Live-log streaming during create is intentionally deferred. The
+                // borrow checker would force a channel-based dance to mutate
+                // `app.modal` while `app.store` is borrowed inside `workspace::create`.
+                // v1: show a static "running..." modal, swap it for the result.
+                let name = if name_buffer.trim().is_empty() { None } else { Some(name_buffer.clone()) };
+                let repo = app.repos.iter().find(|r| r.id == repo_id).unwrap().clone();
+                let base = app.worktree_base.clone();
+                app.modal = Some(Modal::SetupRunning { log: vec!["running setup...".into()] });
+                let result = crate::workspace::create(&app.store, &repo, name.as_deref(), &base, |_| {}).await;
+                match result {
+                    Ok(_) => { app.modal = None; app.refresh()?; }
+                    Err(e) => { app.modal = Some(Modal::Error { message: e.to_string() }); }
+                }
+            }
+            KeyCode::Backspace => { name_buffer.pop();
+                app.modal = Some(Modal::NewWorkspace { repo_id, name_buffer }); }
+            KeyCode::Char(c) => { name_buffer.push(c);
+                app.modal = Some(Modal::NewWorkspace { repo_id, name_buffer }); }
+            _ => {}
+        },
+        Modal::ConfirmArchive { workspace_id, name } => match k.code {
+            KeyCode::Char('y') => {
+                let (repo, ws) = {
+                    let ws = app.workspaces.iter().find(|(_, w)| w.id == workspace_id).map(|(_, w)| w.clone());
+                    let repo = ws.as_ref().and_then(|w| app.repos.iter().find(|r| r.id == w.repo_id).cloned());
+                    match (repo, ws) { (Some(r), Some(w)) => (r, w), _ => { app.modal = None; return Ok(()); } }
+                };
+                let result = crate::workspace::archive(
+                    &app.store, &repo, &ws,
+                    crate::workspace::ArchiveOpts { force_branch_delete: true, ..Default::default() },
+                    |_| {},
+                ).await;
+                match result {
+                    Ok(_) => { app.modal = None; app.refresh()?; }
+                    Err(e) => { app.modal = Some(Modal::Error { message: e.to_string() }); }
+                }
+                let _ = name;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => { app.modal = None; }
+            _ => {}
+        },
+        Modal::Error { .. } | Modal::SetupRunning { .. } => {
+            if matches!(k.code, KeyCode::Esc | KeyCode::Enter) { app.modal = None; }
+        }
+    }
+    Ok(())
+}

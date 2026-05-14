@@ -215,6 +215,24 @@ pub async fn open_pm_with_auto_summary(
     Ok(())
 }
 
+/// Refresh PM state: rewrite `workspaces.json` and send the refresh
+/// user message to PM's PTY (after settle).
+pub async fn refresh_pm(
+    mgr: &mut crate::pty::session::SessionManager,
+    store: &Store,
+    pm_dir: &Path,
+) -> Result<()> {
+    write_workspaces_json(store, &pm_dir.join("workspaces.json"))?;
+    if let Some(session) = mgr.pm() {
+        let s = session.clone();
+        tokio::spawn(async move {
+            s.send_text_when_settled(PM_REFRESH_MESSAGE, 400, 5_000)
+                .await;
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +350,52 @@ mod tests {
         assert!(!tools.contains("Edit"));
         // Catch any inadvertent broad bash variant.
         assert!(!tools.split(',').any(|t| t.trim() == "Bash(*)"), "{tools}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn refresh_pm_rewrites_json_and_sends_message() {
+        // Same shell-wrapper trick as open_pm_with_auto_summary test: cat
+        // chokes on PM flags so we wrap it.
+        let dir = TempDir::new().unwrap();
+        let wrapper = dir.path().join("claude-stub.sh");
+        std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&wrapper, perm).unwrap();
+
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", &wrapper);
+        }
+        let pm_root = dir.path().join("pm");
+        let store = Store::open_in_memory().unwrap();
+        store.add_repo(Path::new("/tmp/r"), "r", "").unwrap();
+        let mut mgr = crate::pty::session::SessionManager::new();
+        open_pm(&mut mgr, &store, &pm_root, None).await.unwrap();
+        let first_meta = std::fs::metadata(pm_root.join("workspaces.json"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        // Wait so mtime advances on rewrite.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let session = mgr.pm().unwrap();
+        session.writer.send(b"prime\n".to_vec()).await.unwrap();
+        refresh_pm(&mut mgr, &store, &pm_root).await.unwrap();
+        // Allow settle + echo.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let second_meta = std::fs::metadata(pm_root.join("workspaces.json"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert!(second_meta > first_meta, "expected mtime advance");
+        let screen = session.parser.lock().unwrap().screen().contents();
+        assert!(
+            screen.contains("Refresh"),
+            "expected refresh echo. screen: {screen:?}"
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

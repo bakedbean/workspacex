@@ -554,6 +554,17 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             // 'd' on a Repo header is intentionally a no-op.
         }
+        (KeyCode::Char('r'), _)
+            if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
+        {
+            let dirs = crate::config::Dirs::discover();
+            let pm_dir = dirs.pm_dir();
+            if let Err(e) = crate::pm::refresh_pm(&mut app.sessions, &app.store, &pm_dir).await {
+                app.modal = Some(Modal::Error {
+                    message: e.to_string(),
+                });
+            }
+        }
         (KeyCode::Char('p'), _) => {
             if pm_enabled(&app.store) {
                 if app.pm_visible {

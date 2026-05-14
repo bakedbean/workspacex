@@ -8,6 +8,7 @@ mod repo;
 mod workspace;
 mod pty;
 mod ui;
+mod app;
 
 fn main() -> error::Result<()> {
     println!("wsx 0.1.0");

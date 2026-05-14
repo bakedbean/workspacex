@@ -189,6 +189,32 @@ pub async fn open_pm(
     Ok(())
 }
 
+/// Like `open_pm` but also spawns a background task that delivers the
+/// auto-summary message after the PTY settles. Only call this on the
+/// FIRST open per wsx run AND only when the resulting spawn mode would
+/// be Fresh — `--continue` resumes should NOT auto-send.
+pub async fn open_pm_with_auto_summary(
+    mgr: &mut crate::pty::session::SessionManager,
+    store: &Store,
+    pm_dir: &Path,
+    custom_instructions: Option<String>,
+) -> Result<()> {
+    let was_resume = crate::pty::session::has_prior_session(pm_dir);
+    open_pm(mgr, store, pm_dir, custom_instructions).await?;
+    if was_resume {
+        return Ok(());
+    }
+    if let Some(session) = mgr.pm() {
+        let session = session.clone();
+        tokio::spawn(async move {
+            session
+                .send_text_when_settled(PM_AUTO_SUMMARY_MESSAGE, 400, 5_000)
+                .await;
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +332,43 @@ mod tests {
         assert!(!tools.contains("Edit"));
         // Catch any inadvertent broad bash variant.
         assert!(!tools.split(',').any(|t| t.trim() == "Bash(*)"), "{tools}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_pm_with_auto_summary_writes_message_after_settle() {
+        // /usr/bin/cat chokes on `--allowedTools` and other PM flags, so we
+        // wrap it in a tiny shell script that ignores its args and execs cat
+        // reading stdin. The wrapper is a tempfile we drop after the test.
+        let dir = TempDir::new().unwrap();
+        let wrapper = dir.path().join("claude-stub.sh");
+        std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&wrapper, perm).unwrap();
+
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", &wrapper);
+        }
+        let pm_root = dir.path().join("pm");
+        let store = Store::open_in_memory().unwrap();
+        store.add_repo(Path::new("/tmp/r"), "r", "").unwrap();
+        let mut mgr = crate::pty::session::SessionManager::new();
+        open_pm_with_auto_summary(&mut mgr, &store, &pm_root, None)
+            .await
+            .unwrap();
+        let session = mgr.pm().expect("pm session");
+        // Prime activity so the settle gate has something to wait on.
+        session.writer.send(b"x\n".to_vec()).await.unwrap();
+        // Let the background task observe quiet + write its message; cat echoes it.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let screen = session.parser.lock().unwrap().screen().contents();
+        assert!(
+            screen.contains("status summary"),
+            "expected auto-summary echoed by cat. screen: {screen:?}"
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 }

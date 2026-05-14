@@ -94,6 +94,7 @@ pub struct App {
     pub pm: Option<std::sync::Arc<crate::pty::session::Session>>,
     pub pm_visible: bool,
     pub focus: crate::ui::PaneFocus,
+    pub pm_auto_summary_sent: bool,
 }
 
 impl App {
@@ -124,6 +125,7 @@ impl App {
             pm: None,
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
+            pm_auto_summary_sent: false,
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -567,14 +569,24 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                         .get_setting("pm_custom_instructions")
                         .ok()
                         .flatten();
-                    if let Err(e) =
+                    let result = if app.pm_auto_summary_sent {
                         crate::pm::open_pm(&mut app.sessions, &app.store, &pm_dir, custom).await
-                    {
+                    } else {
+                        crate::pm::open_pm_with_auto_summary(
+                            &mut app.sessions,
+                            &app.store,
+                            &pm_dir,
+                            custom,
+                        )
+                        .await
+                    };
+                    if let Err(e) = result {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
                         return Ok(());
                     }
+                    app.pm_auto_summary_sent = true;
                     app.pm = app.sessions.pm();
                     app.pm_visible = true;
                 }

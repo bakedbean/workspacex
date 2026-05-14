@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 /// Run `git -C <cwd> <args...>` and return stdout on success, mapping
@@ -69,5 +69,78 @@ pub(super) mod tests {
         assert_eq!(current_branch(dir.path()).await.unwrap(), "main");
         let head = head_commit(dir.path()).await.unwrap();
         assert_eq!(head.len(), 40);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WorktreeInfo {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+}
+
+pub async fn create_worktree(repo: &Path, branch: &str, path: &Path) -> Result<()> {
+    let path_s = path.to_string_lossy();
+    run(repo, &["worktree", "add", "-b", branch, &path_s]).await?;
+    Ok(())
+}
+
+pub async fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
+    let path_s = path.to_string_lossy();
+    run(repo, &["worktree", "remove", "--force", &path_s]).await?;
+    Ok(())
+}
+
+pub async fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeInfo>> {
+    let out = run(repo, &["worktree", "list", "--porcelain"]).await?;
+    let mut result = Vec::new();
+    let mut cur: Option<WorktreeInfo> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            if let Some(w) = cur.take() { result.push(w); }
+            cur = Some(WorktreeInfo { path: PathBuf::from(p), branch: None, head: None });
+        } else if let Some(h) = line.strip_prefix("HEAD ") {
+            if let Some(c) = cur.as_mut() { c.head = Some(h.to_string()); }
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            if let Some(c) = cur.as_mut() {
+                c.branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            }
+        }
+    }
+    if let Some(w) = cur.take() { result.push(w); }
+    Ok(result)
+}
+
+pub async fn branch_delete(repo: &Path, branch: &str, force: bool) -> Result<()> {
+    let flag = if force { "-D" } else { "-d" };
+    run(repo, &["branch", flag, branch]).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod worktree_tests {
+    use super::*;
+    use super::tests::init_repo;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn create_and_list_worktree() {
+        let repo = init_repo();
+        let wt_root = TempDir::new().unwrap();
+        let wt = wt_root.path().join("feature");
+        create_worktree(repo.path(), "feature", &wt).await.unwrap();
+        let listed = list_worktrees(repo.path()).await.unwrap();
+        assert!(listed.iter().any(|w| w.path == wt && w.branch.as_deref() == Some("feature")));
+    }
+
+    #[tokio::test]
+    async fn remove_worktree_cleans_up() {
+        let repo = init_repo();
+        let wt_root = TempDir::new().unwrap();
+        let wt = wt_root.path().join("scratch");
+        create_worktree(repo.path(), "scratch", &wt).await.unwrap();
+        remove_worktree(repo.path(), &wt).await.unwrap();
+        let listed = list_worktrees(repo.path()).await.unwrap();
+        assert!(!listed.iter().any(|w| w.path == wt));
     }
 }

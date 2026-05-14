@@ -1,4 +1,5 @@
 mod app;
+mod cli;
 mod config;
 mod error;
 mod git;
@@ -33,6 +34,13 @@ fn install_panic_hook() {
 async fn main() -> Result<()> {
     let dirs = config::Dirs::discover();
     dirs.ensure()?;
+
+    // CLI path: parse args; if non-TUI, dispatch and return.
+    let action = cli::parse_args(std::env::args().collect())?;
+    if !matches!(action, cli::CliAction::Tui) {
+        cli::run_cli(action, &dirs).await?;
+        return Ok(());
+    }
 
     let file_appender = tracing_appender::rolling::daily(dirs.log_dir(), "wsx.log");
     let (nb, _guard) = tracing_appender::non_blocking(file_appender);

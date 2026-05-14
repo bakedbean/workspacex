@@ -64,3 +64,163 @@ impl App {
 }
 
 pub type SharedApp = Arc<Mutex<App>>;
+
+use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use futures::StreamExt;
+use ratatui::Terminal;
+use ratatui::backend::Backend;
+use std::time::Duration;
+
+pub async fn run<B: Backend>(terminal: &mut Terminal<B>, app: SharedApp) -> Result<()> {
+    let mut events = EventStream::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(16));
+
+    loop {
+        {
+            let mut g = app.lock().await;
+            terminal.draw(|f| draw(f, &mut g))?;
+            if g.quit { break; }
+        }
+
+        tokio::select! {
+            _ = tick.tick() => {}
+            maybe_evt = events.next() => {
+                let Some(Ok(evt)) = maybe_evt else { break; };
+                let mut g = app.lock().await;
+                handle_event(&mut g, evt).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn draw(f: &mut ratatui::Frame, app: &mut App) {
+    use crate::ui::{attached, dashboard, modal};
+    let area = f.area();
+    match &app.view {
+        View::Dashboard => {
+            let rows: Vec<dashboard::Row> = app.workspaces.iter().map(|(rid, ws)| {
+                let repo = app.repos.iter().find(|r| &r.id == rid).unwrap();
+                let session = app.sessions.get(ws.id);
+                let running = session.as_ref().map_or(false, |s|
+                    matches!(*s.status.read().unwrap(), crate::pty::session::SessionStatus::Running { .. }));
+                let secs = session.as_ref().map(|s| {
+                    let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64).unwrap_or(0);
+                    now.saturating_sub(last) / 1000
+                });
+                dashboard::Row { repo, workspace: ws, session_running: running, seconds_since_activity: secs }
+            }).collect();
+            dashboard::render(f, area, &rows, &mut app.dashboard);
+        }
+        View::Attached(id) => {
+            if let Some(session) = app.sessions.get(*id) {
+                let label = app.workspaces.iter().find(|(_, w)| w.id == *id)
+                    .map(|(_, w)| w.name.clone()).unwrap_or_default();
+                attached::resize_session(&session, area);
+                attached::render(f, area, &session, &label);
+            }
+        }
+    }
+    if let Some(m) = &app.modal { modal::render(f, area, m); }
+}
+
+async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
+    match evt {
+        CtEvent::Key(k) if k.kind == KeyEventKind::Press => {
+            if app.modal.is_some() {
+                handle_key_modal(app, k).await?;
+            } else {
+                match &app.view {
+                    View::Dashboard => handle_key_dashboard(app, k).await?,
+                    View::Attached(id) => handle_key_attached(app, *id, k).await?,
+                }
+            }
+        }
+        CtEvent::Resize(_, _) => {}
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    match (k.code, k.modifiers) {
+        (KeyCode::Char('q'), _) => app.quit = true,
+        (KeyCode::Up, _) => app.dashboard.selected = app.dashboard.selected.saturating_sub(1),
+        (KeyCode::Down, _) => {
+            let max = app.workspaces.len().saturating_sub(1);
+            app.dashboard.selected = (app.dashboard.selected + 1).min(max);
+        }
+        (KeyCode::Enter, _) => {
+            // Copy out of the immutable borrow before mutating sessions/view.
+            let info = app.selected_workspace().map(|(_, ws)| (ws.id, ws.worktree_path.clone()));
+            if let Some((id, path)) = info {
+                let _ = app.sessions.spawn(id, &path, 80, 24)?;
+                app.view = View::Attached(id);
+            }
+        }
+        (KeyCode::Char('n'), _) => {
+            let first_repo_id = app.repos.first().map(|r| r.id);
+            if let Some(id) = first_repo_id {
+                app.modal = Some(Modal::NewWorkspace { repo_id: id, name_buffer: String::new() });
+            }
+        }
+        (KeyCode::Char('d'), _) => {
+            let info = app.selected_workspace().map(|(_, ws)| (ws.id, ws.name.clone()));
+            if let Some((id, name)) = info {
+                app.modal = Some(Modal::ConfirmArchive { workspace_id: id, name });
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn handle_key_attached(app: &mut App, id: WorkspaceId, k: crossterm::event::KeyEvent) -> Result<()> {
+    let session = match app.sessions.get(id) {
+        Some(s) => s,
+        None => { app.view = View::Dashboard; return Ok(()); }
+    };
+    // Ctrl-a prefix handling.
+    if app.ctrl_a_pending {
+        app.ctrl_a_pending = false;
+        match k.code {
+            KeyCode::Char('d') => { app.view = View::Dashboard; return Ok(()); }
+            KeyCode::Char('a') => { let _ = session.writer.send(vec![0x01]).await; return Ok(()); }
+            _ => return Ok(()),
+        }
+    }
+    if k.code == KeyCode::Char('a') && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.ctrl_a_pending = true;
+        return Ok(());
+    }
+    let bytes = encode_key(k);
+    if !bytes.is_empty() { let _ = session.writer.send(bytes).await; }
+    Ok(())
+}
+
+fn encode_key(k: crossterm::event::KeyEvent) -> Vec<u8> {
+    use KeyCode::*;
+    match k.code {
+        Char(c) => {
+            if k.modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_alphabetic() {
+                vec![(c.to_ascii_lowercase() as u8) - b'a' + 1]
+            } else {
+                let mut buf = [0u8; 4]; c.encode_utf8(&mut buf).as_bytes().to_vec()
+            }
+        }
+        Enter => b"\r".to_vec(),
+        Backspace => b"\x7f".to_vec(),
+        Tab => b"\t".to_vec(),
+        Esc => b"\x1b".to_vec(),
+        Left => b"\x1b[D".to_vec(),
+        Right => b"\x1b[C".to_vec(),
+        Up => b"\x1b[A".to_vec(),
+        Down => b"\x1b[B".to_vec(),
+        _ => vec![],
+    }
+}
+
+// Defined in Task 24; stub for now.
+async fn handle_key_modal(_app: &mut App, _k: crossterm::event::KeyEvent) -> Result<()> { Ok(()) }

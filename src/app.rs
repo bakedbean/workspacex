@@ -39,6 +39,8 @@ pub struct App {
     pub worktree_base: PathBuf,
     pub ctrl_a_pending: bool,
     pub quit: bool,
+    pub workspace_status:
+        std::collections::HashMap<crate::store::WorkspaceId, crate::git::WorkspaceStatus>,
 }
 
 impl App {
@@ -55,6 +57,7 @@ impl App {
             worktree_base,
             ctrl_a_pending: false,
             quit: false,
+            workspace_status: std::collections::HashMap::new(),
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -162,6 +165,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         session_running: running,
                         seconds_since_activity: secs,
                         has_prior_session: has_prior,
+                        status: app.workspace_status.get(&ws.id).copied(),
                     });
                 }
                 if count == 0 {
@@ -170,7 +174,8 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 items.push(dashboard::Item::Spacer);
             }
             let selected = app.selected_target();
-            dashboard::render(f, area, &items, selected, &mut app.dashboard);
+            let nerd_fonts = nerd_fonts_enabled(&app.store);
+            dashboard::render(f, area, &items, selected, nerd_fonts, &mut app.dashboard);
         }
         View::Attached(id) => {
             if let Some(session) = app.sessions.get(*id) {
@@ -193,6 +198,13 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 #[doc(hidden)]
 pub fn draw_for_test(f: &mut ratatui::Frame, app: &mut App) {
     draw(f, app);
+}
+
+fn nerd_fonts_enabled(store: &crate::store::Store) -> bool {
+    match store.get_setting("nerd_fonts").ok().flatten().as_deref() {
+        Some("false") | Some("0") | Some("off") | Some("no") => false,
+        _ => true, // default ON
+    }
 }
 
 async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
@@ -548,25 +560,28 @@ pub async fn branch_drift_poll(app: SharedApp) {
             if !path.exists() {
                 continue;
             }
-            let current = match crate::git::current_branch(&path).await {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            if current == db_branch || current == "HEAD" {
-                continue;
+
+            // 1) Branch drift (existing logic).
+            if let Ok(current) = crate::git::current_branch(&path).await {
+                if current != db_branch && current != "HEAD" {
+                    let new_name = if prefix.is_empty() {
+                        current.clone()
+                    } else {
+                        let strip = format!("{}/", prefix.trim_end_matches('/'));
+                        current.strip_prefix(&strip).unwrap_or(&current).to_string()
+                    };
+                    let mut g = app.lock().await;
+                    let _ = g.store.rename_workspace(id, &new_name);
+                    let _ = g.store.set_workspace_branch(id, &current);
+                    let _ = g.refresh();
+                }
             }
 
-            let new_name = if prefix.is_empty() {
-                current.clone()
-            } else {
-                let strip = format!("{}/", prefix.trim_end_matches('/'));
-                current.strip_prefix(&strip).unwrap_or(&current).to_string()
-            };
-
-            let mut g = app.lock().await;
-            let _ = g.store.rename_workspace(id, &new_name);
-            let _ = g.store.set_workspace_branch(id, &current);
-            let _ = g.refresh();
+            // 2) Workspace status — refresh the cache for this workspace.
+            if let Ok(status) = crate::git::workspace_status(&path).await {
+                let mut g = app.lock().await;
+                g.workspace_status.insert(id, status);
+            }
         }
     }
 }

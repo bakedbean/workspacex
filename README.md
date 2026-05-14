@@ -72,6 +72,7 @@ Known keys:
 |---|---|
 | `branch_prefix` | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`. |
 | `custom_instructions` | Free-text appended to claude's system prompt on every workspace spawn. |
+| `nerd_fonts` | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable. |
 
 Value sources:
 
@@ -129,6 +130,19 @@ Activity column for running sessions:
 - `waiting` — no output for over 30 seconds
 - `off` — no current session
 - `resumable` — prior session exists, not currently running
+
+### Diff counts column
+
+Compact summary of `git status` per workspace, refreshed every 2 seconds:
+
+| Symbol (plain) | Symbol (nerd) | Meaning |
+|---|---|---|
+| `~N` |  `N` | Modified/staged/added/deleted tracked files |
+| `?N` |  `N` | Untracked files |
+| `↑N` | `N` | Commits ahead of upstream |
+| `↓N` | `N` | Commits behind upstream |
+
+Zero values omitted. Clean workspaces show nothing in this column.
 
 ## Auto-rename modes
 

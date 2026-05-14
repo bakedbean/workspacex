@@ -60,7 +60,7 @@ impl ValueSource {
 }
 
 fn known_setting_key(k: &str) -> bool {
-    matches!(k, "branch_prefix" | "custom_instructions")
+    matches!(k, "branch_prefix" | "custom_instructions" | "nerd_fonts")
 }
 
 pub fn parse_args(args: Vec<String>) -> Result<CliAction> {

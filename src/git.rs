@@ -57,6 +57,55 @@ pub async fn preflight() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkspaceStatus {
+    pub modified: u32,  // tracked-file changes (index or worktree), excludes untracked
+    pub untracked: u32, // files matching ?? in porcelain v1
+    pub ahead: u32,     // commits ahead of upstream
+    pub behind: u32,    // commits behind upstream
+}
+
+impl WorkspaceStatus {
+    pub fn is_clean(&self) -> bool {
+        self.modified == 0 && self.untracked == 0 && self.ahead == 0 && self.behind == 0
+    }
+}
+
+pub async fn workspace_status(worktree: &Path) -> Result<WorkspaceStatus> {
+    let out = run(worktree, &["status", "-b", "--porcelain=v1"]).await?;
+    Ok(parse_porcelain(&out))
+}
+
+fn parse_porcelain(out: &str) -> WorkspaceStatus {
+    let mut status = WorkspaceStatus::default();
+    for line in out.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            // Parse `[ahead N, behind M]` if present.
+            if let Some(brk) = rest.find('[') {
+                if let Some(close_rel) = rest[brk..].find(']') {
+                    let inside = &rest[brk + 1..brk + close_rel];
+                    for part in inside.split(',') {
+                        let part = part.trim();
+                        if let Some(n) = part.strip_prefix("ahead ").and_then(|s| s.parse().ok()) {
+                            status.ahead = n;
+                        } else if let Some(n) =
+                            part.strip_prefix("behind ").and_then(|s| s.parse().ok())
+                        {
+                            status.behind = n;
+                        }
+                    }
+                }
+            }
+        } else if line.starts_with("??") {
+            status.untracked += 1;
+        } else if line.len() >= 2 {
+            // Any other 2-char XY status → tracked-file change
+            status.modified += 1;
+        }
+    }
+    status
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
@@ -103,6 +152,64 @@ pub(super) mod tests {
     #[tokio::test]
     async fn preflight_succeeds_when_git_on_path() {
         preflight().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_clean_repo() {
+        let dir = init_repo();
+        let s = workspace_status(dir.path()).await.unwrap();
+        assert!(s.is_clean(), "fresh repo should be clean, got {s:?}");
+    }
+
+    #[tokio::test]
+    async fn status_counts_modified_and_untracked() {
+        let dir = init_repo();
+        // Commit a file so we can modify it.
+        std::fs::write(dir.path().join("tracked.txt"), "v1").unwrap();
+        let r = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        r(&["add", "tracked.txt"]);
+        r(&["commit", "-q", "-m", "track it"]);
+        // Modify the tracked file and add an untracked one.
+        std::fs::write(dir.path().join("tracked.txt"), "v2").unwrap();
+        std::fs::write(dir.path().join("untracked.txt"), "new").unwrap();
+        let s = workspace_status(dir.path()).await.unwrap();
+        assert_eq!(s.modified, 1, "{s:?}");
+        assert_eq!(s.untracked, 1, "{s:?}");
+    }
+
+    #[test]
+    fn parse_ahead_behind_block() {
+        let out = "## main...origin/main [ahead 2, behind 3]\n M src/main.rs\n?? newfile\n";
+        let s = parse_porcelain(out);
+        assert_eq!(s.ahead, 2);
+        assert_eq!(s.behind, 3);
+        assert_eq!(s.modified, 1);
+        assert_eq!(s.untracked, 1);
+    }
+
+    #[test]
+    fn parse_handles_no_upstream() {
+        let out = "## main\n";
+        let s = parse_porcelain(out);
+        assert_eq!(s.ahead, 0);
+        assert_eq!(s.behind, 0);
+    }
+
+    #[test]
+    fn parse_handles_detached_head() {
+        let out = "## HEAD (no branch)\n M foo\n";
+        let s = parse_porcelain(out);
+        assert_eq!(s.modified, 1);
+        assert_eq!(s.ahead, 0);
     }
 }
 

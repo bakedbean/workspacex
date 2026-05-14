@@ -16,6 +16,7 @@ pub enum Item<'a> {
         session_running: bool,
         seconds_since_activity: Option<u64>,
         has_prior_session: bool,
+        status: Option<crate::git::WorkspaceStatus>,
     },
     EmptyHint,
     Spacer,
@@ -32,6 +33,7 @@ pub fn render(
     area: Rect,
     items: &[Item],
     selected: Option<SelectionTarget>,
+    nerd_fonts: bool,
     state: &mut DashboardState,
 ) {
     let chunks = Layout::default()
@@ -66,6 +68,7 @@ pub fn render(
                 session_running,
                 seconds_since_activity,
                 has_prior_session,
+                status,
             } => {
                 if let Some(SelectionTarget::Workspace(id)) = selected
                     && id == workspace.id
@@ -89,10 +92,13 @@ pub fn render(
                     (None, true) => "resumable",
                     (None, false) => "off",
                 };
+                let branch_label = format_branch_label(&workspace.branch, nerd_fonts);
+                let status_str = status
+                    .map(|s| format_status(&s, nerd_fonts))
+                    .unwrap_or_default();
                 let line = format!(
-                    "  {dot} {name}  [{branch}]  {activity}{setup_badge}",
+                    "  {dot} {name}  [{branch_label}]  {status_str:<14} {activity}{setup_badge}",
                     name = workspace.name,
-                    branch = workspace.branch,
                 );
                 ListItem::new(line)
             }
@@ -112,6 +118,50 @@ pub fn render(
     let footer =
         Paragraph::new("[enter] attach   [n] new   [d] archive   [q] quit").style(theme::dim());
     f.render_widget(footer, chunks[2]);
+}
+
+fn format_status(status: &crate::git::WorkspaceStatus, nerd: bool) -> String {
+    if status.is_clean() {
+        return String::new();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if status.modified > 0 {
+        parts.push(if nerd {
+            format!("\u{f459} {}", status.modified)
+        } else {
+            format!("~{}", status.modified)
+        });
+    }
+    if status.untracked > 0 {
+        parts.push(if nerd {
+            format!("\u{f128} {}", status.untracked)
+        } else {
+            format!("?{}", status.untracked)
+        });
+    }
+    if status.ahead > 0 {
+        parts.push(if nerd {
+            format!("\u{f062}{}", status.ahead)
+        } else {
+            format!("\u{2191}{}", status.ahead)
+        });
+    }
+    if status.behind > 0 {
+        parts.push(if nerd {
+            format!("\u{f063}{}", status.behind)
+        } else {
+            format!("\u{2193}{}", status.behind)
+        });
+    }
+    parts.join(" ")
+}
+
+fn format_branch_label(branch: &str, nerd: bool) -> String {
+    if nerd {
+        format!("\u{e0a0} {branch}")
+    } else {
+        branch.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -159,7 +209,7 @@ mod tests {
 
     #[test]
     fn renders_repo_header_with_indented_workspace() {
-        let mut term = Terminal::new(TestBackend::new(80, 8)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
         let r = repo(1, "demo");
         let w = workspace(1, 1, "alpha", "alpha");
         let items = vec![
@@ -170,6 +220,7 @@ mod tests {
                 session_running: true,
                 seconds_since_activity: Some(0),
                 has_prior_session: false,
+                status: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -179,11 +230,12 @@ mod tests {
                 f.area(),
                 &items,
                 Some(SelectionTarget::Workspace(WorkspaceId(1))),
+                false,
                 &mut state,
             )
         })
         .unwrap();
-        let text = dump(&term, 80, 8);
+        let text = dump(&term, 120, 8);
         assert!(text.contains("▌ demo"), "missing header: {text}");
         assert!(text.contains("alpha"), "missing workspace name: {text}");
         assert!(text.contains("active"), "missing activity column: {text}");
@@ -195,7 +247,7 @@ mod tests {
         let r = repo(1, "empty");
         let items = vec![Item::Header { repo: &r }, Item::EmptyHint];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
             .unwrap();
         let text = dump(&term, 80, 8);
         assert!(text.contains("▌ empty"));
@@ -204,7 +256,7 @@ mod tests {
 
     #[test]
     fn renders_multiple_repos_grouped() {
-        let mut term = Terminal::new(TestBackend::new(80, 15)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 15)).unwrap();
         let r1 = repo(1, "first");
         let r2 = repo(2, "second");
         let w1 = workspace(1, 1, "alpha", "alpha");
@@ -217,6 +269,7 @@ mod tests {
                 session_running: false,
                 seconds_since_activity: None,
                 has_prior_session: false,
+                status: None,
             },
             Item::Spacer,
             Item::Header { repo: &r2 },
@@ -226,12 +279,13 @@ mod tests {
                 session_running: false,
                 seconds_since_activity: None,
                 has_prior_session: false,
+                status: None,
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
             .unwrap();
-        let text = dump(&term, 80, 15);
+        let text = dump(&term, 120, 15);
         let first_pos = text.find("first").expect("first repo header");
         let alpha_pos = text.find("alpha").expect("alpha workspace");
         let second_pos = text.find("second").expect("second repo header");
@@ -240,5 +294,98 @@ mod tests {
             first_pos < alpha_pos && alpha_pos < second_pos && second_pos < beta_pos,
             "ordering wrong:\n{text}"
         );
+    }
+
+    #[test]
+    fn renders_status_counts_plain() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let st = crate::git::WorkspaceStatus {
+            modified: 3,
+            untracked: 1,
+            ahead: 2,
+            behind: 0,
+        };
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: Some(st),
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        assert!(text.contains("~3"), "missing modified count: {text}");
+        assert!(text.contains("?1"), "missing untracked count: {text}");
+        assert!(text.contains("\u{2191}2"), "missing ahead count: {text}");
+        assert!(
+            !text.contains("\u{2193}"),
+            "should not show zero behind: {text}"
+        );
+    }
+
+    #[test]
+    fn renders_status_counts_nerd() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let st = crate::git::WorkspaceStatus {
+            modified: 2,
+            untracked: 0,
+            ahead: 0,
+            behind: 1,
+        };
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: Some(st),
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, true, &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        assert!(text.contains("\u{e0a0}"), "missing branch glyph: {text}");
+        assert!(text.contains("\u{f459}"), "missing modified glyph: {text}");
+        assert!(text.contains("\u{f063}"), "missing behind glyph: {text}");
+    }
+
+    #[test]
+    fn renders_clean_workspace_with_no_status() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let st = crate::git::WorkspaceStatus::default();
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: Some(st),
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        assert!(text.contains("alpha"));
+        // Clean workspace should not show any count markers.
+        assert!(!text.contains("~"));
+        assert!(!text.contains("?"));
     }
 }

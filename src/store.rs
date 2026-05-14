@@ -70,6 +70,37 @@ impl Store {
         self.conn.execute_batch(SCHEMA_V1)?;
         Ok(())
     }
+
+    pub fn add_repo(&self, path: &Path, name: &str, branch_prefix: &str) -> Result<RepoId> {
+        let now = now_ms();
+        self.conn.execute(
+            "INSERT INTO repos (name, path, branch_prefix, created_at) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![name, path.to_string_lossy(), branch_prefix, now],
+        )?;
+        Ok(RepoId(self.conn.last_insert_rowid()))
+    }
+
+    pub fn remove_repo(&self, id: RepoId) -> Result<()> {
+        self.conn.execute("DELETE FROM workspaces WHERE repo_id = ?1", [id.0])?;
+        self.conn.execute("DELETE FROM repos WHERE id = ?1", [id.0])?;
+        Ok(())
+    }
+
+    pub fn repos(&self) -> Result<Vec<Repo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, path, branch_prefix, created_at FROM repos ORDER BY id"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Repo {
+                id: RepoId(r.get(0)?),
+                name: r.get(1)?,
+                path: PathBuf::from(r.get::<_, String>(2)?),
+                branch_prefix: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
 }
 
 const SCHEMA_V1: &str = r#"
@@ -115,5 +146,28 @@ mod tests {
         // Tables exist by querying their count.
         let count: i64 = store.conn.query_row("SELECT count(*) FROM repos", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn repo_crud_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/some/repo"), "demo", "").unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].id, id);
+        assert_eq!(repos[0].name, "demo");
+        assert_eq!(repos[0].path, PathBuf::from("/some/repo"));
+        assert_eq!(repos[0].branch_prefix, "");
+
+        store.remove_repo(id).unwrap();
+        assert!(store.repos().unwrap().is_empty());
+    }
+
+    #[test]
+    fn add_repo_rejects_duplicate_path() {
+        let store = Store::open_in_memory().unwrap();
+        store.add_repo(Path::new("/a"), "first", "").unwrap();
+        let err = store.add_repo(Path::new("/a"), "second", "");
+        assert!(err.is_err());
     }
 }

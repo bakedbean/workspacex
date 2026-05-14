@@ -19,6 +19,10 @@ pub enum Item<'a> {
         status: Option<crate::git::WorkspaceStatus>,
         latest_event: Option<crate::events::EventSnapshot>,
         needs_attention: bool,
+        /// Set when a tool_use has been pending ≥3s (almost always a
+        /// permission prompt). Carries (tool name, first-seen epoch ms) so
+        /// we can render the elapsed wait time in the sub-line.
+        awaiting_tool: Option<(String, i64)>,
     },
     EmptyHint,
     Spacer,
@@ -72,6 +76,7 @@ pub fn render(
                 status,
                 latest_event,
                 needs_attention,
+                awaiting_tool,
             } => {
                 if let Some(SelectionTarget::Workspace(id)) = selected
                     && id == workspace.id
@@ -90,12 +95,19 @@ pub fn render(
                     SetupStatus::Ok | SetupStatus::Skipped | SetupStatus::NotRun => "",
                     SetupStatus::Failed => " [setup-failed]",
                 };
-                let activity = match (*seconds_since_activity, *has_prior_session) {
-                    (Some(s), _) if s < 2 => "active",
-                    (Some(s), _) if s < 30 => "idle",
-                    (Some(_), _) => "waiting",
-                    (None, true) => "resumable",
-                    (None, false) => "off",
+                // `awaiting` overrides the activity column entirely — a
+                // workspace blocked on a permission prompt is the most
+                // important state to surface, regardless of PTY freshness.
+                let activity = if awaiting_tool.is_some() {
+                    "awaiting"
+                } else {
+                    match (*seconds_since_activity, *has_prior_session) {
+                        (Some(s), _) if s < 2 => "active",
+                        (Some(s), _) if s < 30 => "idle",
+                        (Some(_), _) => "waiting",
+                        (None, true) => "resumable",
+                        (None, false) => "off",
+                    }
                 };
                 let branch_label = format_branch_label(&workspace.branch, nerd_fonts);
                 let status_str = status
@@ -107,7 +119,17 @@ pub fn render(
                     name = workspace.name,
                 );
                 list_items.push(ListItem::new(line));
-                if let Some(ev) = latest_event {
+                // Sub-line: if awaiting, always render the permission prompt
+                // (more urgent than whatever the last event happened to be);
+                // otherwise fall back to the latest event sub-line.
+                if let Some((tool_name, first_seen_ms)) = awaiting_tool {
+                    let age = format_age(*first_seen_ms);
+                    let sub = format!(
+                        "    \u{2514} \u{26a0} awaiting permission: {} ({})",
+                        tool_name, age
+                    );
+                    list_items.push(ListItem::new(sub).style(theme::dim()));
+                } else if let Some(ev) = latest_event {
                     let age = format_age(ev.timestamp_ms);
                     let sub = format!("    \u{2514} {} ({})", ev.display, age);
                     list_items.push(ListItem::new(sub).style(theme::dim()));
@@ -254,6 +276,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                awaiting_tool: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -305,6 +328,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                awaiting_tool: None,
             },
             Item::Spacer,
             Item::Header { repo: &r2 },
@@ -317,6 +341,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                awaiting_tool: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -355,6 +380,7 @@ mod tests {
                 status: Some(st),
                 latest_event: None,
                 needs_attention: false,
+                awaiting_tool: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -392,6 +418,7 @@ mod tests {
                 status: Some(st),
                 latest_event: None,
                 needs_attention: false,
+                awaiting_tool: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -429,6 +456,7 @@ mod tests {
                 status: None,
                 latest_event: Some(ev),
                 needs_attention: false,
+                awaiting_tool: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -472,6 +500,7 @@ mod tests {
                 status: None,
                 latest_event: Some(ev),
                 needs_attention: false,
+                awaiting_tool: None,
             },
             Item::Workspace {
                 repo: &r,
@@ -482,6 +511,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                awaiting_tool: None,
             },
         ];
         let mut term = Terminal::new(TestBackend::new(120, 10)).unwrap();
@@ -519,6 +549,7 @@ mod tests {
                 status: Some(st),
                 latest_event: None,
                 needs_attention: false,
+                awaiting_tool: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -554,6 +585,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: true,
+                awaiting_tool: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -588,6 +620,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                awaiting_tool: None,
             },
         ];
         let mut state = DashboardState::default();
@@ -600,5 +633,48 @@ mod tests {
             .expect("alpha row");
         let trimmed = strip_border_prefix(line);
         assert!(!trimmed.starts_with("!"));
+    }
+
+    #[test]
+    fn renders_awaiting_overrides_activity_and_sub_line() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: true,
+                // 10s ago — well past the 3s threshold.
+                awaiting_tool: Some(("Bash".into(), now_ms - 10_000)),
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        assert!(
+            text.contains("awaiting"),
+            "expected 'awaiting' label: {text}"
+        );
+        assert!(
+            text.contains("awaiting permission: Bash"),
+            "expected sub-line: {text}"
+        );
+        // Should NOT show 'active' even though seconds_since_activity is 0.
+        let bad = text
+            .lines()
+            .any(|l| l.contains("alpha") && l.contains("active"));
+        assert!(!bad, "should not show 'active' when awaiting: {text}");
     }
 }

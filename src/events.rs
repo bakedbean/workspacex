@@ -55,7 +55,7 @@
 //! We parse them ourselves to avoid pulling in chrono.
 
 use crate::error::Result;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 const MAX_LOG: usize = 50;
@@ -68,6 +68,11 @@ pub struct WorkspaceEvents {
     pub log: VecDeque<EventSnapshot>,
     pub file_path: Option<PathBuf>,
     pub byte_offset: u64,
+    /// Tool_use ids the assistant has emitted but for which we haven't yet
+    /// seen a matching tool_result. Used to detect permission prompts —
+    /// a tool_use pending for ≥3s is almost certainly waiting on user
+    /// approval. Map: id → (tool name, first-seen epoch ms).
+    pub pending_tool_uses: HashMap<String, (String, i64)>,
 }
 
 impl Default for WorkspaceEvents {
@@ -77,8 +82,24 @@ impl Default for WorkspaceEvents {
             log: VecDeque::with_capacity(MAX_LOG),
             file_path: None,
             byte_offset: 0,
+            pending_tool_uses: HashMap::new(),
         }
     }
+}
+
+/// Output of a single `tail_session` call.
+///
+/// Carries both display-bound events and tool-tracking signals that the caller
+/// uses to maintain a per-workspace pending-tool map.
+#[derive(Debug, Clone, Default)]
+pub struct TailUpdate {
+    pub new_offset: u64,
+    pub events: Vec<EventSnapshot>,
+    /// (tool_use_id, tool_name, first-seen epoch ms) for each tool_use block
+    /// observed in this batch.
+    pub tool_use_starts: Vec<(String, String, i64)>,
+    /// tool_use_ids resolved by a `tool_result` block in this batch.
+    pub tool_use_resolves: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,8 +155,8 @@ pub fn locate_session_file(worktree: &Path) -> Option<PathBuf> {
 
 /// Read new lines from `path` starting at `offset` and parse them.
 /// Returns the new committed offset (only fully terminated lines count) plus
-/// the parsed events.
-pub fn tail_session(path: &Path, offset: u64) -> Result<(u64, Vec<EventSnapshot>)> {
+/// the parsed events and tool-tracking signals.
+pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     let mut file = std::fs::File::open(path)?;
     let file_size = file.metadata()?.len();
@@ -144,7 +165,7 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<(u64, Vec<EventSnapshot>
     let start = if offset > file_size { 0 } else { offset };
     file.seek(SeekFrom::Start(start))?;
     let mut reader = BufReader::new(file);
-    let mut events = Vec::new();
+    let mut update = TailUpdate::default();
     let mut buf = String::new();
     let mut consumed = start;
     loop {
@@ -160,45 +181,91 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<(u64, Vec<EventSnapshot>
             break;
         }
         consumed += n as u64;
-        if let Some(snap) = parse_jsonl_line(buf.trim_end()) {
-            events.push(snap);
+        let parsed = parse_jsonl_line(buf.trim_end());
+        if let Some(snap) = parsed.event {
+            update.events.push(snap);
         }
+        update.tool_use_starts.extend(parsed.tool_use_starts);
+        update.tool_use_resolves.extend(parsed.tool_use_resolves);
     }
-    Ok((consumed, events))
+    update.new_offset = consumed;
+    Ok(update)
 }
 
-/// Parse a single JSONL line. Returns `None` for malformed lines or line
-/// types we don't render (attachments, snapshots, tool results, etc.).
-pub fn parse_jsonl_line(line: &str) -> Option<EventSnapshot> {
-    let v: serde_json::Value = serde_json::from_str(line).ok()?;
-    let kind = v.get("type")?.as_str()?;
+/// Result of parsing a single JSONL line: at most one display event, plus
+/// any tool-tracking signals derived from its content blocks.
+#[derive(Debug, Default)]
+pub struct ParsedLine {
+    pub event: Option<EventSnapshot>,
+    pub tool_use_starts: Vec<(String, String, i64)>,
+    pub tool_use_resolves: Vec<String>,
+}
+
+/// Parse a single JSONL line into a [`ParsedLine`]. Malformed lines and
+/// uninteresting top-level types yield an empty result.
+///
+/// User `tool_result` content blocks DO NOT produce an `EventSnapshot` (they
+/// stay skipped from the display log) but DO populate `tool_use_resolves`.
+pub fn parse_jsonl_line(line: &str) -> ParsedLine {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        return ParsedLine::default();
+    };
+    let Some(kind) = v.get("type").and_then(|t| t.as_str()) else {
+        return ParsedLine::default();
+    };
     let timestamp_ms = parse_timestamp(v.get("timestamp"));
     match kind {
         "user" => parse_user(&v, timestamp_ms),
         "assistant" => parse_assistant(&v, timestamp_ms),
-        _ => None,
+        _ => ParsedLine::default(),
     }
 }
 
-fn parse_user(v: &serde_json::Value, timestamp_ms: i64) -> Option<EventSnapshot> {
-    let content = v.get("message")?.get("content")?;
-    // User content is either a plain string (the user's prompt) or an array
-    // containing tool_result blocks (which we skip — they're tool outputs,
-    // not user messages).
-    let text = content.as_str()?;
-    if text.trim().is_empty() {
-        return None;
+fn parse_user(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
+    let mut out = ParsedLine::default();
+    let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+        return out;
+    };
+    // User content is either:
+    //   (a) a plain string (the user's prompt) — emit a display event;
+    //   (b) an array containing tool_result blocks — emit resolves but no
+    //       display event (tool outputs aren't user prompts).
+    if let Some(text) = content.as_str() {
+        if text.trim().is_empty() {
+            return out;
+        }
+        let display = truncate_display(&format!("user: {}", collapse_ws(text)), MAX_DISPLAY_CHARS);
+        out.event = Some(EventSnapshot {
+            kind: EventKind::UserMessage,
+            display,
+            timestamp_ms,
+        });
+        return out;
     }
-    let display = truncate_display(&format!("user: {}", collapse_ws(text)), MAX_DISPLAY_CHARS);
-    Some(EventSnapshot {
-        kind: EventKind::UserMessage,
-        display,
-        timestamp_ms,
-    })
+    if let Some(blocks) = content.as_array() {
+        for block in blocks {
+            let Some(bt) = block.get("type").and_then(|t| t.as_str()) else {
+                continue;
+            };
+            if bt == "tool_result"
+                && let Some(id) = block.get("tool_use_id").and_then(|i| i.as_str())
+            {
+                out.tool_use_resolves.push(id.to_string());
+            }
+        }
+    }
+    out
 }
 
-fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> Option<EventSnapshot> {
-    let blocks = v.get("message")?.get("content")?.as_array()?;
+fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
+    let mut out = ParsedLine::default();
+    let Some(blocks) = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    else {
+        return out;
+    };
     // Prefer tool_use over text — tool use is the most concrete signal of
     // "what's happening right now". Fall back to assistant text.
     let mut last_text: Option<&str> = None;
@@ -217,6 +284,12 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> Option<EventSnap
                 let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let input = block.get("input").unwrap_or(&serde_json::Value::Null);
                 last_tool = Some((name, input));
+                // Track every tool_use we see — multiple in one message is rare
+                // but possible. The id is required for matching tool_results.
+                if let Some(id) = block.get("id").and_then(|i| i.as_str()) {
+                    out.tool_use_starts
+                        .push((id.to_string(), name.to_string(), timestamp_ms));
+                }
             }
             _ => {}
         }
@@ -233,24 +306,25 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> Option<EventSnap
         } else {
             format!("using {}", name)
         };
-        return Some(EventSnapshot {
+        out.event = Some(EventSnapshot {
             kind: EventKind::AssistantToolUse,
             display: truncate_display(&body, MAX_DISPLAY_CHARS),
             timestamp_ms,
         });
+        return out;
     }
     if let Some(t) = last_text {
         let trimmed = t.trim();
         if trimmed.is_empty() {
-            return None;
+            return out;
         }
-        return Some(EventSnapshot {
+        out.event = Some(EventSnapshot {
             kind: EventKind::AssistantText,
             display: truncate_display(&collapse_ws(trimmed), MAX_DISPLAY_CHARS),
             timestamp_ms,
         });
     }
-    None
+    out
 }
 
 /// Parse an ISO 8601 timestamp (e.g. `2026-05-14T17:32:02.744Z`) to epoch
@@ -362,7 +436,7 @@ mod tests {
     #[test]
     fn parses_user_text_message() {
         let line = r#"{"type":"user","message":{"role":"user","content":"how do I add a new migration?"},"uuid":"u1","timestamp":"2026-05-14T17:32:02.744Z"}"#;
-        let ev = parse_jsonl_line(line).expect("should parse");
+        let ev = parse_jsonl_line(line).event.expect("should parse");
         assert_eq!(ev.kind, EventKind::UserMessage);
         assert!(
             ev.display.starts_with("user: how do I add"),
@@ -376,7 +450,7 @@ mod tests {
     #[test]
     fn parses_assistant_text_message() {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll rename the branch."}]},"timestamp":"2026-05-14T17:32:13.536Z"}"#;
-        let ev = parse_jsonl_line(line).expect("should parse");
+        let ev = parse_jsonl_line(line).event.expect("should parse");
         assert_eq!(ev.kind, EventKind::AssistantText);
         assert!(ev.display.contains("I'll rename"), "{}", ev.display);
     }
@@ -384,7 +458,7 @@ mod tests {
     #[test]
     fn parses_assistant_bash_tool_use() {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test --workspace","description":"run all tests"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
-        let ev = parse_jsonl_line(line).expect("should parse");
+        let ev = parse_jsonl_line(line).event.expect("should parse");
         assert_eq!(ev.kind, EventKind::AssistantToolUse);
         assert!(
             ev.display.contains("ran `cargo test --workspace`"),
@@ -396,7 +470,7 @@ mod tests {
     #[test]
     fn parses_assistant_other_tool_use() {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/x"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
-        let ev = parse_jsonl_line(line).expect("should parse");
+        let ev = parse_jsonl_line(line).event.expect("should parse");
         assert_eq!(ev.kind, EventKind::AssistantToolUse);
         assert_eq!(ev.display, "using Read");
     }
@@ -406,7 +480,7 @@ mod tests {
         // When an assistant message has both a thinking block, a text block,
         // and a tool_use block, we surface the tool_use (most concrete).
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"running the tests"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
-        let ev = parse_jsonl_line(line).expect("should parse");
+        let ev = parse_jsonl_line(line).event.expect("should parse");
         assert_eq!(ev.kind, EventKind::AssistantToolUse);
         assert!(ev.display.contains("cargo test"));
     }
@@ -414,21 +488,24 @@ mod tests {
     #[test]
     fn skips_tool_result_user_messages() {
         // A "user" line whose content is an array (tool results, not a real
-        // user prompt) should be skipped — content.as_str() returns None.
+        // user prompt) should be skipped from the display log entirely. It
+        // STILL emits a resolve so the caller can clear the pending entry.
         let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":"ok","is_error":false}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
-        assert!(parse_jsonl_line(line).is_none());
+        let parsed = parse_jsonl_line(line);
+        assert!(parsed.event.is_none());
+        assert_eq!(parsed.tool_use_resolves, vec!["t1".to_string()]);
     }
 
     #[test]
     fn skips_unknown_line_types() {
         let line = r#"{"type":"attachment","content":"x","timestamp":"2026-05-14T17:32:14.000Z"}"#;
-        assert!(parse_jsonl_line(line).is_none());
+        assert!(parse_jsonl_line(line).event.is_none());
     }
 
     #[test]
     fn rejects_malformed_json() {
-        assert!(parse_jsonl_line("{ not json").is_none());
-        assert!(parse_jsonl_line("").is_none());
+        assert!(parse_jsonl_line("{ not json").event.is_none());
+        assert!(parse_jsonl_line("").event.is_none());
     }
 
     #[test]
@@ -437,7 +514,7 @@ mod tests {
         let line = format!(
             r#"{{"type":"user","message":{{"role":"user","content":"{long}"}},"timestamp":"2026-05-14T17:32:02.744Z"}}"#
         );
-        let ev = parse_jsonl_line(&line).expect("should parse");
+        let ev = parse_jsonl_line(&line).event.expect("should parse");
         assert!(ev.display.chars().count() <= MAX_DISPLAY_CHARS);
         assert!(ev.display.ends_with('\u{2026}'));
     }
@@ -445,8 +522,59 @@ mod tests {
     #[test]
     fn collapses_whitespace_in_display() {
         let line = r#"{"type":"user","message":{"role":"user","content":"hello\n\n  world\t!"},"timestamp":"2026-05-14T17:32:02.744Z"}"#;
-        let ev = parse_jsonl_line(line).expect("should parse");
+        let ev = parse_jsonl_line(line).event.expect("should parse");
         assert_eq!(ev.display, "user: hello world !");
+    }
+
+    #[test]
+    fn parser_emits_tool_use_start_on_assistant_tool_use() {
+        let line = r#"{"type":"assistant","timestamp":"2026-05-14T20:00:00.000Z","message":{"content":[{"type":"tool_use","id":"toolu_abc","name":"Bash","input":{"command":"ls"}}]}}"#;
+        let parsed = parse_jsonl_line(line);
+        // Existing behavior: an AssistantToolUse display event.
+        let ev = parsed.event.as_ref().expect("display event");
+        assert_eq!(ev.kind, EventKind::AssistantToolUse);
+        // New: tracking emission for the tool_use block.
+        assert_eq!(parsed.tool_use_starts.len(), 1);
+        assert_eq!(parsed.tool_use_starts[0].0, "toolu_abc");
+        assert_eq!(parsed.tool_use_starts[0].1, "Bash");
+        assert!(parsed.tool_use_resolves.is_empty());
+    }
+
+    #[test]
+    fn parser_emits_tool_use_resolve_on_user_tool_result() {
+        let line = r#"{"type":"user","timestamp":"2026-05-14T20:00:05.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_abc","content":"ok"}]}}"#;
+        let parsed = parse_jsonl_line(line);
+        // User tool_result rows stay skipped from the display log.
+        assert!(parsed.event.is_none());
+        assert_eq!(parsed.tool_use_resolves, vec!["toolu_abc".to_string()]);
+        assert!(parsed.tool_use_starts.is_empty());
+    }
+
+    #[test]
+    fn parser_handles_assistant_text_and_tool_use_in_same_message() {
+        // For mixed messages we still surface the tool_use as the display
+        // event AND emit a tool_use_start for it.
+        let line = r#"{"type":"assistant","timestamp":"2026-05-14T20:00:00.000Z","message":{"content":[{"type":"text","text":"I'll run this"},{"type":"tool_use","id":"toolu_xyz","name":"Bash","input":{"command":"ls"}}]}}"#;
+        let parsed = parse_jsonl_line(line);
+        let ev = parsed.event.as_ref().expect("display event");
+        assert_eq!(ev.kind, EventKind::AssistantToolUse);
+        assert_eq!(parsed.tool_use_starts.len(), 1);
+        assert_eq!(parsed.tool_use_starts[0].0, "toolu_xyz");
+        assert_eq!(parsed.tool_use_starts[0].1, "Bash");
+    }
+
+    #[test]
+    fn tail_session_emits_pairs_across_lines() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let line_a = r#"{"type":"assistant","timestamp":"2026-05-14T20:00:00.000Z","message":{"content":[{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"x"}}]}}"#;
+        let line_b = r#"{"type":"user","timestamp":"2026-05-14T20:00:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"a1","content":"ok"}]}}"#;
+        std::fs::write(&path, format!("{line_a}\n{line_b}\n")).unwrap();
+        let update = tail_session(&path, 0).unwrap();
+        assert_eq!(update.tool_use_starts.len(), 1);
+        assert_eq!(update.tool_use_starts[0].0, "a1");
+        assert_eq!(update.tool_use_starts[0].1, "Bash");
+        assert_eq!(update.tool_use_resolves, vec!["a1".to_string()]);
     }
 
     #[test]
@@ -467,15 +595,15 @@ mod tests {
         let line2 = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]},"timestamp":"2026-05-14T17:32:03.000Z"}"#;
         std::fs::write(&path, format!("{line1}\n{line2}\n")).unwrap();
 
-        let (off, evs) = tail_session(&path, 0).unwrap();
-        assert_eq!(evs.len(), 2);
-        assert_eq!(evs[0].kind, EventKind::UserMessage);
-        assert_eq!(evs[1].kind, EventKind::AssistantText);
+        let update = tail_session(&path, 0).unwrap();
+        assert_eq!(update.events.len(), 2);
+        assert_eq!(update.events[0].kind, EventKind::UserMessage);
+        assert_eq!(update.events[1].kind, EventKind::AssistantText);
 
         // Re-tailing from the same offset returns nothing.
-        let (off2, evs2) = tail_session(&path, off).unwrap();
-        assert!(evs2.is_empty());
-        assert_eq!(off2, off);
+        let update2 = tail_session(&path, update.new_offset).unwrap();
+        assert!(update2.events.is_empty());
+        assert_eq!(update2.new_offset, update.new_offset);
 
         // Append a new complete line and verify only it comes back.
         let line3 = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}]},"timestamp":"2026-05-14T17:32:04.000Z"}"#;
@@ -485,9 +613,9 @@ mod tests {
             .unwrap();
         use std::io::Write;
         writeln!(f, "{line3}").unwrap();
-        let (_, evs3) = tail_session(&path, off2).unwrap();
-        assert_eq!(evs3.len(), 1);
-        assert_eq!(evs3[0].kind, EventKind::AssistantToolUse);
+        let update3 = tail_session(&path, update2.new_offset).unwrap();
+        assert_eq!(update3.events.len(), 1);
+        assert_eq!(update3.events[0].kind, EventKind::AssistantToolUse);
     }
 
     #[test]
@@ -499,11 +627,11 @@ mod tests {
         let partial = r#"{"type":"user","message":{"role":"user","content":"oops"}"#;
         std::fs::write(&path, format!("{line1}\n{partial}")).unwrap();
 
-        let (off, evs) = tail_session(&path, 0).unwrap();
+        let update = tail_session(&path, 0).unwrap();
         // Only the first, terminated line should be committed.
-        assert_eq!(evs.len(), 1);
+        assert_eq!(update.events.len(), 1);
         // Offset advanced only past the completed line.
-        assert_eq!(off as usize, line1.len() + 1);
+        assert_eq!(update.new_offset as usize, line1.len() + 1);
 
         // Now complete the second line and verify it's picked up.
         let mut f = std::fs::OpenOptions::new()
@@ -512,8 +640,8 @@ mod tests {
             .unwrap();
         use std::io::Write;
         writeln!(f, r#","timestamp":"2026-05-14T17:32:03.000Z"}}"#).unwrap();
-        let (_, evs2) = tail_session(&path, off).unwrap();
-        assert_eq!(evs2.len(), 1);
+        let update2 = tail_session(&path, update.new_offset).unwrap();
+        assert_eq!(update2.events.len(), 1);
     }
 
     #[test]
@@ -523,8 +651,8 @@ mod tests {
         let line = r#"{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-05-14T17:32:02.744Z"}"#;
         std::fs::write(&path, format!("{line}\n")).unwrap();
         // Offset way past EOF — should reset to 0 and re-read.
-        let (_off, evs) = tail_session(&path, 9_999_999).unwrap();
-        assert_eq!(evs.len(), 1);
+        let update = tail_session(&path, 9_999_999).unwrap();
+        assert_eq!(update.events.len(), 1);
     }
 
     #[test]

@@ -29,10 +29,11 @@ pub enum SelectionTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
-    Active,  // < 2s since last output
-    Idle,    // 2-30s
-    Waiting, // > 30s
-    Off,     // no session at all
+    Active,   // < 2s since last output
+    Idle,     // 2-30s
+    Waiting,  // > 30s
+    Awaiting, // tool_use pending for ≥3s (almost always a permission prompt)
+    Off,      // no session at all
 }
 
 fn classify_activity(secs: Option<u64>) -> ActivityState {
@@ -120,6 +121,33 @@ impl App {
     pub fn selected_target(&self) -> Option<SelectionTarget> {
         self.selectable.get(self.dashboard.selected).copied()
     }
+
+    /// If the workspace has any tool_use pending for ≥3s, return the oldest
+    /// pending tool's (name, first-seen epoch ms). Returns None otherwise.
+    ///
+    /// 3 seconds is well past the latency of any auto-approved tool, so a
+    /// pending entry that crosses that threshold is almost certainly waiting
+    /// on a permission prompt the user needs to address.
+    pub fn awaiting_permission(&self, ws_id: crate::store::WorkspaceId) -> Option<(String, i64)> {
+        let evt = self.workspace_events.get(&ws_id)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        const STALE_MS: i64 = 3000;
+        let mut oldest: Option<(&str, i64)> = None;
+        for (name, ts) in evt.pending_tool_uses.values() {
+            let age = now - *ts;
+            if age >= STALE_MS {
+                match oldest {
+                    None => oldest = Some((name.as_str(), *ts)),
+                    Some((_, t)) if *ts < t => oldest = Some((name.as_str(), *ts)),
+                    _ => {}
+                }
+            }
+        }
+        oldest.map(|(n, ts)| (n.to_string(), ts))
+    }
 }
 
 pub type SharedApp = Arc<Mutex<App>>;
@@ -187,6 +215,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     });
                     let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
                     let needs_attention = app.workspace_needs_attention.contains(&ws.id);
+                    let awaiting = app.awaiting_permission(ws.id);
                     items.push(dashboard::Item::Workspace {
                         repo,
                         workspace: ws,
@@ -199,6 +228,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .get(&ws.id)
                             .and_then(|e| e.latest.clone()),
                         needs_attention,
+                        awaiting_tool: awaiting,
                     });
                 }
                 if count == 0 {
@@ -227,17 +257,22 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .unwrap_or(0);
                     now.saturating_sub(last) / 1000
                 });
-                let activity = if running {
+                let awaiting = app.awaiting_permission(ws.id);
+                let activity = if awaiting.is_some() {
+                    ActivityState::Awaiting
+                } else if running {
                     classify_activity(secs)
                 } else {
                     ActivityState::Off
                 };
                 let prev = app.workspace_activity.get(&ws.id).copied();
+                // Fire the bell on either kind of "user needs to act"
+                // transition: PTY-quiet → Waiting, or tool_use pending → Awaiting.
                 if matches!(
                     (prev, activity),
                     (
                         Some(ActivityState::Active) | Some(ActivityState::Idle),
-                        ActivityState::Waiting
+                        ActivityState::Waiting | ActivityState::Awaiting
                     )
                 ) && notifications_on
                 {
@@ -721,14 +756,24 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 }
             };
             if let Some(file) = current_file {
-                if let Ok((new_offset, new_events)) =
-                    crate::events::tail_session(&file, prev_offset)
-                {
+                if let Ok(update) = crate::events::tail_session(&file, prev_offset) {
+                    let crate::events::TailUpdate {
+                        new_offset,
+                        events,
+                        tool_use_starts,
+                        tool_use_resolves,
+                    } = update;
                     let mut g = app.lock().await;
                     let evt = g.workspace_events.entry(id).or_default();
                     evt.file_path = Some(file);
                     evt.byte_offset = new_offset;
-                    for e in new_events {
+                    for (tu_id, tu_name, ts) in tool_use_starts {
+                        evt.pending_tool_uses.insert(tu_id, (tu_name, ts));
+                    }
+                    for tu_id in tool_use_resolves {
+                        evt.pending_tool_uses.remove(&tu_id);
+                    }
+                    for e in events {
                         crate::events::push_event(evt, e);
                     }
                 }

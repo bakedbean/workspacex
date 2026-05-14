@@ -212,9 +212,16 @@ Zero values omitted. Clean workspaces show nothing in this column.
 
 ### Attention alerts
 
-When a workspace's claude session goes ≥30 seconds without producing output
-(state flips from `active` or `idle` to `waiting`), wsx considers the
-workspace to need attention:
+wsx watches each workspace for two distinct "user needs to act" signals:
+
+- A `tool_use` event in the session log has been pending for ≥3 seconds —
+  almost always means claude is showing a permission prompt for a tool.
+  In this case the activity column reads `awaiting` and the sub-line shows
+  `└ ⚠ awaiting permission: <tool> (<age>)`.
+- The claude session has gone ≥30 seconds without producing PTY output
+  (state flips from `active` or `idle` to `waiting`).
+
+On either transition wsx considers the workspace to need attention:
 
 - A terminal bell (`\x07`) is written to stdout. Your terminal config decides
   whether to beep, flash, or ignore.
@@ -222,7 +229,8 @@ workspace to need attention:
 
 The marker clears the moment you attach to the workspace (Enter on the row).
 The first observation of any workspace establishes a baseline; no bell rings
-for workspaces that are already in `waiting` state when wsx launches.
+for workspaces that are already in `waiting` or `awaiting` state when wsx
+launches.
 
 Turn off both via `wsx config set notifications off`.
 

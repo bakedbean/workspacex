@@ -687,6 +687,10 @@ async fn handle_key_attached(
                 let _ = session.writer.send(vec![0x01]).await;
                 return Ok(());
             }
+            KeyCode::Char('u') => {
+                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+                return Ok(());
+            }
             _ => return Ok(()),
         }
     }
@@ -777,6 +781,10 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
             }
             KeyCode::Char('a') => {
                 let _ = session.writer.send(vec![0x01]).await;
+                return Ok(());
+            }
+            KeyCode::Char('u') => {
+                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
                 return Ok(());
             }
             _ => return Ok(()),
@@ -1137,5 +1145,48 @@ mod pm_state_tests {
             "q should not dismiss UpdatesPanel"
         );
         assert!(!app.quit, "q should not propagate to App::quit");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_a_u_in_attached_pm_opens_updates_panel() {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Manually spawn a PM session so handle_key_attached_pm has one.
+        let cwd = PathBuf::from(".");
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+        };
+        let s = app.sessions.spawn_pm(&cwd, 80, 24, mode).unwrap();
+        app.pm = Some(s);
+        app.view = crate::ui::View::AttachedPm;
+
+        // Send Ctrl-a then 'u'.
+        handle_key_attached_pm(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.ctrl_a_pending);
+
+        handle_key_attached_pm(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.ctrl_a_pending);
+        assert!(matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::UpdatesPanel)
+        ));
+
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 }

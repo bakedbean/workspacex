@@ -3,6 +3,7 @@ mod error;
 mod store;
 mod names;
 mod git;
+mod setup;
 
 fn main() -> error::Result<()> {
     println!("wsx 0.1.0");

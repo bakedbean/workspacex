@@ -132,11 +132,13 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .unwrap_or(0);
                         now.saturating_sub(last) / 1000
                     });
+                    let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
                     dashboard::Row {
                         repo,
                         workspace: ws,
                         session_running: running,
                         seconds_since_activity: secs,
+                        has_prior_session: has_prior,
                     }
                 })
                 .collect();
@@ -193,21 +195,28 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         }
         (KeyCode::Enter, _) => {
             // Copy out of the immutable borrow before mutating sessions/view.
-            // Only pass a RenameContext when the workspace name is still a
-            // generated slug — otherwise the user has already renamed it.
+            // If claude has a persisted session JSONL for this worktree,
+            // resume via `--continue`; otherwise spawn fresh, optionally with
+            // the rename system prompt when the workspace name is still a
+            // generated slug.
             let info = app.selected_workspace().map(|(repo, ws)| {
-                let ctx = if crate::names::is_generated_slug(&ws.name) {
-                    Some(crate::pty::session::RenameContext {
-                        current_branch: ws.branch.clone(),
-                        branch_prefix: repo.branch_prefix.clone(),
-                    })
+                let mode = if crate::pty::session::has_prior_session(&ws.worktree_path) {
+                    crate::pty::session::SpawnMode::Continue
                 } else {
-                    None
+                    let rename_ctx = if crate::names::is_generated_slug(&ws.name) {
+                        Some(crate::pty::session::RenameContext {
+                            current_branch: ws.branch.clone(),
+                            branch_prefix: repo.branch_prefix.clone(),
+                        })
+                    } else {
+                        None
+                    };
+                    crate::pty::session::SpawnMode::Fresh { rename_ctx }
                 };
-                (ws.id, ws.worktree_path.clone(), ctx)
+                (ws.id, ws.worktree_path.clone(), mode)
             });
-            if let Some((id, path, ctx)) = info {
-                let _ = app.sessions.spawn(id, &path, 80, 24, ctx)?;
+            if let Some((id, path, mode)) = info {
+                let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
                 app.view = View::Attached(id);
             }
         }

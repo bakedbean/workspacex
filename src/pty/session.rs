@@ -11,6 +11,31 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use vt100::Parser;
 
+/// True if Claude Code has a persisted session JSONL for this worktree.
+/// Claude Code stores sessions at `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`,
+/// where the encoding replaces `/` and `.` with `-`.
+pub fn has_prior_session(worktree: &Path) -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let abs = match std::fs::canonicalize(worktree) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let encoded = abs.to_string_lossy().replace(['/', '.'], "-");
+    let session_dir = home.join(".claude/projects").join(encoded);
+    if !session_dir.is_dir() {
+        return false;
+    }
+    std::fs::read_dir(&session_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().map(|x| x == "jsonl").unwrap_or(false))
+        })
+        .unwrap_or(false)
+}
+
 #[derive(Default)]
 pub struct PromptCapture {
     buffer: String,
@@ -104,14 +129,25 @@ pub struct RenameContext {
     pub branch_prefix: String, // empty if no prefix
 }
 
+/// How to spawn the claude process for a workspace.
+#[derive(Debug, Clone)]
+pub enum SpawnMode {
+    /// Brand-new session. Apply rename system prompt if context provided.
+    Fresh { rename_ctx: Option<RenameContext> },
+    /// Resume the most recent prior session in this worktree via `--continue`.
+    Continue,
+}
+
 /// Build a `CommandBuilder` for `claude` (or whatever `WSX_CLAUDE_BIN`
 /// points to) inside `cwd`. Inherits the current process env.
 ///
-/// When `ctx` is Some and `WSX_RENAME_MODE` is `claude` (the default),
-/// appends a system-prompt instruction directing claude to rename the
-/// branch based on the user's first message, plus pre-authorizes
-/// `Bash(git branch:*)` so the rename runs without a permission prompt.
-pub fn build_claude_command(cwd: &Path, ctx: Option<&RenameContext>) -> CommandBuilder {
+/// When `mode` is `Fresh { rename_ctx: Some(_) }` and `WSX_RENAME_MODE` is
+/// `claude` (the default), appends a system-prompt instruction directing
+/// claude to rename the branch based on the user's first message, plus
+/// pre-authorizes `Bash(git branch:*)` so the rename runs without a
+/// permission prompt. When `mode` is `Continue`, passes `--continue` so
+/// claude resumes the most recent persisted session for this worktree.
+pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
     let bin = std::env::var("WSX_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
     let mut cmd = CommandBuilder::new(bin);
     cmd.cwd(cwd);
@@ -119,15 +155,24 @@ pub fn build_claude_command(cwd: &Path, ctx: Option<&RenameContext>) -> CommandB
         cmd.env(k, v);
     }
 
-    if let Some(ctx) = ctx {
-        let mode = std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
-        if mode == "claude" {
-            let prompt = render_rename_system_prompt(&ctx.current_branch, &ctx.branch_prefix);
-            cmd.arg("--append-system-prompt");
-            cmd.arg(prompt);
-            cmd.arg("--allowedTools");
-            cmd.arg("Bash(git branch:*)");
+    match mode {
+        SpawnMode::Continue => {
+            cmd.arg("--continue");
         }
+        SpawnMode::Fresh {
+            rename_ctx: Some(ctx),
+        } => {
+            let rename_mode =
+                std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
+            if rename_mode == "claude" {
+                let prompt = render_rename_system_prompt(&ctx.current_branch, &ctx.branch_prefix);
+                cmd.arg("--append-system-prompt");
+                cmd.arg(prompt);
+                cmd.arg("--allowedTools");
+                cmd.arg("Bash(git branch:*)");
+            }
+        }
+        SpawnMode::Fresh { rename_ctx: None } => {}
     }
     cmd
 }
@@ -156,12 +201,7 @@ fn render_rename_system_prompt(current_branch: &str, branch_prefix: &str) -> Str
     )
 }
 
-pub fn spawn_session(
-    cwd: &Path,
-    cols: u16,
-    rows: u16,
-    rename_ctx: Option<RenameContext>,
-) -> Result<Session> {
+pub fn spawn_session(cwd: &Path, cols: u16, rows: u16, mode: SpawnMode) -> Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -174,7 +214,7 @@ pub fn spawn_session(
 
     let mut child = pair
         .slave
-        .spawn_command(build_claude_command(cwd, rename_ctx.as_ref()))
+        .spawn_command(build_claude_command(cwd, &mode))
         .map_err(|e| Error::Pty(format!("spawn: {e}")))?;
     drop(pair.slave);
 
@@ -273,7 +313,7 @@ impl SessionManager {
         cwd: &Path,
         cols: u16,
         rows: u16,
-        rename_ctx: Option<RenameContext>,
+        mode: SpawnMode,
     ) -> Result<Arc<Session>> {
         if let Some(s) = self.sessions.get(&id) {
             if matches!(*s.status.read().unwrap(), SessionStatus::Running { .. }) {
@@ -281,7 +321,7 @@ impl SessionManager {
             }
             // Otherwise fall through and respawn.
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows, rename_ctx)?);
+        let session = Arc::new(spawn_session(cwd, cols, rows, mode)?);
         self.sessions.insert(id, session.clone());
         Ok(session)
     }
@@ -319,7 +359,7 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", echo_bin());
         }
         let cwd = PathBuf::from(".");
-        let s = spawn_session(&cwd, 80, 24, None).unwrap();
+        let s = spawn_session(&cwd, 80, 24, SpawnMode::Fresh { rename_ctx: None }).unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
         // Give cat a moment to echo and the reader to process.
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -336,7 +376,7 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", "/no/such/binary/wsx-test");
         }
         let cwd = PathBuf::from(".");
-        let result = spawn_session(&cwd, 80, 24, None);
+        let result = spawn_session(&cwd, 80, 24, SpawnMode::Fresh { rename_ctx: None });
         assert!(result.is_err());
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
@@ -355,7 +395,9 @@ mod tests {
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
         let id = crate::store::WorkspaceId(1);
-        let session = mgr.spawn(id, &cwd, 80, 24, None).unwrap();
+        let session = mgr
+            .spawn(id, &cwd, 80, 24, SpawnMode::Fresh { rename_ctx: None })
+            .unwrap();
         // sh -i would run forever; we just check the session was Running.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(matches!(
@@ -384,7 +426,7 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
         }
         let cwd = std::path::PathBuf::from(".");
-        let session = spawn_session(&cwd, 80, 24, None).unwrap();
+        let session = spawn_session(&cwd, 80, 24, SpawnMode::Fresh { rename_ctx: None }).unwrap();
 
         // First "Enter" before typing — must NOT latch.
         assert!(session.take_first_prompt().is_none());
@@ -417,5 +459,58 @@ mod tests {
         let p = render_rename_system_prompt("bold-fern", "");
         assert!(p.contains("`bold-fern`"));
         assert!(p.contains("git branch -m bold-fern <slug>"));
+    }
+
+    #[test]
+    fn has_prior_session_finds_jsonl() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let abs = std::fs::canonicalize(work.path()).unwrap();
+        let encoded = abs.to_string_lossy().replace(['/', '.'], "-");
+        let session_dir = home.path().join(".claude/projects").join(&encoded);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("abc.jsonl"), "{}").unwrap();
+
+        // Override HOME for the duration of this test.
+        let original = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+        let result = has_prior_session(work.path());
+        if let Some(h) = original {
+            unsafe {
+                std::env::set_var("HOME", h);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        assert!(
+            result,
+            "expected to find prior session at {}",
+            session_dir.display()
+        );
+    }
+
+    #[test]
+    fn has_prior_session_returns_false_for_empty_dir() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let original = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+        let result = has_prior_session(work.path());
+        if let Some(h) = original {
+            unsafe {
+                std::env::set_var("HOME", h);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        assert!(!result);
     }
 }

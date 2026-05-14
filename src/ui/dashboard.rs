@@ -10,6 +10,7 @@ pub struct Row<'a> {
     pub workspace: &'a Workspace,
     pub session_running: bool,
     pub seconds_since_activity: Option<u64>,
+    pub has_prior_session: bool,
 }
 
 #[derive(Default)]
@@ -34,20 +35,22 @@ pub fn render(f: &mut Frame, area: Rect, rows: &[Row], state: &mut DashboardStat
     let items: Vec<ListItem> = rows
         .iter()
         .map(|r| {
-            let dot = match (r.session_running, &r.workspace.state) {
-                (true, _) => "●",
-                (false, WorkspaceState::Failed) => "✕",
+            let dot = match (r.session_running, &r.workspace.state, r.has_prior_session) {
+                (true, _, _) => "●",
+                (false, WorkspaceState::Failed, _) => "✕",
+                (false, _, true) => "↻",
                 _ => "○",
             };
             let setup_badge = match r.workspace.setup_status {
                 SetupStatus::Ok | SetupStatus::Skipped | SetupStatus::NotRun => "",
                 SetupStatus::Failed => " [setup-failed]",
             };
-            let activity = match r.seconds_since_activity {
-                Some(s) if s < 2 => "active",
-                Some(s) if s < 30 => "idle",
-                Some(_) => "waiting",
-                None => "off",
+            let activity = match (r.seconds_since_activity, r.has_prior_session) {
+                (Some(s), _) if s < 2 => "active",
+                (Some(s), _) if s < 30 => "idle",
+                (Some(_), _) => "waiting",
+                (None, true) => "resumable",
+                (None, false) => "off",
             };
             let line = format!(
                 "{dot} {repo}/{name}  [{branch}]  {activity}{setup_badge}",
@@ -105,6 +108,7 @@ mod tests {
             workspace: &ws,
             session_running: true,
             seconds_since_activity: Some(0),
+            has_prior_session: false,
         }];
         let mut state = DashboardState::default();
         term.draw(|f| render(f, f.area(), &rows, &mut state))

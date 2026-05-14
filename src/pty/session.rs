@@ -139,6 +139,14 @@ pub enum SpawnMode {
     },
     /// Resume the most recent prior session in this worktree via `--continue`.
     Continue { custom_instructions: Option<String> },
+    /// Spawn the project-manager session. Embeds the PM system prompt and
+    /// a read-only tool allowlist. When `resume` is true, also passes
+    /// `--continue` to pick up PM's prior conversation.
+    ProjectManager {
+        workspaces_json_path: std::path::PathBuf,
+        custom_instructions: Option<String>,
+        resume: bool,
+    },
 }
 
 /// Build a `CommandBuilder` for `claude` (or whatever `WSX_CLAUDE_BIN`
@@ -158,13 +166,10 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
         cmd.env(k, v);
     }
 
-    let (rename_prompt, custom, allow_git_branch) = match mode {
+    let (rename_prompt, custom, allow_git_branch, allow_tools_override, add_continue) = match mode {
         SpawnMode::Continue {
             custom_instructions,
-        } => {
-            cmd.arg("--continue");
-            (None, custom_instructions.clone(), false)
-        }
+        } => (None, custom_instructions.clone(), false, None, true),
         SpawnMode::Fresh {
             rename_ctx,
             custom_instructions,
@@ -186,11 +191,29 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
             } else {
                 (None, false)
             };
-            (rp, custom_instructions.clone(), allow)
+            (rp, custom_instructions.clone(), allow, None, false)
         }
+        SpawnMode::ProjectManager {
+            workspaces_json_path: _,
+            custom_instructions,
+            resume,
+        } => (
+            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+            None,
+            false,
+            Some(crate::pm::pm_allowed_tools().to_string()),
+            *resume,
+        ),
     };
 
-    if allow_git_branch {
+    if add_continue {
+        cmd.arg("--continue");
+    }
+
+    if let Some(tools) = allow_tools_override {
+        cmd.arg("--allowedTools");
+        cmd.arg(tools);
+    } else if allow_git_branch {
         cmd.arg("--allowedTools");
         cmd.arg("Bash(git branch:*)");
     }
@@ -655,5 +678,48 @@ mod tests {
             }
         }
         assert!(!result);
+    }
+
+    #[test]
+    fn project_manager_mode_adds_allowed_tools_and_system_prompt() {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
+            custom_instructions: None,
+            resume: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode);
+        let dbg = format!("{cmd:?}");
+        assert!(dbg.contains("--allowedTools"), "{dbg}");
+        assert!(dbg.contains("Read"), "{dbg}");
+        assert!(dbg.contains("Bash(git status:*)"), "{dbg}");
+        assert!(dbg.contains("--append-system-prompt"), "{dbg}");
+        assert!(dbg.contains("project manager"), "{dbg}");
+        assert!(!dbg.contains("--continue"), "should be Fresh-style: {dbg}");
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[test]
+    fn project_manager_mode_resume_adds_continue() {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
+            custom_instructions: None,
+            resume: true,
+        };
+        let cmd = build_claude_command(&cwd, &mode);
+        let dbg = format!("{cmd:?}");
+        assert!(dbg.contains("--continue"), "{dbg}");
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 }

@@ -10,3 +10,9 @@ pub enum View {
     Dashboard,
     Attached(WorkspaceId),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneFocus {
+    Dashboard,
+    ProjectManager,
+}

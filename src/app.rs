@@ -66,6 +66,9 @@ pub struct App {
     /// Workspaces whose alert hasn't been acknowledged (cleared on attach).
     pub workspace_needs_attention: std::collections::HashSet<crate::store::WorkspaceId>,
     pub theme: crate::ui::theme::Theme,
+    pub pm: Option<std::sync::Arc<crate::pty::session::Session>>,
+    pub pm_visible: bool,
+    pub focus: crate::ui::PaneFocus,
 }
 
 impl App {
@@ -93,6 +96,9 @@ impl App {
             workspace_activity: std::collections::HashMap::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
             theme,
+            pm: None,
+            pm_visible: false,
+            focus: crate::ui::PaneFocus::Dashboard,
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -801,5 +807,21 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod pm_state_tests {
+    use super::*;
+    use crate::store::Store;
+    use std::path::PathBuf;
+
+    #[test]
+    fn app_initializes_pm_state_off() {
+        let store = Store::open_in_memory().unwrap();
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(app.pm.is_none());
+        assert!(!app.pm_visible);
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
     }
 }

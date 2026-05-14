@@ -28,7 +28,10 @@ pub struct Session {
     pub writer: mpsc::Sender<Vec<u8>>,
     pub status: Arc<RwLock<SessionStatus>>,
     pub activity_ms: Arc<AtomicU64>,
-    master: Box<dyn MasterPty + Send>,
+    // Wrapped in Mutex so Session is Sync — required because App is held in
+    // an Arc<tokio::sync::Mutex<App>> that gets passed to `tokio::spawn` for
+    // the branch-drift poller.
+    master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
     pub prompt: Arc<Mutex<PromptCapture>>,
 }
@@ -36,6 +39,8 @@ pub struct Session {
 impl Session {
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
         self.master
+            .lock()
+            .unwrap()
             .resize(PtySize {
                 cols,
                 rows,
@@ -90,19 +95,73 @@ impl Drop for Session {
     }
 }
 
+/// Context the claude-mode auto-rename system prompt needs to address the
+/// worktree by branch name. Passed into `build_claude_command` only when
+/// the workspace name is still a generated slug.
+#[derive(Debug, Clone)]
+pub struct RenameContext {
+    pub current_branch: String,
+    pub branch_prefix: String, // empty if no prefix
+}
+
 /// Build a `CommandBuilder` for `claude` (or whatever `WSX_CLAUDE_BIN`
 /// points to) inside `cwd`. Inherits the current process env.
-pub fn build_claude_command(cwd: &Path) -> CommandBuilder {
+///
+/// When `ctx` is Some and `WSX_RENAME_MODE` is `claude` (the default),
+/// appends a system-prompt instruction directing claude to rename the
+/// branch based on the user's first message, plus pre-authorizes
+/// `Bash(git branch:*)` so the rename runs without a permission prompt.
+pub fn build_claude_command(cwd: &Path, ctx: Option<&RenameContext>) -> CommandBuilder {
     let bin = std::env::var("WSX_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
     let mut cmd = CommandBuilder::new(bin);
     cmd.cwd(cwd);
     for (k, v) in std::env::vars() {
         cmd.env(k, v);
     }
+
+    if let Some(ctx) = ctx {
+        let mode = std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
+        if mode == "claude" {
+            let prompt = render_rename_system_prompt(&ctx.current_branch, &ctx.branch_prefix);
+            cmd.arg("--append-system-prompt");
+            cmd.arg(prompt);
+            cmd.arg("--allowedTools");
+            cmd.arg("Bash(git branch:*)");
+        }
+    }
     cmd
 }
 
-pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
+fn render_rename_system_prompt(current_branch: &str, branch_prefix: &str) -> String {
+    let prefix = if branch_prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", branch_prefix.trim_end_matches('/'))
+    };
+    format!(
+        "This is a wsx-managed worktree currently checked out on a placeholder branch \
+         named `{current_branch}`. The placeholder is a randomly-generated \
+         adjective-plant slug from the wsx workspace manager.\n\n\
+         BEFORE doing the work the user asks about, on their first message: \
+         run `git branch -m {current_branch} {prefix}<slug>` where `<slug>` is a \
+         2-4 word lowercase kebab-case summary of what the user is asking for. \
+         Then briefly tell the user \"renamed branch to {prefix}<slug>\" on one line \
+         and proceed with their actual request.\n\n\
+         Constraints:\n\
+         - Keep the `{prefix}` prefix exactly as shown.\n\
+         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars.\n\
+         - Don't ask for confirmation; don't add extra explanation.\n\
+         - Only do this once per worktree. If the current branch is no longer \
+         the placeholder `{current_branch}`, skip the rename — it's already done.\n"
+    )
+}
+
+pub fn spawn_session(
+    cwd: &Path,
+    cols: u16,
+    rows: u16,
+    rename_ctx: Option<RenameContext>,
+) -> Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -115,7 +174,7 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
 
     let mut child = pair
         .slave
-        .spawn_command(build_claude_command(cwd))
+        .spawn_command(build_claude_command(cwd, rename_ctx.as_ref()))
         .map_err(|e| Error::Pty(format!("spawn: {e}")))?;
     drop(pair.slave);
 
@@ -177,7 +236,7 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
         writer: tx,
         status,
         activity_ms,
-        master: pair.master,
+        master: Mutex::new(pair.master),
         killer: Mutex::new(killer),
         prompt,
     })
@@ -214,6 +273,7 @@ impl SessionManager {
         cwd: &Path,
         cols: u16,
         rows: u16,
+        rename_ctx: Option<RenameContext>,
     ) -> Result<Arc<Session>> {
         if let Some(s) = self.sessions.get(&id) {
             if matches!(*s.status.read().unwrap(), SessionStatus::Running { .. }) {
@@ -221,7 +281,7 @@ impl SessionManager {
             }
             // Otherwise fall through and respawn.
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows)?);
+        let session = Arc::new(spawn_session(cwd, cols, rows, rename_ctx)?);
         self.sessions.insert(id, session.clone());
         Ok(session)
     }
@@ -259,7 +319,7 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", echo_bin());
         }
         let cwd = PathBuf::from(".");
-        let s = spawn_session(&cwd, 80, 24).unwrap();
+        let s = spawn_session(&cwd, 80, 24, None).unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
         // Give cat a moment to echo and the reader to process.
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -276,7 +336,7 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", "/no/such/binary/wsx-test");
         }
         let cwd = PathBuf::from(".");
-        let result = spawn_session(&cwd, 80, 24);
+        let result = spawn_session(&cwd, 80, 24, None);
         assert!(result.is_err());
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
@@ -295,7 +355,7 @@ mod tests {
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
         let id = crate::store::WorkspaceId(1);
-        let session = mgr.spawn(id, &cwd, 80, 24).unwrap();
+        let session = mgr.spawn(id, &cwd, 80, 24, None).unwrap();
         // sh -i would run forever; we just check the session was Running.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(matches!(
@@ -324,7 +384,7 @@ mod tests {
             std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
         }
         let cwd = std::path::PathBuf::from(".");
-        let session = spawn_session(&cwd, 80, 24).unwrap();
+        let session = spawn_session(&cwd, 80, 24, None).unwrap();
 
         // First "Enter" before typing — must NOT latch.
         assert!(session.take_first_prompt().is_none());
@@ -342,5 +402,20 @@ mod tests {
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
+    }
+
+    #[test]
+    fn rename_prompt_includes_current_branch_and_prefix() {
+        let p = render_rename_system_prompt("wsx/bold-fern", "wsx");
+        assert!(p.contains("`wsx/bold-fern`"));
+        assert!(p.contains("git branch -m wsx/bold-fern wsx/<slug>"));
+        assert!(p.contains("Keep the `wsx/` prefix"));
+    }
+
+    #[test]
+    fn rename_prompt_handles_empty_prefix() {
+        let p = render_rename_system_prompt("bold-fern", "");
+        assert!(p.contains("`bold-fern`"));
+        assert!(p.contains("git branch -m bold-fern <slug>"));
     }
 }

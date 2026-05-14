@@ -50,6 +50,10 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&worktree_base)?;
     let app = Arc::new(Mutex::new(app::App::new(store, worktree_base)?));
 
+    // Watch for git branch renames performed by claude (or the user)
+    // and propagate to the wsx store. Aborts when the runtime drops.
+    tokio::spawn(app::branch_drift_poll(app.clone()));
+
     install_panic_hook();
 
     enable_raw_mode()?;

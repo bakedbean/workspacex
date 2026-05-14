@@ -193,11 +193,21 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         }
         (KeyCode::Enter, _) => {
             // Copy out of the immutable borrow before mutating sessions/view.
-            let info = app
-                .selected_workspace()
-                .map(|(_, ws)| (ws.id, ws.worktree_path.clone()));
-            if let Some((id, path)) = info {
-                let _ = app.sessions.spawn(id, &path, 80, 24)?;
+            // Only pass a RenameContext when the workspace name is still a
+            // generated slug — otherwise the user has already renamed it.
+            let info = app.selected_workspace().map(|(repo, ws)| {
+                let ctx = if crate::names::is_generated_slug(&ws.name) {
+                    Some(crate::pty::session::RenameContext {
+                        current_branch: ws.branch.clone(),
+                        branch_prefix: repo.branch_prefix.clone(),
+                    })
+                } else {
+                    None
+                };
+                (ws.id, ws.worktree_path.clone(), ctx)
+            });
+            if let Some((id, path, ctx)) = info {
+                let _ = app.sessions.spawn(id, &path, 80, 24, ctx)?;
                 app.view = View::Attached(id);
             }
         }
@@ -261,34 +271,41 @@ async fn handle_key_attached(
     if !bytes.is_empty() {
         let _ = session.writer.send(bytes).await;
     }
-    // Auto-rename capture: buffer printable chars; on Enter, attempt rename if
-    // the workspace name is still a generated slug.
-    match k.code {
-        KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => session.capture_char(c),
-        KeyCode::Backspace => session.capture_backspace(),
-        KeyCode::Enter => {
-            if let Some(prompt) = session.take_first_prompt() {
-                if let Some(slug) = crate::workspace::slugify_prompt(&prompt) {
-                    let ws_info = app
-                        .workspaces
-                        .iter()
-                        .find(|(_, w)| w.id == id)
-                        .map(|(_, w)| w.clone());
-                    if let Some(ws) = ws_info {
-                        if crate::names::is_generated_slug(&ws.name) {
-                            let repo = app.repos.iter().find(|r| r.id == ws.repo_id).cloned();
-                            if let Some(repo) = repo {
-                                // Fire-and-forget: rename failure shouldn't disrupt the keystroke.
-                                let _ =
-                                    crate::workspace::rename(&app.store, &repo, &ws, &slug).await;
-                                app.refresh()?;
+    // Auto-rename capture (local mode only): buffer printable chars; on Enter,
+    // attempt rename if the workspace name is still a generated slug. In the
+    // default `claude` mode the rename happens via system-prompt + branch
+    // poller, so the PTY-interception path stays inert.
+    let mode = std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
+    if mode == "local" {
+        match k.code {
+            KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+                session.capture_char(c)
+            }
+            KeyCode::Backspace => session.capture_backspace(),
+            KeyCode::Enter => {
+                if let Some(prompt) = session.take_first_prompt() {
+                    if let Some(slug) = crate::workspace::slugify_prompt(&prompt) {
+                        let ws_info = app
+                            .workspaces
+                            .iter()
+                            .find(|(_, w)| w.id == id)
+                            .map(|(_, w)| w.clone());
+                        if let Some(ws) = ws_info {
+                            if crate::names::is_generated_slug(&ws.name) {
+                                let repo = app.repos.iter().find(|r| r.id == ws.repo_id).cloned();
+                                if let Some(repo) = repo {
+                                    // Fire-and-forget: rename failure shouldn't disrupt the keystroke.
+                                    let _ = crate::workspace::rename(&app.store, &repo, &ws, &slug)
+                                        .await;
+                                    app.refresh()?;
+                                }
                             }
                         }
                     }
                 }
             }
+            _ => {} // arrows, function keys, etc. — not part of the prompt
         }
-        _ => {} // arrows, function keys, etc. — not part of the prompt
     }
     Ok(())
 }
@@ -427,4 +444,54 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
         }
     }
     Ok(())
+}
+
+/// Periodically check each live workspace's current git branch against
+/// the DB; if claude (or a user) renamed it, update name + branch in the
+/// store. Runs forever; cheap when nothing has drifted.
+pub async fn branch_drift_poll(app: SharedApp) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+    loop {
+        interval.tick().await;
+        let snapshot: Vec<(WorkspaceId, std::path::PathBuf, String, String)> = {
+            let g = app.lock().await;
+            g.workspaces
+                .iter()
+                .filter_map(|(_, w)| {
+                    let repo = g.repos.iter().find(|r| r.id == w.repo_id)?;
+                    Some((
+                        w.id,
+                        w.worktree_path.clone(),
+                        w.branch.clone(),
+                        repo.branch_prefix.clone(),
+                    ))
+                })
+                .collect()
+        };
+
+        for (id, path, db_branch, prefix) in snapshot {
+            if !path.exists() {
+                continue;
+            }
+            let current = match crate::git::current_branch(&path).await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            if current == db_branch || current == "HEAD" {
+                continue;
+            }
+
+            let new_name = if prefix.is_empty() {
+                current.clone()
+            } else {
+                let strip = format!("{}/", prefix.trim_end_matches('/'));
+                current.strip_prefix(&strip).unwrap_or(&current).to_string()
+            };
+
+            let mut g = app.lock().await;
+            let _ = g.store.rename_workspace(id, &new_name);
+            let _ = g.store.set_workspace_branch(id, &current);
+            let _ = g.refresh();
+        }
+    }
 }

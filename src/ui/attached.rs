@@ -1,11 +1,12 @@
 use crate::pty::render::render_screen;
 use crate::pty::session::Session;
+use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::sync::Arc;
 
-pub fn render(f: &mut Frame, area: Rect, session: &Arc<Session>, label: &str) {
+pub fn render(f: &mut Frame, area: Rect, session: &Arc<Session>, label: &str, theme: &Theme) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -22,10 +23,7 @@ pub fn render(f: &mut Frame, area: Rect, session: &Arc<Session>, label: &str) {
     drop(parser);
 
     let footer = format!(" {label}   [Ctrl-a d] detach   [Ctrl-a a] send Ctrl-a ");
-    f.render_widget(
-        Paragraph::new(footer).style(crate::ui::theme::dim()),
-        chunks[1],
-    );
+    f.render_widget(Paragraph::new(footer).style(theme.dim_style()), chunks[1]);
 }
 
 pub fn resize_session(session: &Arc<Session>, area: Rect) {

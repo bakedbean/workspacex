@@ -1,5 +1,5 @@
 use crate::store::RepoId;
-use crate::ui::theme;
+use crate::ui::theme::Theme;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -41,7 +41,7 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
         .split(popup)[1]
 }
 
-pub fn render(f: &mut Frame, area: Rect, modal: &Modal) {
+pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     let rect = centered(area, 60, 12);
     f.render_widget(Clear, rect);
     let (title, body) = match modal {
@@ -61,9 +61,9 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal) {
         Modal::Error { message } => ("error", message.clone()),
     };
     let style = if matches!(modal, Modal::Error { .. }) {
-        theme::err()
+        theme.err_style()
     } else {
-        theme::header()
+        theme.header_style()
     };
     let para = Paragraph::new(body)
         .block(

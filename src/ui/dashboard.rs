@@ -1,6 +1,6 @@
 use crate::app::SelectionTarget;
 use crate::store::{Repo, SetupStatus, Workspace, WorkspaceState};
-use crate::ui::theme;
+use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
@@ -40,6 +40,7 @@ pub fn render(
     items: &[Item],
     selected: Option<SelectionTarget>,
     nerd_fonts: bool,
+    theme: &Theme,
     state: &mut DashboardState,
 ) {
     let chunks = Layout::default()
@@ -51,7 +52,7 @@ pub fn render(
         ])
         .split(area);
 
-    let header_text = Paragraph::new("wsx — Workspaces").style(theme::header());
+    let header_text = Paragraph::new("wsx — Workspaces").style(theme.header_style());
     f.render_widget(header_text, chunks[0]);
 
     // List is rendered into chunks[1] with a 1-char border on each side, so
@@ -70,7 +71,7 @@ pub fn render(
                     selected_idx = Some(list_items.len());
                 }
                 let line = format!("▌ {}    {}", repo.name, repo.path.display());
-                list_items.push(ListItem::new(line).style(theme::header()));
+                list_items.push(ListItem::new(line).style(theme.header_style()));
             }
             Item::Workspace {
                 repo: _,
@@ -135,16 +136,17 @@ pub fn render(
                         "    \u{2514} \u{26a0} awaiting permission: {} ({})",
                         tool_name, age
                     );
-                    list_items.push(ListItem::new(sub).style(theme::dim()));
+                    list_items.push(ListItem::new(sub).style(theme.dim_style()));
                 } else if let Some(ev) = latest_event {
                     let age = format_age(ev.timestamp_ms);
                     let sub = format!("    \u{2514} {} ({})", ev.display, age);
-                    list_items.push(ListItem::new(sub).style(theme::dim()));
+                    list_items.push(ListItem::new(sub).style(theme.dim_style()));
                 }
             }
             Item::EmptyHint => {
                 list_items.push(
-                    ListItem::new("  (no workspaces — press n to create one)").style(theme::dim()),
+                    ListItem::new("  (no workspaces — press n to create one)")
+                        .style(theme.dim_style()),
                 );
             }
             Item::Spacer => list_items.push(ListItem::new("")),
@@ -154,13 +156,13 @@ pub fn render(
     state.list_state.select(selected_idx);
     let list = List::new(list_items)
         .block(Block::default().borders(Borders::ALL))
-        .highlight_style(theme::selected());
+        .highlight_style(theme.selected_style());
     f.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
     let footer = Paragraph::new(
         "[enter] attach   [n] new   [e] edit   [t] terminal   [d] archive   [q] quit",
     )
-    .style(theme::dim());
+    .style(theme.dim_style());
     f.render_widget(footer, chunks[2]);
 }
 
@@ -271,6 +273,10 @@ mod tests {
         }
     }
 
+    fn t() -> Theme {
+        Theme::default_theme()
+    }
+
     fn dump(term: &Terminal<TestBackend>, w: u16, h: u16) -> String {
         let buf = term.backend().buffer();
         let mut s = String::new();
@@ -309,6 +315,7 @@ mod tests {
                 &items,
                 Some(SelectionTarget::Workspace(WorkspaceId(1))),
                 false,
+                &t(),
                 &mut state,
             )
         })
@@ -325,7 +332,7 @@ mod tests {
         let r = repo(1, "empty");
         let items = vec![Item::Header { repo: &r }, Item::EmptyHint];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 80, 8);
         assert!(text.contains("▌ empty"));
@@ -367,7 +374,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 15);
         let first_pos = text.find("first").expect("first repo header");
@@ -406,7 +413,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
         assert!(text.contains("~3"), "missing modified count: {text}");
@@ -444,7 +451,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, true, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, true, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
         assert!(text.contains("\u{e0a0}"), "missing branch glyph: {text}");
@@ -482,7 +489,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
         assert!(text.contains("\u{2514}"), "missing └ glyph: {text}");
@@ -545,6 +552,7 @@ mod tests {
                 &items,
                 Some(SelectionTarget::Workspace(WorkspaceId(2))),
                 false,
+                &t(),
                 &mut state,
             )
         })
@@ -575,7 +583,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
         assert!(text.contains("alpha"));
@@ -611,7 +619,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
         // Look for the row that has the alpha workspace; assert ! is in the leading column.
@@ -646,7 +654,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
         let line = text
@@ -697,7 +705,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
 
@@ -747,7 +755,7 @@ mod tests {
             },
         ];
         let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
         assert!(

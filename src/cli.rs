@@ -68,6 +68,7 @@ fn known_setting_key(k: &str) -> bool {
             | "editor_cmd"
             | "terminal_cmd"
             | "notifications"
+            | "theme"
     )
 }
 

@@ -65,10 +65,17 @@ pub struct App {
     pub workspace_activity: std::collections::HashMap<crate::store::WorkspaceId, ActivityState>,
     /// Workspaces whose alert hasn't been acknowledged (cleared on attach).
     pub workspace_needs_attention: std::collections::HashSet<crate::store::WorkspaceId>,
+    pub theme: crate::ui::theme::Theme,
 }
 
 impl App {
     pub fn new(store: Store, worktree_base: PathBuf) -> Result<Self> {
+        let theme_name = store
+            .get_setting("theme")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let theme = crate::ui::theme::Theme::by_name(&theme_name);
         let mut app = Self {
             store,
             sessions: SessionManager::new(),
@@ -85,6 +92,7 @@ impl App {
             workspace_events: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
+            theme,
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -289,7 +297,15 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
             let selected = app.selected_target();
             let nerd_fonts = nerd_fonts_enabled(&app.store);
-            dashboard::render(f, area, &items, selected, nerd_fonts, &mut app.dashboard);
+            dashboard::render(
+                f,
+                area,
+                &items,
+                selected,
+                nerd_fonts,
+                &app.theme,
+                &mut app.dashboard,
+            );
         }
         View::Attached(id) => {
             if let Some(session) = app.sessions.get(*id) {
@@ -300,12 +316,12 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .map(|(_, w)| w.name.clone())
                     .unwrap_or_default();
                 attached::resize_session(&session, area);
-                attached::render(f, area, &session, &label);
+                attached::render(f, area, &session, &label, &app.theme);
             }
         }
     }
     if let Some(m) = &app.modal {
-        modal::render(f, area, m);
+        modal::render(f, area, m, &app.theme);
     }
 }
 

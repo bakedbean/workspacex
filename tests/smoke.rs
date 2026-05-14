@@ -58,15 +58,18 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
         term.draw(|f| wsx::app::draw_for_test(f, &mut g)).unwrap();
     }
     let buf = term.backend().buffer();
-    let mut found = false;
+    // Replace the existing line-by-line scan with a substring check on the
+    // combined text (any layout that shows both "demo" and "alpha" passes).
+    let mut all_text = String::new();
     for y in 0..10 {
         let line: String = (0..80).map(|x| buf[(x, y)].symbol().to_string()).collect();
-        if line.contains("demo/alpha") {
-            found = true;
-            break;
-        }
+        all_text.push_str(&line);
+        all_text.push('\n');
     }
-    assert!(found, "dashboard did not show demo/alpha");
+    assert!(
+        all_text.contains("demo") && all_text.contains("alpha"),
+        "dashboard did not show demo and alpha:\n{all_text}"
+    );
 
     unsafe {
         std::env::remove_var("WSX_CLAUDE_BIN");

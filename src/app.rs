@@ -21,6 +21,12 @@ pub enum AppEvent {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionTarget {
+    Repo(crate::store::RepoId),
+    Workspace(crate::store::WorkspaceId),
+}
+
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
@@ -29,6 +35,7 @@ pub struct App {
     pub dashboard: DashboardState,
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::store::RepoId, Workspace)>,
+    pub selectable: Vec<SelectionTarget>,
     pub worktree_base: PathBuf,
     pub ctrl_a_pending: bool,
     pub quit: bool,
@@ -44,6 +51,7 @@ impl App {
             dashboard: DashboardState::default(),
             repos: Vec::new(),
             workspaces: Vec::new(),
+            selectable: Vec::new(),
             worktree_base,
             ctrl_a_pending: false,
             quit: false,
@@ -64,13 +72,24 @@ impl App {
                 self.workspaces.push((r.id, w));
             }
         }
+        // Rebuild selection targets: repos in order, each followed by its workspaces.
+        self.selectable.clear();
+        for repo in &self.repos {
+            self.selectable.push(SelectionTarget::Repo(repo.id));
+            for (rid, w) in &self.workspaces {
+                if *rid == repo.id {
+                    self.selectable.push(SelectionTarget::Workspace(w.id));
+                }
+            }
+        }
+        if !self.selectable.is_empty() && self.dashboard.selected >= self.selectable.len() {
+            self.dashboard.selected = self.selectable.len() - 1;
+        }
         Ok(())
     }
 
-    pub fn selected_workspace(&self) -> Option<(&Repo, &Workspace)> {
-        let (rid, ws) = self.workspaces.get(self.dashboard.selected)?;
-        let repo = self.repos.iter().find(|r| &r.id == rid)?;
-        Some((repo, ws))
+    pub fn selected_target(&self) -> Option<SelectionTarget> {
+        self.selectable.get(self.dashboard.selected).copied()
     }
 }
 
@@ -112,11 +131,15 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let area = f.area();
     match &app.view {
         View::Dashboard => {
-            let rows: Vec<dashboard::Row> = app
-                .workspaces
-                .iter()
-                .map(|(rid, ws)| {
-                    let repo = app.repos.iter().find(|r| &r.id == rid).unwrap();
+            let mut items: Vec<dashboard::Item> = Vec::new();
+            for repo in &app.repos {
+                items.push(dashboard::Item::Header { repo });
+                let mut count = 0usize;
+                for (rid, ws) in &app.workspaces {
+                    if *rid != repo.id {
+                        continue;
+                    }
+                    count += 1;
                     let session = app.sessions.get(ws.id);
                     let running = session.as_ref().is_some_and(|s| {
                         matches!(
@@ -133,16 +156,21 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         now.saturating_sub(last) / 1000
                     });
                     let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
-                    dashboard::Row {
+                    items.push(dashboard::Item::Workspace {
                         repo,
                         workspace: ws,
                         session_running: running,
                         seconds_since_activity: secs,
                         has_prior_session: has_prior,
-                    }
-                })
-                .collect();
-            dashboard::render(f, area, &rows, &mut app.dashboard);
+                    });
+                }
+                if count == 0 {
+                    items.push(dashboard::Item::EmptyHint);
+                }
+                items.push(dashboard::Item::Spacer);
+            }
+            let selected = app.selected_target();
+            dashboard::render(f, area, &items, selected, &mut app.dashboard);
         }
         View::Attached(id) => {
             if let Some(session) = app.sessions.get(*id) {
@@ -188,51 +216,41 @@ async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) => app.quit = true,
-        (KeyCode::Up, _) => app.dashboard.selected = app.dashboard.selected.saturating_sub(1),
+        (KeyCode::Up, _) => {
+            app.dashboard.selected = app.dashboard.selected.saturating_sub(1);
+        }
         (KeyCode::Down, _) => {
-            let max = app.workspaces.len().saturating_sub(1);
+            let max = app.selectable.len().saturating_sub(1);
             app.dashboard.selected = (app.dashboard.selected + 1).min(max);
         }
-        (KeyCode::Enter, _) => {
-            // Copy out of the immutable borrow before mutating sessions/view.
-            // If claude has a persisted session JSONL for this worktree,
-            // resume via `--continue`; otherwise spawn fresh, optionally with
-            // the rename system prompt when the workspace name is still a
-            // generated slug.
-            let info = app.selected_workspace().map(|(repo, ws)| {
-                let custom = crate::repo::resolve_custom_instructions(repo, &app.store)
-                    .ok()
-                    .flatten();
-                let mode = if crate::pty::session::has_prior_session(&ws.worktree_path) {
-                    crate::pty::session::SpawnMode::Continue {
-                        custom_instructions: custom,
-                    }
-                } else {
-                    let rename_ctx = if crate::names::is_generated_slug(&ws.name) {
-                        let resolved_prefix = crate::repo::resolve_branch_prefix(repo, &app.store)
-                            .unwrap_or_default();
-                        Some(crate::pty::session::RenameContext {
-                            current_branch: ws.branch.clone(),
-                            branch_prefix: resolved_prefix,
-                        })
-                    } else {
-                        None
-                    };
-                    crate::pty::session::SpawnMode::Fresh {
-                        rename_ctx,
-                        custom_instructions: custom,
-                    }
-                };
-                (ws.id, ws.worktree_path.clone(), mode)
-            });
-            if let Some((id, path, mode)) = info {
-                let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
-                app.view = View::Attached(id);
+        (KeyCode::Enter, _) => match app.selected_target() {
+            Some(SelectionTarget::Workspace(id)) => {
+                if let Some((id, path, mode)) = build_spawn_info(app, id) {
+                    let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
+                    app.view = View::Attached(id);
+                }
             }
-        }
+            Some(SelectionTarget::Repo(id)) => {
+                app.modal = Some(Modal::NewWorkspace {
+                    repo_id: id,
+                    name_buffer: String::new(),
+                });
+            }
+            None => {}
+        },
         (KeyCode::Char('n'), _) => {
-            let first_repo_id = app.repos.first().map(|r| r.id);
-            if let Some(id) = first_repo_id {
+            // Resolve target repo from the current selection. Falls back to the
+            // first repo if nothing is selected (shouldn't normally happen).
+            let repo_id = match app.selected_target() {
+                Some(SelectionTarget::Repo(id)) => Some(id),
+                Some(SelectionTarget::Workspace(wid)) => app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == wid)
+                    .map(|(rid, _)| *rid),
+                None => app.repos.first().map(|r| r.id),
+            };
+            if let Some(id) = repo_id {
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
                     name_buffer: String::new(),
@@ -240,19 +258,60 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
         }
         (KeyCode::Char('d'), _) => {
-            let info = app
-                .selected_workspace()
-                .map(|(_, ws)| (ws.id, ws.name.clone()));
-            if let Some((id, name)) = info {
-                app.modal = Some(Modal::ConfirmArchive {
-                    workspace_id: id,
-                    name,
-                });
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let name = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.name.clone());
+                if let Some(name) = name {
+                    app.modal = Some(Modal::ConfirmArchive {
+                        workspace_id: id,
+                        name,
+                    });
+                }
             }
+            // 'd' on a Repo header is intentionally a no-op.
         }
         _ => {}
     }
     Ok(())
+}
+
+fn build_spawn_info(
+    app: &App,
+    ws_id: crate::store::WorkspaceId,
+) -> Option<(
+    crate::store::WorkspaceId,
+    std::path::PathBuf,
+    crate::pty::session::SpawnMode,
+)> {
+    let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
+    let repo = app.repos.iter().find(|r| r.id == *rid)?;
+    let custom = crate::repo::resolve_custom_instructions(repo, &app.store)
+        .ok()
+        .flatten();
+    let mode = if crate::pty::session::has_prior_session(&ws.worktree_path) {
+        crate::pty::session::SpawnMode::Continue {
+            custom_instructions: custom,
+        }
+    } else {
+        let rename_ctx = if crate::names::is_generated_slug(&ws.name) {
+            let resolved_prefix =
+                crate::repo::resolve_branch_prefix(repo, &app.store).unwrap_or_default();
+            Some(crate::pty::session::RenameContext {
+                current_branch: ws.branch.clone(),
+                branch_prefix: resolved_prefix,
+            })
+        } else {
+            None
+        };
+        crate::pty::session::SpawnMode::Fresh {
+            rename_ctx,
+            custom_instructions: custom,
+        }
+    };
+    Some((ws_id, ws.worktree_path.clone(), mode))
 }
 
 async fn handle_key_attached(

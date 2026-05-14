@@ -1,17 +1,4 @@
-mod app;
-mod cli;
-mod config;
-mod error;
-mod git;
-mod names;
-mod pty;
-mod repo;
-mod setup;
-mod store;
-mod ui;
-mod workspace;
-
-use crate::error::Result;
+use wsx::{app, cli, config, error::Result, git, store};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;

@@ -126,6 +126,9 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     if let Some(m) = &app.modal { modal::render(f, area, m); }
 }
 
+#[doc(hidden)]
+pub fn draw_for_test(f: &mut ratatui::Frame, app: &mut App) { draw(f, app); }
+
 async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
     match evt {
         CtEvent::Key(k) if k.kind == KeyEventKind::Press => {

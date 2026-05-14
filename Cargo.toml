@@ -3,6 +3,14 @@ name = "wsx"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "wsx"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wsx"
+path = "src/main.rs"
+
 [dependencies]
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }

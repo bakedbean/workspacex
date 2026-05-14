@@ -1,0 +1,47 @@
+use std::process::Command as StdCmd;
+use std::sync::Arc;
+use tempfile::TempDir;
+use tokio::sync::Mutex;
+
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashboard_renders_with_one_repo_one_workspace() {
+    unsafe { std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat"); }
+
+    let repo_dir = TempDir::new().unwrap();
+    let r = |args: &[&str]| {
+        assert!(StdCmd::new("git").current_dir(repo_dir.path()).args(args).status().unwrap().success());
+    };
+    r(&["init", "-q", "-b", "main"]);
+    r(&["config", "user.email", "t@e"]);
+    r(&["config", "user.name", "t"]);
+    r(&["commit", "--allow-empty", "-q", "-m", "init"]);
+
+    let store = wsx::store::Store::open_in_memory().unwrap();
+    let repo_id = wsx::repo::add(&store, repo_dir.path(), "demo", "wsx").await.unwrap();
+    let repo = store.repos().unwrap().into_iter().find(|r| r.id == repo_id).unwrap();
+    let base = TempDir::new().unwrap();
+    wsx::workspace::create(&store, &repo, Some("alpha"), base.path(), |_| {}).await.unwrap();
+
+    let app = Arc::new(Mutex::new(wsx::app::App::new(store, base.path().to_path_buf()).unwrap()));
+    let backend = TestBackend::new(80, 10);
+    let mut term = Terminal::new(backend).unwrap();
+
+    // Single draw — we just want to verify the dashboard renders without panicking
+    // and shows the workspace we created.
+    {
+        let mut g = app.lock().await;
+        term.draw(|f| wsx::app::draw_for_test(f, &mut g)).unwrap();
+    }
+    let buf = term.backend().buffer();
+    let mut found = false;
+    for y in 0..10 {
+        let line: String = (0..80).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        if line.contains("demo/alpha") { found = true; break; }
+    }
+    assert!(found, "dashboard did not show demo/alpha");
+
+    unsafe { std::env::remove_var("WSX_CLAUDE_BIN"); }
+}

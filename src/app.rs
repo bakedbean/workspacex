@@ -45,6 +45,31 @@ fn classify_activity(secs: Option<u64>) -> ActivityState {
     }
 }
 
+fn encode_key_for_pty(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    match (k.code, k.modifiers) {
+        (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+            Some(c.to_string().into_bytes())
+        }
+        (KeyCode::Char(c), m) if m.contains(KeyModifiers::CONTROL) => {
+            let upper = c.to_ascii_uppercase();
+            if ('@'..='_').contains(&upper) {
+                Some(vec![(upper as u8) - b'@'])
+            } else {
+                None
+            }
+        }
+        (KeyCode::Enter, _) => Some(b"\r".to_vec()),
+        (KeyCode::Backspace, _) => Some(vec![0x7f]),
+        (KeyCode::Up, _) => Some(b"\x1b[A".to_vec()),
+        (KeyCode::Down, _) => Some(b"\x1b[B".to_vec()),
+        (KeyCode::Right, _) => Some(b"\x1b[C".to_vec()),
+        (KeyCode::Left, _) => Some(b"\x1b[D".to_vec()),
+        (KeyCode::Tab, _) => Some(b"\t".to_vec()),
+        _ => None,
+    }
+}
+
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
@@ -403,6 +428,36 @@ async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
 }
 
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    // PM pane focus handling. When PM is focused, most keystrokes forward
+    // to its PTY. Tab/Esc swap back to dashboard; `p` and `r` are still
+    // handled by the main match below.
+    if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) {
+        match (k.code, k.modifiers) {
+            (KeyCode::Tab, _) | (KeyCode::Esc, _) => {
+                app.focus = crate::ui::PaneFocus::Dashboard;
+                return Ok(());
+            }
+            (KeyCode::Char('p'), _) | (KeyCode::Char('r'), _) => {
+                // Fall through to the main match.
+            }
+            _ => {
+                if let Some(session) = app.pm.as_ref() {
+                    if let Some(bytes) = encode_key_for_pty(&k) {
+                        let _ = session.writer.send(bytes).await;
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
+    // Tab when focus is on Dashboard and PM is visible: swap to PM.
+    if app.pm_visible
+        && matches!(app.focus, crate::ui::PaneFocus::Dashboard)
+        && k.code == KeyCode::Tab
+    {
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+        return Ok(());
+    }
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) => app.quit = true,
         (KeyCode::Up, _) => {
@@ -929,5 +984,46 @@ mod pm_state_tests {
             rendered.contains("Tab to focus"),
             "expected unfocused hint:\n{rendered}"
         );
+    }
+
+    use crossterm::event::{KeyEvent, KeyModifiers};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tab_swaps_focus_when_pm_visible() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.pm_visible = true;
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        handle_key_dashboard(&mut app, KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+        handle_key_dashboard(&mut app, KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn esc_returns_focus_to_dashboard() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+        handle_key_dashboard(&mut app, KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tab_no_op_when_pm_hidden() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(!app.pm_visible);
+        handle_key_dashboard(&mut app, KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
     }
 }

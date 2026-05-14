@@ -74,11 +74,11 @@ impl Session {
         if p.done {
             return None;
         }
-        p.done = true;
         let text = std::mem::take(&mut p.buffer);
         if text.trim().is_empty() {
-            None
+            None // don't latch — let next Enter try again
         } else {
+            p.done = true;
             Some(text)
         }
     }
@@ -313,6 +313,32 @@ mod tests {
             "expected Exited after kill_all, got {:?}",
             *session.status.read().unwrap()
         );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn empty_enter_does_not_latch_prompt_capture() {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let cwd = std::path::PathBuf::from(".");
+        let session = spawn_session(&cwd, 80, 24).unwrap();
+
+        // First "Enter" before typing — must NOT latch.
+        assert!(session.take_first_prompt().is_none());
+
+        // Now type and submit — must capture and return.
+        for c in "hello!".chars() {
+            session.capture_char(c);
+        }
+        assert_eq!(session.take_first_prompt().as_deref(), Some("hello!"));
+
+        // After a successful take, further calls latch correctly.
+        session.capture_char('x');
+        assert!(session.take_first_prompt().is_none());
+
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }

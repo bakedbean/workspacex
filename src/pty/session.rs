@@ -21,6 +21,7 @@ pub struct Session {
     pub status: Arc<RwLock<SessionStatus>>,
     pub activity_ms: Arc<AtomicU64>,
     master: Box<dyn MasterPty + Send>,
+    killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
 }
 
 impl Session {
@@ -29,6 +30,18 @@ impl Session {
             .map_err(|e| Error::Pty(format!("resize: {e}")))?;
         self.parser.lock().unwrap().set_size(rows, cols);
         Ok(())
+    }
+
+    /// Send SIGKILL (or platform equivalent) to the child process.
+    /// Idempotent; safe to call multiple times.
+    pub fn kill(&self) {
+        let _ = self.killer.lock().unwrap().kill();
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.killer.lock().unwrap().kill();
     }
 }
 
@@ -51,6 +64,7 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
         .map_err(|e| Error::Pty(format!("spawn: {e}")))?;
     drop(pair.slave);
 
+    let killer = child.clone_killer();
     let pid = child.process_id().unwrap_or(0);
     let parser = Arc::new(Mutex::new(Parser::new(rows, cols, 1000)));
     let status = Arc::new(RwLock::new(SessionStatus::Running { pid }));
@@ -95,7 +109,14 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16) -> Result<Session> {
         }
     });
 
-    Ok(Session { parser, writer: tx, status, activity_ms, master: pair.master })
+    Ok(Session {
+        parser,
+        writer: tx,
+        status,
+        activity_ms,
+        master: pair.master,
+        killer: Mutex::new(killer),
+    })
 }
 
 fn now_ms() -> u64 {
@@ -125,7 +146,9 @@ impl SessionManager {
     pub fn get(&self, id: WorkspaceId) -> Option<Arc<Session>> { self.sessions.get(&id).cloned() }
 
     pub fn kill_all(&mut self) {
-        // Dropping each Session drops its master PTY, which sends SIGHUP to the child.
+        for s in self.sessions.values() {
+            s.kill();
+        }
         self.sessions.clear();
     }
 }
@@ -160,6 +183,26 @@ mod tests {
         let cwd = PathBuf::from(".");
         let result = spawn_session(&cwd, 80, 24);
         assert!(result.is_err());
+        unsafe { std::env::remove_var("WSX_CLAUDE_BIN"); }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kill_all_terminates_child() {
+        unsafe { std::env::set_var("WSX_CLAUDE_BIN", "sleep"); }
+        // sleep needs an arg; we use sh as a wrapper instead.
+        unsafe { std::env::set_var("WSX_CLAUDE_BIN", "/bin/sh"); }
+        let cwd = std::path::PathBuf::from(".");
+        let mut mgr = SessionManager::new();
+        let id = crate::store::WorkspaceId(1);
+        let session = mgr.spawn(id, &cwd, 80, 24).unwrap();
+        // sh -i would run forever; we just check the session was Running.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(matches!(*session.status.read().unwrap(), SessionStatus::Running { .. }));
+        mgr.kill_all();
+        // Give the reader thread time to observe the kill and update status.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(matches!(*session.status.read().unwrap(), SessionStatus::Exited { .. }),
+            "expected Exited after kill_all, got {:?}", *session.status.read().unwrap());
         unsafe { std::env::remove_var("WSX_CLAUDE_BIN"); }
     }
 }

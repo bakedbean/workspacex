@@ -120,7 +120,7 @@ pub enum EventKind {
 
 /// Encode an absolute path the way Claude Code does for `~/.claude/projects/`.
 /// Mirrors [`crate::pty::session::has_prior_session`].
-fn encode_cwd(path: &Path) -> String {
+pub fn encode_cwd(path: &Path) -> String {
     path.to_string_lossy().replace(['/', '.'], "-")
 }
 

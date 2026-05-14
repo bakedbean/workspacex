@@ -54,6 +54,11 @@ pub fn render(
     let header_text = Paragraph::new("wsx — Workspaces").style(theme::header());
     f.render_widget(header_text, chunks[0]);
 
+    // List is rendered into chunks[1] with a 1-char border on each side, so
+    // the inner usable width is (width - 2). Used below to right-justify
+    // the activity column of each workspace row.
+    let inner_width = chunks[1].width.saturating_sub(2) as usize;
+
     let mut selected_idx: Option<usize> = None;
     let mut list_items: Vec<ListItem> = Vec::with_capacity(items.len());
     for item in items.iter() {
@@ -114,10 +119,12 @@ pub fn render(
                     .map(|s| format_status(&s, nerd_fonts))
                     .unwrap_or_default();
                 let attn = if *needs_attention { "!" } else { " " };
-                let line = format!(
-                    "{attn} {dot} {name}  [{branch_label}]  {status_str:<14} {activity}{setup_badge}",
+                let left = format!(
+                    "{attn} {dot} {name}  [{branch_label}]  {status_str}",
                     name = workspace.name,
                 );
+                let right = format!("{activity}{setup_badge}");
+                let line = right_pad_line(&left, &right, inner_width);
                 list_items.push(ListItem::new(line));
                 // Sub-line: if awaiting, always render the permission prompt
                 // (more urgent than whatever the last event happened to be);
@@ -206,6 +213,21 @@ fn format_age(timestamp_ms: i64) -> String {
         format!("{}m ago", secs / 60)
     } else {
         format!("{}h ago", secs / 3600)
+    }
+}
+
+/// Compose a row with `left` flush-left and `right` flush-right, padded
+/// with spaces to total exactly `total_width` chars. If `left.len() +
+/// right.len() >= total_width`, returns the natural concatenation (let
+/// the renderer truncate).
+fn right_pad_line(left: &str, right: &str, total_width: usize) -> String {
+    let left_w = left.chars().count();
+    let right_w = right.chars().count();
+    if left_w + right_w >= total_width {
+        format!("{left} {right}")
+    } else {
+        let gap = total_width - left_w - right_w;
+        format!("{left}{}{right}", " ".repeat(gap))
     }
 }
 
@@ -633,6 +655,71 @@ mod tests {
             .expect("alpha row");
         let trimmed = strip_border_prefix(line);
         assert!(!trimmed.starts_with("!"));
+    }
+
+    #[test]
+    fn activity_is_right_justified() {
+        // 120-wide terminal so the long row doesn't overflow and get
+        // truncated — the contract being tested is alignment of the
+        // "active" column, not overflow behaviour.
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w_short = workspace(1, 1, "a", "p/a");
+        let w_long = workspace(
+            2,
+            1,
+            "very-long-workspace-name-here",
+            "prefix/very-long-workspace-name-here",
+        );
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_short,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                awaiting_tool: None,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_long,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                awaiting_tool: None,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+
+        // The "active" word should end at roughly the same column for both rows.
+        let lines: Vec<&str> = text.lines().collect();
+        let row_a = lines
+            .iter()
+            .find(|l| l.contains(" a ") || l.contains("│ a"))
+            .expect("row a");
+        let row_long = lines
+            .iter()
+            .find(|l| l.contains("very-long-workspace-name"))
+            .expect("row long");
+        // Find the column where "active" starts in each row.
+        let col_a = row_a.find("active").expect("active in row a");
+        let col_long = row_long.find("active").expect("active in row long");
+        // Allow ±2 chars tolerance for unicode glyph cell width quirks.
+        let diff = (col_a as isize - col_long as isize).abs();
+        assert!(
+            diff <= 2,
+            "activity column drifted: a={col_a} long={col_long}, lines:\n{text}"
+        );
     }
 
     #[test]

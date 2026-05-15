@@ -105,7 +105,7 @@ Value sources:
 | `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
 | `Tab` | Swap focus between dashboard and the PM pane (when visible) |
 | `r` (when PM focused) | Refresh `workspaces.json` and ask PM to re-summarize |
-| `Ctrl-O` (when PM focused) | Expand PM to full screen (use `Ctrl-a d` to detach back) |
+| `Ctrl-O` (when PM focused) | Expand PM to full screen (use `Ctrl-x d` to detach back) |
 
 ### New Workspace / Confirm Archive / Setup Running modals
 
@@ -122,9 +122,9 @@ Keystrokes are forwarded to the running `claude` session, except:
 
 | Key | Action |
 |---|---|
-| `Ctrl-a d` | Detach back to the dashboard (session keeps running) |
-| `Ctrl-a u` | Open the floating updates panel (shows other workspaces' state) |
-| `Ctrl-a a` | Send a literal `Ctrl-a` to claude |
+| `Ctrl-x d` | Detach back to the dashboard (session keeps running) |
+| `Ctrl-x u` | Open the floating updates panel (shows other workspaces' state) |
+| `Ctrl-x x` | Send a literal `Ctrl-x` to claude |
 
 ## Editor and terminal integration
 
@@ -166,6 +166,32 @@ For terminal commands the same substitution applies, though most terminals
 honor the spawned process's cwd already so you typically don't need it.
 
 If neither the setting nor the env-var fallback is set, an error modal explains how to configure.
+
+## Remote access
+
+Running wsx on one machine (e.g. your desktop) and attaching from another (e.g. a laptop) works cleanly with tmux + ssh — no wsx-specific networking required.
+
+**On the host machine:**
+
+```
+tmux new -As wsx 'wsx'
+```
+
+This starts wsx inside a tmux session named `wsx` (or reattaches to it if one already exists).
+
+**From any other machine:**
+
+```
+ssh desktop -t tmux attach -t wsx
+```
+
+Workspaces — and the claude sessions running inside them — keep running while you're detached, so picking up where you left off from a different machine just works.
+
+**Notes:**
+
+- wsx's leader key is `Ctrl-x`, chosen specifically to not collide with tmux's default `Ctrl-b` prefix (or anyone's `Ctrl-a` customization). No tmux config needed.
+- **Mosh** drops in cleanly if your network is flaky: `mosh desktop -- tmux attach -t wsx`.
+- **Tailscale** (or any VPN) makes the host reachable from anywhere by a stable name without port-forwarding.
 
 ## Dashboard status indicators
 
@@ -254,7 +280,7 @@ workspaces in the background. Two affordances surface that:
   `● <name>: <event> (<age>)` for activity. The row collapses to nothing
   when there's nothing to surface, giving claude the row back.
 
-- A floating panel via `Ctrl-a u` listing ALL workspaces grouped by repo,
+- A floating panel via `Ctrl-x u` listing ALL workspaces grouped by repo,
   with their current state and latest event. Press `Esc` to close. The
   panel re-renders live, so ages count up and attention flags appear/clear
   in real time.
@@ -306,7 +332,7 @@ the attached view). `Tab` or `Esc` swaps focus back to the dashboard;
 `Tab` from the dashboard swaps back into the PM pane. `r` (while PM is
 focused) refreshes `workspaces.json` and asks PM to re-summarize. `Ctrl-O`
 (while PM is focused) expands PM to a full-screen attached view so you
-can scroll through claude's history naturally; `Ctrl-a d` detaches back
+can scroll through claude's history naturally; `Ctrl-x d` detaches back
 to the dashboard with the pane state preserved.
 
 PM only summarizes workspaces where claude has been started at least once

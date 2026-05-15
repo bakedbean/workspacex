@@ -102,6 +102,7 @@ Value sources:
 | `t` | Open the selected workspace in a terminal (no-op on repo header) |
 | `v` | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |
 | `k` | Show processes running under the selected workspace's worktree (no-op on repo header) |
+| `s` | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected) |
 | `d` | Archive the selected workspace (no-op on repo header) |
 | `q` | Quit (kills all running sessions) |
 | `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
@@ -457,6 +458,26 @@ wsx repo edit-archive <repo-name>
 ```
 
 Each script is executed as `sh -c "$value"` with `cwd` set to the new worktree and two extra env vars: `WSX_REPO_ROOT` (the source repo) and `WSX_WORKTREE` (the new worktree). Setup failure does not block the workspace from being usable; it's surfaced as a `[setup-failed]` badge on the dashboard. Passing an empty value clears the script.
+
+### Editing in the TUI
+
+Press `s` on any dashboard row to open the Repo settings modal for that
+row's repo. The modal lists the four per-repo fields:
+
+- `branch_prefix`
+- `custom_instructions`
+- `setup_script`
+- `archive_script`
+
+`↑/↓` selects a field. Press `Enter` to edit — wsx temporarily leaves
+the TUI, opens `$EDITOR` (or `vi` if unset) on a tempfile prepopulated
+with the current value, and saves whatever you write when the editor
+exits. Press `d` to clear the highlighted field. `Esc` closes.
+
+The editor needs to be a terminal-native editor that returns when you
+quit (vim, nvim, helix, micro, nano). GUI editors that return
+immediately without a `--wait` flag will appear to "save nothing" —
+keep `$EDITOR` pointed at a CLI editor for this flow.
 
 ## Testing
 

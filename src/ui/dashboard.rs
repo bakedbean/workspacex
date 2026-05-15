@@ -859,9 +859,21 @@ mod label_tests {
     }
 
     #[test]
+    fn ascii_draft_pr_appends_draft_suffix() {
+        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrDraft));
+        assert_eq!(s, "feat/x (draft)");
+    }
+
+    #[test]
     fn ascii_merged_pr_appends_merged_suffix() {
         let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrMerged));
         assert_eq!(s, "feat/x (merged)");
+    }
+
+    #[test]
+    fn ascii_closed_pr_appends_closed_suffix() {
+        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrClosed));
+        assert_eq!(s, "feat/x (closed)");
     }
 
     #[test]

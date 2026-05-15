@@ -35,6 +35,11 @@ pub enum Item<'a> {
         /// not yet replied. Distinct from `awaiting_tool` (permission
         /// prompts), which has higher priority in the activity column.
         stopped: bool,
+        /// Number of processes detected with `cwd` inside this
+        /// workspace's worktree (sourced from `app.workspace_processes`).
+        /// Rendered inline as `~N` in merged-style when nonzero; hidden
+        /// when zero.
+        proc_count: usize,
     },
     EmptyHint,
     Spacer,
@@ -120,6 +125,7 @@ pub fn render(
                 lifecycle,
                 awaiting_tool,
                 stopped,
+                proc_count,
             } => {
                 if let Some(SelectionTarget::Workspace(id)) = selected
                     && id == workspace.id
@@ -136,6 +142,7 @@ pub fn render(
                     *lifecycle,
                     awaiting_tool,
                     *stopped,
+                    *proc_count,
                     nerd_fonts,
                     theme,
                     inner_width,
@@ -405,6 +412,7 @@ fn workspace_main_row(
     lifecycle: Option<crate::forge::BranchLifecycle>,
     awaiting_tool: &Option<(String, i64)>,
     stopped: bool,
+    proc_count: usize,
     nerd: bool,
     theme: &Theme,
     inner_width: usize,
@@ -491,6 +499,13 @@ fn workspace_main_row(
         spans.push(Span::styled(git_status, theme.dim_style()));
     }
 
+    if proc_count > 0 {
+        spans.push(Span::styled(
+            format!(" ~{proc_count}"),
+            theme.merged_style(),
+        ));
+    }
+
     // Right side: activity + space + age
     let right_text_w = activity.chars().count() + 1 + age.chars().count();
     let left_w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
@@ -574,6 +589,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -632,6 +648,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
             Item::Spacer,
             Item::Header { repo: &r2 },
@@ -647,6 +664,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -688,6 +706,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -738,6 +757,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -778,6 +798,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -824,6 +845,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
             Item::Workspace {
                 repo: &r,
@@ -837,6 +859,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut term = Terminal::new(TestBackend::new(120, 10)).unwrap();
@@ -878,6 +901,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -916,6 +940,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -953,6 +978,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -995,6 +1021,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
             Item::Workspace {
                 repo: &r,
@@ -1008,6 +1035,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1065,6 +1093,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
             Item::Workspace {
                 repo: &r,
@@ -1078,6 +1107,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: Some(("Bash".into(), 0)),
                 stopped: false,
+                proc_count: 0,
             },
             Item::Workspace {
                 repo: &r,
@@ -1091,6 +1121,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: true,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1123,6 +1154,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1175,6 +1207,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1216,6 +1249,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1256,6 +1290,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
             Item::Workspace {
                 repo: &r,
@@ -1269,6 +1304,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1309,6 +1345,7 @@ mod tests {
                 // 10s ago — well past the 3s threshold.
                 awaiting_tool: Some(("Bash".into(), now_ms - 10_000)),
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1350,6 +1387,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
             Item::Workspace {
                 repo: &r,
@@ -1363,6 +1401,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1419,6 +1458,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1494,6 +1534,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1536,6 +1577,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1573,6 +1615,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1623,6 +1666,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1670,6 +1714,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1729,6 +1774,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                proc_count: 0,
             },
         ];
         let mut state = DashboardState::default();
@@ -1739,6 +1785,69 @@ mod tests {
         assert!(
             footer.contains("[↑/↓] move"),
             "footer missing arrow nav hint: {footer}"
+        );
+    }
+
+    #[test]
+    fn workspace_row_shows_proc_count_when_nonzero() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "ws", "wsx/ws");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+                proc_count: 3,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let row = text.lines().find(|l| l.contains("wsx/ws")).expect("row");
+        assert!(row.contains("~3"), "expected `~3` proc count in row: {row}");
+    }
+
+    #[test]
+    fn workspace_row_hides_proc_count_when_zero() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "quiet", "wsx/quiet");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+                proc_count: 0,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let row = text.lines().find(|l| l.contains("quiet")).expect("row");
+        assert!(
+            !row.contains("~"),
+            "did not expect `~` count when proc_count=0: {row}"
         );
     }
 }

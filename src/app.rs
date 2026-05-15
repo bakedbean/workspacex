@@ -355,6 +355,11 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         stopped,
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         awaiting_tool: awaiting,
+                        proc_count: app
+                            .workspace_processes
+                            .get(&ws.id)
+                            .map(|v| v.len())
+                            .unwrap_or(0),
                     });
                 }
                 if count == 0 {

@@ -525,6 +525,30 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &app.theme,
                 );
             }
+            crate::ui::modal::Modal::ProcessList {
+                workspace_id,
+                selected,
+            } => {
+                let workspace_name = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == *workspace_id)
+                    .map(|(_, w)| w.name.clone())
+                    .unwrap_or_default();
+                let procs = app
+                    .workspace_processes
+                    .get(workspace_id)
+                    .cloned()
+                    .unwrap_or_default();
+                crate::ui::modal::render_process_list(
+                    f,
+                    area,
+                    &workspace_name,
+                    &procs,
+                    *selected,
+                    &app.theme,
+                );
+            }
             other => modal::render(f, area, other, &app.theme),
         }
     }
@@ -1182,6 +1206,14 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                     app.modal = None;
                 }
                 _ => {}
+            }
+        }
+        Modal::ProcessList { .. } => {
+            // Task 5 will wire arrow keys and kill controls. For now the
+            // modal isn't reachable from any keybind, but we still need
+            // an exhaustive arm — accept Esc to dismiss defensively.
+            if matches!(k.code, KeyCode::Esc) {
+                app.modal = None;
             }
         }
     }

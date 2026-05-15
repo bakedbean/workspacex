@@ -27,6 +27,10 @@ pub enum Modal {
         /// it; Enter switches `app.view` to that workspace.
         selected: usize,
     },
+    ProcessList {
+        workspace_id: crate::store::WorkspaceId,
+        selected: usize,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -49,10 +53,14 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
-    // UpdatesPanel is rendered by `render_updates_panel` directly from
-    // `draw()` because it needs live App state. This function should
-    // never be called with UpdatesPanel; guard defensively.
-    if matches!(modal, Modal::UpdatesPanel { .. }) {
+    // UpdatesPanel and ProcessList are rendered by their dedicated
+    // helpers directly from `draw()` because they need live App state.
+    // This function should never be called with those variants; guard
+    // defensively.
+    if matches!(
+        modal,
+        Modal::UpdatesPanel { .. } | Modal::ProcessList { .. }
+    ) {
         return;
     }
     let rect = centered(area, 60, 12);
@@ -81,6 +89,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         // UpdatesPanel is handled by the early-return above; this arm is
         // unreachable but required for exhaustiveness.
         Modal::UpdatesPanel { .. } => unreachable!("UpdatesPanel must not reach render()"),
+        Modal::ProcessList { .. } => unreachable!("ProcessList must not reach render()"),
     };
     let style = if matches!(modal, Modal::Error { .. }) {
         theme.err_style()
@@ -314,5 +323,78 @@ fn workspace_row<'a>(
         Line::from(Span::styled(body, theme.selected_style()))
     } else {
         Line::from(body)
+    }
+}
+
+/// Render the floating process-list modal. Reads live App state via
+/// borrowed slices so the modal updates on every render tick.
+pub fn render_process_list(
+    f: &mut Frame,
+    area: Rect,
+    workspace_name: &str,
+    procs: &[crate::proc::ProcInfo],
+    selected: usize,
+    theme: &Theme,
+) {
+    let w = area.width.clamp(20, 80);
+    let h = area.height.clamp(8, 25);
+    let rect = centered(area, w, h);
+    f.render_widget(Clear, rect);
+
+    let title = format!(" Processes — {workspace_name} ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(theme.dim_style());
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let body_area = chunks[0];
+    let footer_area = chunks[1];
+
+    if procs.is_empty() {
+        f.render_widget(
+            Paragraph::new("(no tracked processes)").style(theme.dim_style()),
+            body_area,
+        );
+    } else {
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(Span::styled(
+            format!("  {:<7} {:<20} {}", "PID", "COMMAND", "CWD"),
+            theme.header_style(),
+        )));
+        for (i, p) in procs.iter().enumerate() {
+            let body = format!(
+                "  {:<7} {:<20} {}",
+                p.pid,
+                truncate(&p.command, 20),
+                p.cwd.display()
+            );
+            if i == selected {
+                lines.push(Line::from(Span::styled(body, theme.selected_style())));
+            } else {
+                lines.push(Line::from(body));
+            }
+        }
+        f.render_widget(Paragraph::new(lines), body_area);
+    }
+    f.render_widget(
+        Paragraph::new("[\u{2191}/\u{2193}] move   [k] term   [K] kill   [esc] close")
+            .style(theme.dim_style()),
+        footer_area,
+    );
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('\u{2026}');
+        out
     }
 }

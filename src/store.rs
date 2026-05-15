@@ -184,6 +184,22 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_repo_setup_script(&self, id: RepoId, value: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET setup_script = ?1 WHERE id = ?2",
+            rusqlite::params![value, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_repo_archive_script(&self, id: RepoId, value: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET archive_script = ?1 WHERE id = ?2",
+            rusqlite::params![value, id.0],
+        )?;
+        Ok(())
+    }
+
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         self.conn
             .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
@@ -484,6 +500,42 @@ mod tests {
         let repos = store.repos().unwrap();
         assert_eq!(repos[0].setup_script, None);
         assert_eq!(repos[0].archive_script, None);
+    }
+
+    #[test]
+    fn repo_setup_script_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/r"), "demo", "").unwrap();
+        assert_eq!(store.repos().unwrap()[0].setup_script, None);
+
+        store
+            .set_repo_setup_script(id, Some("bun install"))
+            .unwrap();
+        assert_eq!(
+            store.repos().unwrap()[0].setup_script.as_deref(),
+            Some("bun install")
+        );
+
+        store.set_repo_setup_script(id, None).unwrap();
+        assert_eq!(store.repos().unwrap()[0].setup_script, None);
+    }
+
+    #[test]
+    fn repo_archive_script_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/r"), "demo", "").unwrap();
+        assert_eq!(store.repos().unwrap()[0].archive_script, None);
+
+        store
+            .set_repo_archive_script(id, Some("rm -rf node_modules"))
+            .unwrap();
+        assert_eq!(
+            store.repos().unwrap()[0].archive_script.as_deref(),
+            Some("rm -rf node_modules")
+        );
+
+        store.set_repo_archive_script(id, None).unwrap();
+        assert_eq!(store.repos().unwrap()[0].archive_script, None);
     }
 
     #[test]

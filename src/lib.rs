@@ -5,6 +5,7 @@ pub mod error;
 pub mod events;
 pub mod pm;
 pub mod external;
+pub mod forge;
 pub mod git;
 pub mod names;
 pub mod pty;

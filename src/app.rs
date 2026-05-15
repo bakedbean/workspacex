@@ -425,31 +425,41 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .find(|(_, w)| w.id == *id)
                     .map(|(_, w)| w.name.clone())
                     .unwrap_or_default();
-                let row = if matches!(app.modal, Some(crate::ui::modal::Modal::UpdatesPanel)) {
+                // The status row gets the inner width minus the "⚠ " prefix
+                // (glyph + space) that `attached::render` prepends.
+                let max_width = (area.width as usize).saturating_sub(3);
+                let line = if matches!(
+                    app.modal,
+                    Some(crate::ui::modal::Modal::UpdatesPanel { .. })
+                ) {
                     None
                 } else {
-                    compute_status_row(app, Some(*id))
+                    compute_attention_line(app, Some(*id), max_width)
                 };
-                let footer_rows = if row.is_some() { 2 } else { 1 };
+                let footer_rows = if line.is_some() { 2 } else { 1 };
                 attached::resize_session(&session, area, footer_rows);
-                attached::render(f, area, &session, &label, row.as_ref(), &app.theme);
+                attached::render(f, area, &session, &label, line.as_deref(), &app.theme);
             }
         }
         View::AttachedPm => {
             if let Some(session) = app.pm.as_ref() {
-                let row = if matches!(app.modal, Some(crate::ui::modal::Modal::UpdatesPanel)) {
+                let max_width = (area.width as usize).saturating_sub(3);
+                let line = if matches!(
+                    app.modal,
+                    Some(crate::ui::modal::Modal::UpdatesPanel { .. })
+                ) {
                     None
                 } else {
-                    compute_status_row(app, None)
+                    compute_attention_line(app, None, max_width)
                 };
-                let footer_rows = if row.is_some() { 2 } else { 1 };
+                let footer_rows = if line.is_some() { 2 } else { 1 };
                 attached::resize_session(session, area, footer_rows);
                 attached::render(
                     f,
                     area,
                     session,
                     "project-manager",
-                    row.as_ref(),
+                    line.as_deref(),
                     &app.theme,
                 );
             } else {
@@ -460,7 +470,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     }
     if let Some(m) = &app.modal {
         match m {
-            crate::ui::modal::Modal::UpdatesPanel => {
+            crate::ui::modal::Modal::UpdatesPanel { selected } => {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
@@ -491,6 +501,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &activity_translated,
                     &app.workspace_needs_attention,
                     &awaiting,
+                    *selected,
                     now_ms,
                     &app.theme,
                 );
@@ -797,7 +808,7 @@ async fn handle_key_attached(
                 return Ok(());
             }
             KeyCode::Char('u') => {
-                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
                 return Ok(());
             }
             _ => return Ok(()),
@@ -893,7 +904,7 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
                 return Ok(());
             }
             KeyCode::Char('u') => {
-                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
                 return Ok(());
             }
             _ => return Ok(()),
@@ -1019,19 +1030,62 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = None;
             }
         }
-        Modal::UpdatesPanel => {
-            if k.code == KeyCode::Esc {
-                app.modal = None;
+        Modal::UpdatesPanel { selected } => {
+            let selected_now = selected;
+            // Build the same ordered workspace list the renderer uses, so
+            // arrow keys and Enter operate on the same indices.
+            let activity_translated: std::collections::HashMap<
+                crate::store::WorkspaceId,
+                crate::ui::updates_bar::ActivityState,
+            > = app
+                .workspace_activity
+                .iter()
+                .map(|(k, v)| (*k, translate_activity(*v)))
+                .collect();
+            let order = crate::ui::modal::ordered_workspaces_for_panel(
+                &app.repos,
+                &app.workspaces,
+                &app.workspace_events,
+                &activity_translated,
+                &app.workspace_needs_attention,
+            );
+            match k.code {
+                KeyCode::Esc => {
+                    app.modal = None;
+                }
+                KeyCode::Up => {
+                    let new_sel = selected_now.saturating_sub(1);
+                    app.modal = Some(Modal::UpdatesPanel { selected: new_sel });
+                }
+                KeyCode::Down => {
+                    let max = order.len().saturating_sub(1);
+                    let new_sel = (selected_now + 1).min(max);
+                    app.modal = Some(Modal::UpdatesPanel { selected: new_sel });
+                }
+                KeyCode::Enter => {
+                    if let Some(ws_id) = order.get(selected_now).copied() {
+                        // Mirror the dashboard-attach flow: clear the
+                        // alert, spawn (or resume) the PTY, switch view.
+                        app.workspace_needs_attention.remove(&ws_id);
+                        if let Some((id, path, mode)) = build_spawn_info(app, ws_id) {
+                            let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
+                            app.view = View::Attached(id);
+                        }
+                    }
+                    app.modal = None;
+                }
+                _ => {}
             }
         }
     }
     Ok(())
 }
 
-fn compute_status_row(
+fn compute_attention_line(
     app: &App,
     attached_id: Option<crate::store::WorkspaceId>,
-) -> Option<crate::ui::updates_bar::UpdatesRow> {
+    max_width: usize,
+) -> Option<String> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -1063,7 +1117,8 @@ fn compute_status_row(
             }
         })
         .collect();
-    crate::ui::updates_bar::select_row(attached_id, &candidates, now_ms)
+    let entries = crate::ui::updates_bar::collect_attention(&candidates, attached_id, now_ms);
+    crate::ui::updates_bar::format_attention_line(&entries, now_ms, max_width)
 }
 
 fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {
@@ -1425,7 +1480,7 @@ mod pm_state_tests {
     async fn updates_panel_modal_esc_closes() {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
         handle_key_modal(
             &mut app,
             KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE),
@@ -1436,10 +1491,122 @@ mod pm_state_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_down_advances_selection() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        // Two workspaces so Down has somewhere to go.
+        for (name, branch, path) in [
+            ("alpha", "repo/alpha", "/tmp/wsx-test/alpha"),
+            ("beta", "repo/beta", "/tmp/wsx-test/beta"),
+        ] {
+            let id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name,
+                    branch,
+                    worktree_path: std::path::Path::new(path),
+                })
+                .unwrap();
+            store
+                .set_workspace_state(id, WorkspaceState::Ready)
+                .unwrap();
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        handle_key_modal(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+                assert_eq!(selected, 1, "Down should advance to index 1");
+            }
+            other => panic!("unexpected modal state: {other:?}"),
+        }
+        // Down again clamps at the last index.
+        handle_key_modal(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+                assert_eq!(selected, 1, "Down past last clamps at max");
+            }
+            other => panic!("unexpected modal state: {other:?}"),
+        }
+        // Up returns to 0.
+        handle_key_modal(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Up, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+                assert_eq!(selected, 0, "Up should retreat to 0");
+            }
+            other => panic!("unexpected modal state: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_enter_switches_view_and_clears_attention() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "blocked",
+                branch: "repo/blocked",
+                worktree_path: std::path::Path::new("."),
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.workspace_needs_attention.insert(ws_id);
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        handle_key_modal(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "Enter should close the modal");
+        assert!(
+            matches!(app.view, crate::ui::View::Attached(id) if id == ws_id),
+            "Enter should switch view to the selected workspace; got {:?}",
+            app.view
+        );
+        assert!(
+            !app.workspace_needs_attention.contains(&ws_id),
+            "attention flag should clear on Enter"
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_modal_swallows_other_keys() {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
         handle_key_modal(
             &mut app,
             KeyEvent::new(crossterm::event::KeyCode::Char('q'), KeyModifiers::NONE),
@@ -1487,7 +1654,7 @@ mod pm_state_tests {
             .unwrap();
 
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
 
         let backend = TestBackend::new(100, 30);
         let mut term = Terminal::new(backend).unwrap();
@@ -1524,8 +1691,7 @@ mod pm_state_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn attached_view_shows_status_row_with_other_workspace_event() {
-        use crate::events::{EventKind, EventSnapshot, WorkspaceEvents};
+    async fn attached_view_shows_status_row_for_other_workspace_needing_attention() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -1561,7 +1727,6 @@ mod pm_state_tests {
             .unwrap();
 
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        // Spawn a session for the attached workspace so the view has a PTY to render.
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
@@ -1570,20 +1735,9 @@ mod pm_state_tests {
             .spawn(attached_id, std::path::Path::new("."), 80, 24, mode)
             .unwrap();
         app.view = crate::ui::View::Attached(attached_id);
-        // Give "the-other" a recent event.
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        let ev = WorkspaceEvents {
-            latest: Some(EventSnapshot {
-                kind: EventKind::AssistantText,
-                display: "ran cargo test".to_string(),
-                timestamp_ms: now_ms - 3000,
-            }),
-            ..Default::default()
-        };
-        app.workspace_events.insert(other_id, ev);
+        // The new status row exclusively surfaces workspaces with
+        // `needs_attention` set — recent activity alone no longer qualifies.
+        app.workspace_needs_attention.insert(other_id);
 
         let backend = TestBackend::new(80, 24);
         let mut term = Terminal::new(backend).unwrap();
@@ -1602,8 +1756,8 @@ mod pm_state_tests {
             "expected status row mention of the other workspace:\n{rendered}"
         );
         assert!(
-            rendered.contains("ran cargo test"),
-            "expected status row event text:\n{rendered}"
+            rendered.contains('⚠'),
+            "expected attention glyph on status row:\n{rendered}"
         );
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
@@ -1704,7 +1858,7 @@ mod pm_state_tests {
         assert!(!app.ctrl_a_pending);
         assert!(matches!(
             app.modal,
-            Some(crate::ui::modal::Modal::UpdatesPanel)
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })
         ));
 
         unsafe {

@@ -1,24 +1,23 @@
 use crate::pty::render::render_screen;
 use crate::pty::session::Session;
 use crate::ui::theme::Theme;
-use crate::ui::updates_bar::{UpdatesRow, UpdatesRowKind};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::sync::Arc;
 
-/// Render the attached-workspace view. When `status_row` is `Some`, a
-/// one-line indicator showing another workspace's update is inserted
-/// above the footer; when `None`, the term gets that row back.
+/// Render the attached-workspace view. When `attention_line` is `Some`, a
+/// one-line indicator listing other workspaces that need attention is
+/// inserted above the footer; when `None`, the term gets that row back.
 pub fn render(
     f: &mut Frame,
     area: Rect,
     session: &Arc<Session>,
     label: &str,
-    status_row: Option<&UpdatesRow>,
+    attention_line: Option<&str>,
     theme: &Theme,
 ) {
-    let status_height = if status_row.is_some() { 1 } else { 0 };
+    let status_height = if attention_line.is_some() { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -40,13 +39,9 @@ pub fn render(
     }
     drop(parser);
 
-    if let Some(row) = status_row {
-        let style = match row.kind {
-            UpdatesRowKind::Attention => theme.warn_style(),
-            UpdatesRowKind::Activity => theme.ok_style(),
-        };
-        let text = format!(" {} {}", row.glyph, row.text);
-        f.render_widget(Paragraph::new(text).style(style), status_area);
+    if let Some(text) = attention_line {
+        let line = format!(" ⚠ {text}");
+        f.render_widget(Paragraph::new(line).style(theme.warn_style()), status_area);
     }
 
     let footer =

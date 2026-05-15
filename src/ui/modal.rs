@@ -21,7 +21,11 @@ pub enum Modal {
     Error {
         message: String,
     },
-    UpdatesPanel,
+    UpdatesPanel {
+        /// Index into the modal's ordered workspace list. Up/Down adjust
+        /// it; Enter switches `app.view` to that workspace.
+        selected: usize,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -47,7 +51,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     // UpdatesPanel is rendered by `render_updates_panel` directly from
     // `draw()` because it needs live App state. This function should
     // never be called with UpdatesPanel; guard defensively.
-    if matches!(modal, Modal::UpdatesPanel) {
+    if matches!(modal, Modal::UpdatesPanel { .. }) {
         return;
     }
     let rect = centered(area, 60, 12);
@@ -69,7 +73,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         Modal::Error { message } => ("error", message.clone()),
         // UpdatesPanel is handled by the early-return above; this arm is
         // unreachable but required for exhaustiveness.
-        Modal::UpdatesPanel => unreachable!("UpdatesPanel must not reach render()"),
+        Modal::UpdatesPanel { .. } => unreachable!("UpdatesPanel must not reach render()"),
     };
     let style = if matches!(modal, Modal::Error { .. }) {
         theme.err_style()
@@ -87,6 +91,65 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     f.render_widget(para, rect);
 }
 
+/// Compute the order in which workspaces appear in the updates panel.
+/// Returns workspace IDs in the same order the renderer walks them —
+/// grouped by repo (in App's repo order), sorted within each repo by
+/// (attention, failed, activity_rank, recency).
+///
+/// Used by both the renderer (to draw rows) and the key handler (to map
+/// the selected index back to a workspace id).
+pub fn ordered_workspaces_for_panel(
+    repos: &[crate::store::Repo],
+    workspaces: &[(RepoId, crate::store::Workspace)],
+    events: &HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
+    activity: &HashMap<crate::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
+    needs_attention: &HashSet<crate::store::WorkspaceId>,
+) -> Vec<crate::store::WorkspaceId> {
+    let mut out = Vec::new();
+    for repo in repos {
+        let mut ws_for_repo: Vec<&crate::store::Workspace> = workspaces
+            .iter()
+            .filter(|(rid, _)| *rid == repo.id)
+            .map(|(_, w)| w)
+            .collect();
+        ws_for_repo.sort_by_key(|w| sort_key(w, events, activity, needs_attention));
+        out.extend(ws_for_repo.into_iter().map(|w| w.id));
+    }
+    out
+}
+
+fn sort_key(
+    w: &crate::store::Workspace,
+    events: &HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
+    activity: &HashMap<crate::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
+    needs_attention: &HashSet<crate::store::WorkspaceId>,
+) -> (u8, u8, u8, i64) {
+    let attention = if needs_attention.contains(&w.id) {
+        0
+    } else {
+        1
+    };
+    let activity_rank = match activity.get(&w.id).copied() {
+        Some(crate::ui::updates_bar::ActivityState::Awaiting)
+        | Some(crate::ui::updates_bar::ActivityState::Stopped)
+        | Some(crate::ui::updates_bar::ActivityState::Waiting) => 0,
+        Some(crate::ui::updates_bar::ActivityState::Active)
+        | Some(crate::ui::updates_bar::ActivityState::Idle) => 1,
+        Some(crate::ui::updates_bar::ActivityState::Off) => 2,
+        None => 3,
+    };
+    let failed = if w.state == crate::store::WorkspaceState::Failed {
+        1
+    } else {
+        0
+    };
+    let recency = -events
+        .get(&w.id)
+        .and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms))
+        .unwrap_or(0);
+    (attention, failed, activity_rank, recency)
+}
+
 /// Render the floating workspace-updates panel. Reads live App state via
 /// borrowed slices so the panel updates on every render tick.
 #[allow(clippy::too_many_arguments)]
@@ -99,6 +162,7 @@ pub fn render_updates_panel(
     activity: &HashMap<crate::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
     needs_attention: &HashSet<crate::store::WorkspaceId>,
     awaiting: &HashMap<crate::store::WorkspaceId, (String, i64)>,
+    selected: usize,
     now_ms: i64,
     theme: &Theme,
 ) {
@@ -122,58 +186,41 @@ pub fn render_updates_panel(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
+    let order = ordered_workspaces_for_panel(repos, workspaces, events, activity, needs_attention);
+    // workspace_id -> position in `order` so we can match against `selected`.
+    let pos_of: HashMap<crate::store::WorkspaceId, usize> =
+        order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+
     let mut lines: Vec<Line> = Vec::new();
     for repo in repos {
         lines.push(Line::from(Span::styled(
             repo.name.clone(),
             theme.header_style(),
         )));
-        let mut ws_for_repo: Vec<&crate::store::Workspace> = workspaces
+        let ws_for_repo: Vec<&crate::store::Workspace> = workspaces
             .iter()
             .filter(|(rid, _)| *rid == repo.id)
             .map(|(_, w)| w)
+            .filter(|w| pos_of.contains_key(&w.id))
             .collect();
-        // Sort: attention first (by most recent), then active/idle by recent,
-        // then resumable, then off, then failed.
-        ws_for_repo.sort_by_key(|w| {
-            let attention = if needs_attention.contains(&w.id) {
-                0
-            } else {
-                1
-            };
-            let activity_rank = match activity.get(&w.id).copied() {
-                Some(crate::ui::updates_bar::ActivityState::Awaiting)
-                | Some(crate::ui::updates_bar::ActivityState::Stopped)
-                | Some(crate::ui::updates_bar::ActivityState::Waiting) => 0,
-                Some(crate::ui::updates_bar::ActivityState::Active)
-                | Some(crate::ui::updates_bar::ActivityState::Idle) => 1,
-                Some(crate::ui::updates_bar::ActivityState::Off) => 2,
-                None => 3,
-            };
-            let failed = if w.state == crate::store::WorkspaceState::Failed {
-                1
-            } else {
-                0
-            };
-            let recency = -events
-                .get(&w.id)
-                .and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms))
-                .unwrap_or(0);
-            (attention, failed, activity_rank, recency)
-        });
-        if ws_for_repo.is_empty() {
+        // Already pre-sorted in `order`; preserve that ordering here too.
+        let mut ws_sorted = ws_for_repo;
+        ws_sorted.sort_by_key(|w| pos_of.get(&w.id).copied().unwrap_or(usize::MAX));
+        if ws_sorted.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  (no workspaces)".to_string(),
                 theme.dim_style(),
             )));
         } else {
-            for w in ws_for_repo {
+            for w in ws_sorted {
+                let is_selected = pos_of.get(&w.id).copied() == Some(selected);
                 lines.push(workspace_row(
                     w,
                     events.get(&w.id),
                     activity.get(&w.id).copied(),
                     needs_attention.contains(&w.id),
                     awaiting.get(&w.id),
+                    is_selected,
                     now_ms,
                     theme,
                 ));
@@ -190,19 +237,22 @@ pub fn render_updates_panel(
 
     f.render_widget(Paragraph::new(lines).style(theme.dim_style()), body_area);
     f.render_widget(
-        Paragraph::new("[esc] close").style(theme.dim_style()),
+        Paragraph::new("[\u{2191}/\u{2193}] move   [enter] switch   [esc] close")
+            .style(theme.dim_style()),
         footer_area,
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn workspace_row<'a>(
     w: &'a crate::store::Workspace,
     events: Option<&'a crate::events::WorkspaceEvents>,
     activity: Option<crate::ui::updates_bar::ActivityState>,
     needs_attention: bool,
     awaiting: Option<&'a (String, i64)>,
+    is_selected: bool,
     now_ms: i64,
-    _theme: &Theme,
+    theme: &Theme,
 ) -> Line<'a> {
     use crate::ui::updates_bar::{ActivityState, format_age};
     let glyph = if w.state == crate::store::WorkspaceState::Failed {
@@ -252,8 +302,10 @@ fn workspace_row<'a>(
         Some(a) => format!(" ({a})"),
         None => String::new(),
     };
-    Line::from(format!(
-        "  {glyph} {:<20} {}{}",
-        w.name, status_text, suffix
-    ))
+    let body = format!("  {glyph} {:<20} {}{}", w.name, status_text, suffix);
+    if is_selected {
+        Line::from(Span::styled(body, theme.selected_style()))
+    } else {
+        Line::from(body)
+    }
 }

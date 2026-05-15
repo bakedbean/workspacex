@@ -17,6 +17,9 @@ pub enum ActivityState {
     Awaiting,
     Active,
     Idle,
+    /// Claude has stalled mid-tool-chain (JSONL quiet >60s with a
+    /// pending stop_reason and no outstanding tool_use). Alertable.
+    Stalled,
     Waiting,
     Off,
 }

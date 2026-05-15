@@ -78,6 +78,12 @@ pub enum ActivityState {
     Active,
     /// 2–30s since last PTY output.
     Idle,
+    /// Claude has stalled between turns: the JSONL log hasn't been
+    /// appended for >60s, no tool_use is pending, and we've seen at
+    /// least one stop_reason in this session. Catches the case where
+    /// Claude crashes/hangs after a tool_result without ever writing
+    /// a terminal stop_reason (end_turn). Alertable.
+    Stalled,
     /// More than 30s since last PTY output but no JSONL stop signal.
     /// Retained for the recency column; does NOT drive the bell.
     Waiting,
@@ -88,7 +94,10 @@ pub enum ActivityState {
 impl ActivityState {
     /// States that should fire a bell + `!` marker when entered.
     pub fn is_alertable(self) -> bool {
-        matches!(self, ActivityState::Stopped | ActivityState::Awaiting)
+        matches!(
+            self,
+            ActivityState::Stopped | ActivityState::Awaiting | ActivityState::Stalled
+        )
     }
 }
 
@@ -102,22 +111,28 @@ fn classify_activity(secs: Option<u64>) -> ActivityState {
 }
 
 /// Compute the activity state for a workspace, combining JSONL-derived
-/// signals (`stop_reason` + pending tool_uses) with PTY-output recency.
+/// signals (`stop_reason` + pending tool_uses + stall detection) with
+/// PTY-output recency.
 ///
 /// Priority: `Awaiting` (tool_use pending ≥3s) > `Stopped` (assistant
 /// stop_reason = end_turn/max_tokens/stop_sequence and user hasn't replied)
-/// > PTY-recency (Active/Idle/Waiting) > Off (no session).
+/// > `Stalled` (JSONL quiet >60s mid-tool-chain) > PTY-recency
+/// > (Active/Idle/Waiting) > Off (no session).
 fn classify_activity_with_events(
     secs: Option<u64>,
     running: bool,
     awaiting: bool,
     stopped: bool,
+    stalled: bool,
 ) -> ActivityState {
     if awaiting {
         return ActivityState::Awaiting;
     }
     if stopped {
         return ActivityState::Stopped;
+    }
+    if stalled {
+        return ActivityState::Stalled;
     }
     if !running {
         return ActivityState::Off;
@@ -439,10 +454,18 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
                     let needs_attention = app.workspace_needs_attention.contains(&ws.id);
                     let awaiting = app.awaiting_permission(ws.id);
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
                     let stopped = app
                         .workspace_events
                         .get(&ws.id)
                         .is_some_and(|e| e.is_awaiting_user());
+                    let stalled = app
+                        .workspace_events
+                        .get(&ws.id)
+                        .is_some_and(|e| e.is_stalled(now_ms, 60_000));
                     items.push(dashboard::Item::Workspace {
                         repo,
                         workspace: ws,
@@ -456,6 +479,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .and_then(|e| e.latest.clone()),
                         needs_attention,
                         stopped,
+                        stalled,
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         awaiting_tool: awaiting,
                         proc_count: app
@@ -503,11 +527,20 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     now.saturating_sub(last) / 1000
                 });
                 let awaiting = app.awaiting_permission(ws.id).is_some();
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
                 let stopped = app
                     .workspace_events
                     .get(&ws.id)
                     .is_some_and(|e| e.is_awaiting_user());
-                let activity = classify_activity_with_events(secs, running, awaiting, stopped);
+                let stalled = app
+                    .workspace_events
+                    .get(&ws.id)
+                    .is_some_and(|e| e.is_stalled(now_ms, 60_000));
+                let activity =
+                    classify_activity_with_events(secs, running, awaiting, stopped, stalled);
                 let prev = app.workspace_activity.get(&ws.id).copied();
                 if activity.is_alertable() && prev != Some(activity) && notifications_on {
                     app.workspace_needs_attention.insert(ws.id);
@@ -1540,6 +1573,7 @@ fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState
         ActivityState::Awaiting => U::Awaiting,
         ActivityState::Active => U::Active,
         ActivityState::Idle => U::Idle,
+        ActivityState::Stalled => U::Stalled,
         ActivityState::Waiting => U::Waiting,
         ActivityState::Off => U::Off,
     }
@@ -1666,6 +1700,15 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     if file_changed || reset_from_zero {
                         evt.reset_session_state();
                     }
+                    if new_offset != prev_offset {
+                        // The log grew this iteration — stamp the activity
+                        // marker so is_stalled can compute time-since-last-write.
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        evt.last_log_activity_ms = now_ms;
+                    }
                     evt.file_path = Some(file);
                     evt.byte_offset = new_offset;
                     for (tu_id, tu_name, ts) in tool_use_starts {
@@ -1740,29 +1783,52 @@ mod activity_classifier_tests {
     fn awaiting_wins_over_stopped_over_recency() {
         // awaiting (permission) beats everything.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, true, true),
+            classify_activity_with_events(Some(0), true, true, true, false),
             ActivityState::Awaiting
         );
         assert_eq!(
-            classify_activity_with_events(Some(0), true, true, false),
+            classify_activity_with_events(Some(0), true, true, false, false),
             ActivityState::Awaiting
         );
         // stopped beats PTY recency.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, true),
+            classify_activity_with_events(Some(0), true, false, true, false),
             ActivityState::Stopped
+        );
+    }
+
+    #[test]
+    fn stopped_wins_over_stalled() {
+        // If we have a terminal stop_reason waiting on the user, that
+        // takes priority over the stall detector.
+        assert_eq!(
+            classify_activity_with_events(Some(0), true, false, true, true),
+            ActivityState::Stopped
+        );
+    }
+
+    #[test]
+    fn stalled_wins_over_pty_recency() {
+        // Stall detector fires before PTY-recency Active/Idle/Waiting.
+        assert_eq!(
+            classify_activity_with_events(Some(0), true, false, false, true),
+            ActivityState::Stalled
+        );
+        assert_eq!(
+            classify_activity_with_events(Some(60), true, false, false, true),
+            ActivityState::Stalled
         );
     }
 
     #[test]
     fn no_session_is_off_even_if_running_false() {
         assert_eq!(
-            classify_activity_with_events(None, false, false, false),
+            classify_activity_with_events(None, false, false, false, false),
             ActivityState::Off
         );
         // Even with pty seconds, if running=false → Off.
         assert_eq!(
-            classify_activity_with_events(Some(5), false, false, false),
+            classify_activity_with_events(Some(5), false, false, false, false),
             ActivityState::Off
         );
     }
@@ -1771,7 +1837,7 @@ mod activity_classifier_tests {
     fn awaiting_fires_even_when_session_not_running() {
         // A pending tool_use is a strong signal regardless of pty state.
         assert_eq!(
-            classify_activity_with_events(None, false, true, false),
+            classify_activity_with_events(None, false, true, false, false),
             ActivityState::Awaiting
         );
     }
@@ -1779,23 +1845,24 @@ mod activity_classifier_tests {
     #[test]
     fn pty_recency_drives_active_idle_waiting_when_no_event_signals() {
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, false),
+            classify_activity_with_events(Some(0), true, false, false, false),
             ActivityState::Active
         );
         assert_eq!(
-            classify_activity_with_events(Some(10), true, false, false),
+            classify_activity_with_events(Some(10), true, false, false, false),
             ActivityState::Idle
         );
         assert_eq!(
-            classify_activity_with_events(Some(60), true, false, false),
+            classify_activity_with_events(Some(60), true, false, false, false),
             ActivityState::Waiting
         );
     }
 
     #[test]
-    fn is_alertable_includes_stopped_and_awaiting_only() {
+    fn is_alertable_includes_stopped_awaiting_and_stalled() {
         assert!(ActivityState::Stopped.is_alertable());
         assert!(ActivityState::Awaiting.is_alertable());
+        assert!(ActivityState::Stalled.is_alertable());
         assert!(!ActivityState::Active.is_alertable());
         assert!(!ActivityState::Idle.is_alertable());
         assert!(!ActivityState::Waiting.is_alertable());

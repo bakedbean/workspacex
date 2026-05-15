@@ -116,6 +116,11 @@ pub struct WorkspaceEvents {
     /// idle (waiting on the human) or has resumed (received new input but
     /// hasn't produced its next assistant message yet).
     pub user_replied_since_stop: bool,
+    /// Epoch-ms of the last time the JSONL log was observed to have grown.
+    /// Updated by the tail loop whenever a new event is appended. Used by
+    /// `is_stalled` to detect sessions where claude has gone quiet
+    /// mid-tool-chain without writing a terminal stop_reason.
+    pub last_log_activity_ms: i64,
 }
 
 impl Default for WorkspaceEvents {
@@ -128,6 +133,7 @@ impl Default for WorkspaceEvents {
             pending_tool_uses: HashMap::new(),
             last_stop_reason: None,
             user_replied_since_stop: false,
+            last_log_activity_ms: 0,
         }
     }
 }
@@ -140,6 +146,7 @@ impl WorkspaceEvents {
         self.pending_tool_uses.clear();
         self.last_stop_reason = None;
         self.user_replied_since_stop = false;
+        self.last_log_activity_ms = 0;
     }
 
     /// The agent is stopped and the human hasn't replied yet.
@@ -149,6 +156,18 @@ impl WorkspaceEvents {
                 .last_stop_reason
                 .as_ref()
                 .is_some_and(StopReason::is_awaiting_user)
+    }
+
+    /// True iff claude appears to have stalled mid-tool-chain: the JSONL
+    /// log was last appended >`stall_threshold_ms` ago, there's no
+    /// pending tool_use (so it's not just a slow tool), and we've seen
+    /// at least one stop_reason (so we know claude has been active in
+    /// this session — fresh sessions with no events yet don't flag).
+    pub fn is_stalled(&self, now_ms: i64, stall_threshold_ms: i64) -> bool {
+        self.last_stop_reason.is_some()
+            && self.pending_tool_uses.is_empty()
+            && self.last_log_activity_ms > 0
+            && now_ms.saturating_sub(self.last_log_activity_ms) > stall_threshold_ms
     }
 }
 
@@ -900,15 +919,77 @@ mod tests {
 
     #[test]
     fn workspace_events_reset_session_state_clears_everything() {
-        let mut ws = WorkspaceEvents::default();
+        let mut ws = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            user_replied_since_stop: true,
+            last_log_activity_ms: 12_345,
+            ..Default::default()
+        };
         ws.pending_tool_uses
             .insert("t1".into(), ("Bash".into(), 1000));
-        ws.last_stop_reason = Some(StopReason::EndTurn);
-        ws.user_replied_since_stop = true;
         ws.reset_session_state();
         assert!(ws.pending_tool_uses.is_empty());
         assert_eq!(ws.last_stop_reason, None);
         assert!(!ws.user_replied_since_stop);
+        assert_eq!(ws.last_log_activity_ms, 0);
+    }
+
+    #[test]
+    fn workspace_events_is_stalled_requires_prior_stop_reason() {
+        // Fresh sessions with no stop_reason yet must not flag — we'd
+        // misclassify normal startup quiet as a stall.
+        let ws = WorkspaceEvents {
+            last_log_activity_ms: 1_000,
+            ..Default::default()
+        };
+        assert!(!ws.is_stalled(100_000, 60_000));
+    }
+
+    #[test]
+    fn workspace_events_is_stalled_false_when_tool_use_pending() {
+        // Pending tool_use means claude is mid-call — not a stall, just
+        // a slow tool.
+        let mut ws = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            last_log_activity_ms: 1_000,
+            ..Default::default()
+        };
+        ws.pending_tool_uses
+            .insert("t1".into(), ("Bash".into(), 500));
+        assert!(!ws.is_stalled(100_000, 60_000));
+    }
+
+    #[test]
+    fn workspace_events_is_stalled_false_within_threshold() {
+        let ws = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            last_log_activity_ms: 50_000,
+            ..Default::default()
+        };
+        // delta = 60_000 - 50_000 = 10s, well under the 60s threshold.
+        assert!(!ws.is_stalled(60_000, 60_000));
+    }
+
+    #[test]
+    fn workspace_events_is_stalled_true_when_all_conditions_met() {
+        let ws = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            last_log_activity_ms: 1_000,
+            ..Default::default()
+        };
+        // delta = 100_000 - 1_000 = 99s, above the 60s threshold.
+        assert!(ws.is_stalled(100_000, 60_000));
+    }
+
+    #[test]
+    fn workspace_events_is_stalled_false_when_log_activity_never_set() {
+        // last_log_activity_ms = 0 means we've never observed the log
+        // grow — guard against false positives before the tailer runs.
+        let ws = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            ..Default::default()
+        };
+        assert!(!ws.is_stalled(100_000, 60_000));
     }
 
     #[test]

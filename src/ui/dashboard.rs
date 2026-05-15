@@ -35,6 +35,12 @@ pub enum Item<'a> {
         /// not yet replied. Distinct from `awaiting_tool` (permission
         /// prompts), which has higher priority in the activity column.
         stopped: bool,
+        /// True when Claude has stalled mid-tool-chain: the JSONL log
+        /// hasn't been appended for >60s, no tool_use is pending, and
+        /// at least one stop_reason has been observed. Catches sessions
+        /// where Claude crashes/hangs after a tool_result without ever
+        /// writing a terminal stop_reason.
+        stalled: bool,
         /// Number of processes detected with `cwd` inside this
         /// workspace's worktree (sourced from `app.workspace_processes`).
         /// Rendered inline as `~N` in merged-style when nonzero; hidden
@@ -125,6 +131,7 @@ pub fn render(
                 lifecycle,
                 awaiting_tool,
                 stopped,
+                stalled,
                 proc_count,
             } => {
                 if let Some(SelectionTarget::Workspace(id)) = selected
@@ -142,6 +149,7 @@ pub fn render(
                     *lifecycle,
                     awaiting_tool,
                     *stopped,
+                    *stalled,
                     *proc_count,
                     nerd_fonts,
                     theme,
@@ -245,21 +253,25 @@ fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
     let mut total = 0usize;
     let mut awaiting = 0usize;
     let mut stopped_n = 0usize;
+    let mut stalled_n = 0usize;
     for item in items {
         if let Item::Workspace {
             awaiting_tool,
             stopped,
+            stalled,
             ..
         } = item
         {
             total += 1;
-            // Priority matches `classify_activity_with_events`: awaiting wins
-            // over stopped, so a workspace with both flags counts toward
-            // `awaiting` only (it renders as `awaiting` in the activity column).
+            // Priority matches `classify_activity_with_events`: awaiting >
+            // stopped > stalled. A workspace with multiple flags counts
+            // only toward its highest-priority bucket.
             if awaiting_tool.is_some() {
                 awaiting += 1;
             } else if *stopped {
                 stopped_n += 1;
+            } else if *stalled {
+                stalled_n += 1;
             }
         }
     }
@@ -278,6 +290,11 @@ fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
         spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
         spans.push(Span::styled(format!("{stopped_n}"), theme.warn_style()));
         spans.push(Span::styled(" stopped".to_string(), theme.dim_style()));
+    }
+    if stalled_n > 0 {
+        spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
+        spans.push(Span::styled(format!("{stalled_n}"), theme.warn_style()));
+        spans.push(Span::styled(" stalled".to_string(), theme.dim_style()));
     }
     Line::from(spans)
 }
@@ -391,7 +408,7 @@ fn format_age_compact(timestamp_ms: i64) -> String {
 /// Map an activity word to a style (color) per the spec.
 fn activity_style(label: &str, theme: &Theme) -> Style {
     match label {
-        "awaiting" | "stopped" => theme.warn_style(),
+        "awaiting" | "stopped" | "stalled" => theme.warn_style(),
         "active" => theme.ok_style(),
         "idle" => Style::default(),
         "waiting" | "resumable" | "off" => theme.dim_style(),
@@ -412,6 +429,7 @@ fn workspace_main_row(
     lifecycle: Option<crate::forge::BranchLifecycle>,
     awaiting_tool: &Option<(String, i64)>,
     stopped: bool,
+    stalled: bool,
     proc_count: usize,
     nerd: bool,
     theme: &Theme,
@@ -427,6 +445,8 @@ fn workspace_main_row(
         "awaiting"
     } else if stopped {
         "stopped"
+    } else if stalled {
+        "stalled"
     } else {
         match (seconds_since_activity, has_prior_session) {
             (Some(s), _) if s < 2 => "active",
@@ -589,6 +609,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -648,6 +669,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
             Item::Spacer,
@@ -664,6 +686,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -706,6 +729,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -757,6 +781,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -798,6 +823,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -845,6 +871,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
             Item::Workspace {
@@ -859,6 +886,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -901,6 +929,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -940,6 +969,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -978,6 +1008,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1021,6 +1052,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
             Item::Workspace {
@@ -1035,6 +1067,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1093,6 +1126,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
             Item::Workspace {
@@ -1107,6 +1141,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: Some(("Bash".into(), 0)),
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
             Item::Workspace {
@@ -1121,6 +1156,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: true,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1154,6 +1190,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1207,6 +1244,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1249,6 +1287,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1290,6 +1329,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
             Item::Workspace {
@@ -1304,6 +1344,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1345,6 +1386,7 @@ mod tests {
                 // 10s ago — well past the 3s threshold.
                 awaiting_tool: Some(("Bash".into(), now_ms - 10_000)),
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1387,6 +1429,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
             Item::Workspace {
@@ -1401,6 +1444,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1459,6 +1503,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1535,6 +1580,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1578,6 +1624,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1616,6 +1663,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1667,6 +1715,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1715,6 +1764,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1775,6 +1825,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];
@@ -1808,6 +1859,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 3,
             },
         ];
@@ -1838,6 +1890,7 @@ mod tests {
                 lifecycle: None,
                 awaiting_tool: None,
                 stopped: false,
+                stalled: false,
                 proc_count: 0,
             },
         ];

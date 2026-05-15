@@ -985,16 +985,23 @@ fn compute_status_row(
     let candidates: Vec<crate::ui::updates_bar::WorkspaceUpdateInfo> = app
         .workspaces
         .iter()
-        .map(|(_, w)| {
+        .map(|(rid, w)| {
             let activity = app
                 .workspace_activity
                 .get(&w.id)
                 .copied()
                 .map(translate_activity)
                 .unwrap_or(crate::ui::updates_bar::ActivityState::Off);
+            let repo_name = app
+                .repos
+                .iter()
+                .find(|r| r.id == *rid)
+                .map(|r| r.name.as_str())
+                .unwrap_or("");
             crate::ui::updates_bar::WorkspaceUpdateInfo {
                 id: w.id,
                 name: w.name.as_str(),
+                repo_name,
                 events: app.workspace_events.get(&w.id),
                 activity,
                 needs_attention: app.workspace_needs_attention.contains(&w.id),

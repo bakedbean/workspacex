@@ -57,6 +57,25 @@ pub async fn preflight() -> Result<()> {
     Ok(())
 }
 
+/// Resolve the repo's main branch name as seen from `worktree`.
+/// Reads `git symbolic-ref --short refs/remotes/origin/HEAD` and strips
+/// the `origin/` prefix. Falls back to `main` on any error (no origin,
+/// origin/HEAD not set, git not installed, etc.).
+pub async fn resolve_base_branch(worktree: &Path) -> String {
+    let output = tokio::process::Command::new("git")
+        .current_dir(worktree)
+        .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .output()
+        .await;
+    match output {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            s.strip_prefix("origin/").unwrap_or(&s).to_string()
+        }
+        _ => "main".to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WorkspaceStatus {
     pub modified: u32,  // tracked-file changes (index or worktree), excludes untracked
@@ -184,6 +203,49 @@ pub(super) mod tests {
         let s = workspace_status(dir.path()).await.unwrap();
         assert_eq!(s.modified, 1, "{s:?}");
         assert_eq!(s.untracked, 1, "{s:?}");
+    }
+
+    #[tokio::test]
+    async fn resolve_base_branch_uses_origin_head_when_set() {
+        let dir = TempDir::new().unwrap();
+        let r = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success(),
+                "git {args:?} failed"
+            );
+        };
+        r(&["init", "-q", "-b", "trunk"]);
+        r(&["config", "user.email", "t@e"]);
+        r(&["config", "user.name", "t"]);
+        r(&["commit", "--allow-empty", "-q", "-m", "init"]);
+        // Fake an origin that points at this repo so symbolic-ref has something to read.
+        r(&["remote", "add", "origin", dir.path().to_str().unwrap()]);
+        r(&["fetch", "-q", "origin"]);
+        r(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/trunk",
+        ]);
+
+        let base = resolve_base_branch(dir.path()).await;
+        assert_eq!(base, "trunk");
+    }
+
+    #[tokio::test]
+    async fn resolve_base_branch_falls_back_to_main_without_origin() {
+        let dir = TempDir::new().unwrap();
+        std::process::Command::new("git")
+            .current_dir(dir.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        let base = resolve_base_branch(dir.path()).await;
+        assert_eq!(base, "main");
     }
 
     #[test]

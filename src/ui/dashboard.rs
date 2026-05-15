@@ -117,18 +117,26 @@ pub fn render(
                         (None, false) => "off",
                     }
                 };
-                let branch_label = format_branch_label(&workspace.branch, nerd_fonts, *lifecycle);
+                let branch_line =
+                    format_branch_label(&workspace.branch, nerd_fonts, *lifecycle, theme);
                 let status_str = status
                     .map(|s| format_status(&s, nerd_fonts))
                     .unwrap_or_default();
                 let attn = if *needs_attention { "!" } else { " " };
-                let left = format!(
-                    "{attn} {dot} {name}  [{branch_label}]  {status_str}",
-                    name = workspace.name,
-                );
+                let mut spans: Vec<Span<'static>> = Vec::with_capacity(branch_line.spans.len() + 4);
+                spans.push(Span::raw(format!(
+                    "{attn} {dot} {name}  [",
+                    name = workspace.name
+                )));
+                spans.extend(branch_line.spans);
+                spans.push(Span::raw(format!("]  {status_str}")));
                 let right = format!("{activity}{setup_badge}");
-                let line = right_pad_line(&left, &right, inner_width);
-                list_items.push(ListItem::new(line));
+                let left_w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+                let right_w = right.chars().count();
+                let gap = inner_width.saturating_sub(left_w + right_w).max(1);
+                spans.push(Span::raw(" ".repeat(gap)));
+                spans.push(Span::raw(right));
+                list_items.push(ListItem::new(Line::from(spans)));
                 // Sub-line: if awaiting, always render the permission prompt
                 // (more urgent than whatever the last event happened to be);
                 // otherwise fall back to the latest event sub-line.
@@ -220,31 +228,21 @@ fn format_age(timestamp_ms: i64) -> String {
     }
 }
 
-/// Compose a row with `left` flush-left and `right` flush-right, padded
-/// with spaces to total exactly `total_width` chars. If `left.len() +
-/// right.len() >= total_width`, returns the natural concatenation (let
-/// the renderer truncate).
-fn right_pad_line(left: &str, right: &str, total_width: usize) -> String {
-    let left_w = left.chars().count();
-    let right_w = right.chars().count();
-    if left_w + right_w >= total_width {
-        format!("{left} {right}")
-    } else {
-        let gap = total_width - left_w - right_w;
-        format!("{left}{}{right}", " ".repeat(gap))
-    }
-}
-
+/// Render the bracketed branch label as a `Line` whose glyph + name are
+/// styled per PR lifecycle. Returning a `Line` (rather than `String`) lets
+/// the row composer apply per-segment colors while still measuring the
+/// displayed width for right-justified padding.
 fn format_branch_label(
     branch: &str,
     nerd: bool,
     lifecycle: Option<crate::forge::BranchLifecycle>,
-) -> String {
+    theme: &Theme,
+) -> Line<'static> {
     use crate::forge::BranchLifecycle::*;
-    if nerd {
+    let text = if nerd {
         let (glyph, suffix) = match lifecycle {
             None | Some(NoPr) => ("\u{e0a0}", ""),
-            Some(PrOpen) => ("\u{f407}", ""),
+            Some(PrOpen) | Some(PrConflicted) => ("\u{f407}", ""),
             Some(PrDraft) => ("\u{f407}", " draft"),
             Some(PrMerged) => ("\u{f419}", ""),
             Some(PrClosed) => ("\u{f659}", ""),
@@ -254,12 +252,26 @@ fn format_branch_label(
         let suffix = match lifecycle {
             Some(PrOpen) => " (pr)",
             Some(PrDraft) => " (draft)",
+            Some(PrConflicted) => " (conflict)",
             Some(PrMerged) => " (merged)",
             Some(PrClosed) => " (closed)",
             None | Some(NoPr) => "",
         };
         format!("{branch}{suffix}")
-    }
+    };
+    let style = match lifecycle {
+        Some(PrOpen) => Some(theme.ok_style()),
+        Some(PrConflicted) => Some(theme.warn_style()),
+        Some(PrMerged) => Some(theme.merged_style()),
+        Some(PrClosed) => Some(theme.err_style()),
+        // Draft / NoPr / None render in the default foreground.
+        _ => None,
+    };
+    let span = match style {
+        Some(s) => Span::styled(text, s),
+        None => Span::raw(text),
+    };
+    Line::from(span)
 }
 
 #[cfg(test)]
@@ -816,75 +828,123 @@ mod label_tests {
     use super::*;
     use crate::forge::BranchLifecycle;
 
+    fn line_text(l: &Line) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn line_fg(l: &Line) -> Option<ratatui::style::Color> {
+        l.spans.iter().find_map(|s| s.style.fg)
+    }
+
     #[test]
     fn nerd_no_lifecycle_uses_branch_glyph() {
-        let s = format_branch_label("feat/x", true, None);
-        assert_eq!(s, "\u{e0a0} feat/x");
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", true, None, &t);
+        assert_eq!(line_text(&l), "\u{e0a0} feat/x");
+        assert_eq!(line_fg(&l), None);
     }
 
     #[test]
-    fn nerd_open_pr_uses_pr_glyph() {
-        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::PrOpen));
-        assert_eq!(s, "\u{f407} feat/x");
+    fn nerd_open_pr_uses_pr_glyph_and_ok_color() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", true, Some(BranchLifecycle::PrOpen), &t);
+        assert_eq!(line_text(&l), "\u{f407} feat/x");
+        assert_eq!(line_fg(&l), Some(t.ok));
     }
 
     #[test]
-    fn nerd_draft_pr_annotates() {
-        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::PrDraft));
-        assert_eq!(s, "\u{f407} feat/x draft");
+    fn nerd_draft_pr_annotates_and_stays_uncolored() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", true, Some(BranchLifecycle::PrDraft), &t);
+        assert_eq!(line_text(&l), "\u{f407} feat/x draft");
+        assert_eq!(line_fg(&l), None);
     }
 
     #[test]
-    fn nerd_merged_pr_uses_merge_glyph() {
-        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::PrMerged));
-        assert_eq!(s, "\u{f419} feat/x");
+    fn nerd_conflicted_pr_uses_pr_glyph_and_warn_color() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", true, Some(BranchLifecycle::PrConflicted), &t);
+        assert_eq!(line_text(&l), "\u{f407} feat/x");
+        assert_eq!(line_fg(&l), Some(t.warn));
     }
 
     #[test]
-    fn nerd_closed_pr_uses_x_glyph() {
-        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::PrClosed));
-        assert_eq!(s, "\u{f659} feat/x");
+    fn nerd_merged_pr_uses_merge_glyph_and_merged_color() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", true, Some(BranchLifecycle::PrMerged), &t);
+        assert_eq!(line_text(&l), "\u{f419} feat/x");
+        assert_eq!(line_fg(&l), Some(t.merged));
     }
 
     #[test]
-    fn nerd_no_pr_uses_branch_glyph() {
-        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::NoPr));
-        assert_eq!(s, "\u{e0a0} feat/x");
+    fn nerd_closed_pr_uses_x_glyph_and_err_color() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", true, Some(BranchLifecycle::PrClosed), &t);
+        assert_eq!(line_text(&l), "\u{f659} feat/x");
+        assert_eq!(line_fg(&l), Some(t.err));
+    }
+
+    #[test]
+    fn nerd_no_pr_uses_branch_glyph_uncolored() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", true, Some(BranchLifecycle::NoPr), &t);
+        assert_eq!(line_text(&l), "\u{e0a0} feat/x");
+        assert_eq!(line_fg(&l), None);
     }
 
     #[test]
     fn ascii_open_pr_appends_pr_suffix() {
-        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrOpen));
-        assert_eq!(s, "feat/x (pr)");
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", false, Some(BranchLifecycle::PrOpen), &t);
+        assert_eq!(line_text(&l), "feat/x (pr)");
+        assert_eq!(line_fg(&l), Some(t.ok));
     }
 
     #[test]
-    fn ascii_draft_pr_appends_draft_suffix() {
-        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrDraft));
-        assert_eq!(s, "feat/x (draft)");
+    fn ascii_draft_pr_appends_draft_suffix_uncolored() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", false, Some(BranchLifecycle::PrDraft), &t);
+        assert_eq!(line_text(&l), "feat/x (draft)");
+        assert_eq!(line_fg(&l), None);
+    }
+
+    #[test]
+    fn ascii_conflicted_pr_appends_conflict_suffix() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", false, Some(BranchLifecycle::PrConflicted), &t);
+        assert_eq!(line_text(&l), "feat/x (conflict)");
+        assert_eq!(line_fg(&l), Some(t.warn));
     }
 
     #[test]
     fn ascii_merged_pr_appends_merged_suffix() {
-        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrMerged));
-        assert_eq!(s, "feat/x (merged)");
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", false, Some(BranchLifecycle::PrMerged), &t);
+        assert_eq!(line_text(&l), "feat/x (merged)");
+        assert_eq!(line_fg(&l), Some(t.merged));
     }
 
     #[test]
     fn ascii_closed_pr_appends_closed_suffix() {
-        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrClosed));
-        assert_eq!(s, "feat/x (closed)");
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", false, Some(BranchLifecycle::PrClosed), &t);
+        assert_eq!(line_text(&l), "feat/x (closed)");
+        assert_eq!(line_fg(&l), Some(t.err));
     }
 
     #[test]
-    fn ascii_no_pr_is_plain() {
-        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::NoPr));
-        assert_eq!(s, "feat/x");
+    fn ascii_no_pr_is_plain_uncolored() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", false, Some(BranchLifecycle::NoPr), &t);
+        assert_eq!(line_text(&l), "feat/x");
+        assert_eq!(line_fg(&l), None);
     }
 
     #[test]
-    fn ascii_none_is_plain() {
-        let s = format_branch_label("feat/x", false, None);
-        assert_eq!(s, "feat/x");
+    fn ascii_none_is_plain_uncolored() {
+        let t = Theme::default_theme();
+        let l = format_branch_label("feat/x", false, None, &t);
+        assert_eq!(line_text(&l), "feat/x");
+        assert_eq!(line_fg(&l), None);
     }
 }

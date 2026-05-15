@@ -175,15 +175,22 @@ pub struct RenameContext {
 #[derive(Debug, Clone)]
 pub enum SpawnMode {
     /// Brand-new session. Apply rename system prompt if context provided.
+    /// `yolo` adds `--dangerously-skip-permissions`.
     Fresh {
         rename_ctx: Option<RenameContext>,
         custom_instructions: Option<String>,
+        yolo: bool,
     },
     /// Resume the most recent prior session in this worktree via `--continue`.
-    Continue { custom_instructions: Option<String> },
+    /// `yolo` adds `--dangerously-skip-permissions`.
+    Continue {
+        custom_instructions: Option<String>,
+        yolo: bool,
+    },
     /// Spawn the project-manager session. Embeds the PM system prompt and
     /// a read-only tool allowlist. When `resume` is true, also passes
-    /// `--continue` to pick up PM's prior conversation.
+    /// `--continue` to pick up PM's prior conversation. Always uses
+    /// `--dangerously-skip-permissions`.
     ProjectManager {
         workspaces_json_path: std::path::PathBuf,
         custom_instructions: Option<String>,
@@ -211,10 +218,12 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
     let (rename_prompt, custom, allow_git_branch, add_continue, skip_permissions) = match mode {
         SpawnMode::Continue {
             custom_instructions,
-        } => (None, custom_instructions.clone(), false, true, false),
+            yolo,
+        } => (None, custom_instructions.clone(), false, true, *yolo),
         SpawnMode::Fresh {
             rename_ctx,
             custom_instructions,
+            yolo,
         } => {
             let rename_mode =
                 std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
@@ -233,7 +242,7 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
             } else {
                 (None, false)
             };
-            (rp, custom_instructions.clone(), allow, false, false)
+            (rp, custom_instructions.clone(), allow, false, *yolo)
         }
         SpawnMode::ProjectManager {
             workspaces_json_path: _,
@@ -493,6 +502,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                yolo: false,
             },
         )
         .unwrap();
@@ -519,6 +529,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                yolo: false,
             },
         );
         assert!(result.is_err());
@@ -548,6 +559,7 @@ mod tests {
                 SpawnMode::Fresh {
                     rename_ctx: None,
                     custom_instructions: None,
+                    yolo: false,
                 },
             )
             .unwrap();
@@ -586,6 +598,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                yolo: false,
             },
         )
         .unwrap();
@@ -617,6 +630,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(ctx),
             custom_instructions: Some("Use tabs not spaces".into()),
+            yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(&cwd, &mode);
@@ -649,6 +663,7 @@ mod tests {
     fn system_prompt_continue_passes_custom_only() {
         let mode = SpawnMode::Continue {
             custom_instructions: Some("Use ruff".into()),
+            yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(&cwd, &mode);
@@ -671,6 +686,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(&cwd, &mode);
@@ -681,6 +697,58 @@ mod tests {
                 .any(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
         );
         assert!(!argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
+    }
+
+    #[test]
+    fn yolo_fresh_emits_skip_permissions() {
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            yolo: true,
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(&cwd, &mode);
+        let argv = cmd.get_argv();
+        assert!(
+            argv.iter()
+                .any(|a| a == std::ffi::OsStr::new("--dangerously-skip-permissions")),
+            "expected --dangerously-skip-permissions for yolo Fresh"
+        );
+    }
+
+    #[test]
+    fn yolo_continue_emits_skip_permissions() {
+        let mode = SpawnMode::Continue {
+            custom_instructions: None,
+            yolo: true,
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(&cwd, &mode);
+        let argv = cmd.get_argv();
+        assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
+        assert!(
+            argv.iter()
+                .any(|a| a == std::ffi::OsStr::new("--dangerously-skip-permissions")),
+            "expected --dangerously-skip-permissions for yolo Continue"
+        );
+    }
+
+    #[test]
+    fn non_yolo_fresh_omits_skip_permissions() {
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            yolo: false,
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(&cwd, &mode);
+        let argv = cmd.get_argv();
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a == std::ffi::OsStr::new("--dangerously-skip-permissions")),
+            "non-yolo Fresh must not emit skip-permissions"
+        );
     }
 
     #[test]
@@ -806,6 +874,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                yolo: false,
             },
         )
         .unwrap();
@@ -874,6 +943,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                yolo: false,
             },
         )
         .unwrap();

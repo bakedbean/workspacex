@@ -10,6 +10,7 @@ pub enum Modal {
     NewWorkspace {
         repo_id: RepoId,
         name_buffer: String,
+        yolo: bool,
     },
     ConfirmArchive {
         workspace_id: crate::store::WorkspaceId,
@@ -57,8 +58,14 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     let rect = centered(area, 60, 12);
     f.render_widget(Clear, rect);
     let (title, body) = match modal {
-        Modal::NewWorkspace { name_buffer, .. } => (
-            "new workspace",
+        Modal::NewWorkspace {
+            name_buffer, yolo, ..
+        } => (
+            if *yolo {
+                "new workspace (YOLO)"
+            } else {
+                "new workspace"
+            },
             format!("name: {name_buffer}\n\n[enter] create   [esc] cancel"),
         ),
         Modal::ConfirmArchive { name, .. } => (

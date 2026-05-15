@@ -47,6 +47,7 @@ pub struct Workspace {
     pub state: WorkspaceState,
     pub setup_status: SetupStatus,
     pub created_at: i64,
+    pub yolo: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,7 @@ pub struct NewWorkspace<'a> {
     pub name: &'a str,
     pub branch: &'a str,
     pub worktree_path: &'a Path,
+    pub yolo: bool,
 }
 
 pub struct Store {
@@ -122,6 +124,20 @@ impl Store {
                     .execute("ALTER TABLE repos ADD COLUMN archive_script TEXT", [])?;
             }
             self.conn.execute("PRAGMA user_version = 3", [])?;
+        }
+        if v < 4 {
+            let has_yolo: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('workspaces') WHERE name = 'yolo'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_yolo == 0 {
+                self.conn.execute(
+                    "ALTER TABLE workspaces ADD COLUMN yolo INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            self.conn.execute("PRAGMA user_version = 4", [])?;
         }
         Ok(())
     }
@@ -235,9 +251,9 @@ impl Store {
     pub fn insert_workspace(&self, w: &NewWorkspace) -> Result<WorkspaceId> {
         let now = now_ms();
         self.conn.execute(
-            "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at)
-             VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5)",
-            rusqlite::params![w.repo_id.0, w.name, w.branch, w.worktree_path.to_string_lossy(), now],
+            "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo)
+             VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5, ?6)",
+            rusqlite::params![w.repo_id.0, w.name, w.branch, w.worktree_path.to_string_lossy(), now, w.yolo as i64],
         )?;
         Ok(WorkspaceId(self.conn.last_insert_rowid()))
     }
@@ -282,7 +298,7 @@ impl Store {
 
     pub fn workspaces(&self, repo_id: RepoId) -> Result<Vec<Workspace>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo
              FROM workspaces WHERE repo_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([repo_id.0], |r| {
@@ -295,6 +311,7 @@ impl Store {
                 state: parse_state(&r.get::<_, String>(5)?),
                 setup_status: parse_setup(&r.get::<_, String>(6)?),
                 created_at: r.get(7)?,
+                yolo: r.get::<_, i64>(8)? != 0,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -329,6 +346,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     state          TEXT NOT NULL,
     setup_status   TEXT NOT NULL,
     created_at     INTEGER NOT NULL,
+    yolo           INTEGER NOT NULL DEFAULT 0,
     UNIQUE(repo_id, name)
 );
 
@@ -432,6 +450,7 @@ mod tests {
                 name: "fix-bug",
                 branch: "wsx/fix-bug",
                 worktree_path: Path::new("/wts/fix-bug"),
+                yolo: false,
             })
             .unwrap();
 
@@ -539,6 +558,35 @@ mod tests {
     }
 
     #[test]
+    fn workspace_yolo_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
+        store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "tame",
+                branch: "wsx/tame",
+                worktree_path: Path::new("/wts/tame"),
+                yolo: false,
+            })
+            .unwrap();
+        store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "wild",
+                branch: "wsx/wild",
+                worktree_path: Path::new("/wts/wild"),
+                yolo: true,
+            })
+            .unwrap();
+        let ws = store.workspaces(repo).unwrap();
+        let tame = ws.iter().find(|w| w.name == "tame").unwrap();
+        let wild = ws.iter().find(|w| w.name == "wild").unwrap();
+        assert!(!tame.yolo);
+        assert!(wild.yolo);
+    }
+
+    #[test]
     fn sweep_stale_pending_marks_orphaned() {
         use std::time::Duration;
         let store = Store::open_in_memory().unwrap();
@@ -549,6 +597,7 @@ mod tests {
                 name: "stuck",
                 branch: "wsx/stuck",
                 worktree_path: Path::new("/wts/stuck"),
+                yolo: false,
             })
             .unwrap();
         // Backdate the row to look stale.

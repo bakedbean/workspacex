@@ -172,7 +172,7 @@ pub fn render(
     f.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
     let footer = Paragraph::new(
-        "[↑/↓] move   [enter] attach   [n] new   [e] edit   [t] terminal   [d] archive   [q] quit",
+        "[↑/↓] move   [enter] attach   [n] new   [N] new (YOLO)   [e] edit   [t] terminal   [d] archive   [q] quit",
     )
     .style(theme.dim_style());
     f.render_widget(footer, chunks[2]);
@@ -468,7 +468,13 @@ fn workspace_main_row(
     spans.push(Span::raw("  ".to_string()));
     spans.push(Span::styled(attn.to_string(), theme.warn_style()));
     spans.push(Span::raw(format!(" {dot} ")));
-    spans.push(Span::raw(name_padded));
+    if workspace.yolo {
+        // YOLO workspaces auto-approve every tool use; warn-style the name
+        // so it's identifiable at a glance in the dashboard list.
+        spans.push(Span::styled(name_padded, theme.warn_style()));
+    } else {
+        spans.push(Span::raw(name_padded));
+    }
     if setup_failed {
         // NOTE: this err_style fg is suppressed when the row is selected
         // (ratatui's highlight_style patches the fg). The glyph still
@@ -530,6 +536,7 @@ mod tests {
             state: WorkspaceState::Ready,
             setup_status: SetupStatus::Ok,
             created_at: 0,
+            yolo: false,
         }
     }
 
@@ -1543,6 +1550,103 @@ mod tests {
         assert!(
             !row.contains("[setup-failed]"),
             "did not expect the old right-side badge: {row}"
+        );
+    }
+
+    #[test]
+    fn yolo_workspace_name_uses_warn_style() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let mut w = workspace(1, 1, "wild", "wsx/wild");
+        w.yolo = true;
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        let theme = t();
+        term.draw(|f| render(f, f.area(), &items, None, false, &theme, &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        // Find the row y containing "wild".
+        let mut row_y = None;
+        for y in 0..8u16 {
+            let r: String = (0..120u16)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect();
+            if r.contains("wild") {
+                row_y = Some(y);
+                break;
+            }
+        }
+        let y = row_y.expect("yolo row not found");
+        // The name column starts at probe_x_name = 2 (indent) + 1 (attn) + 1
+        // (sep) + 1 (glyph) + 1 (sep) = 6.
+        let name_x: u16 = 6;
+        let cell = &buf[(name_x, y)];
+        assert_eq!(cell.symbol(), "w", "expected 'w' at name start: {cell:?}");
+        assert_eq!(
+            cell.fg,
+            theme.warn_style().fg.unwrap(),
+            "expected warn_style fg on yolo workspace name"
+        );
+    }
+
+    #[test]
+    fn non_yolo_workspace_name_not_warn_styled() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "tame", "wsx/tame"); // yolo defaults to false
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: false,
+                seconds_since_activity: None,
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        let theme = t();
+        term.draw(|f| render(f, f.area(), &items, None, false, &theme, &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let mut row_y = None;
+        for y in 0..8u16 {
+            let r: String = (0..120u16)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect();
+            if r.contains("tame") {
+                row_y = Some(y);
+                break;
+            }
+        }
+        let y = row_y.expect("tame row not found");
+        let cell = &buf[(6u16, y)];
+        assert_eq!(cell.symbol(), "t");
+        assert_ne!(
+            cell.fg,
+            theme.warn_style().fg.unwrap(),
+            "non-yolo workspace name must not use warn_style fg"
         );
     }
 

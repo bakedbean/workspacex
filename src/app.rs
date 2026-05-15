@@ -619,13 +619,17 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
                     name_buffer: String::new(),
+                    yolo: false,
                 });
             }
             None => {}
         },
-        (KeyCode::Char('n'), _) => {
+        (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) => {
             // Resolve target repo from the current selection. Falls back to the
             // first repo if nothing is selected (shouldn't normally happen).
+            // Capital N opens the modal in YOLO mode (claude launches with
+            // --dangerously-skip-permissions on every attach).
+            let yolo = matches!(k.code, KeyCode::Char('N'));
             let repo_id = match app.selected_target() {
                 Some(SelectionTarget::Repo(id)) => Some(id),
                 Some(SelectionTarget::Workspace(wid)) => app
@@ -639,6 +643,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
                     name_buffer: String::new(),
+                    yolo,
                 });
             }
         }
@@ -760,9 +765,11 @@ fn build_spawn_info(
     let custom = crate::repo::resolve_custom_instructions(repo, &app.store)
         .ok()
         .flatten();
+    let yolo = ws.yolo;
     let mode = if crate::pty::session::has_prior_session(&ws.worktree_path) {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
+            yolo,
         }
     } else {
         let rename_ctx = if crate::names::is_generated_slug(&ws.name) {
@@ -778,6 +785,7 @@ fn build_spawn_info(
         crate::pty::session::SpawnMode::Fresh {
             rename_ctx,
             custom_instructions: custom,
+            yolo,
         }
     };
     Some((ws_id, ws.worktree_path.clone(), mode))
@@ -927,6 +935,7 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
         Modal::NewWorkspace {
             repo_id,
             mut name_buffer,
+            yolo,
         } => match k.code {
             KeyCode::Esc => {
                 app.modal = None;
@@ -946,9 +955,15 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = Some(Modal::SetupRunning {
                     log: vec!["running setup...".into()],
                 });
-                let result =
-                    crate::workspace::create(&app.store, &repo, name.as_deref(), &base, |_| {})
-                        .await;
+                let result = crate::workspace::create(
+                    &app.store,
+                    &repo,
+                    name.as_deref(),
+                    &base,
+                    yolo,
+                    |_| {},
+                )
+                .await;
                 match result {
                     Ok(_) => {
                         app.modal = None;
@@ -966,6 +981,7 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id,
                     name_buffer,
+                    yolo,
                 });
             }
             KeyCode::Char(c) => {
@@ -973,6 +989,7 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id,
                     name_buffer,
+                    yolo,
                 });
             }
             _ => {}
@@ -1508,6 +1525,7 @@ mod pm_state_tests {
                     name,
                     branch,
                     worktree_path: std::path::Path::new(path),
+                    yolo: false,
                 })
                 .unwrap();
             store
@@ -1572,6 +1590,7 @@ mod pm_state_tests {
                 name: "blocked",
                 branch: "repo/blocked",
                 worktree_path: std::path::Path::new("."),
+                yolo: false,
             })
             .unwrap();
         store
@@ -1633,6 +1652,7 @@ mod pm_state_tests {
                 name: "alpha-ws",
                 branch: "repo-alpha/alpha-ws",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
+                yolo: false,
             })
             .unwrap();
         store
@@ -1647,6 +1667,7 @@ mod pm_state_tests {
                 name: "beta-ws",
                 branch: "repo-beta/beta-ws",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/beta-ws"),
+                yolo: false,
             })
             .unwrap();
         store
@@ -1709,6 +1730,7 @@ mod pm_state_tests {
                 name: "attached-here",
                 branch: "repo/attached-here",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/attached"),
+                yolo: false,
             })
             .unwrap();
         store
@@ -1720,6 +1742,7 @@ mod pm_state_tests {
                 name: "the-other",
                 branch: "repo/the-other",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/other"),
+                yolo: false,
             })
             .unwrap();
         store
@@ -1730,6 +1753,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            yolo: false,
         };
         app.sessions
             .spawn(attached_id, std::path::Path::new("."), 80, 24, mode)
@@ -1783,6 +1807,7 @@ mod pm_state_tests {
                 name: "only-one",
                 branch: "repo/only-one",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/only"),
+                yolo: false,
             })
             .unwrap();
         store
@@ -1792,6 +1817,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            yolo: false,
         };
         app.sessions
             .spawn(attached_id, std::path::Path::new("."), 80, 24, mode)
@@ -1835,6 +1861,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            yolo: false,
         };
         let s = app.sessions.spawn_pm(&cwd, 80, 24, mode).unwrap();
         app.pm = Some(s);

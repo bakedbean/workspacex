@@ -292,6 +292,7 @@ mod tests {
                 name: "ready-with-session",
                 branch: "demo/ready-with-session",
                 worktree_path: &ready_with_session,
+                yolo: false,
             })
             .unwrap();
         store
@@ -303,6 +304,7 @@ mod tests {
                 name: "ready-no-session",
                 branch: "demo/ready-no-session",
                 worktree_path: &ready_no_session,
+                yolo: false,
             })
             .unwrap();
         store
@@ -314,6 +316,7 @@ mod tests {
                 name: "broken",
                 branch: "demo/broken",
                 worktree_path: &failed,
+                yolo: false,
             })
             .unwrap();
         store

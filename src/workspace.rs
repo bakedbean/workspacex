@@ -20,6 +20,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     repo: &Repo,
     name: Option<&str>,
     worktree_base: &Path,
+    yolo: bool,
     on_setup_line: F,
 ) -> Result<CreatedWorkspace> {
     let name = match name {
@@ -39,6 +40,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         name: &name,
         branch: &branch,
         worktree_path: &worktree_path,
+        yolo,
     })?;
 
     if let Err(e) = git::create_worktree(&repo.path, &branch, &worktree_path).await {
@@ -128,6 +130,7 @@ pub fn import_existing(
         name,
         branch: &branch,
         worktree_path: &info.path,
+        yolo: false,
     })?;
     store.set_workspace_state(id, WorkspaceState::Ready)?;
     store.set_setup_status(id, SetupStatus::Skipped)?;
@@ -222,14 +225,36 @@ mod tests {
             .unwrap();
         let base = TempDir::new().unwrap();
 
-        let created = create(&store, &repo, Some("alpha"), base.path(), |_| {})
+        let created = create(&store, &repo, Some("alpha"), base.path(), false, |_| {})
             .await
             .unwrap();
         assert_eq!(created.workspace.name, "alpha");
         assert_eq!(created.workspace.branch, "wsx/alpha");
         assert_eq!(created.workspace.state, WorkspaceState::Ready);
         assert_eq!(created.workspace.setup_status, SetupStatus::Skipped);
+        assert!(!created.workspace.yolo);
         assert!(created.workspace.worktree_path.join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn create_with_yolo_sets_flag() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+
+        let created = create(&store, &repo, Some("wild"), base.path(), true, |_| {})
+            .await
+            .unwrap();
+        assert!(created.workspace.yolo);
     }
 
     #[tokio::test]
@@ -246,7 +271,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
-        let created = create(&store, &repo, None, base.path(), |_| {})
+        let created = create(&store, &repo, None, base.path(), false, |_| {})
             .await
             .unwrap();
         assert!(created.workspace.name.contains('-'));
@@ -267,7 +292,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
-        let created = create(&store, &repo, Some("a"), base.path(), |_| {})
+        let created = create(&store, &repo, Some("a"), base.path(), false, |_| {})
             .await
             .unwrap();
         assert_eq!(created.workspace.state, WorkspaceState::Ready);
@@ -288,7 +313,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
-        let created = create(&store, &repo, Some("doomed"), base.path(), |_| {})
+        let created = create(&store, &repo, Some("doomed"), base.path(), false, |_| {})
             .await
             .unwrap();
         archive(
@@ -335,7 +360,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
-        let created = create(&store, &repo, Some("alpha"), base.path(), |_| {})
+        let created = create(&store, &repo, Some("alpha"), base.path(), false, |_| {})
             .await
             .unwrap();
 
@@ -405,7 +430,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
-        let created = create(&store, &repo, Some("a"), base.path(), |_| {})
+        let created = create(&store, &repo, Some("a"), base.path(), false, |_| {})
             .await
             .unwrap();
         assert_eq!(created.workspace.setup_status, SetupStatus::Ok);
@@ -436,7 +461,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
-        let created = create(&store, &repo, Some("doomed"), base.path(), |_| {})
+        let created = create(&store, &repo, Some("doomed"), base.path(), false, |_| {})
             .await
             .unwrap();
         archive(

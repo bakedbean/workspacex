@@ -37,9 +37,16 @@ async fn branch_rename_propagates_to_store() {
         .find(|r| r.id == repo_id)
         .unwrap();
     let base = TempDir::new().unwrap();
-    let created = wsx::workspace::create(&store, &repo, Some("placeholder"), base.path(), |_| {})
-        .await
-        .unwrap();
+    let created = wsx::workspace::create(
+        &store,
+        &repo,
+        Some("placeholder"),
+        base.path(),
+        false,
+        |_| {},
+    )
+    .await
+    .unwrap();
 
     let app = Arc::new(Mutex::new(
         wsx::app::App::new(store, base.path().to_path_buf()).unwrap(),

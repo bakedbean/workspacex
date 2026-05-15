@@ -54,18 +54,30 @@ fn resolve_terminal_cmd(configured: Option<&str>) -> Result<String> {
 }
 
 fn spawn_with_path_arg(cmd: &str, path: &Path) -> Result<()> {
-    spawn_resolved(cmd, path, /* append_when_no_placeholder = */ true)
+    let path_str = path.to_string_lossy();
+    spawn_resolved(
+        cmd,
+        path,
+        &[("path", path_str.as_ref())],
+        Some(path_str.as_ref()),
+    )
 }
 
 fn spawn_with_cwd(cmd: &str, cwd: &Path) -> Result<()> {
-    spawn_resolved(cmd, cwd, /* append_when_no_placeholder = */ false)
+    let cwd_str = cwd.to_string_lossy();
+    spawn_resolved(cmd, cwd, &[("path", cwd_str.as_ref())], None)
 }
 
-fn spawn_resolved(cmd: &str, path: &Path, append_when_no_placeholder: bool) -> Result<()> {
-    let mut parts = resolve_argv(cmd, path, append_when_no_placeholder)?;
+fn spawn_resolved(
+    cmd: &str,
+    cwd: &Path,
+    substitutions: &[(&str, &str)],
+    fallback_when_no_placeholder: Option<&str>,
+) -> Result<()> {
+    let mut parts = resolve_argv(cmd, substitutions, fallback_when_no_placeholder)?;
     let program = parts.remove(0);
     let mut command = std::process::Command::new(&program);
-    command.args(&parts).current_dir(path);
+    command.args(&parts).current_dir(cwd);
     detach_io(&mut command);
     command
         .spawn()
@@ -73,23 +85,34 @@ fn spawn_resolved(cmd: &str, path: &Path, append_when_no_placeholder: bool) -> R
     Ok(())
 }
 
-/// Pure helper: resolve a command + path into the program + argv that would be spawned.
-/// If any token contains `{path}`, substitute it there. Otherwise, optionally append
-/// the path as the final argument (controlled by `append_when_no_placeholder`).
-fn resolve_argv(cmd: &str, path: &Path, append_when_no_placeholder: bool) -> Result<Vec<String>> {
+/// Pure helper: resolve a command into the program + argv that would be spawned.
+/// For each `(name, value)` in `substitutions`, replace `{name}` occurrences in every
+/// token. If no token contained any of the named placeholders and
+/// `fallback_when_no_placeholder` is `Some(p)`, append `p` as the final argument.
+fn resolve_argv(
+    cmd: &str,
+    substitutions: &[(&str, &str)],
+    fallback_when_no_placeholder: Option<&str>,
+) -> Result<Vec<String>> {
     let mut parts = shlex::split(cmd)
         .ok_or_else(|| Error::UserInput(format!("could not parse command: {cmd}")))?;
     if parts.is_empty() {
         return Err(Error::UserInput("command is empty".into()));
     }
-    let path_str = path.to_string_lossy().to_string();
-    let has_placeholder = parts.iter().any(|p| p.contains("{path}"));
-    if has_placeholder {
-        for part in &mut parts {
-            *part = part.replace("{path}", &path_str);
+    let needles: Vec<String> = substitutions
+        .iter()
+        .map(|(name, _)| format!("{{{name}}}"))
+        .collect();
+    let any_placeholder_used = parts.iter().any(|p| needles.iter().any(|n| p.contains(n)));
+    for part in &mut parts {
+        for (needle, (_, value)) in needles.iter().zip(substitutions.iter()) {
+            *part = part.replace(needle.as_str(), value);
         }
-    } else if append_when_no_placeholder {
-        parts.push(path_str);
+    }
+    if !any_placeholder_used {
+        if let Some(fallback) = fallback_when_no_placeholder {
+            parts.push(fallback.to_string());
+        }
     }
     Ok(parts)
 }
@@ -196,33 +219,61 @@ mod tests {
     }
 
     #[test]
-    fn resolve_argv_substitutes_placeholder() {
-        let path = std::path::Path::new("/tmp/wtree");
-        let argv = resolve_argv("xdg-terminal-exec --dir={path} nvim", path, true).unwrap();
-        assert_eq!(argv, vec!["xdg-terminal-exec", "--dir=/tmp/wtree", "nvim"]);
+    fn resolve_argv_substitutes_named_placeholders() {
+        let argv = resolve_argv(
+            "diff-tool --cwd={path} --base={base}",
+            &[("path", "/tmp/wt"), ("base", "main")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(argv, vec!["diff-tool", "--cwd=/tmp/wt", "--base=main"]);
     }
 
     #[test]
-    fn resolve_argv_appends_when_no_placeholder_and_flag_set() {
-        let path = std::path::Path::new("/tmp/wtree");
-        let argv = resolve_argv("code", path, true).unwrap();
-        assert_eq!(argv, vec!["code", "/tmp/wtree"]);
+    fn resolve_argv_substitutes_multiple_occurrences_of_same_placeholder() {
+        let argv = resolve_argv(
+            "editor --cwd={path} --file={path}/main.rs",
+            &[("path", "/tmp/wt")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec!["editor", "--cwd=/tmp/wt", "--file=/tmp/wt/main.rs"]
+        );
     }
 
     #[test]
-    fn resolve_argv_omits_when_no_placeholder_and_flag_unset() {
-        let path = std::path::Path::new("/tmp/wtree");
-        let argv = resolve_argv("alacritty", path, false).unwrap();
+    fn resolve_argv_appends_fallback_path_when_no_placeholder() {
+        let argv = resolve_argv("code", &[("path", "/tmp/wt")], Some("/tmp/wt")).unwrap();
+        assert_eq!(argv, vec!["code", "/tmp/wt"]);
+    }
+
+    #[test]
+    fn resolve_argv_omits_fallback_when_none() {
+        let argv = resolve_argv("alacritty", &[("path", "/tmp/wt")], None).unwrap();
         assert_eq!(argv, vec!["alacritty"]);
     }
 
     #[test]
-    fn resolve_argv_substitutes_multiple_occurrences() {
-        let path = std::path::Path::new("/tmp/wtree");
-        let argv = resolve_argv("editor --cwd={path} --file={path}/main.rs", path, true).unwrap();
-        assert_eq!(
-            argv,
-            vec!["editor", "--cwd=/tmp/wtree", "--file=/tmp/wtree/main.rs"]
-        );
+    fn resolve_argv_with_empty_substitutions_returns_argv_unchanged() {
+        let argv = resolve_argv("just a command", &[], None).unwrap();
+        assert_eq!(argv, vec!["just", "a", "command"]);
+    }
+
+    #[test]
+    fn resolve_argv_leaves_unknown_placeholders_literal_and_skips_fallback() {
+        // Design note: `any_placeholder_used` only considers placeholders the
+        // caller actually passed in `substitutions`. An unknown placeholder like
+        // `{base}` in the command stays literal (no substitution rule matches),
+        // and because no *known* placeholder appeared, the fallback path IS
+        // appended. This test pins that behavior.
+        let argv = resolve_argv(
+            "tool --base={base}",
+            &[("path", "/tmp/wt")],
+            Some("/tmp/wt"),
+        )
+        .unwrap();
+        assert_eq!(argv, vec!["tool", "--base={base}", "/tmp/wt"]);
     }
 }

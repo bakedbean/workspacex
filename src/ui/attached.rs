@@ -45,7 +45,7 @@ pub fn render(
     }
 
     let footer =
-        format!(" {label}   [Ctrl-x d] detach   [Ctrl-x u] updates   [Ctrl-x x] send Ctrl-x ");
+        format!(" {label}   [Ctrl-x] d=detach u=updates e=edit t=term v=diff x=send-Ctrl-x ");
     f.render_widget(Paragraph::new(footer).style(theme.dim_style()), footer_area);
 }
 

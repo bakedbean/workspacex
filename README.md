@@ -125,6 +125,9 @@ Keystrokes are forwarded to the running `claude` session, except:
 |---|---|
 | `Ctrl-x d` | Detach back to the dashboard (session keeps running) |
 | `Ctrl-x u` | Open the floating updates panel (shows other workspaces' state) |
+| `Ctrl-x e` | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard) |
+| `Ctrl-x t` | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`) |
+| `Ctrl-x v` | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`) |
 | `Ctrl-x x` | Send a literal `Ctrl-x` to claude |
 
 ## Editor, terminal, and diff integration

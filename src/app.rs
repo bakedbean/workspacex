@@ -845,6 +845,55 @@ async fn handle_key_attached(
                 app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
                 return Ok(());
             }
+            KeyCode::Char('e') => {
+                let path = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = path {
+                    let cmd = app.store.get_setting("editor_cmd").ok().flatten();
+                    if let Err(e) = crate::external::open_in_editor(&path, cmd.as_deref()) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+                return Ok(());
+            }
+            KeyCode::Char('t') => {
+                let path = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = path {
+                    let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
+                    if let Err(e) = crate::external::open_in_terminal(&path, cmd.as_deref()) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+                return Ok(());
+            }
+            KeyCode::Char('v') => {
+                let path = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = path {
+                    let cmd = app.store.get_setting("diff_cmd").ok().flatten();
+                    let base = crate::git::resolve_base_branch(&path).await;
+                    if let Err(e) = crate::external::open_diff(&path, &base, cmd.as_deref()) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+                return Ok(());
+            }
             _ => return Ok(()),
         }
     }

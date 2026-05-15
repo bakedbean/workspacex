@@ -79,6 +79,7 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
             },
         }
     }
+    // Drain any remaining stderr after stdout closes (and vice versa).
     while let Ok(Some(l)) = out_reader.next_line().await {
         on_line(SetupLine::Stdout(l));
     }

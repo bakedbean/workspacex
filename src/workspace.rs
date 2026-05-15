@@ -422,7 +422,7 @@ mod tests {
         let base = TempDir::new().unwrap();
         let scratch = TempDir::new().unwrap();
         let marker = scratch.path().join("wsx-archive-marker");
-        let script = format!("touch {}", marker.display());
+        let script = format!("touch '{}'", marker.display());
         store
             .set_repo_archive_script(id, Some(&script))
             .unwrap();

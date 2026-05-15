@@ -100,6 +100,7 @@ Value sources:
 | `n` | New workspace in the selected row's repo |
 | `e` | Open the selected workspace in your editor (no-op on repo header) |
 | `t` | Open the selected workspace in a terminal (no-op on repo header) |
+| `v` | View diff of the selected workspace's branch vs main (no-op on repo header) |
 | `d` | Archive the selected workspace (no-op on repo header) |
 | `q` | Quit (kills all running sessions) |
 | `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
@@ -126,7 +127,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x u` | Open the floating updates panel (shows other workspaces' state) |
 | `Ctrl-x x` | Send a literal `Ctrl-x` to claude |
 
-## Editor and terminal integration
+## Editor, terminal, and diff integration
 
 `[e]` and `[t]` on the dashboard launch your editor or terminal in the selected workspace's worktree directory. Both spawn detached so wsx keeps running.
 
@@ -164,6 +165,25 @@ plugins on a directory open).
 
 For terminal commands the same substitution applies, though most terminals
 honor the spawned process's cwd already so you typically don't need it.
+
+### Diff command
+
+`[v]` spawns the configured difftool with the selected workspace's worktree path as `{path}` and the repo's main branch as `{base}`. Unlike editor/terminal, there's no env-var fallback — set `diff_cmd` explicitly.
+
+Examples:
+
+```
+# Terminal pager with delta-prettified diff
+wsx config set diff_cmd "alacritty -e sh -c 'cd {path} && git diff {base}..HEAD | delta'"
+
+# Neovim with diffview.nvim
+wsx config set diff_cmd "alacritty -e nvim -c 'DiffviewOpen {base}' {path}"
+
+# VS Code (opens the workspace; user navigates to Source Control panel)
+wsx config set diff_cmd "code {path}"
+```
+
+The main branch is auto-detected from `origin/HEAD`; falls back to `main` if your repo doesn't have origin/HEAD set. (Tip: `git remote set-head origin --auto` after cloning fixes that for the wsx repo metadata too.)
 
 If neither the setting nor the env-var fallback is set, an error modal explains how to configure.
 

@@ -3,7 +3,12 @@ use crate::store::{Repo, SetupStatus, Workspace, WorkspaceState};
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+
+// Column widths for the workspace row. Names and branches are truncated
+// or right-padded so the columns align vertically across rows.
+const NAME_WIDTH: usize = 20;
+const BRANCH_BLOCK_WIDTH: usize = 28;
 
 #[derive(Debug, Clone)]
 pub enum Item<'a> {
@@ -59,13 +64,33 @@ pub fn render(
         ])
         .split(area);
 
-    let header_text = Paragraph::new("wsx — Workspaces").style(theme.header_style());
-    f.render_widget(header_text, chunks[0]);
+    f.render_widget(Paragraph::new(top_summary_line(items, theme)), chunks[0]);
 
-    // List is rendered into chunks[1] with a 1-char border on each side, so
-    // the inner usable width is (width - 2). Used below to right-justify
-    // the activity column of each workspace row.
-    let inner_width = chunks[1].width.saturating_sub(2) as usize;
+    // No outer border anymore — the list spans the full width of chunks[1].
+    let inner_width = chunks[1].width as usize;
+
+    // Count workspaces between each Item::Header. We can't simply count
+    // by repo.id during the render loop because we need the count BEFORE
+    // emitting the header line.
+    let mut counts_by_repo_idx: Vec<usize> = Vec::new();
+    {
+        let mut current: Option<usize> = None;
+        for item in items.iter() {
+            match item {
+                Item::Header { .. } => {
+                    counts_by_repo_idx.push(0);
+                    current = Some(counts_by_repo_idx.len() - 1);
+                }
+                Item::Workspace { .. } => {
+                    if let Some(i) = current {
+                        counts_by_repo_idx[i] += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut repo_idx = 0usize;
 
     let mut selected_idx: Option<usize> = None;
     let mut list_items: Vec<ListItem> = Vec::with_capacity(items.len());
@@ -77,8 +102,11 @@ pub fn render(
                 {
                     selected_idx = Some(list_items.len());
                 }
-                let line = format!("▌ {}    {}", repo.name, repo.path.display());
-                list_items.push(ListItem::new(line).style(theme.header_style()));
+                let count = counts_by_repo_idx.get(repo_idx).copied().unwrap_or(0);
+                repo_idx += 1;
+                let (header, rule) = repo_header_lines(repo, count, inner_width, theme);
+                list_items.push(ListItem::new(header));
+                list_items.push(ListItem::new(rule));
             }
             Item::Workspace {
                 repo: _,
@@ -96,70 +124,36 @@ pub fn render(
                 if let Some(SelectionTarget::Workspace(id)) = selected
                     && id == workspace.id
                 {
-                    // The main workspace row is selectable; the sub-line
-                    // below it is not.
                     selected_idx = Some(list_items.len());
                 }
-                let dot = match (*session_running, &workspace.state, *has_prior_session) {
-                    (true, _, _) => "●",
-                    (false, WorkspaceState::Failed, _) => "✕",
-                    (false, _, true) => "↻",
-                    _ => "○",
-                };
-                let setup_badge = match workspace.setup_status {
-                    SetupStatus::Ok | SetupStatus::Skipped | SetupStatus::NotRun => "",
-                    SetupStatus::Failed => " [setup-failed]",
-                };
-                // Priority: a tool_use pending (permission prompt) > the
-                // agent stopped at end_turn awaiting user > PTY-recency.
-                // The first two are the user-actionable states and override
-                // the activity column entirely.
-                let activity = if awaiting_tool.is_some() {
-                    "awaiting"
-                } else if *stopped {
-                    "stopped"
-                } else {
-                    match (*seconds_since_activity, *has_prior_session) {
-                        (Some(s), _) if s < 2 => "active",
-                        (Some(s), _) if s < 30 => "idle",
-                        (Some(_), _) => "waiting",
-                        (None, true) => "resumable",
-                        (None, false) => "off",
-                    }
-                };
-                let branch_line =
-                    format_branch_label(&workspace.branch, nerd_fonts, *lifecycle, theme);
-                let status_str = status
-                    .map(|s| format_status(&s, nerd_fonts))
-                    .unwrap_or_default();
-                let attn = if *needs_attention { "!" } else { " " };
-                let mut spans: Vec<Span<'static>> = Vec::with_capacity(branch_line.spans.len() + 4);
-                spans.push(Span::raw(format!(
-                    "{attn} {dot} {name}  [",
-                    name = workspace.name
-                )));
-                spans.extend(branch_line.spans);
-                spans.push(Span::raw(format!("]  {status_str}")));
-                let right = format!("{activity}{setup_badge}");
-                let left_w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-                let right_w = right.chars().count();
-                let gap = inner_width.saturating_sub(left_w + right_w).max(1);
-                spans.push(Span::raw(" ".repeat(gap)));
-                spans.push(Span::raw(right));
-                list_items.push(ListItem::new(Line::from(spans)));
-                // Sub-line: if awaiting, always render the permission prompt
-                // (more urgent than whatever the last event happened to be);
-                // otherwise fall back to the latest event sub-line.
+                let main = workspace_main_row(
+                    workspace,
+                    *session_running,
+                    *seconds_since_activity,
+                    *has_prior_session,
+                    *status,
+                    *needs_attention,
+                    *lifecycle,
+                    awaiting_tool,
+                    *stopped,
+                    nerd_fonts,
+                    theme,
+                    inner_width,
+                );
+                list_items.push(ListItem::new(main));
+                // Sub-line: if awaiting, render the permission prompt;
+                // otherwise fall back to latest event. Setup-failed glyph
+                // lives in the main row's name column in Task 5.
                 if let Some((tool_name, first_seen_ms)) = awaiting_tool {
                     let age = format_age(*first_seen_ms);
                     let sub = format!(
-                        "    \u{2514} \u{26a0} awaiting permission: {} ({})",
+                        "      \u{2514} \u{26a0} awaiting permission: {} ({})",
                         tool_name, age
                     );
                     list_items.push(ListItem::new(sub).style(theme.dim_style()));
                 } else if let Some(ev) = latest_event {
                     let age = format_age(ev.timestamp_ms);
-                    let sub = format!("    \u{2514} {} ({})", ev.display, age);
+                    let sub = format!("      \u{2514} {} ({})", ev.display, age);
                     list_items.push(ListItem::new(sub).style(theme.dim_style()));
                 }
             }
@@ -174,13 +168,11 @@ pub fn render(
     }
 
     state.list_state.select(selected_idx);
-    let list = List::new(list_items)
-        .block(Block::default().borders(Borders::ALL))
-        .highlight_style(theme.selected_style());
+    let list = List::new(list_items).highlight_style(theme.selected_style());
     f.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
     let footer = Paragraph::new(
-        "[enter] attach   [n] new   [e] edit   [t] terminal   [d] archive   [q] quit",
+        "[↑/↓] move   [enter] attach   [n] new   [e] edit   [t] terminal   [d] archive   [q] quit",
     )
     .style(theme.dim_style());
     f.render_widget(footer, chunks[2]);
@@ -238,6 +230,72 @@ fn format_age(timestamp_ms: i64) -> String {
     }
 }
 
+/// Build the top summary line: `wsx · N workspaces[ · K awaiting][ · M stopped]`.
+/// State suffixes are omitted when their count is zero. `wsx` uses the header
+/// style; ` · `, the numeric totals, and the labels use dim style — except
+/// alertable counts (`awaiting`, `stopped`), whose numeric value uses warn.
+fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
+    let mut total = 0usize;
+    let mut awaiting = 0usize;
+    let mut stopped_n = 0usize;
+    for item in items {
+        if let Item::Workspace {
+            awaiting_tool,
+            stopped,
+            ..
+        } = item
+        {
+            total += 1;
+            // Priority matches `classify_activity_with_events`: awaiting wins
+            // over stopped, so a workspace with both flags counts toward
+            // `awaiting` only (it renders as `awaiting` in the activity column).
+            if awaiting_tool.is_some() {
+                awaiting += 1;
+            } else if *stopped {
+                stopped_n += 1;
+            }
+        }
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::styled("wsx".to_string(), theme.header_style()));
+    spans.push(Span::styled(
+        format!(" · {total} workspace{}", if total == 1 { "" } else { "s" }),
+        theme.dim_style(),
+    ));
+    if awaiting > 0 {
+        spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
+        spans.push(Span::styled(format!("{awaiting}"), theme.warn_style()));
+        spans.push(Span::styled(" awaiting".to_string(), theme.dim_style()));
+    }
+    if stopped_n > 0 {
+        spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
+        spans.push(Span::styled(format!("{stopped_n}"), theme.warn_style()));
+        spans.push(Span::styled(" stopped".to_string(), theme.dim_style()));
+    }
+    Line::from(spans)
+}
+
+/// Build the two-line block that introduces a repo group:
+///   `<name> · <path> · <count>`
+///   `─────────────────────────...`
+fn repo_header_lines(
+    repo: &Repo,
+    count: usize,
+    inner_width: usize,
+    theme: &Theme,
+) -> (Line<'static>, Line<'static>) {
+    let header = Line::from(vec![
+        Span::styled(repo.name.clone(), theme.header_style()),
+        Span::styled(
+            format!(" · {} · {}", repo.path.display(), count),
+            theme.dim_style(),
+        ),
+    ]);
+    let rule_text: String = "─".repeat(inner_width);
+    let rule = Line::from(Span::styled(rule_text, theme.dim_style()));
+    (header, rule)
+}
+
 /// Render the bracketed branch label as a `Line` whose glyph + name are
 /// styled per PR lifecycle. Returning a `Line` (rather than `String`) lets
 /// the row composer apply per-segment colors while still measuring the
@@ -284,10 +342,167 @@ fn format_branch_label(
     Line::from(span)
 }
 
+/// Right-pad `s` with spaces to `target` chars. If `s` is longer, truncate
+/// to `target - 1` chars and append `…`. char-count based (handles
+/// multi-byte chars correctly for the alignment math we care about).
+fn truncate_pad(s: &str, target: usize) -> String {
+    let len = s.chars().count();
+    if len == target {
+        s.to_string()
+    } else if len < target {
+        let mut out = s.to_string();
+        out.push_str(&" ".repeat(target - len));
+        out
+    } else {
+        let mut out: String = s.chars().take(target.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Compact relative-time label for the right-side age column: `5s`, `12s`,
+/// `5m`, `1h`. Returns `—` (em-dash) when timestamp is 0 (sentinel for "no
+/// meaningful age").
+fn format_age_compact(timestamp_ms: i64) -> String {
+    if timestamp_ms <= 0 {
+        return "—".to_string();
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let secs = ((now_ms - timestamp_ms) / 1000).max(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
+}
+
+/// Map an activity word to a style (color) per the spec.
+fn activity_style(label: &str, theme: &Theme) -> Style {
+    match label {
+        "awaiting" | "stopped" => theme.warn_style(),
+        "active" => theme.ok_style(),
+        "idle" => Style::default(),
+        "waiting" | "resumable" | "off" => theme.dim_style(),
+        _ => Style::default(),
+    }
+}
+
+/// Compose a workspace's main row as a `Line` of spans with fixed columns.
+/// Right-justifies the activity + age at the inner-width edge.
+#[allow(clippy::too_many_arguments)]
+fn workspace_main_row(
+    workspace: &Workspace,
+    session_running: bool,
+    seconds_since_activity: Option<u64>,
+    has_prior_session: bool,
+    status: Option<crate::git::WorkspaceStatus>,
+    needs_attention: bool,
+    lifecycle: Option<crate::forge::BranchLifecycle>,
+    awaiting_tool: &Option<(String, i64)>,
+    stopped: bool,
+    nerd: bool,
+    theme: &Theme,
+    inner_width: usize,
+) -> Line<'static> {
+    let dot = match (session_running, &workspace.state, has_prior_session) {
+        (true, _, _) => "●",
+        (false, WorkspaceState::Failed, _) => "✕",
+        (false, _, true) => "↻",
+        _ => "○",
+    };
+    let activity = if awaiting_tool.is_some() {
+        "awaiting"
+    } else if stopped {
+        "stopped"
+    } else {
+        match (seconds_since_activity, has_prior_session) {
+            (Some(s), _) if s < 2 => "active",
+            (Some(s), _) if s < 30 => "idle",
+            (Some(_), _) => "waiting",
+            (None, true) => "resumable",
+            (None, false) => "off",
+        }
+    };
+    // Age source: the most recent of awaiting_tool.first_seen_ms and
+    // (implicit) latest event isn't available here, so we use 0 as a
+    // sentinel — the sub-line carries the latest event's age.
+    let age_ms = match awaiting_tool {
+        Some((_, ts)) => *ts,
+        None => 0,
+    };
+    // When setup failed, reserve 3 chars (" ⚙!") at the end of the name
+    // column and truncate the name to 17 chars so the total stays at 20.
+    let setup_failed = workspace.setup_status == SetupStatus::Failed;
+    let name_padded = if setup_failed {
+        // No styled span here yet — we emit the badge as a separate styled
+        // span below so it gets err coloring.
+        truncate_pad(&workspace.name, NAME_WIDTH - 3)
+    } else {
+        truncate_pad(&workspace.name, NAME_WIDTH)
+    };
+    let branch_line = format_branch_label(&workspace.branch, nerd, lifecycle, theme);
+    // Take the styled spans from branch_line; pad/truncate to BRANCH_BLOCK_WIDTH.
+    let branch_concat: String = branch_line
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    let branch_style = branch_line
+        .spans
+        .iter()
+        .find_map(|s| s.style.fg)
+        .map(|fg| Style::default().fg(fg));
+    let branch_padded = truncate_pad(&branch_concat, BRANCH_BLOCK_WIDTH);
+    let git_status = status.map(|s| format_status(&s, nerd)).unwrap_or_default();
+    let age = format_age_compact(age_ms);
+
+    let attn = if needs_attention { "!" } else { " " };
+
+    // Left side: indent + attn + glyph + name + gutter + branch + gutter + git
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::raw("  ".to_string()));
+    spans.push(Span::styled(attn.to_string(), theme.warn_style()));
+    spans.push(Span::raw(format!(" {dot} ")));
+    spans.push(Span::raw(name_padded));
+    if setup_failed {
+        // NOTE: this err_style fg is suppressed when the row is selected
+        // (ratatui's highlight_style patches the fg). The glyph still
+        // appears on the selected row, just without the red coloring.
+        spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
+    }
+    spans.push(Span::raw("   ".to_string()));
+    match branch_style {
+        Some(style) => spans.push(Span::styled(branch_padded, style)),
+        None => spans.push(Span::raw(branch_padded)),
+    }
+    spans.push(Span::raw("   ".to_string()));
+    if !git_status.is_empty() {
+        spans.push(Span::styled(git_status, theme.dim_style()));
+    }
+
+    // Right side: activity + space + age
+    let right_text_w = activity.chars().count() + 1 + age.chars().count();
+    let left_w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let gap = inner_width.saturating_sub(left_w + right_text_w).max(1);
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.push(Span::styled(
+        activity.to_string(),
+        activity_style(activity, theme),
+    ));
+    spans.push(Span::raw(" ".to_string()));
+    spans.push(Span::styled(age, theme.dim_style()));
+    Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{RepoId, WorkspaceId};
+    use crate::store::{RepoId, SetupStatus, WorkspaceId};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
@@ -368,7 +583,10 @@ mod tests {
         })
         .unwrap();
         let text = dump(&term, 120, 8);
-        assert!(text.contains("▌ demo"), "missing header: {text}");
+        assert!(
+            text.contains("demo") && text.contains("/repos/demo"),
+            "missing header: {text}"
+        );
         assert!(text.contains("alpha"), "missing workspace name: {text}");
         assert!(text.contains("active"), "missing activity column: {text}");
     }
@@ -382,7 +600,7 @@ mod tests {
         term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 80, 8);
-        assert!(text.contains("▌ empty"));
+        assert!(text.contains("empty") && text.contains("/repos/empty"));
         assert!(text.contains("press n to create"));
     }
 
@@ -469,12 +687,22 @@ mod tests {
         term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
-        assert!(text.contains("~3"), "missing modified count: {text}");
-        assert!(text.contains("?1"), "missing untracked count: {text}");
-        assert!(text.contains("\u{2191}2"), "missing ahead count: {text}");
+        // Check only the content lines, not the footer (which is the last line).
+        let lines: Vec<&str> = text.lines().collect();
+        let content = if lines.len() > 1 {
+            lines[..lines.len() - 1].join("\n")
+        } else {
+            text.clone()
+        };
+        assert!(content.contains("~3"), "missing modified count: {content}");
+        assert!(content.contains("?1"), "missing untracked count: {content}");
         assert!(
-            !text.contains("\u{2193}"),
-            "should not show zero behind: {text}"
+            content.contains("\u{2191}2"),
+            "missing ahead count: {content}"
+        );
+        assert!(
+            !content.contains("\u{2193}"),
+            "should not show zero behind: {content}"
         );
     }
 
@@ -618,9 +846,9 @@ mod tests {
             )
         })
         .unwrap();
-        // The second workspace becomes the 4th list item (index 3): header,
-        // ws1 row, ws1 sub-line, ws2 row.
-        assert_eq!(state.list_state.selected(), Some(3));
+        // The second workspace becomes the 5th list item (index 4): header,
+        // rule, ws1 row, ws1 sub-line, ws2 row.
+        assert_eq!(state.list_state.selected(), Some(4));
     }
 
     #[test]
@@ -788,16 +1016,265 @@ mod tests {
             .expect("row a");
         let row_long = lines
             .iter()
-            .find(|l| l.contains("very-long-workspace-name"))
+            .find(|l| l.contains("very-long-workspac"))
             .expect("row long");
-        // Find the column where "active" starts in each row.
-        let col_a = row_a.find("active").expect("active in row a");
-        let col_long = row_long.find("active").expect("active in row long");
+        // Find the *char* column where "active" starts in each row. Using char
+        // indices avoids false drift from multi-byte glyphs (e.g. `…`) that
+        // appear in truncated names/branches.
+        let char_pos = |row: &str, needle: &str| -> usize {
+            let byte_pos = row
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle} not in: {row}"));
+            row[..byte_pos].chars().count()
+        };
+        let col_a = char_pos(row_a, "active");
+        let col_long = char_pos(row_long, "active");
         // Allow ±2 chars tolerance for unicode glyph cell width quirks.
         let diff = (col_a as isize - col_long as isize).abs();
         assert!(
             diff <= 2,
             "activity column drifted: a={col_a} long={col_long}, lines:\n{text}"
+        );
+    }
+
+    #[test]
+    fn top_summary_shows_total_and_alertable_counts() {
+        let mut term = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        let r = repo(1, "demo");
+        let w_quiet = workspace(1, 1, "quiet", "wsx/quiet");
+        let w_awaiting = workspace(2, 1, "blocked", "wsx/blocked");
+        let w_stopped = workspace(3, 1, "thinking", "wsx/thinking");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_quiet,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_awaiting,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: true,
+                lifecycle: None,
+                awaiting_tool: Some(("Bash".into(), 0)),
+                stopped: false,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_stopped,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: true,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: true,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 12);
+        let top = text.lines().next().unwrap().trim();
+        assert!(top.contains("wsx"), "missing 'wsx': {top}");
+        assert!(top.contains("3 workspaces"), "missing total: {top}");
+        assert!(top.contains("1 awaiting"), "missing awaiting count: {top}");
+        assert!(top.contains("1 stopped"), "missing stopped count: {top}");
+    }
+
+    #[test]
+    fn top_summary_omits_zero_alertable_counts() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let top = text.lines().next().unwrap().trim();
+        assert!(top.contains("1 workspace"), "missing total: {top}");
+        assert!(
+            !top.contains("awaiting"),
+            "unexpected awaiting in quiet top: {top}"
+        );
+        assert!(
+            !top.contains("stopped"),
+            "unexpected stopped in quiet top: {top}"
+        );
+    }
+
+    #[test]
+    fn top_summary_handles_zero_workspaces() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let items: Vec<Item> = vec![];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let top = text.lines().next().unwrap().trim();
+        assert!(top.contains("wsx"), "missing wsx: {top}");
+        assert!(top.contains("0 workspaces"), "expected zero count: {top}");
+        assert!(!top.contains("awaiting"), "unexpected awaiting: {top}");
+        assert!(!top.contains("stopped"), "unexpected stopped: {top}");
+    }
+
+    #[test]
+    fn outer_border_is_absent() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        // No vertical-bar border glyphs at either edge.
+        let max_x = buf.area.width - 1;
+        for y in 0..8u16 {
+            assert_ne!(
+                buf[(0u16, y)].symbol(),
+                "│",
+                "expected no border at col 0, row {y}"
+            );
+            assert_ne!(
+                buf[(max_x, y)].symbol(),
+                "│",
+                "expected no border at right edge col {max_x}, row {y}"
+            );
+        }
+    }
+
+    #[test]
+    fn repo_header_renders_with_rule_below() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let lines: Vec<&str> = text.lines().collect();
+        // Find the repo header line; the next non-empty line should be a rule.
+        let hdr_idx = lines
+            .iter()
+            .position(|l| l.contains("demo") && l.contains("/repos/demo"))
+            .expect("repo header line");
+        let rule = lines[hdr_idx + 1];
+        let rule_chars: Vec<char> = rule.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            !rule_chars.is_empty() && rule_chars.iter().all(|c| *c == '─'),
+            "expected horizontal rule under header, got: {rule:?}"
+        );
+    }
+
+    #[test]
+    fn repo_header_includes_workspace_count() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w1 = workspace(1, 1, "alpha", "wsx/alpha");
+        let w2 = workspace(2, 1, "beta", "wsx/beta");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w1,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w2,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let hdr = text
+            .lines()
+            .find(|l| l.contains("demo") && l.contains("/repos/demo"))
+            .expect("repo header line");
+        assert!(
+            hdr.contains("· 2"),
+            "expected workspace count in header: {hdr}"
         );
     }
 
@@ -844,6 +1321,321 @@ mod tests {
             .lines()
             .any(|l| l.contains("alpha") && l.contains("active"));
         assert!(!bad, "should not show 'active' when awaiting: {text}");
+    }
+
+    #[test]
+    fn workspace_row_name_padded_to_fixed_width() {
+        let mut term = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        let r = repo(1, "demo");
+        let w_short = workspace(1, 1, "ab", "wsx/ab");
+        let w_long = workspace(2, 1, "much-longer-name", "wsx/much-longer-name");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_short,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_long,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        // Find the y of each workspace row by scanning the buffer for the
+        // name. Then check that the glyph after the name column starts at
+        // the same x on both rows.
+        let find_y = |needle: &str| -> u16 {
+            for y in 0..12u16 {
+                let row: String = (0..120u16)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect();
+                if row.contains(needle) {
+                    return y;
+                }
+            }
+            panic!("not found: {needle}");
+        };
+        let y_short = find_y("ab ");
+        let y_long = find_y("much-longer-name");
+        // Branch column should start at the same x on both rows.
+        // x = indent(2) + attn(1) + sep(1) + dot(1) + sep(1) + name + gutter(3)
+        let probe_x: u16 = (2 + 1 + 1 + 1 + 1 + NAME_WIDTH + 3) as u16;
+        // After truncation/padding, both rows' branch glyph should appear at
+        // probe_x — the branch glyph differs but its starting x should match.
+        let short_at = buf[(probe_x, y_short)].symbol();
+        let long_at = buf[(probe_x, y_long)].symbol();
+        // Both should be non-space (the branch glyph or first branch char).
+        assert!(
+            short_at != " " && long_at != " ",
+            "branch column misaligned: short={short_at:?} long={long_at:?}"
+        );
+    }
+
+    #[test]
+    fn workspace_row_branch_truncated_with_ellipsis() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let very_long_branch = "feat/the-quick-brown-fox-jumps-over-the-lazy-dog";
+        let w = workspace(1, 1, "alpha", very_long_branch);
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let row = text
+            .lines()
+            .find(|l| l.contains("alpha"))
+            .expect("alpha row");
+        assert!(
+            row.contains('…'),
+            "expected branch ellipsis truncation: {row}"
+        );
+    }
+
+    #[test]
+    fn activity_word_uses_warn_color_for_stopped() {
+        // Direct unit test of the style mapping.
+        let theme = Theme::default_theme();
+        let style_stopped = activity_style("stopped", &theme);
+        let style_awaiting = activity_style("awaiting", &theme);
+        assert_eq!(style_stopped.fg, Some(theme.warn));
+        assert_eq!(style_awaiting.fg, Some(theme.warn));
+    }
+
+    #[test]
+    fn activity_word_uses_ok_color_for_active() {
+        let theme = Theme::default_theme();
+        let style = activity_style("active", &theme);
+        assert_eq!(style.fg, Some(theme.ok));
+    }
+
+    #[test]
+    fn activity_word_uses_dim_for_off_and_resumable() {
+        let theme = Theme::default_theme();
+        assert_eq!(activity_style("off", &theme).fg, Some(theme.dim));
+        assert_eq!(activity_style("resumable", &theme).fg, Some(theme.dim));
+    }
+
+    #[test]
+    fn activity_word_uses_default_for_idle() {
+        let theme = Theme::default_theme();
+        assert_eq!(activity_style("idle", &theme).fg, None);
+    }
+
+    #[test]
+    fn sub_line_indent_aligns_with_name_column() {
+        use crate::events::{EventKind, EventSnapshot};
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let ev = EventSnapshot {
+            kind: EventKind::AssistantText,
+            display: "hello".into(),
+            timestamp_ms: now - 5_000,
+        };
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: Some(ev),
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        // Find the sub-line row (contains "hello") and confirm the └ glyph
+        // is at column 6.
+        let mut sub_y = None;
+        for y in 0..8u16 {
+            let row: String = (0..120u16)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect();
+            if row.contains("hello") && row.contains('└') {
+                sub_y = Some(y);
+                break;
+            }
+        }
+        let y = sub_y.expect("sub-line not found");
+        assert_eq!(buf[(6u16, y)].symbol(), "└");
+    }
+
+    #[test]
+    fn setup_failed_glyph_appears_after_name() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let mut w = workspace(1, 1, "alpha", "wsx/alpha");
+        w.setup_status = SetupStatus::Failed;
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let row = text.lines().find(|l| l.contains("alpha")).expect("row");
+        assert!(
+            row.contains("⚙!"),
+            "expected ⚙! setup-failed glyph after name: {row}"
+        );
+        assert!(
+            !row.contains("[setup-failed]"),
+            "did not expect the old right-side badge: {row}"
+        );
+    }
+
+    #[test]
+    fn setup_failed_glyph_with_long_name_truncates_correctly() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let mut w = workspace(1, 1, "this-workspace-name-is-very-long", "wsx/long");
+        w.setup_status = SetupStatus::Failed;
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let text = dump(&term, 120, 8);
+        let row = text
+            .lines()
+            .find(|l| l.contains("this-workspace") && l.contains("⚙!"))
+            .expect("row with long name + setup_failed glyph");
+        // Both glyphs present:
+        assert!(
+            row.contains('…'),
+            "expected name truncation ellipsis: {row}"
+        );
+        assert!(row.contains("⚙!"), "expected setup-failed glyph: {row}");
+        // The branch column should still start at the same probe_x as
+        // workspace_row_name_padded_to_fixed_width — i.e., the badge
+        // does NOT push the branch column to the right.
+        let probe_x: u16 = (2 + 1 + 1 + 1 + 1 + NAME_WIDTH + 3) as u16;
+        // Find the row's y. Iterate, find the row containing both markers.
+        let mut row_y = None;
+        for y in 0..8u16 {
+            let r: String = (0..120u16)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect();
+            if r.contains("this-workspace") && r.contains("⚙!") {
+                row_y = Some(y);
+                break;
+            }
+        }
+        let y = row_y.expect("row not found in buffer");
+        assert_ne!(
+            buf[(probe_x, y)].symbol(),
+            " ",
+            "branch column should start at probe_x even when badge is present"
+        );
+    }
+
+    #[test]
+    fn footer_includes_arrow_nav_hint() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let footer = text.lines().last().unwrap();
+        assert!(
+            footer.contains("[↑/↓] move"),
+            "footer missing arrow nav hint: {footer}"
+        );
     }
 }
 

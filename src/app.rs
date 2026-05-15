@@ -34,6 +34,32 @@ pub enum SelectionTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepoSettingField {
+    BranchPrefix,
+    CustomInstructions,
+    SetupScript,
+    ArchiveScript,
+}
+
+impl RepoSettingField {
+    pub const ALL: [Self; 4] = [
+        Self::BranchPrefix,
+        Self::CustomInstructions,
+        Self::SetupScript,
+        Self::ArchiveScript,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::BranchPrefix => "branch_prefix",
+            Self::CustomInstructions => "custom_instructions",
+            Self::SetupScript => "setup_script",
+            Self::ArchiveScript => "archive_script",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
     /// The agent has stopped its turn and is awaiting human input. Derived
     /// from the JSONL `stop_reason` field — the only reliable "agent is
@@ -548,6 +574,14 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     *selected,
                     &app.theme,
                 );
+            }
+            crate::ui::modal::Modal::RepoSettings { repo_id, selected } => {
+                if let Some(repo) = app.repos.iter().find(|r| r.id == *repo_id) {
+                    let repo_name = repo.name.clone();
+                    crate::ui::modal::render_repo_settings(
+                        f, area, &repo_name, repo, *selected, &app.theme,
+                    );
+                }
             }
             other => modal::render(f, area, other, &app.theme),
         }
@@ -1308,6 +1342,11 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                     }
                 }
                 _ => {}
+            }
+        }
+        Modal::RepoSettings { .. } => {
+            if k.code == KeyCode::Esc {
+                app.modal = None;
             }
         }
     }

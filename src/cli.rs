@@ -22,6 +22,20 @@ pub enum CliAction {
         name: String,
         source: ValueSource,
     },
+    RepoSetSetup {
+        name: String,
+        source: ValueSource,
+    },
+    RepoSetArchive {
+        name: String,
+        source: ValueSource,
+    },
+    RepoEditSetup {
+        name: String,
+    },
+    RepoEditArchive {
+        name: String,
+    },
     ConfigGet {
         key: String,
     },
@@ -138,6 +152,42 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                     source: ValueSource::from_arg(value),
                 })
             }
+            Some("set-setup") => {
+                let name = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-setup <name> <value-or-@file>".into())
+                })?;
+                let value = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-setup <name> <value-or-@file>".into())
+                })?;
+                Ok(CliAction::RepoSetSetup {
+                    name,
+                    source: ValueSource::from_arg(value),
+                })
+            }
+            Some("set-archive") => {
+                let name = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-archive <name> <value-or-@file>".into())
+                })?;
+                let value = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-archive <name> <value-or-@file>".into())
+                })?;
+                Ok(CliAction::RepoSetArchive {
+                    name,
+                    source: ValueSource::from_arg(value),
+                })
+            }
+            Some("edit-setup") => {
+                let name = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("repo edit-setup <name>".into()))?;
+                Ok(CliAction::RepoEditSetup { name })
+            }
+            Some("edit-archive") => {
+                let name = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("repo edit-archive <name>".into()))?;
+                Ok(CliAction::RepoEditArchive { name })
+            }
             other => Err(Error::UserInput(format!("unknown repo action: {other:?}"))),
         },
         Some("config") => match it.next().as_deref() {
@@ -235,6 +285,74 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             } else {
                 store.set_repo_custom_instructions(r.id, Some(&value))?;
                 println!("set custom instructions for {name} ({} chars)", value.len());
+            }
+        }
+        CliAction::RepoSetSetup { name, source } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let value = source.resolve()?;
+            if value.trim().is_empty() {
+                store.set_repo_setup_script(r.id, None)?;
+                println!("cleared setup for {name}");
+            } else {
+                store.set_repo_setup_script(r.id, Some(&value))?;
+                println!("set setup for {name} ({} chars)", value.len());
+            }
+        }
+        CliAction::RepoSetArchive { name, source } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let value = source.resolve()?;
+            if value.trim().is_empty() {
+                store.set_repo_archive_script(r.id, None)?;
+                println!("cleared archive for {name}");
+            } else {
+                store.set_repo_archive_script(r.id, Some(&value))?;
+                println!("set archive for {name} ({} chars)", value.len());
+            }
+        }
+        CliAction::RepoEditSetup { name } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let current = r.setup_script.clone().unwrap_or_default();
+            let new_value = open_in_editor("setup", &current)?;
+            let new_value = new_value.trim_end_matches('\n').to_string();
+            if new_value.trim().is_empty() {
+                store.set_repo_setup_script(r.id, None)?;
+                println!("cleared setup for {name}");
+            } else if new_value == current {
+                println!("setup unchanged");
+            } else {
+                store.set_repo_setup_script(r.id, Some(&new_value))?;
+                println!("set setup for {name} ({} chars)", new_value.len());
+            }
+        }
+        CliAction::RepoEditArchive { name } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let current = r.archive_script.clone().unwrap_or_default();
+            let new_value = open_in_editor("archive", &current)?;
+            let new_value = new_value.trim_end_matches('\n').to_string();
+            if new_value.trim().is_empty() {
+                store.set_repo_archive_script(r.id, None)?;
+                println!("cleared archive for {name}");
+            } else if new_value == current {
+                println!("archive unchanged");
+            } else {
+                store.set_repo_archive_script(r.id, Some(&new_value))?;
+                println!("set archive for {name} ({} chars)", new_value.len());
             }
         }
         CliAction::ConfigGet { key } => match store.get_setting(&key)? {
@@ -364,6 +482,63 @@ mod tests {
                 assert_eq!(name, "myrepo");
                 assert_eq!(prefix, "bakedbean");
             }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn parses_repo_set_setup_literal() {
+        let a = parse(&["repo", "set-setup", "demo", "bun install"]).unwrap();
+        match a {
+            CliAction::RepoSetSetup {
+                name,
+                source: ValueSource::Literal(v),
+            } => {
+                assert_eq!(name, "demo");
+                assert_eq!(v, "bun install");
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn parses_repo_set_setup_file_reference() {
+        let a = parse(&["repo", "set-setup", "demo", "@./setup.sh"]).unwrap();
+        match a {
+            CliAction::RepoSetSetup {
+                name,
+                source: ValueSource::File(p),
+            } => {
+                assert_eq!(name, "demo");
+                assert_eq!(p, std::path::PathBuf::from("./setup.sh"));
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn parses_repo_set_archive_literal() {
+        let a = parse(&["repo", "set-archive", "demo", "rm -rf node_modules"]).unwrap();
+        match a {
+            CliAction::RepoSetArchive {
+                name,
+                source: ValueSource::Literal(v),
+            } => {
+                assert_eq!(name, "demo");
+                assert_eq!(v, "rm -rf node_modules");
+            }
+            _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn parses_repo_edit_setup_and_edit_archive() {
+        match parse(&["repo", "edit-setup", "demo"]).unwrap() {
+            CliAction::RepoEditSetup { name } => assert_eq!(name, "demo"),
+            _ => panic!("wrong action"),
+        }
+        match parse(&["repo", "edit-archive", "demo"]).unwrap() {
+            CliAction::RepoEditArchive { name } => assert_eq!(name, "demo"),
             _ => panic!("wrong action"),
         }
     }

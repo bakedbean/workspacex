@@ -1070,6 +1070,11 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     let _ = g.store.rename_workspace(id, &new_name);
                     let _ = g.store.set_workspace_branch(id, &current);
                     let _ = g.refresh();
+                    // Invalidate cached PR state — the new branch may have a
+                    // different (or no) PR. Clearing the throttle stamp
+                    // makes the next tick poll immediately.
+                    g.pr_lifecycle.remove(&id);
+                    g.pr_last_poll_ms.remove(&id);
                 }
             }
 

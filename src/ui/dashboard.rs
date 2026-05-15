@@ -3,7 +3,7 @@ use crate::store::{Repo, SetupStatus, Workspace, WorkspaceState};
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 #[derive(Debug, Clone)]
 pub enum Item<'a> {
@@ -59,13 +59,13 @@ pub fn render(
         ])
         .split(area);
 
-    let header_text = Paragraph::new("wsx — Workspaces").style(theme.header_style());
-    f.render_widget(header_text, chunks[0]);
+    f.render_widget(
+        Paragraph::new(top_summary_line(items, theme)),
+        chunks[0],
+    );
 
-    // List is rendered into chunks[1] with a 1-char border on each side, so
-    // the inner usable width is (width - 2). Used below to right-justify
-    // the activity column of each workspace row.
-    let inner_width = chunks[1].width.saturating_sub(2) as usize;
+    // No outer border anymore — the list spans the full width of chunks[1].
+    let inner_width = chunks[1].width as usize;
 
     let mut selected_idx: Option<usize> = None;
     let mut list_items: Vec<ListItem> = Vec::with_capacity(items.len());
@@ -174,9 +174,7 @@ pub fn render(
     }
 
     state.list_state.select(selected_idx);
-    let list = List::new(list_items)
-        .block(Block::default().borders(Borders::ALL))
-        .highlight_style(theme.selected_style());
+    let list = List::new(list_items).highlight_style(theme.selected_style());
     f.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
     let footer = Paragraph::new(
@@ -236,6 +234,49 @@ fn format_age(timestamp_ms: i64) -> String {
     } else {
         format!("{}h ago", secs / 3600)
     }
+}
+
+/// Build the top summary line: `wsx · N workspaces[ · K awaiting][ · M stopped]`.
+/// State suffixes are omitted when their count is zero. `wsx` uses the header
+/// style; ` · `, the numeric totals, and the labels use dim style — except
+/// alertable counts (`awaiting`, `stopped`), whose numeric value uses warn.
+fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
+    let mut total = 0usize;
+    let mut awaiting = 0usize;
+    let mut stopped_n = 0usize;
+    for item in items {
+        if let Item::Workspace {
+            awaiting_tool,
+            stopped,
+            ..
+        } = item
+        {
+            total += 1;
+            if awaiting_tool.is_some() {
+                awaiting += 1;
+            }
+            if *stopped {
+                stopped_n += 1;
+            }
+        }
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::styled("wsx".to_string(), theme.header_style()));
+    spans.push(Span::styled(
+        format!(" · {total} workspace{}", if total == 1 { "" } else { "s" }),
+        theme.dim_style(),
+    ));
+    if awaiting > 0 {
+        spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
+        spans.push(Span::styled(format!("{awaiting}"), theme.warn_style()));
+        spans.push(Span::styled(" awaiting".to_string(), theme.dim_style()));
+    }
+    if stopped_n > 0 {
+        spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
+        spans.push(Span::styled(format!("{stopped_n}"), theme.warn_style()));
+        spans.push(Span::styled(" stopped".to_string(), theme.dim_style()));
+    }
+    Line::from(spans)
 }
 
 /// Render the bracketed branch label as a `Line` whose glyph + name are
@@ -799,6 +840,129 @@ mod tests {
             diff <= 2,
             "activity column drifted: a={col_a} long={col_long}, lines:\n{text}"
         );
+    }
+
+    #[test]
+    fn top_summary_shows_total_and_alertable_counts() {
+        let mut term = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        let r = repo(1, "demo");
+        let w_quiet = workspace(1, 1, "quiet", "wsx/quiet");
+        let w_awaiting = workspace(2, 1, "blocked", "wsx/blocked");
+        let w_stopped = workspace(3, 1, "thinking", "wsx/thinking");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_quiet,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_awaiting,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: true,
+                lifecycle: None,
+                awaiting_tool: Some(("Bash".into(), 0)),
+                stopped: false,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_stopped,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: true,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: true,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 12);
+        let top = text.lines().next().unwrap().trim();
+        assert!(top.contains("wsx"), "missing 'wsx': {top}");
+        assert!(top.contains("3 workspaces"), "missing total: {top}");
+        assert!(top.contains("1 awaiting"), "missing awaiting count: {top}");
+        assert!(top.contains("1 stopped"), "missing stopped count: {top}");
+    }
+
+    #[test]
+    fn top_summary_omits_zero_alertable_counts() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let top = text.lines().next().unwrap().trim();
+        assert!(top.contains("1 workspace"), "missing total: {top}");
+        assert!(!top.contains("awaiting"), "unexpected awaiting in quiet top: {top}");
+        assert!(!top.contains("stopped"), "unexpected stopped in quiet top: {top}");
+    }
+
+    #[test]
+    fn outer_border_is_absent() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        // No vertical-bar border glyphs should appear at x = 0 anywhere.
+        for y in 0..8u16 {
+            let cell = buf[(0u16, y)].symbol();
+            assert_ne!(cell, "│", "expected no border at col 0, row {y}");
+        }
     }
 
     #[test]

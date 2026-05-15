@@ -84,6 +84,12 @@ pub struct App {
     pub quit: bool,
     pub workspace_status:
         std::collections::HashMap<crate::store::WorkspaceId, crate::git::WorkspaceStatus>,
+    /// Cached PR lifecycle per workspace. Absent key = never polled; present
+    /// key = last successful poll's result.
+    pub pr_lifecycle:
+        std::collections::HashMap<crate::store::WorkspaceId, crate::forge::BranchLifecycle>,
+    /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
+    pub pr_last_poll_ms: std::collections::HashMap<crate::store::WorkspaceId, i64>,
     pub workspace_events:
         std::collections::HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
     /// Per-workspace tracking for attention-alert state.
@@ -118,6 +124,8 @@ impl App {
             ctrl_a_pending: false,
             quit: false,
             workspace_status: std::collections::HashMap::new(),
+            pr_lifecycle: std::collections::HashMap::new(),
+            pr_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_needs_attention: std::collections::HashSet::new(),

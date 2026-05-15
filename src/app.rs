@@ -292,6 +292,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .get(&ws.id)
                             .and_then(|e| e.latest.clone()),
                         needs_attention,
+                        lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         awaiting_tool: awaiting,
                     });
                 }

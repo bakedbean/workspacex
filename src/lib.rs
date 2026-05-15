@@ -8,6 +8,7 @@ pub mod forge;
 pub mod git;
 pub mod names;
 pub mod pm;
+pub mod proc;
 pub mod pty;
 pub mod repo;
 pub mod setup;

@@ -136,9 +136,14 @@ pub fn render_updates_panel(
         // Sort: attention first (by most recent), then active/idle by recent,
         // then resumable, then off, then failed.
         ws_for_repo.sort_by_key(|w| {
-            let attention = if needs_attention.contains(&w.id) { 0 } else { 1 };
+            let attention = if needs_attention.contains(&w.id) {
+                0
+            } else {
+                1
+            };
             let activity_rank = match activity.get(&w.id).copied() {
                 Some(crate::ui::updates_bar::ActivityState::Awaiting)
+                | Some(crate::ui::updates_bar::ActivityState::Stopped)
                 | Some(crate::ui::updates_bar::ActivityState::Waiting) => 0,
                 Some(crate::ui::updates_bar::ActivityState::Active)
                 | Some(crate::ui::updates_bar::ActivityState::Idle) => 1,
@@ -183,10 +188,7 @@ pub fn render_updates_panel(
         )));
     }
 
-    f.render_widget(
-        Paragraph::new(lines).style(theme.dim_style()),
-        body_area,
-    );
+    f.render_widget(Paragraph::new(lines).style(theme.dim_style()), body_area);
     f.render_widget(
         Paragraph::new("[esc] close").style(theme.dim_style()),
         footer_area,
@@ -210,7 +212,9 @@ fn workspace_row<'a>(
     } else {
         match activity {
             Some(ActivityState::Active) | Some(ActivityState::Idle) => '●',
-            Some(ActivityState::Awaiting) | Some(ActivityState::Waiting) => '⚠',
+            Some(ActivityState::Awaiting)
+            | Some(ActivityState::Stopped)
+            | Some(ActivityState::Waiting) => '⚠',
             Some(ActivityState::Off) | None => {
                 if events.and_then(|e| e.latest.as_ref()).is_some() {
                     '↻'

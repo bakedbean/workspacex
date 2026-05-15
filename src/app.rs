@@ -29,11 +29,29 @@ pub enum SelectionTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
-    Active,   // < 2s since last output
-    Idle,     // 2-30s
-    Waiting,  // > 30s
-    Awaiting, // tool_use pending for ≥3s (almost always a permission prompt)
-    Off,      // no session at all
+    /// The agent has stopped its turn and is awaiting human input. Derived
+    /// from the JSONL `stop_reason` field — the only reliable "agent is
+    /// done" signal. Higher priority than PTY-recency states.
+    Stopped,
+    /// A tool_use has been pending for ≥3s (almost always a permission
+    /// prompt). Higher priority than `Stopped`.
+    Awaiting,
+    /// < 2s since last PTY output.
+    Active,
+    /// 2–30s since last PTY output.
+    Idle,
+    /// More than 30s since last PTY output but no JSONL stop signal.
+    /// Retained for the recency column; does NOT drive the bell.
+    Waiting,
+    /// No session attached at all.
+    Off,
+}
+
+impl ActivityState {
+    /// States that should fire a bell + `!` marker when entered.
+    pub fn is_alertable(self) -> bool {
+        matches!(self, ActivityState::Stopped | ActivityState::Awaiting)
+    }
 }
 
 fn classify_activity(secs: Option<u64>) -> ActivityState {
@@ -43,6 +61,30 @@ fn classify_activity(secs: Option<u64>) -> ActivityState {
         Some(_) => ActivityState::Waiting,
         None => ActivityState::Off,
     }
+}
+
+/// Compute the activity state for a workspace, combining JSONL-derived
+/// signals (`stop_reason` + pending tool_uses) with PTY-output recency.
+///
+/// Priority: `Awaiting` (tool_use pending ≥3s) > `Stopped` (assistant
+/// stop_reason = end_turn/max_tokens/stop_sequence and user hasn't replied)
+/// > PTY-recency (Active/Idle/Waiting) > Off (no session).
+fn classify_activity_with_events(
+    secs: Option<u64>,
+    running: bool,
+    awaiting: bool,
+    stopped: bool,
+) -> ActivityState {
+    if awaiting {
+        return ActivityState::Awaiting;
+    }
+    if stopped {
+        return ActivityState::Stopped;
+    }
+    if !running {
+        return ActivityState::Off;
+    }
+    classify_activity(secs)
 }
 
 fn encode_key_for_pty(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
@@ -280,6 +322,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
                     let needs_attention = app.workspace_needs_attention.contains(&ws.id);
                     let awaiting = app.awaiting_permission(ws.id);
+                    let stopped = app
+                        .workspace_events
+                        .get(&ws.id)
+                        .is_some_and(|e| e.is_awaiting_user());
                     items.push(dashboard::Item::Workspace {
                         repo,
                         workspace: ws,
@@ -292,6 +338,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .get(&ws.id)
                             .and_then(|e| e.latest.clone()),
                         needs_attention,
+                        stopped,
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         awaiting_tool: awaiting,
                     });
@@ -302,9 +349,17 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 items.push(dashboard::Item::Spacer);
             }
 
-            // Commit the new activity states + fire bell on
-            // active|idle -> waiting transitions. Done after the immutable
-            // iteration above so we don't conflict with the &app borrow.
+            // Commit the new activity states + fire bell on transitions
+            // into an alertable state (Stopped or Awaiting). Fires on:
+            //   - first observation of a workspace already in an alertable
+            //     state (e.g. wsx just started, agent was already waiting),
+            //   - transition from any non-alertable state into Stopped or
+            //     Awaiting,
+            //   - transition between two different alertable states
+            //     (e.g. Stopped -> Awaiting when a permission prompt arrives
+            //     while the user hasn't yet replied to the prior end_turn).
+            // Does NOT re-fire while an alertable state persists across
+            // polls.
             let mut should_ring = false;
             for (_rid, ws) in &app.workspaces {
                 let session = app.sessions.get(ws.id);
@@ -325,25 +380,14 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .unwrap_or(0);
                     now.saturating_sub(last) / 1000
                 });
-                let awaiting = app.awaiting_permission(ws.id);
-                let activity = if awaiting.is_some() {
-                    ActivityState::Awaiting
-                } else if running {
-                    classify_activity(secs)
-                } else {
-                    ActivityState::Off
-                };
+                let awaiting = app.awaiting_permission(ws.id).is_some();
+                let stopped = app
+                    .workspace_events
+                    .get(&ws.id)
+                    .is_some_and(|e| e.is_awaiting_user());
+                let activity = classify_activity_with_events(secs, running, awaiting, stopped);
                 let prev = app.workspace_activity.get(&ws.id).copied();
-                // Fire the bell on either kind of "user needs to act"
-                // transition: PTY-quiet → Waiting, or tool_use pending → Awaiting.
-                if matches!(
-                    (prev, activity),
-                    (
-                        Some(ActivityState::Active) | Some(ActivityState::Idle),
-                        ActivityState::Waiting | ActivityState::Awaiting
-                    )
-                ) && notifications_on
-                {
+                if activity.is_alertable() && prev != Some(activity) && notifications_on {
                     app.workspace_needs_attention.insert(ws.id);
                     should_ring = true;
                 }
@@ -381,10 +425,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .find(|(_, w)| w.id == *id)
                     .map(|(_, w)| w.name.clone())
                     .unwrap_or_default();
-                let row = if matches!(
-                    app.modal,
-                    Some(crate::ui::modal::Modal::UpdatesPanel)
-                ) {
+                let row = if matches!(app.modal, Some(crate::ui::modal::Modal::UpdatesPanel)) {
                     None
                 } else {
                     compute_status_row(app, Some(*id))
@@ -396,17 +437,21 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
         }
         View::AttachedPm => {
             if let Some(session) = app.pm.as_ref() {
-                let row = if matches!(
-                    app.modal,
-                    Some(crate::ui::modal::Modal::UpdatesPanel)
-                ) {
+                let row = if matches!(app.modal, Some(crate::ui::modal::Modal::UpdatesPanel)) {
                     None
                 } else {
                     compute_status_row(app, None)
                 };
                 let footer_rows = if row.is_some() { 2 } else { 1 };
                 attached::resize_session(session, area, footer_rows);
-                attached::render(f, area, session, "project-manager", row.as_ref(), &app.theme);
+                attached::render(
+                    f,
+                    area,
+                    session,
+                    "project-manager",
+                    row.as_ref(),
+                    &app.theme,
+                );
             } else {
                 // PM session went away; bounce to dashboard on next event.
                 app.view = View::Dashboard;
@@ -1024,10 +1069,11 @@ fn compute_status_row(
 fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {
     use crate::ui::updates_bar::ActivityState as U;
     match a {
+        ActivityState::Stopped => U::Stopped,
+        ActivityState::Awaiting => U::Awaiting,
         ActivityState::Active => U::Active,
         ActivityState::Idle => U::Idle,
         ActivityState::Waiting => U::Waiting,
-        ActivityState::Awaiting => U::Awaiting,
         ActivityState::Off => U::Off,
     }
 }
@@ -1138,9 +1184,21 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         events,
                         tool_use_starts,
                         tool_use_resolves,
+                        last_stop_reason,
+                        human_replied_after_last_stop,
+                        reset_from_zero,
                     } = update;
                     let mut g = app.lock().await;
                     let evt = g.workspace_events.entry(id).or_default();
+                    // If the session file was replaced (different path) or
+                    // truncated/rewound (reset_from_zero), discard all
+                    // session-derived state before applying the new batch.
+                    // Otherwise stale tool_uses or stop_reasons from the
+                    // prior session keep the dashboard stuck on "awaiting".
+                    let file_changed = evt.file_path.as_deref() != Some(file.as_path());
+                    if file_changed || reset_from_zero {
+                        evt.reset_session_state();
+                    }
                     evt.file_path = Some(file);
                     evt.byte_offset = new_offset;
                     for (tu_id, tu_name, ts) in tool_use_starts {
@@ -1149,12 +1207,99 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     for tu_id in tool_use_resolves {
                         evt.pending_tool_uses.remove(&tu_id);
                     }
+                    // Update the "agent is waiting on user" tracking.
+                    // - A fresh assistant stop_reason replaces the prior one
+                    //   and resets the user-replied latch (the agent just
+                    //   produced a new stopping point).
+                    // - `human_replied_after_last_stop` from this batch
+                    //   already accounts for within-batch ordering: it's set
+                    //   only if real user text appears AFTER the last
+                    //   stop_reason in the batch (or anywhere in the batch
+                    //   if there's no new stop_reason).
+                    if let Some(sr) = last_stop_reason {
+                        evt.last_stop_reason = Some(sr);
+                        evt.user_replied_since_stop = false;
+                    }
+                    if human_replied_after_last_stop {
+                        evt.user_replied_since_stop = true;
+                    }
                     for e in events {
                         crate::events::push_event(evt, e);
                     }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod activity_classifier_tests {
+    use super::*;
+
+    #[test]
+    fn awaiting_wins_over_stopped_over_recency() {
+        // awaiting (permission) beats everything.
+        assert_eq!(
+            classify_activity_with_events(Some(0), true, true, true),
+            ActivityState::Awaiting
+        );
+        assert_eq!(
+            classify_activity_with_events(Some(0), true, true, false),
+            ActivityState::Awaiting
+        );
+        // stopped beats PTY recency.
+        assert_eq!(
+            classify_activity_with_events(Some(0), true, false, true),
+            ActivityState::Stopped
+        );
+    }
+
+    #[test]
+    fn no_session_is_off_even_if_running_false() {
+        assert_eq!(
+            classify_activity_with_events(None, false, false, false),
+            ActivityState::Off
+        );
+        // Even with pty seconds, if running=false → Off.
+        assert_eq!(
+            classify_activity_with_events(Some(5), false, false, false),
+            ActivityState::Off
+        );
+    }
+
+    #[test]
+    fn awaiting_fires_even_when_session_not_running() {
+        // A pending tool_use is a strong signal regardless of pty state.
+        assert_eq!(
+            classify_activity_with_events(None, false, true, false),
+            ActivityState::Awaiting
+        );
+    }
+
+    #[test]
+    fn pty_recency_drives_active_idle_waiting_when_no_event_signals() {
+        assert_eq!(
+            classify_activity_with_events(Some(0), true, false, false),
+            ActivityState::Active
+        );
+        assert_eq!(
+            classify_activity_with_events(Some(10), true, false, false),
+            ActivityState::Idle
+        );
+        assert_eq!(
+            classify_activity_with_events(Some(60), true, false, false),
+            ActivityState::Waiting
+        );
+    }
+
+    #[test]
+    fn is_alertable_includes_stopped_and_awaiting_only() {
+        assert!(ActivityState::Stopped.is_alertable());
+        assert!(ActivityState::Awaiting.is_alertable());
+        assert!(!ActivityState::Active.is_alertable());
+        assert!(!ActivityState::Idle.is_alertable());
+        assert!(!ActivityState::Waiting.is_alertable());
+        assert!(!ActivityState::Off.is_alertable());
     }
 }
 
@@ -1231,13 +1376,19 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.pm_visible = true;
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
-        handle_key_dashboard(&mut app, KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
-        handle_key_dashboard(&mut app, KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
     }
 
@@ -1247,9 +1398,12 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.pm_visible = true;
         app.focus = crate::ui::PaneFocus::ProjectManager;
-        handle_key_dashboard(&mut app, KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
     }
 
@@ -1258,9 +1412,12 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         assert!(!app.pm_visible);
-        handle_key_dashboard(&mut app, KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
     }
 
@@ -1289,10 +1446,7 @@ mod pm_state_tests {
         )
         .await
         .unwrap();
-        assert!(
-            app.modal.is_some(),
-            "q should not dismiss UpdatesPanel"
-        );
+        assert!(app.modal.is_some(), "q should not dismiss UpdatesPanel");
         assert!(!app.quit, "q should not propagate to App::quit");
     }
 

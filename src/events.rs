@@ -61,6 +61,41 @@ use std::path::{Path, PathBuf};
 const MAX_LOG: usize = 50;
 const MAX_DISPLAY_CHARS: usize = 70;
 
+/// Why the assistant's most recent message stopped. Mirrors the Anthropic
+/// API's `stop_reason` field. `EndTurn`, `MaxTokens`, and `StopSequence` all
+/// mean "the agent is no longer running and is awaiting user input";
+/// `ToolUse` means it stopped to call a tool and will resume after the
+/// `tool_result` is delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopReason {
+    EndTurn,
+    ToolUse,
+    MaxTokens,
+    StopSequence,
+    Other(String),
+}
+
+impl StopReason {
+    /// True iff the agent has stopped and is waiting on the human (as opposed
+    /// to waiting on its own tool-call result).
+    pub fn is_awaiting_user(&self) -> bool {
+        matches!(
+            self,
+            StopReason::EndTurn | StopReason::MaxTokens | StopReason::StopSequence
+        )
+    }
+
+    fn from_json_str(s: &str) -> Self {
+        match s {
+            "end_turn" => StopReason::EndTurn,
+            "tool_use" => StopReason::ToolUse,
+            "max_tokens" => StopReason::MaxTokens,
+            "stop_sequence" => StopReason::StopSequence,
+            other => StopReason::Other(other.to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceEvents {
     pub latest: Option<EventSnapshot>,
@@ -73,6 +108,14 @@ pub struct WorkspaceEvents {
     /// a tool_use pending for ≥3s is almost certainly waiting on user
     /// approval. Map: id → (tool name, first-seen epoch ms).
     pub pending_tool_uses: HashMap<String, (String, i64)>,
+    /// The most recently observed assistant `stop_reason`. None until the
+    /// first assistant message arrives, or after a session file reset.
+    pub last_stop_reason: Option<StopReason>,
+    /// Set when a real user text message arrives after the latest
+    /// awaiting-user stop_reason. Used to decide whether the agent is still
+    /// idle (waiting on the human) or has resumed (received new input but
+    /// hasn't produced its next assistant message yet).
+    pub user_replied_since_stop: bool,
 }
 
 impl Default for WorkspaceEvents {
@@ -83,7 +126,29 @@ impl Default for WorkspaceEvents {
             file_path: None,
             byte_offset: 0,
             pending_tool_uses: HashMap::new(),
+            last_stop_reason: None,
+            user_replied_since_stop: false,
         }
+    }
+}
+
+impl WorkspaceEvents {
+    /// Clear all session-derived state. Used when the underlying jsonl file
+    /// is replaced or truncated — stale tool_uses and stop_reasons from the
+    /// prior session must not leak into the new one.
+    pub fn reset_session_state(&mut self) {
+        self.pending_tool_uses.clear();
+        self.last_stop_reason = None;
+        self.user_replied_since_stop = false;
+    }
+
+    /// The agent is stopped and the human hasn't replied yet.
+    pub fn is_awaiting_user(&self) -> bool {
+        !self.user_replied_since_stop
+            && self
+                .last_stop_reason
+                .as_ref()
+                .is_some_and(StopReason::is_awaiting_user)
     }
 }
 
@@ -100,6 +165,21 @@ pub struct TailUpdate {
     pub tool_use_starts: Vec<(String, String, i64)>,
     /// tool_use_ids resolved by a `tool_result` block in this batch.
     pub tool_use_resolves: Vec<String>,
+    /// The stop_reason on the last assistant message in this batch, if any.
+    /// Later batches with a fresh assistant message override this; batches
+    /// containing only user/tool_result lines leave it None.
+    pub last_stop_reason: Option<StopReason>,
+    /// True iff at least one plain-text user message appears in this batch
+    /// AFTER the latest assistant `stop_reason` in this batch (or anywhere in
+    /// the batch if there is no new stop_reason). The caller uses this to
+    /// decide whether to flip `user_replied_since_stop` on. Within-batch
+    /// ordering matters: `end_turn` then user-text means "user replied";
+    /// user-text then `end_turn` means "agent stopped again, no reply yet".
+    pub human_replied_after_last_stop: bool,
+    /// True if `tail_session` had to rewind to offset 0 because the file
+    /// shrank since the previous call (truncation or replacement). The caller
+    /// should treat all prior session-derived state as stale.
+    pub reset_from_zero: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -162,10 +242,14 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
     let file_size = file.metadata()?.len();
     // Handle truncation/replacement: if the file is now smaller than our
     // offset, reset to 0 — likely a new session in the same path (rare).
-    let start = if offset > file_size { 0 } else { offset };
+    let reset_from_zero = offset > file_size;
+    let start = if reset_from_zero { 0 } else { offset };
     file.seek(SeekFrom::Start(start))?;
     let mut reader = BufReader::new(file);
-    let mut update = TailUpdate::default();
+    let mut update = TailUpdate {
+        reset_from_zero,
+        ..TailUpdate::default()
+    };
     let mut buf = String::new();
     let mut consumed = start;
     loop {
@@ -187,6 +271,15 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
         }
         update.tool_use_starts.extend(parsed.tool_use_starts);
         update.tool_use_resolves.extend(parsed.tool_use_resolves);
+        // Order-aware: a fresh stop_reason restarts the "has the user
+        // replied since this stop?" count. A user_text after it sets it.
+        if let Some(sr) = parsed.stop_reason {
+            update.last_stop_reason = Some(sr);
+            update.human_replied_after_last_stop = false;
+        }
+        if parsed.is_user_text {
+            update.human_replied_after_last_stop = true;
+        }
     }
     update.new_offset = consumed;
     Ok(update)
@@ -199,6 +292,12 @@ pub struct ParsedLine {
     pub event: Option<EventSnapshot>,
     pub tool_use_starts: Vec<(String, String, i64)>,
     pub tool_use_resolves: Vec<String>,
+    /// The stop_reason on an assistant line, if present. None for any other
+    /// line type (user, tool_result, unknown).
+    pub stop_reason: Option<StopReason>,
+    /// True if this line is a plain-text user message (real human input).
+    /// Tool_result lines wrapped as `user` do not set this.
+    pub is_user_text: bool,
 }
 
 /// Parse a single JSONL line into a [`ParsedLine`]. Malformed lines and
@@ -240,6 +339,7 @@ fn parse_user(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
             display,
             timestamp_ms,
         });
+        out.is_user_text = true;
         return out;
     }
     if let Some(blocks) = content.as_array() {
@@ -259,6 +359,16 @@ fn parse_user(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
 
 fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     let mut out = ParsedLine::default();
+    // stop_reason lives at message.stop_reason. Some lines (e.g. partial
+    // streaming snapshots) may omit it; in that case we leave the previous
+    // sticky value in place upstream.
+    if let Some(sr) = v
+        .get("message")
+        .and_then(|m| m.get("stop_reason"))
+        .and_then(|s| s.as_str())
+    {
+        out.stop_reason = Some(StopReason::from_json_str(sr));
+    }
     let Some(blocks) = v
         .get("message")
         .and_then(|m| m.get("content"))
@@ -653,6 +763,152 @@ mod tests {
         // Offset way past EOF — should reset to 0 and re-read.
         let update = tail_session(&path, 9_999_999).unwrap();
         assert_eq!(update.events.len(), 1);
+        assert!(update.reset_from_zero);
+    }
+
+    #[test]
+    fn parses_assistant_stop_reason_end_turn() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]},"timestamp":"2026-05-14T17:32:13.536Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(parsed.stop_reason, Some(StopReason::EndTurn));
+        assert!(parsed.stop_reason.unwrap().is_awaiting_user());
+    }
+
+    #[test]
+    fn parses_assistant_stop_reason_tool_use() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(parsed.stop_reason, Some(StopReason::ToolUse));
+        assert!(!parsed.stop_reason.unwrap().is_awaiting_user());
+    }
+
+    #[test]
+    fn parses_assistant_stop_reason_max_tokens_and_stop_sequence() {
+        for (sr, expected) in [
+            ("max_tokens", StopReason::MaxTokens),
+            ("stop_sequence", StopReason::StopSequence),
+        ] {
+            let line = format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","stop_reason":"{sr}","content":[{{"type":"text","text":"x"}}]}},"timestamp":"2026-05-14T17:32:13.536Z"}}"#
+            );
+            let parsed = parse_jsonl_line(&line);
+            assert_eq!(parsed.stop_reason, Some(expected.clone()));
+            assert!(expected.is_awaiting_user());
+        }
+    }
+
+    #[test]
+    fn assistant_without_stop_reason_yields_none() {
+        // Some streaming-snapshot lines may omit stop_reason.
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"thinking"}]},"timestamp":"2026-05-14T17:32:13.536Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(parsed.stop_reason, None);
+    }
+
+    #[test]
+    fn assistant_unknown_stop_reason_is_other() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"refusal","content":[{"type":"text","text":"x"}]},"timestamp":"2026-05-14T17:32:13.536Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        match parsed.stop_reason {
+            Some(StopReason::Other(s)) => assert_eq!(s, "refusal"),
+            other => panic!("expected Other(\"refusal\"), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_text_message_sets_is_user_text() {
+        let line = r#"{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"2026-05-14T17:32:02.744Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(parsed.is_user_text);
+    }
+
+    #[test]
+    fn user_tool_result_does_not_set_is_user_text() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":"ok"}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(!parsed.is_user_text);
+    }
+
+    #[test]
+    fn tail_session_aggregates_last_stop_reason_and_no_user_text_between() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("s.jsonl");
+        // tool_use then end_turn, with only tool_result in between — the
+        // last assistant stop_reason wins, and no real user text appears.
+        let l1 = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}]},"timestamp":"2026-05-14T17:32:13.536Z"}"#;
+        let l2 = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t","type":"tool_result","content":"ok"}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let l3 = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]},"timestamp":"2026-05-14T17:32:15.000Z"}"#;
+        std::fs::write(&path, format!("{l1}\n{l2}\n{l3}\n")).unwrap();
+        let update = tail_session(&path, 0).unwrap();
+        assert_eq!(update.last_stop_reason, Some(StopReason::EndTurn));
+        assert!(!update.human_replied_after_last_stop);
+        assert!(!update.reset_from_zero);
+    }
+
+    #[test]
+    fn tail_session_flags_user_text_after_stop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let l1 = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]},"timestamp":"2026-05-14T17:32:15.000Z"}"#;
+        let l2 = r#"{"type":"user","message":{"role":"user","content":"more please"},"timestamp":"2026-05-14T17:32:20.000Z"}"#;
+        std::fs::write(&path, format!("{l1}\n{l2}\n")).unwrap();
+        let update = tail_session(&path, 0).unwrap();
+        assert_eq!(update.last_stop_reason, Some(StopReason::EndTurn));
+        assert!(update.human_replied_after_last_stop);
+    }
+
+    #[test]
+    fn tail_session_user_text_before_a_later_stop_does_not_count() {
+        // user_text comes first, then assistant ends turn — the agent is
+        // awaiting input AGAIN, the prior user_text does not count.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let l1 = r#"{"type":"user","message":{"role":"user","content":"go"},"timestamp":"2026-05-14T17:32:00.000Z"}"#;
+        let l2 = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]},"timestamp":"2026-05-14T17:32:15.000Z"}"#;
+        std::fs::write(&path, format!("{l1}\n{l2}\n")).unwrap();
+        let update = tail_session(&path, 0).unwrap();
+        assert_eq!(update.last_stop_reason, Some(StopReason::EndTurn));
+        assert!(!update.human_replied_after_last_stop);
+    }
+
+    #[test]
+    fn tail_session_user_text_with_no_stop_in_batch_still_flags() {
+        // No stop_reason in this batch, only a user_text. The caller will
+        // keep its prior last_stop_reason; user_replied_since_stop should
+        // be flipped on.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let l1 = r#"{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"2026-05-14T17:32:00.000Z"}"#;
+        std::fs::write(&path, format!("{l1}\n")).unwrap();
+        let update = tail_session(&path, 0).unwrap();
+        assert_eq!(update.last_stop_reason, None);
+        assert!(update.human_replied_after_last_stop);
+    }
+
+    #[test]
+    fn workspace_events_is_awaiting_user() {
+        let mut ws = WorkspaceEvents::default();
+        assert!(!ws.is_awaiting_user()); // no stop_reason yet
+        ws.last_stop_reason = Some(StopReason::EndTurn);
+        assert!(ws.is_awaiting_user());
+        ws.user_replied_since_stop = true;
+        assert!(!ws.is_awaiting_user()); // human spoke after end_turn
+        ws.user_replied_since_stop = false;
+        ws.last_stop_reason = Some(StopReason::ToolUse);
+        assert!(!ws.is_awaiting_user()); // tool_use stops aren't on the user
+    }
+
+    #[test]
+    fn workspace_events_reset_session_state_clears_everything() {
+        let mut ws = WorkspaceEvents::default();
+        ws.pending_tool_uses
+            .insert("t1".into(), ("Bash".into(), 1000));
+        ws.last_stop_reason = Some(StopReason::EndTurn);
+        ws.user_replied_since_stop = true;
+        ws.reset_session_state();
+        assert!(ws.pending_tool_uses.is_empty());
+        assert_eq!(ws.last_stop_reason, None);
+        assert!(!ws.user_replied_since_stop);
     }
 
     #[test]

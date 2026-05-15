@@ -24,6 +24,12 @@ pub enum Item<'a> {
         /// permission prompt). Carries (tool name, first-seen epoch ms) so
         /// we can render the elapsed wait time in the sub-line.
         awaiting_tool: Option<(String, i64)>,
+        /// True when the assistant's most recent `stop_reason` indicates
+        /// the agent finished its turn and is awaiting human input
+        /// (`end_turn`, `max_tokens`, `stop_sequence`) and the user has
+        /// not yet replied. Distinct from `awaiting_tool` (permission
+        /// prompts), which has higher priority in the activity column.
+        stopped: bool,
     },
     EmptyHint,
     Spacer,
@@ -85,6 +91,7 @@ pub fn render(
                 needs_attention,
                 lifecycle,
                 awaiting_tool,
+                stopped,
             } => {
                 if let Some(SelectionTarget::Workspace(id)) = selected
                     && id == workspace.id
@@ -103,11 +110,14 @@ pub fn render(
                     SetupStatus::Ok | SetupStatus::Skipped | SetupStatus::NotRun => "",
                     SetupStatus::Failed => " [setup-failed]",
                 };
-                // `awaiting` overrides the activity column entirely — a
-                // workspace blocked on a permission prompt is the most
-                // important state to surface, regardless of PTY freshness.
+                // Priority: a tool_use pending (permission prompt) > the
+                // agent stopped at end_turn awaiting user > PTY-recency.
+                // The first two are the user-actionable states and override
+                // the activity column entirely.
                 let activity = if awaiting_tool.is_some() {
                     "awaiting"
+                } else if *stopped {
+                    "stopped"
                 } else {
                     match (*seconds_since_activity, *has_prior_session) {
                         (Some(s), _) if s < 2 => "active",
@@ -341,6 +351,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -395,6 +406,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
             Item::Spacer,
             Item::Header { repo: &r2 },
@@ -409,6 +421,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -449,6 +462,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -488,6 +502,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -527,6 +542,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -572,6 +588,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
             Item::Workspace {
                 repo: &r,
@@ -584,6 +601,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut term = Terminal::new(TestBackend::new(120, 10)).unwrap();
@@ -624,6 +642,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -661,6 +680,7 @@ mod tests {
                 needs_attention: true,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -697,6 +717,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -738,6 +759,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
             Item::Workspace {
                 repo: &r,
@@ -750,6 +772,7 @@ mod tests {
                 needs_attention: false,
                 lifecycle: None,
                 awaiting_tool: None,
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();
@@ -801,6 +824,7 @@ mod tests {
                 lifecycle: None,
                 // 10s ago — well past the 3s threshold.
                 awaiting_tool: Some(("Bash".into(), now_ms - 10_000)),
+                stopped: false,
             },
         ];
         let mut state = DashboardState::default();

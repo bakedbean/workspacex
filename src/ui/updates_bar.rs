@@ -23,10 +23,11 @@ pub struct UpdatesRow {
 /// re-export-friendly enum so updates_bar doesn't depend on app.rs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
+    Stopped,
+    Awaiting,
     Active,
     Idle,
     Waiting,
-    Awaiting,
     Off,
 }
 
@@ -64,7 +65,10 @@ pub fn select_row(
             .awaiting_tool
             .as_ref()
             .map(|(_, t)| *t)
-            .or_else(|| c.events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms)))
+            .or_else(|| {
+                c.events
+                    .and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms))
+            })
             .unwrap_or(0);
         -ts
     });
@@ -83,10 +87,7 @@ pub fn select_row(
         return Some(UpdatesRow {
             glyph: '⚠',
             kind: UpdatesRowKind::Attention,
-            text: format!(
-                "{}/{} {} ({})",
-                c.repo_name, c.name, state_summary, age
-            ),
+            text: format!("{}/{} {} ({})", c.repo_name, c.name, state_summary, age),
         });
     }
 
@@ -184,20 +185,31 @@ mod tests {
         let attention = events_with_latest("attention-evt", 5_000);
         let recent = events_with_latest("recent-evt", 9_000);
         let candidates_owned = [
-            ws(1, "blocked", Some(attention), ActivityState::Waiting, true, None),
+            ws(
+                1,
+                "blocked",
+                Some(attention),
+                ActivityState::Waiting,
+                true,
+                None,
+            ),
             ws(2, "busy", Some(recent), ActivityState::Idle, false, None),
         ];
         let candidates: Vec<WorkspaceUpdateInfo> = candidates_owned
             .iter()
-            .map(|(id, events, activity, needs_attention, awaiting, name, repo_name)| WorkspaceUpdateInfo {
-                id: *id,
-                name: name.as_str(),
-                repo_name: repo_name.as_str(),
-                events: events.as_ref(),
-                activity: *activity,
-                needs_attention: *needs_attention,
-                awaiting_tool: awaiting.clone(),
-            })
+            .map(
+                |(id, events, activity, needs_attention, awaiting, name, repo_name)| {
+                    WorkspaceUpdateInfo {
+                        id: *id,
+                        name: name.as_str(),
+                        repo_name: repo_name.as_str(),
+                        events: events.as_ref(),
+                        activity: *activity,
+                        needs_attention: *needs_attention,
+                        awaiting_tool: awaiting.clone(),
+                    }
+                },
+            )
             .collect();
         let row = select_row(None, &candidates, 10_000).expect("row");
         assert_eq!(row.kind, UpdatesRowKind::Attention);
@@ -220,15 +232,19 @@ mod tests {
         ];
         let candidates: Vec<WorkspaceUpdateInfo> = candidates_owned
             .iter()
-            .map(|(id, events, activity, needs_attention, awaiting, name, repo_name)| WorkspaceUpdateInfo {
-                id: *id,
-                name: name.as_str(),
-                repo_name: repo_name.as_str(),
-                events: events.as_ref(),
-                activity: *activity,
-                needs_attention: *needs_attention,
-                awaiting_tool: awaiting.clone(),
-            })
+            .map(
+                |(id, events, activity, needs_attention, awaiting, name, repo_name)| {
+                    WorkspaceUpdateInfo {
+                        id: *id,
+                        name: name.as_str(),
+                        repo_name: repo_name.as_str(),
+                        events: events.as_ref(),
+                        activity: *activity,
+                        needs_attention: *needs_attention,
+                        awaiting_tool: awaiting.clone(),
+                    }
+                },
+            )
             .collect();
         let row = select_row(None, &candidates, 10_000).expect("row");
         assert_eq!(row.kind, UpdatesRowKind::Activity);
@@ -247,15 +263,19 @@ mod tests {
         let candidates_owned = [ws(1, "self", Some(evt), ActivityState::Idle, false, None)];
         let candidates: Vec<WorkspaceUpdateInfo> = candidates_owned
             .iter()
-            .map(|(id, events, activity, needs_attention, awaiting, name, repo_name)| WorkspaceUpdateInfo {
-                id: *id,
-                name: name.as_str(),
-                repo_name: repo_name.as_str(),
-                events: events.as_ref(),
-                activity: *activity,
-                needs_attention: *needs_attention,
-                awaiting_tool: awaiting.clone(),
-            })
+            .map(
+                |(id, events, activity, needs_attention, awaiting, name, repo_name)| {
+                    WorkspaceUpdateInfo {
+                        id: *id,
+                        name: name.as_str(),
+                        repo_name: repo_name.as_str(),
+                        events: events.as_ref(),
+                        activity: *activity,
+                        needs_attention: *needs_attention,
+                        awaiting_tool: awaiting.clone(),
+                    }
+                },
+            )
             .collect();
         let row = select_row(Some(WorkspaceId(1)), &candidates, 10_000);
         assert!(row.is_none());
@@ -268,15 +288,19 @@ mod tests {
         let candidates_owned = [ws(1, "old", Some(stale), ActivityState::Idle, false, None)];
         let candidates: Vec<WorkspaceUpdateInfo> = candidates_owned
             .iter()
-            .map(|(id, events, activity, needs_attention, awaiting, name, repo_name)| WorkspaceUpdateInfo {
-                id: *id,
-                name: name.as_str(),
-                repo_name: repo_name.as_str(),
-                events: events.as_ref(),
-                activity: *activity,
-                needs_attention: *needs_attention,
-                awaiting_tool: awaiting.clone(),
-            })
+            .map(
+                |(id, events, activity, needs_attention, awaiting, name, repo_name)| {
+                    WorkspaceUpdateInfo {
+                        id: *id,
+                        name: name.as_str(),
+                        repo_name: repo_name.as_str(),
+                        events: events.as_ref(),
+                        activity: *activity,
+                        needs_attention: *needs_attention,
+                        awaiting_tool: awaiting.clone(),
+                    }
+                },
+            )
             .collect();
         let row = select_row(None, &candidates, 120_000);
         assert!(row.is_none());
@@ -294,15 +318,19 @@ mod tests {
         )];
         let candidates: Vec<WorkspaceUpdateInfo> = candidates_owned
             .iter()
-            .map(|(id, events, activity, needs_attention, awaiting, name, repo_name)| WorkspaceUpdateInfo {
-                id: *id,
-                name: name.as_str(),
-                repo_name: repo_name.as_str(),
-                events: events.as_ref(),
-                activity: *activity,
-                needs_attention: *needs_attention,
-                awaiting_tool: awaiting.clone(),
-            })
+            .map(
+                |(id, events, activity, needs_attention, awaiting, name, repo_name)| {
+                    WorkspaceUpdateInfo {
+                        id: *id,
+                        name: name.as_str(),
+                        repo_name: repo_name.as_str(),
+                        events: events.as_ref(),
+                        activity: *activity,
+                        needs_attention: *needs_attention,
+                        awaiting_tool: awaiting.clone(),
+                    }
+                },
+            )
             .collect();
         let row = select_row(None, &candidates, 10_000).expect("row");
         assert!(

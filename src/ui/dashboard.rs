@@ -19,6 +19,7 @@ pub enum Item<'a> {
         status: Option<crate::git::WorkspaceStatus>,
         latest_event: Option<crate::events::EventSnapshot>,
         needs_attention: bool,
+        lifecycle: Option<crate::forge::BranchLifecycle>,
         /// Set when a tool_use has been pending ≥3s (almost always a
         /// permission prompt). Carries (tool name, first-seen epoch ms) so
         /// we can render the elapsed wait time in the sub-line.
@@ -82,6 +83,7 @@ pub fn render(
                 status,
                 latest_event,
                 needs_attention,
+                lifecycle,
                 awaiting_tool,
             } => {
                 if let Some(SelectionTarget::Workspace(id)) = selected
@@ -115,7 +117,7 @@ pub fn render(
                         (None, false) => "off",
                     }
                 };
-                let branch_label = format_branch_label(&workspace.branch, nerd_fonts);
+                let branch_label = format_branch_label(&workspace.branch, nerd_fonts, *lifecycle);
                 let status_str = status
                     .map(|s| format_status(&s, nerd_fonts))
                     .unwrap_or_default();
@@ -233,11 +235,30 @@ fn right_pad_line(left: &str, right: &str, total_width: usize) -> String {
     }
 }
 
-fn format_branch_label(branch: &str, nerd: bool) -> String {
+fn format_branch_label(
+    branch: &str,
+    nerd: bool,
+    lifecycle: Option<crate::forge::BranchLifecycle>,
+) -> String {
+    use crate::forge::BranchLifecycle::*;
     if nerd {
-        format!("\u{e0a0} {branch}")
+        let (glyph, suffix) = match lifecycle {
+            None | Some(NoPr) => ("\u{e0a0}", ""),
+            Some(PrOpen) => ("\u{f407}", ""),
+            Some(PrDraft) => ("\u{f407}", " draft"),
+            Some(PrMerged) => ("\u{f419}", ""),
+            Some(PrClosed) => ("\u{f659}", ""),
+        };
+        format!("{glyph} {branch}{suffix}")
     } else {
-        branch.to_string()
+        let suffix = match lifecycle {
+            Some(PrOpen) => " (pr)",
+            Some(PrDraft) => " (draft)",
+            Some(PrMerged) => " (merged)",
+            Some(PrClosed) => " (closed)",
+            None | Some(NoPr) => "",
+        };
+        format!("{branch}{suffix}")
     }
 }
 
@@ -306,6 +327,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -359,6 +381,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
             Item::Spacer,
@@ -372,6 +395,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -411,6 +435,7 @@ mod tests {
                 status: Some(st),
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -449,6 +474,7 @@ mod tests {
                 status: Some(st),
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -487,6 +513,7 @@ mod tests {
                 status: None,
                 latest_event: Some(ev),
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -531,6 +558,7 @@ mod tests {
                 status: None,
                 latest_event: Some(ev),
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
             Item::Workspace {
@@ -542,6 +570,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -581,6 +610,7 @@ mod tests {
                 status: Some(st),
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -617,6 +647,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: true,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -652,6 +683,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -692,6 +724,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
             Item::Workspace {
@@ -703,6 +736,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: false,
+                lifecycle: None,
                 awaiting_tool: None,
             },
         ];
@@ -752,6 +786,7 @@ mod tests {
                 status: None,
                 latest_event: None,
                 needs_attention: true,
+                lifecycle: None,
                 // 10s ago — well past the 3s threshold.
                 awaiting_tool: Some(("Bash".into(), now_ms - 10_000)),
             },
@@ -773,5 +808,83 @@ mod tests {
             .lines()
             .any(|l| l.contains("alpha") && l.contains("active"));
         assert!(!bad, "should not show 'active' when awaiting: {text}");
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+    use crate::forge::BranchLifecycle;
+
+    #[test]
+    fn nerd_no_lifecycle_uses_branch_glyph() {
+        let s = format_branch_label("feat/x", true, None);
+        assert_eq!(s, "\u{e0a0} feat/x");
+    }
+
+    #[test]
+    fn nerd_open_pr_uses_pr_glyph() {
+        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::PrOpen));
+        assert_eq!(s, "\u{f407} feat/x");
+    }
+
+    #[test]
+    fn nerd_draft_pr_annotates() {
+        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::PrDraft));
+        assert_eq!(s, "\u{f407} feat/x draft");
+    }
+
+    #[test]
+    fn nerd_merged_pr_uses_merge_glyph() {
+        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::PrMerged));
+        assert_eq!(s, "\u{f419} feat/x");
+    }
+
+    #[test]
+    fn nerd_closed_pr_uses_x_glyph() {
+        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::PrClosed));
+        assert_eq!(s, "\u{f659} feat/x");
+    }
+
+    #[test]
+    fn nerd_no_pr_uses_branch_glyph() {
+        let s = format_branch_label("feat/x", true, Some(BranchLifecycle::NoPr));
+        assert_eq!(s, "\u{e0a0} feat/x");
+    }
+
+    #[test]
+    fn ascii_open_pr_appends_pr_suffix() {
+        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrOpen));
+        assert_eq!(s, "feat/x (pr)");
+    }
+
+    #[test]
+    fn ascii_draft_pr_appends_draft_suffix() {
+        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrDraft));
+        assert_eq!(s, "feat/x (draft)");
+    }
+
+    #[test]
+    fn ascii_merged_pr_appends_merged_suffix() {
+        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrMerged));
+        assert_eq!(s, "feat/x (merged)");
+    }
+
+    #[test]
+    fn ascii_closed_pr_appends_closed_suffix() {
+        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::PrClosed));
+        assert_eq!(s, "feat/x (closed)");
+    }
+
+    #[test]
+    fn ascii_no_pr_is_plain() {
+        let s = format_branch_label("feat/x", false, Some(BranchLifecycle::NoPr));
+        assert_eq!(s, "feat/x");
+    }
+
+    #[test]
+    fn ascii_none_is_plain() {
+        let s = format_branch_label("feat/x", false, None);
+        assert_eq!(s, "feat/x");
     }
 }

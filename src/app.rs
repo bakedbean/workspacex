@@ -84,6 +84,12 @@ pub struct App {
     pub quit: bool,
     pub workspace_status:
         std::collections::HashMap<crate::store::WorkspaceId, crate::git::WorkspaceStatus>,
+    /// Cached PR lifecycle per workspace. Absent key = never polled; present
+    /// key = last successful poll's result.
+    pub pr_lifecycle:
+        std::collections::HashMap<crate::store::WorkspaceId, crate::forge::BranchLifecycle>,
+    /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
+    pub pr_last_poll_ms: std::collections::HashMap<crate::store::WorkspaceId, i64>,
     pub workspace_events:
         std::collections::HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
     /// Per-workspace tracking for attention-alert state.
@@ -118,6 +124,8 @@ impl App {
             ctrl_a_pending: false,
             quit: false,
             workspace_status: std::collections::HashMap::new(),
+            pr_lifecycle: std::collections::HashMap::new(),
+            pr_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
@@ -284,6 +292,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .get(&ws.id)
                             .and_then(|e| e.latest.clone()),
                         needs_attention,
+                        lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         awaiting_tool: awaiting,
                     });
                 }
@@ -1061,6 +1070,11 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     let _ = g.store.rename_workspace(id, &new_name);
                     let _ = g.store.set_workspace_branch(id, &current);
                     let _ = g.refresh();
+                    // Invalidate cached PR state — the new branch may have a
+                    // different (or no) PR. Clearing the throttle stamp
+                    // makes the next tick poll immediately.
+                    g.pr_lifecycle.remove(&id);
+                    g.pr_last_poll_ms.remove(&id);
                 }
             }
 
@@ -1070,7 +1084,38 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 g.workspace_status.insert(id, status);
             }
 
-            // 3) Tail Claude Code session JSONL for events.
+            // 3) PR lifecycle — throttled to once per 30s per workspace.
+            //    gh is a network call, so we don't run it every tick.
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let should_poll_pr = {
+                let g = app.lock().await;
+                g.pr_last_poll_ms
+                    .get(&id)
+                    .map(|t| now_ms.saturating_sub(*t) >= 30_000)
+                    .unwrap_or(true)
+            };
+            if should_poll_pr {
+                // Mark the attempt before awaiting the fetch, so concurrent
+                // ticks don't queue up multiple gh processes.
+                {
+                    let mut g = app.lock().await;
+                    g.pr_last_poll_ms.insert(id, now_ms);
+                }
+                if let Ok(Some(lifecycle)) =
+                    crate::forge::fetch_branch_lifecycle(&path, &db_branch).await
+                {
+                    let mut g = app.lock().await;
+                    g.pr_lifecycle.insert(id, lifecycle);
+                }
+                // Ok(None) → leave any existing cached value alone; better
+                // than clobbering a previously-known state on a transient
+                // network error.
+            }
+
+            // 4) Tail Claude Code session JSONL for events.
             //
             // Lock-ordering: snapshot the previous offset under the lock,
             // do the file I/O without the lock held, then re-acquire to

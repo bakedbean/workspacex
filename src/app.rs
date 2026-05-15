@@ -687,6 +687,25 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 }
             }
         }
+        (KeyCode::Char('v'), _) => {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let info = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = info {
+                    let cmd = app.store.get_setting("diff_cmd").ok().flatten();
+                    let base = crate::git::resolve_base_branch(&path).await;
+                    if let Err(e) = crate::external::open_diff(&path, &base, cmd.as_deref()) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            // 'v' on a Repo header is intentionally a no-op.
+        }
         (KeyCode::Char('d'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
                 let name = app

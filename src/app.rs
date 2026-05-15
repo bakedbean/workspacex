@@ -300,11 +300,77 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use std::time::Duration;
 
-pub async fn run<B: Backend>(terminal: &mut Terminal<B>, app: SharedApp) -> Result<()> {
+async fn do_pending_edit<B>(
+    terminal: &mut ratatui::Terminal<B>,
+    app: &SharedApp,
+    edit: PendingEdit,
+) -> Result<()>
+where
+    B: ratatui::backend::Backend + std::io::Write,
+{
+    // Read current value + extension hint under the lock.
+    let (current, ext) = {
+        let g = app.lock().await;
+        let Some(repo) = g.repos.iter().find(|r| r.id == edit.repo_id) else {
+            return Ok(());
+        };
+        match edit.field {
+            RepoSettingField::BranchPrefix => (repo.branch_prefix.clone(), "txt"),
+            RepoSettingField::CustomInstructions => {
+                (repo.custom_instructions.clone().unwrap_or_default(), "md")
+            }
+            RepoSettingField::SetupScript => (repo.setup_script.clone().unwrap_or_default(), "sh"),
+            RepoSettingField::ArchiveScript => {
+                (repo.archive_script.clone().unwrap_or_default(), "sh")
+            }
+        }
+    };
+
+    // Suspend the TUI.
+    crossterm::terminal::disable_raw_mode()?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::LeaveAlternateScreen
+    )?;
+
+    let result = crate::external::edit_in_editor(&current, ext);
+
+    // Resume the TUI.
+    crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::EnterAlternateScreen
+    )?;
+    crossterm::terminal::enable_raw_mode()?;
+    terminal.clear()?;
+
+    if let Ok(Some(new)) = result {
+        if new.trim() != current.trim() {
+            let mut g = app.lock().await;
+            let _ = apply_repo_setting(&mut g, edit.repo_id, edit.field, &new);
+            let _ = g.refresh();
+        }
+    }
+    Ok(())
+}
+
+pub async fn run<B: Backend + std::io::Write>(
+    terminal: &mut Terminal<B>,
+    app: SharedApp,
+) -> Result<()> {
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(16));
 
     loop {
+        // Handle any pending edit BEFORE drawing — the editor takes
+        // over the terminal and we need a clean redraw after it exits.
+        let pending = {
+            let mut g = app.lock().await;
+            g.pending_edit.take()
+        };
+        if let Some(edit) = pending {
+            do_pending_edit(terminal, &app, edit).await?;
+        }
+
         {
             let mut g = app.lock().await;
             terminal.draw(|f| draw(f, &mut g))?;

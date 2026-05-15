@@ -59,10 +59,7 @@ pub fn render(
         ])
         .split(area);
 
-    f.render_widget(
-        Paragraph::new(top_summary_line(items, theme)),
-        chunks[0],
-    );
+    f.render_widget(Paragraph::new(top_summary_line(items, theme)), chunks[0]);
 
     // No outer border anymore — the list spans the full width of chunks[1].
     let inner_width = chunks[1].width as usize;
@@ -252,10 +249,12 @@ fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
         } = item
         {
             total += 1;
+            // Priority matches `classify_activity_with_events`: awaiting wins
+            // over stopped, so a workspace with both flags counts toward
+            // `awaiting` only (it renders as `awaiting` in the activity column).
             if awaiting_tool.is_some() {
                 awaiting += 1;
-            }
-            if *stopped {
+            } else if *stopped {
                 stopped_n += 1;
             }
         }
@@ -929,8 +928,29 @@ mod tests {
         let text = dump(&term, 120, 8);
         let top = text.lines().next().unwrap().trim();
         assert!(top.contains("1 workspace"), "missing total: {top}");
-        assert!(!top.contains("awaiting"), "unexpected awaiting in quiet top: {top}");
-        assert!(!top.contains("stopped"), "unexpected stopped in quiet top: {top}");
+        assert!(
+            !top.contains("awaiting"),
+            "unexpected awaiting in quiet top: {top}"
+        );
+        assert!(
+            !top.contains("stopped"),
+            "unexpected stopped in quiet top: {top}"
+        );
+    }
+
+    #[test]
+    fn top_summary_handles_zero_workspaces() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let items: Vec<Item> = vec![];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let top = text.lines().next().unwrap().trim();
+        assert!(top.contains("wsx"), "missing wsx: {top}");
+        assert!(top.contains("0 workspaces"), "expected zero count: {top}");
+        assert!(!top.contains("awaiting"), "unexpected awaiting: {top}");
+        assert!(!top.contains("stopped"), "unexpected stopped: {top}");
     }
 
     #[test]
@@ -958,10 +978,19 @@ mod tests {
         term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let buf = term.backend().buffer();
-        // No vertical-bar border glyphs should appear at x = 0 anywhere.
+        // No vertical-bar border glyphs at either edge.
+        let max_x = buf.area.width - 1;
         for y in 0..8u16 {
-            let cell = buf[(0u16, y)].symbol();
-            assert_ne!(cell, "│", "expected no border at col 0, row {y}");
+            assert_ne!(
+                buf[(0u16, y)].symbol(),
+                "│",
+                "expected no border at col 0, row {y}"
+            );
+            assert_ne!(
+                buf[(max_x, y)].symbol(),
+                "│",
+                "expected no border at right edge col {max_x}, row {y}"
+            );
         }
     }
 

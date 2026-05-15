@@ -101,6 +101,8 @@ mod settings_tests {
             path: PathBuf::from("/r"),
             branch_prefix: prefix.into(),
             custom_instructions: instructions.map(|s| s.to_string()),
+            setup_script: None,
+            archive_script: None,
             created_at: 0,
         }
     }

@@ -256,6 +256,8 @@ mod tests {
             path: PathBuf::from(format!("/repos/{name}")),
             branch_prefix: "".into(),
             custom_instructions: None,
+            setup_script: None,
+            archive_script: None,
             created_at: 0,
         }
     }

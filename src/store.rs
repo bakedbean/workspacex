@@ -32,6 +32,8 @@ pub struct Repo {
     pub path: PathBuf,
     pub branch_prefix: String,
     pub custom_instructions: Option<String>,
+    pub setup_script: Option<String>,
+    pub archive_script: Option<String>,
     pub created_at: i64,
 }
 
@@ -100,6 +102,27 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 2", [])?;
         }
+        if v < 3 {
+            let has_setup: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'setup_script'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_setup == 0 {
+                self.conn
+                    .execute("ALTER TABLE repos ADD COLUMN setup_script TEXT", [])?;
+            }
+            let has_archive: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'archive_script'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_archive == 0 {
+                self.conn
+                    .execute("ALTER TABLE repos ADD COLUMN archive_script TEXT", [])?;
+            }
+            self.conn.execute("PRAGMA user_version = 3", [])?;
+        }
         Ok(())
     }
 
@@ -122,7 +145,8 @@ impl Store {
 
     pub fn repos(&self) -> Result<Vec<Repo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, path, branch_prefix, custom_instructions, created_at \
+            "SELECT id, name, path, branch_prefix, custom_instructions, \
+                    setup_script, archive_script, created_at \
              FROM repos ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -132,7 +156,9 @@ impl Store {
                 path: PathBuf::from(r.get::<_, String>(2)?),
                 branch_prefix: r.get(3)?,
                 custom_instructions: r.get(4)?,
-                created_at: r.get(5)?,
+                setup_script: r.get(5)?,
+                archive_script: r.get(6)?,
+                created_at: r.get(7)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -449,6 +475,15 @@ mod tests {
         assert_eq!(store.repos().unwrap()[0].branch_prefix, "new");
         store.set_repo_branch_prefix(id, "").unwrap();
         assert_eq!(store.repos().unwrap()[0].branch_prefix, "");
+    }
+
+    #[test]
+    fn repo_setup_and_archive_scripts_default_null() {
+        let store = Store::open_in_memory().unwrap();
+        let _id = store.add_repo(Path::new("/r"), "demo", "").unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(repos[0].setup_script, None);
+        assert_eq!(repos[0].archive_script, None);
     }
 
     #[test]

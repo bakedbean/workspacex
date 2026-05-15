@@ -64,6 +64,29 @@ pub fn render(
     // No outer border anymore — the list spans the full width of chunks[1].
     let inner_width = chunks[1].width as usize;
 
+    // Count workspaces between each Item::Header. We can't simply count
+    // by repo.id during the render loop because we need the count BEFORE
+    // emitting the header line.
+    let mut counts_by_repo_idx: Vec<usize> = Vec::new();
+    {
+        let mut current: Option<usize> = None;
+        for item in items.iter() {
+            match item {
+                Item::Header { .. } => {
+                    counts_by_repo_idx.push(0);
+                    current = Some(counts_by_repo_idx.len() - 1);
+                }
+                Item::Workspace { .. } => {
+                    if let Some(i) = current {
+                        counts_by_repo_idx[i] += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut repo_idx = 0usize;
+
     let mut selected_idx: Option<usize> = None;
     let mut list_items: Vec<ListItem> = Vec::with_capacity(items.len());
     for item in items.iter() {
@@ -74,8 +97,11 @@ pub fn render(
                 {
                     selected_idx = Some(list_items.len());
                 }
-                let line = format!("▌ {}    {}", repo.name, repo.path.display());
-                list_items.push(ListItem::new(line).style(theme.header_style()));
+                let count = counts_by_repo_idx.get(repo_idx).copied().unwrap_or(0);
+                repo_idx += 1;
+                let (header, rule) = repo_header_lines(repo, count, inner_width, theme);
+                list_items.push(ListItem::new(header));
+                list_items.push(ListItem::new(rule));
             }
             Item::Workspace {
                 repo: _,
@@ -278,6 +304,27 @@ fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Build the two-line block that introduces a repo group:
+///   `<name> · <path> · <count>`
+///   `─────────────────────────...`
+fn repo_header_lines(
+    repo: &Repo,
+    count: usize,
+    inner_width: usize,
+    theme: &Theme,
+) -> (Line<'static>, Line<'static>) {
+    let header = Line::from(vec![
+        Span::styled(repo.name.clone(), theme.header_style()),
+        Span::styled(
+            format!(" · {} · {}", repo.path.display(), count),
+            theme.dim_style(),
+        ),
+    ]);
+    let rule_text: String = "─".repeat(inner_width);
+    let rule = Line::from(Span::styled(rule_text, theme.dim_style()));
+    (header, rule)
+}
+
 /// Render the bracketed branch label as a `Line` whose glyph + name are
 /// styled per PR lifecycle. Returning a `Line` (rather than `String`) lets
 /// the row composer apply per-segment colors while still measuring the
@@ -408,7 +455,7 @@ mod tests {
         })
         .unwrap();
         let text = dump(&term, 120, 8);
-        assert!(text.contains("▌ demo"), "missing header: {text}");
+        assert!(text.contains("demo") && text.contains("/repos/demo"), "missing header: {text}");
         assert!(text.contains("alpha"), "missing workspace name: {text}");
         assert!(text.contains("active"), "missing activity column: {text}");
     }
@@ -422,7 +469,7 @@ mod tests {
         term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 80, 8);
-        assert!(text.contains("▌ empty"));
+        assert!(text.contains("empty") && text.contains("/repos/empty"));
         assert!(text.contains("press n to create"));
     }
 
@@ -658,9 +705,9 @@ mod tests {
             )
         })
         .unwrap();
-        // The second workspace becomes the 4th list item (index 3): header,
-        // ws1 row, ws1 sub-line, ws2 row.
-        assert_eq!(state.list_state.selected(), Some(3));
+        // The second workspace becomes the 5th list item (index 4): header,
+        // rule, ws1 row, ws1 sub-line, ws2 row.
+        assert_eq!(state.list_state.selected(), Some(4));
     }
 
     #[test]
@@ -992,6 +1039,91 @@ mod tests {
                 "expected no border at right edge col {max_x}, row {y}"
             );
         }
+    }
+
+    #[test]
+    fn repo_header_renders_with_rule_below() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let lines: Vec<&str> = text.lines().collect();
+        // Find the repo header line; the next non-empty line should be a rule.
+        let hdr_idx = lines
+            .iter()
+            .position(|l| l.contains("demo") && l.contains("/repos/demo"))
+            .expect("repo header line");
+        let rule = lines[hdr_idx + 1];
+        let rule_chars: Vec<char> = rule.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            !rule_chars.is_empty() && rule_chars.iter().all(|c| *c == '─'),
+            "expected horizontal rule under header, got: {rule:?}"
+        );
+    }
+
+    #[test]
+    fn repo_header_includes_workspace_count() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w1 = workspace(1, 1, "alpha", "wsx/alpha");
+        let w2 = workspace(2, 1, "beta", "wsx/beta");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w1,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w2,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let hdr = text
+            .lines()
+            .find(|l| l.contains("demo") && l.contains("/repos/demo"))
+            .expect("repo header line");
+        assert!(hdr.contains("· 2"), "expected workspace count in header: {hdr}");
     }
 
     #[test]

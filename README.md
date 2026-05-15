@@ -123,6 +123,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | Key | Action |
 |---|---|
 | `Ctrl-a d` | Detach back to the dashboard (session keeps running) |
+| `Ctrl-a u` | Open the floating updates panel (shows other workspaces' state) |
 | `Ctrl-a a` | Send a literal `Ctrl-a` to claude |
 
 ## Editor and terminal integration
@@ -240,6 +241,23 @@ for workspaces that are already in `waiting` or `awaiting` state when wsx
 launches.
 
 Turn off both via `wsx config set notifications off`.
+
+## Workspace updates panel
+
+When you're attached to a workspace (full-screen claude session) or the
+project manager pane is expanded full-screen, wsx still tracks the other
+workspaces in the background. Two affordances surface that:
+
+- A single-row status indicator above the footer, shown only when another
+  workspace needs attention or has produced output in the last 60 seconds.
+  Format: `⚠ <name> awaiting permission: <tool> (<age>)` for attention,
+  `● <name>: <event> (<age>)` for activity. The row collapses to nothing
+  when there's nothing to surface, giving claude the row back.
+
+- A floating panel via `Ctrl-a u` listing ALL workspaces grouped by repo,
+  with their current state and latest event. Press `Esc` to close. The
+  panel re-renders live, so ages count up and attention flags appear/clear
+  in real time.
 
 ## Themes
 

@@ -173,20 +173,22 @@ honor the spawned process's cwd already so you typically don't need it.
 
 `[v]` spawns the configured difftool with the selected workspace's worktree path as `{path}` and the repo's main branch as `{base}`. Unlike editor/terminal, there's no env-var fallback — set `diff_cmd` explicitly.
 
-Examples:
+Examples (note the **three dots** — this anchors the diff at the merge base, so stale local `main` doesn't bleed extra commits into the diff):
 
 ```
 # Terminal pager with delta-prettified diff
-wsx config set diff_cmd "alacritty -e sh -c 'cd {path} && git diff {base}..HEAD | delta'"
+wsx config set diff_cmd "alacritty -e sh -c 'cd {path} && git diff {base}...HEAD | delta'"
 
 # Neovim with diffview.nvim (set alacritty's cwd so nvim doesn't open {path} as a buffer)
-wsx config set diff_cmd "alacritty --working-directory={path} -e nvim -c 'DiffviewOpen {base}'"
+wsx config set diff_cmd "alacritty --working-directory={path} -e nvim -c 'DiffviewOpen {base}...HEAD'"
 
 # VS Code (opens the workspace; user navigates to Source Control panel)
 wsx config set diff_cmd "code {path}"
 ```
 
 The main branch is auto-detected from `origin/HEAD`; falls back to `main` if your repo doesn't have origin/HEAD set. (Tip: `git remote set-head origin --auto` after cloning fixes that for the wsx repo metadata too.)
+
+**Why three dots?** `git diff A..B` (two dots) lists every commit on `B` that isn't on `A`'s current tip. If your local `main` is behind `origin/main`, those upstream commits show up as "extra changes" in your branch diff. `A...B` (three dots) anchors at the merge base — the commit where your branch diverged — so stale local refs don't pollute the view. This is what `gh pr` and most code-review tools use.
 
 For `editor_cmd` and `terminal_cmd`, if neither the setting nor the env-var fallback is set, an error modal explains how to configure. `diff_cmd` has no env-var fallback and errors directly if unset.
 

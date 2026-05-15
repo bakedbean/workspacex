@@ -100,7 +100,7 @@ Value sources:
 | `n` | New workspace in the selected row's repo |
 | `e` | Open the selected workspace in your editor (no-op on repo header) |
 | `t` | Open the selected workspace in a terminal (no-op on repo header) |
-| `v` | View diff of the selected workspace's branch vs main (no-op on repo header) |
+| `v` | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |
 | `d` | Archive the selected workspace (no-op on repo header) |
 | `q` | Quit (kills all running sessions) |
 | `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
@@ -176,8 +176,8 @@ Examples:
 # Terminal pager with delta-prettified diff
 wsx config set diff_cmd "alacritty -e sh -c 'cd {path} && git diff {base}..HEAD | delta'"
 
-# Neovim with diffview.nvim
-wsx config set diff_cmd "alacritty -e nvim -c 'DiffviewOpen {base}' {path}"
+# Neovim with diffview.nvim (set alacritty's cwd so nvim doesn't open {path} as a buffer)
+wsx config set diff_cmd "alacritty --working-directory={path} -e nvim -c 'DiffviewOpen {base}'"
 
 # VS Code (opens the workspace; user navigates to Source Control panel)
 wsx config set diff_cmd "code {path}"
@@ -185,7 +185,7 @@ wsx config set diff_cmd "code {path}"
 
 The main branch is auto-detected from `origin/HEAD`; falls back to `main` if your repo doesn't have origin/HEAD set. (Tip: `git remote set-head origin --auto` after cloning fixes that for the wsx repo metadata too.)
 
-If neither the setting nor the env-var fallback is set, an error modal explains how to configure.
+For `editor_cmd` and `terminal_cmd`, if neither the setting nor the env-var fallback is set, an error modal explains how to configure. `diff_cmd` has no env-var fallback and errors directly if unset.
 
 ## Remote access
 

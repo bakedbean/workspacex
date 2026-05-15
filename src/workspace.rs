@@ -47,7 +47,13 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     }
     store.set_workspace_state(id, WorkspaceState::Ready)?;
 
-    let setup_result = setup::run_setup(&repo.path, &worktree_path, on_setup_line).await?;
+    let setup_result = setup::run_setup(
+        repo.setup_script.as_deref(),
+        &repo.path,
+        &worktree_path,
+        on_setup_line,
+    )
+    .await?;
     let status = match &setup_result {
         SetupResult::Ok => SetupStatus::Ok,
         SetupResult::Skipped => SetupStatus::Skipped,
@@ -79,7 +85,13 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     opts: ArchiveOpts,
     on_archive_line: F,
 ) -> Result<SetupResult> {
-    let archive_result = setup::run_archive(&repo.path, &ws.worktree_path, on_archive_line).await?;
+    let archive_result = setup::run_archive(
+        repo.archive_script.as_deref(),
+        &repo.path,
+        &ws.worktree_path,
+        on_archive_line,
+    )
+    .await?;
     if !opts.keep_worktree && ws.worktree_path.exists() {
         git::remove_worktree(&repo.path, &ws.worktree_path).await?;
     }
@@ -244,14 +256,10 @@ mod tests {
     async fn create_records_setup_failure_but_keeps_workspace_ready() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        std::fs::write(
-            repo_dir.path().join(".claudette.json"),
-            r#"{"setup":{"command":"sh","args":["-c","exit 1"]}}"#,
-        )
-        .unwrap();
         let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
+        store.set_repo_setup_script(id, Some("exit 1")).unwrap();
         let repo = store
             .repos()
             .unwrap()
@@ -377,5 +385,68 @@ mod tests {
             .unwrap();
         let found = discover_untracked(&repo, &store).await.unwrap();
         assert!(found.iter().any(|w| w.path == wt));
+    }
+
+    #[tokio::test]
+    async fn create_runs_setup_script_when_set() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        // Touch a marker file inside the worktree.
+        store
+            .set_repo_setup_script(id, Some("touch wsx-setup-marker"))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let created = create(&store, &repo, Some("a"), base.path(), |_| {})
+            .await
+            .unwrap();
+        assert_eq!(created.workspace.setup_status, SetupStatus::Ok);
+        assert!(created.workspace.worktree_path.join("wsx-setup-marker").exists());
+    }
+
+    #[tokio::test]
+    async fn archive_runs_archive_script_when_set() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let scratch = TempDir::new().unwrap();
+        let marker = scratch.path().join("wsx-archive-marker");
+        let script = format!("touch {}", marker.display());
+        store
+            .set_repo_archive_script(id, Some(&script))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let created = create(&store, &repo, Some("doomed"), base.path(), |_| {})
+            .await
+            .unwrap();
+        archive(
+            &store,
+            &repo,
+            &created.workspace,
+            ArchiveOpts {
+                force_branch_delete: true,
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(marker.exists(), "archive script did not run");
     }
 }

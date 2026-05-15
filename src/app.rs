@@ -59,6 +59,12 @@ impl RepoSettingField {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingEdit {
+    pub repo_id: crate::store::RepoId,
+    pub field: RepoSettingField,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
     /// The agent has stopped its turn and is awaiting human input. Derived
@@ -176,6 +182,10 @@ pub struct App {
         std::collections::HashMap<crate::store::WorkspaceId, Vec<crate::proc::ProcInfo>>,
     /// Epoch-ms of last completed `proc::scan` — throttle source.
     pub last_proc_scan_ms: i64,
+    /// Set by the repo-settings modal when the user presses Enter on a
+    /// field. The run loop detects this BEFORE the next draw, suspends
+    /// the TUI, invokes `external::edit_in_editor`, resumes, and saves.
+    pub pending_edit: Option<PendingEdit>,
     pub theme: crate::ui::theme::Theme,
     pub pm: Option<std::sync::Arc<crate::pty::session::Session>>,
     pub pm_visible: bool,
@@ -211,6 +221,7 @@ impl App {
             workspace_needs_attention: std::collections::HashSet::new(),
             workspace_processes: std::collections::HashMap::new(),
             last_proc_scan_ms: 0,
+            pending_edit: None,
             theme,
             pm: None,
             pm_visible: false,
@@ -785,6 +796,23 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             // 'k' on a Repo header is intentionally a no-op.
         }
+        (KeyCode::Char('s'), _) => {
+            let repo_id = match app.selected_target() {
+                Some(SelectionTarget::Repo(id)) => Some(id),
+                Some(SelectionTarget::Workspace(wid)) => app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == wid)
+                    .map(|(rid, _)| *rid),
+                None => app.repos.first().map(|r| r.id),
+            };
+            if let Some(id) = repo_id {
+                app.modal = Some(Modal::RepoSettings {
+                    repo_id: id,
+                    selected: 0,
+                });
+            }
+        }
         (KeyCode::Char('d'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
                 let name = app
@@ -897,6 +925,28 @@ async fn rescan_processes(app: &mut App) {
                 (*selected).min(len - 1)
             };
         }
+    }
+}
+
+fn apply_repo_setting(
+    app: &mut App,
+    repo_id: crate::store::RepoId,
+    field: RepoSettingField,
+    value: &str,
+) -> Result<()> {
+    let trimmed = value.trim();
+    let opt = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    };
+    match field {
+        RepoSettingField::BranchPrefix => app.store.set_repo_branch_prefix(repo_id, trimmed),
+        RepoSettingField::CustomInstructions => {
+            app.store.set_repo_custom_instructions(repo_id, opt)
+        }
+        RepoSettingField::SetupScript => app.store.set_repo_setup_script(repo_id, opt),
+        RepoSettingField::ArchiveScript => app.store.set_repo_archive_script(repo_id, opt),
     }
 }
 
@@ -1344,11 +1394,35 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 _ => {}
             }
         }
-        Modal::RepoSettings { .. } => {
-            if k.code == KeyCode::Esc {
+        Modal::RepoSettings {
+            repo_id,
+            mut selected,
+        } => match k.code {
+            KeyCode::Esc => {
                 app.modal = None;
             }
-        }
+            KeyCode::Up => {
+                selected = selected.saturating_sub(1);
+                app.modal = Some(Modal::RepoSettings { repo_id, selected });
+            }
+            KeyCode::Down => {
+                let max = RepoSettingField::ALL.len() - 1;
+                selected = (selected + 1).min(max);
+                app.modal = Some(Modal::RepoSettings { repo_id, selected });
+            }
+            KeyCode::Enter => {
+                let field = RepoSettingField::ALL[selected.min(3)];
+                app.pending_edit = Some(PendingEdit { repo_id, field });
+                app.modal = None;
+            }
+            KeyCode::Char('d') => {
+                let field = RepoSettingField::ALL[selected.min(3)];
+                let _ = apply_repo_setting(app, repo_id, field, "");
+                let _ = app.refresh();
+                app.modal = Some(Modal::RepoSettings { repo_id, selected });
+            }
+            _ => {}
+        },
     }
     Ok(())
 }

@@ -186,7 +186,7 @@ wsx config set diff_cmd "alacritty --working-directory={path} -e nvim -c 'Diffvi
 wsx config set diff_cmd "code {path}"
 ```
 
-The main branch is auto-detected from `origin/HEAD`; falls back to `main` if your repo doesn't have origin/HEAD set. (Tip: `git remote set-head origin --auto` after cloning fixes that for the wsx repo metadata too.)
+The base ref is auto-detected from `origin/HEAD` and substituted as the **upstream** tracking ref (e.g. `origin/main`) — using the upstream means a stale local `main` doesn't poison the diff. Falls back to `main` if your repo doesn't have `origin/HEAD` set. (Tip: `git remote set-head origin --auto` after cloning fixes that for the wsx repo metadata too.)
 
 **Why three dots?** `git diff A..B` (two dots) lists every commit on `B` that isn't on `A`'s current tip. If your local `main` is behind `origin/main`, those upstream commits show up as "extra changes" in your branch diff. `A...B` (three dots) anchors at the merge base — the commit where your branch diverged — so stale local refs don't pollute the view. This is what `gh pr` and most code-review tools use.
 

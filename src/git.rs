@@ -57,10 +57,12 @@ pub async fn preflight() -> Result<()> {
     Ok(())
 }
 
-/// Resolve the repo's main branch name as seen from `worktree`.
-/// Reads `git symbolic-ref --short refs/remotes/origin/HEAD` and strips
-/// the `origin/` prefix. Falls back to `main` on any error (no origin,
-/// origin/HEAD not set, git not installed, etc.).
+/// Resolve the repo's base branch reference for diff comparisons.
+/// Returns the upstream tracking ref (e.g. `origin/main`) when
+/// `git symbolic-ref --short refs/remotes/origin/HEAD` succeeds — using
+/// the upstream tracking ref means a stale local `main` doesn't poison
+/// the diff. Falls back to `main` on any error (no origin, origin/HEAD
+/// not set, git not installed, etc.).
 pub async fn resolve_base_branch(worktree: &Path) -> String {
     let output = tokio::process::Command::new("git")
         .current_dir(worktree)
@@ -68,10 +70,7 @@ pub async fn resolve_base_branch(worktree: &Path) -> String {
         .output()
         .await;
     match output {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            s.strip_prefix("origin/").unwrap_or(&s).to_string()
-        }
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         _ => "main".to_string(),
     }
 }
@@ -233,7 +232,7 @@ pub(super) mod tests {
         ]);
 
         let base = resolve_base_branch(dir.path()).await;
-        assert_eq!(base, "trunk");
+        assert_eq!(base, "origin/trunk");
     }
 
     #[tokio::test]

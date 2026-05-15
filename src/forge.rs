@@ -45,8 +45,6 @@ pub async fn fetch_branch_lifecycle(
     branch: &str,
 ) -> Result<Option<BranchLifecycle>> {
     let out = Command::new("gh")
-        .arg("-R")
-        .arg(".")
         .current_dir(worktree)
         .args([
             "pr",

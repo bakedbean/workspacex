@@ -354,16 +354,22 @@ Customize PM's behavior with `wsx config set pm_custom_instructions @./pm.md`.
 
 ## Per-repo setup scripts
 
-A `.claudette.json` file in the repo root is honored for setup and archive scripts that run when a workspace is created or removed:
+Each repo can have a `setup` script (run when a workspace is created) and an `archive` script (run when a workspace is removed). Both are stored in the wsx state database and configured per-repo via the CLI:
 
-```json
-{
-  "setup":   { "command": "bun",  "args": ["install"] },
-  "archive": { "command": "rm",   "args": ["-rf", "node_modules"] }
-}
+```bash
+wsx repo set-setup    <repo-name> 'bun install'
+wsx repo set-archive  <repo-name> 'rm -rf node_modules'
 ```
 
-The script runs with `cwd` set to the new worktree path and two extra env vars: `WSX_REPO_ROOT` (the source repo) and `WSX_WORKTREE` (the new worktree). Setup failure does not block the workspace from being usable; it's surfaced as a `[setup-failed]` badge on the dashboard.
+For multi-line scripts, pass a file with the `@` prefix or open `$EDITOR`:
+
+```bash
+wsx repo set-setup    <repo-name> @./scripts/setup.sh
+wsx repo edit-setup   <repo-name>
+wsx repo edit-archive <repo-name>
+```
+
+Each script is executed as `sh -c "$value"` with `cwd` set to the new worktree and two extra env vars: `WSX_REPO_ROOT` (the source repo) and `WSX_WORKTREE` (the new worktree). Setup failure does not block the workspace from being usable; it's surfaced as a `[setup-failed]` badge on the dashboard. Passing an empty value clears the script.
 
 ## Testing
 

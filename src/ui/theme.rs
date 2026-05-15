@@ -18,6 +18,8 @@ pub struct Theme {
     pub err: Color,
     /// Attention markers (`!`, awaiting-permission) (reserved).
     pub attention: Color,
+    /// Merged-PR indicator on workspace rows.
+    pub merged: Color,
 }
 
 impl Theme {
@@ -34,6 +36,7 @@ impl Theme {
             warn: Color::Yellow,
             err: Color::Red,
             attention: Color::Magenta,
+            merged: Color::Magenta,
         }
     }
 
@@ -58,6 +61,7 @@ impl Theme {
             warn: yellow,
             err: red,
             attention: pink,
+            merged: purple,
         }
     }
 
@@ -81,6 +85,7 @@ impl Theme {
             warn: orange,
             err: red,
             attention: purple,
+            merged: purple,
         }
     }
 
@@ -93,6 +98,7 @@ impl Theme {
         let aurora_orange = Color::Rgb(0xd0, 0x87, 0x70);
         let aurora_yellow = Color::Rgb(0xeb, 0xcb, 0x8b);
         let aurora_green = Color::Rgb(0xa3, 0xbe, 0x8c);
+        let aurora_purple = Color::Rgb(0xb4, 0x8e, 0xad);
         Self {
             header_fg: frost1,
             header_bg: None,
@@ -103,6 +109,7 @@ impl Theme {
             warn: aurora_yellow,
             err: aurora_red,
             attention: aurora_orange,
+            merged: aurora_purple,
         }
     }
 
@@ -140,6 +147,9 @@ impl Theme {
     }
     pub fn attention_style(&self) -> Style {
         Style::default().fg(self.attention)
+    }
+    pub fn merged_style(&self) -> Style {
+        Style::default().fg(self.merged)
     }
 }
 

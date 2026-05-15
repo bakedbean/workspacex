@@ -7,8 +7,8 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 // Column widths for the workspace row. Names and branches are truncated
 // or right-padded so the columns align vertically across rows.
-const NAME_WIDTH: usize = 20;
-const BRANCH_BLOCK_WIDTH: usize = 28;
+const NAME_WIDTH: usize = 32;
+const BRANCH_BLOCK_WIDTH: usize = 48;
 
 #[derive(Debug, Clone)]
 pub enum Item<'a> {
@@ -1442,7 +1442,8 @@ mod tests {
     fn workspace_row_branch_truncated_with_ellipsis() {
         let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
         let r = repo(1, "demo");
-        let very_long_branch = "feat/the-quick-brown-fox-jumps-over-the-lazy-dog";
+        let very_long_branch =
+            "feat/the-quick-brown-fox-jumps-over-the-lazy-dog-multiple-times-in-a-row";
         let w = workspace(1, 1, "alpha", very_long_branch);
         let items = vec![
             Item::Header { repo: &r },

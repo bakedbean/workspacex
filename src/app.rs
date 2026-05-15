@@ -10,6 +10,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Leader key for attached-view actions (detach, open updates panel, send
+/// literal leader to claude). Chosen to be free in raw mode and to avoid
+/// collision with tmux's default `Ctrl-b` prefix (or any non-default
+/// `Ctrl-a` setup).
+const LEADER_KEY: crossterm::event::KeyCode = crossterm::event::KeyCode::Char('x');
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum AppEvent {
@@ -122,7 +128,7 @@ pub struct App {
     pub workspaces: Vec<(crate::store::RepoId, Workspace)>,
     pub selectable: Vec<SelectionTarget>,
     pub worktree_base: PathBuf,
-    pub ctrl_a_pending: bool,
+    pub leader_pending: bool,
     pub quit: bool,
     pub workspace_status:
         std::collections::HashMap<crate::store::WorkspaceId, crate::git::WorkspaceStatus>,
@@ -163,7 +169,7 @@ impl App {
             workspaces: Vec::new(),
             selectable: Vec::new(),
             worktree_base,
-            ctrl_a_pending: false,
+            leader_pending: false,
             quit: false,
             workspace_status: std::collections::HashMap::new(),
             pr_lifecycle: std::collections::HashMap::new(),
@@ -803,16 +809,17 @@ async fn handle_key_attached(
             return Ok(());
         }
     };
-    // Ctrl-a prefix handling.
-    if app.ctrl_a_pending {
-        app.ctrl_a_pending = false;
+    // Leader-key prefix handling. See `LEADER_KEY`.
+    if app.leader_pending {
+        app.leader_pending = false;
         match k.code {
             KeyCode::Char('d') => {
                 app.view = View::Dashboard;
                 return Ok(());
             }
-            KeyCode::Char('a') => {
-                let _ = session.writer.send(vec![0x01]).await;
+            KeyCode::Char('x') => {
+                // Send a literal Ctrl-x (0x18) to claude.
+                let _ = session.writer.send(vec![0x18]).await;
                 return Ok(());
             }
             KeyCode::Char('u') => {
@@ -822,8 +829,8 @@ async fn handle_key_attached(
             _ => return Ok(()),
         }
     }
-    if k.code == KeyCode::Char('a') && k.modifiers.contains(KeyModifiers::CONTROL) {
-        app.ctrl_a_pending = true;
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
         return Ok(());
     }
     let bytes = encode_key(k);
@@ -900,15 +907,16 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
             return Ok(());
         }
     };
-    if app.ctrl_a_pending {
-        app.ctrl_a_pending = false;
+    if app.leader_pending {
+        app.leader_pending = false;
         match k.code {
             KeyCode::Char('d') => {
                 app.view = View::Dashboard;
                 return Ok(());
             }
-            KeyCode::Char('a') => {
-                let _ = session.writer.send(vec![0x01]).await;
+            KeyCode::Char('x') => {
+                // Send a literal Ctrl-x (0x18) to claude.
+                let _ = session.writer.send(vec![0x18]).await;
                 return Ok(());
             }
             KeyCode::Char('u') => {
@@ -918,8 +926,8 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
             _ => return Ok(()),
         }
     }
-    if k.code == KeyCode::Char('a') && k.modifiers.contains(KeyModifiers::CONTROL) {
-        app.ctrl_a_pending = true;
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
         return Ok(());
     }
     let bytes = encode_key(k);
@@ -1850,7 +1858,7 @@ mod pm_state_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ctrl_a_u_in_attached_pm_opens_updates_panel() {
+    async fn leader_u_in_attached_pm_opens_updates_panel() {
         unsafe {
             std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
         }
@@ -1867,14 +1875,14 @@ mod pm_state_tests {
         app.pm = Some(s);
         app.view = crate::ui::View::AttachedPm;
 
-        // Send Ctrl-a then 'u'.
+        // Send the leader (Ctrl-x) then 'u'.
         handle_key_attached_pm(
             &mut app,
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
         .unwrap();
-        assert!(app.ctrl_a_pending);
+        assert!(app.leader_pending);
 
         handle_key_attached_pm(
             &mut app,
@@ -1882,7 +1890,7 @@ mod pm_state_tests {
         )
         .await
         .unwrap();
-        assert!(!app.ctrl_a_pending);
+        assert!(!app.leader_pending);
         assert!(matches!(
             app.modal,
             Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })

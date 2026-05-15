@@ -1836,7 +1836,7 @@ mod pm_state_tests {
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| draw_for_test(f, &mut app)).unwrap();
         let buf = term.backend().buffer();
-        // The bottom row is the footer with "Ctrl-a d detach". The second-
+        // The bottom row is the footer with "Ctrl-x d detach". The second-
         // to-last row should NOT contain a status indicator glyph.
         let h = buf.area.height;
         let second_to_last: String = (0..buf.area.width)

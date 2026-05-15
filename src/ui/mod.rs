@@ -12,7 +12,7 @@ pub enum View {
     Dashboard,
     Attached(WorkspaceId),
     /// Full-screen view of the Project Manager session. Reached from the
-    /// dashboard's PM pane via `Ctrl-O`; detach back with `Ctrl-a d`.
+    /// dashboard's PM pane via `Ctrl-O`; detach back with `Ctrl-x d`.
     AttachedPm,
 }
 

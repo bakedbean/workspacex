@@ -386,6 +386,7 @@ fn activity_style(label: &str, theme: &Theme) -> Style {
     match label {
         "awaiting" | "stopped" => theme.warn_style(),
         "active" => theme.ok_style(),
+        "idle" => Style::default(),
         "waiting" | "resumable" | "off" => theme.dim_style(),
         _ => Style::default(),
     }
@@ -466,7 +467,7 @@ fn workspace_main_row(
     }
     spans.push(Span::raw("   ".to_string()));
     if !git_status.is_empty() {
-        spans.push(Span::styled(git_status.clone(), theme.dim_style()));
+        spans.push(Span::styled(git_status, theme.dim_style()));
     }
 
     // Right side: activity + space + age
@@ -1353,8 +1354,8 @@ mod tests {
         let y_short = find_y("ab ");
         let y_long = find_y("much-longer-name");
         // Branch column should start at the same x on both rows.
-        // x = 2 (indent) + 1 (attn) + 1 (sep) + 1 (dot) + 1 (sep) + 20 (name) + 3 (gutter) = 29
-        let probe_x = 29u16;
+        // x = indent(2) + attn(1) + sep(1) + dot(1) + sep(1) + name + gutter(3)
+        let probe_x: u16 = (2 + 1 + 1 + 1 + 1 + NAME_WIDTH + 3) as u16;
         // After truncation/padding, both rows' branch glyph should appear at
         // probe_x — the branch glyph differs but its starting x should match.
         let short_at = buf[(probe_x, y_short)].symbol();
@@ -1424,6 +1425,12 @@ mod tests {
         let theme = Theme::default_theme();
         assert_eq!(activity_style("off", &theme).fg, Some(theme.dim));
         assert_eq!(activity_style("resumable", &theme).fg, Some(theme.dim));
+    }
+
+    #[test]
+    fn activity_word_uses_default_for_idle() {
+        let theme = Theme::default_theme();
+        assert_eq!(activity_style("idle", &theme).fg, None);
     }
 
     #[test]

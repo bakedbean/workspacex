@@ -81,6 +81,7 @@ fn known_setting_key(k: &str) -> bool {
             | "nerd_fonts"
             | "editor_cmd"
             | "terminal_cmd"
+            | "diff_cmd"
             | "notifications"
             | "theme"
             | "pm_enabled"
@@ -472,6 +473,11 @@ mod tests {
     fn accepts_pm_enabled_and_pm_custom_instructions() {
         assert!(known_setting_key("pm_enabled"));
         assert!(known_setting_key("pm_custom_instructions"));
+    }
+
+    #[test]
+    fn accepts_diff_cmd() {
+        assert!(known_setting_key("diff_cmd"));
     }
 
     #[test]

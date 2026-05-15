@@ -1078,7 +1078,38 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 g.workspace_status.insert(id, status);
             }
 
-            // 3) Tail Claude Code session JSONL for events.
+            // 3) PR lifecycle — throttled to once per 30s per workspace.
+            //    gh is a network call, so we don't run it every tick.
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let should_poll_pr = {
+                let g = app.lock().await;
+                g.pr_last_poll_ms
+                    .get(&id)
+                    .map(|t| now_ms.saturating_sub(*t) >= 30_000)
+                    .unwrap_or(true)
+            };
+            if should_poll_pr {
+                // Mark the attempt before awaiting the fetch, so concurrent
+                // ticks don't queue up multiple gh processes.
+                {
+                    let mut g = app.lock().await;
+                    g.pr_last_poll_ms.insert(id, now_ms);
+                }
+                if let Ok(Some(lifecycle)) =
+                    crate::forge::fetch_branch_lifecycle(&path, &db_branch).await
+                {
+                    let mut g = app.lock().await;
+                    g.pr_lifecycle.insert(id, lifecycle);
+                }
+                // Ok(None) → leave any existing cached value alone; better
+                // than clobbering a previously-known state on a transient
+                // network error.
+            }
+
+            // 4) Tail Claude Code session JSONL for events.
             //
             // Lock-ordering: snapshot the previous offset under the lock,
             // do the file I/O without the lock held, then re-acquire to

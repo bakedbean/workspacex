@@ -27,8 +27,8 @@ pub fn render(
     let term_area = chunks[1];
 
     let title = match focus {
-        PaneFocus::ProjectManager => "── Project Manager [Tab/Esc back · r refresh] ──",
-        PaneFocus::Dashboard => "── Project Manager [Tab to focus] ──",
+        PaneFocus::ProjectManager => "── Project Manager [Tab/Esc back] ──",
+        PaneFocus::Dashboard => "── Project Manager [Tab to focus · r refresh] ──",
     };
     f.render_widget(Paragraph::new(title).style(theme.dim_style()), title_area);
 

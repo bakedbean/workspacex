@@ -566,9 +566,11 @@ async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
 }
 
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
-    // PM pane focus handling. When PM is focused, most keystrokes forward
-    // to its PTY. Tab/Esc swap back to dashboard; `p` and `r` are still
-    // handled by the main match below.
+    // PM pane focus handling. When PM is focused, all keystrokes forward
+    // to its PTY — including 'p' and 'r' (typing words containing those
+    // letters must not toggle the pane or trigger refresh). To use the
+    // dashboard's 'p' / 'r' shortcuts, the user presses Tab/Esc first to
+    // return focus to the dashboard.
     if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) {
         match (k.code, k.modifiers) {
             (KeyCode::Tab, _) | (KeyCode::Esc, _) => {
@@ -582,9 +584,6 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     app.view = View::AttachedPm;
                 }
                 return Ok(());
-            }
-            (KeyCode::Char('p'), _) | (KeyCode::Char('r'), _) => {
-                // Fall through to the main match.
             }
             _ => {
                 if let Some(session) = app.pm.as_ref() {
@@ -723,8 +722,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             // 'd' on a Repo header is intentionally a no-op.
         }
         (KeyCode::Char('r'), _)
-            if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
+            if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::Dashboard) =>
         {
+            // Manual refresh of the PM pane. Only fires from Dashboard focus
+            // so 'r' typed inside PM (when PM is focused) goes to the PTY.
             let dirs = crate::config::Dirs::discover();
             let pm_dir = dirs.pm_dir();
             if let Err(e) = crate::pm::refresh_pm(&mut app.sessions, &app.store, &pm_dir).await {

@@ -30,6 +30,40 @@ pub fn open_diff(worktree: &Path, base: &str, configured: Option<&str>) -> Resul
     )
 }
 
+/// Open `$EDITOR` (or `vi` if unset) on a tempfile prepopulated with
+/// `initial`. Returns `Ok(Some(contents))` on a clean exit (the contents
+/// may equal `initial` if the user didn't modify them), `Ok(None)` if
+/// the editor exited non-zero (treat as cancel), or `Err` on tempfile/
+/// spawn I/O failure.
+///
+/// `ext_hint` is the file extension (no leading dot) — `"sh"`, `"md"`,
+/// `"txt"` — used so the editor picks the right syntax mode.
+pub fn edit_in_editor(initial: &str, ext_hint: &str) -> Result<Option<String>> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("wsx-edit-{pid}-{nanos}.{ext_hint}"));
+    std::fs::write(&path, initial)?;
+
+    let status = std::process::Command::new(&editor)
+        .arg(&path)
+        .status()
+        .map_err(|e| Error::Io(std::io::Error::other(format!("spawn {editor}: {e}"))))?;
+
+    if !status.success() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(None);
+    }
+    let new = std::fs::read_to_string(&path)?;
+    let _ = std::fs::remove_file(&path);
+    Ok(Some(new))
+}
+
 fn resolve_editor_cmd(configured: Option<&str>) -> Result<String> {
     if let Some(c) = configured {
         if !c.trim().is_empty() {
@@ -307,6 +341,39 @@ mod tests {
         let dir = std::env::temp_dir();
         let r = open_diff(&dir, "main", Some("/bin/true --path={path} --base={base}"));
         assert!(r.is_ok(), "open_diff failed: {r:?}");
+    }
+
+    #[test]
+    fn edit_in_editor_returns_unchanged_when_editor_doesnt_write() {
+        // Save / restore EDITOR around the test.
+        let saved = std::env::var_os("EDITOR");
+        unsafe {
+            std::env::set_var("EDITOR", "/bin/true");
+        }
+        let result = edit_in_editor("hello world", "txt");
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("EDITOR", v),
+                None => std::env::remove_var("EDITOR"),
+            }
+        }
+        assert_eq!(result.unwrap().as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn edit_in_editor_returns_none_when_editor_exits_nonzero() {
+        let saved = std::env::var_os("EDITOR");
+        unsafe {
+            std::env::set_var("EDITOR", "/bin/false");
+        }
+        let result = edit_in_editor("anything", "txt");
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("EDITOR", v),
+                None => std::env::remove_var("EDITOR"),
+            }
+        }
+        assert!(result.unwrap().is_none());
     }
 
     #[test]

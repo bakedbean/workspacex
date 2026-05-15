@@ -1,5 +1,5 @@
 use crate::app::SelectionTarget;
-use crate::store::{Repo, Workspace, WorkspaceState};
+use crate::store::{Repo, SetupStatus, Workspace, WorkspaceState};
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
@@ -435,7 +435,16 @@ fn workspace_main_row(
         Some((_, ts)) => *ts,
         None => 0,
     };
-    let name_padded = truncate_pad(&workspace.name, NAME_WIDTH);
+    // When setup failed, reserve 3 chars (" ⚙!") at the end of the name
+    // column and truncate the name to 17 chars so the total stays at 20.
+    let setup_failed = workspace.setup_status == SetupStatus::Failed;
+    let name_padded = if setup_failed {
+        // No styled span here yet — we emit the badge as a separate styled
+        // span below so it gets err coloring.
+        truncate_pad(&workspace.name, NAME_WIDTH - 3)
+    } else {
+        truncate_pad(&workspace.name, NAME_WIDTH)
+    };
     let branch_line = format_branch_label(&workspace.branch, nerd, lifecycle, theme);
     // Take the styled spans from branch_line; pad/truncate to BRANCH_BLOCK_WIDTH.
     let branch_concat: String = branch_line
@@ -460,6 +469,12 @@ fn workspace_main_row(
     spans.push(Span::styled(attn.to_string(), theme.warn_style()));
     spans.push(Span::raw(format!(" {dot} ")));
     spans.push(Span::raw(name_padded));
+    if setup_failed {
+        // NOTE: this err_style fg is suppressed when the row is selected
+        // (ratatui's highlight_style patches the fg). The glyph still
+        // appears on the selected row, just without the red coloring.
+        spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
+    }
     spans.push(Span::raw("   ".to_string()));
     match branch_style {
         Some(style) => spans.push(Span::styled(branch_padded, style)),
@@ -1482,6 +1497,103 @@ mod tests {
         }
         let y = sub_y.expect("sub-line not found");
         assert_eq!(buf[(6u16, y)].symbol(), "└");
+    }
+
+    #[test]
+    fn setup_failed_glyph_appears_after_name() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let mut w = workspace(1, 1, "alpha", "wsx/alpha");
+        w.setup_status = SetupStatus::Failed;
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let row = text.lines().find(|l| l.contains("alpha")).expect("row");
+        assert!(
+            row.contains("⚙!"),
+            "expected ⚙! setup-failed glyph after name: {row}"
+        );
+        assert!(
+            !row.contains("[setup-failed]"),
+            "did not expect the old right-side badge: {row}"
+        );
+    }
+
+    #[test]
+    fn setup_failed_glyph_with_long_name_truncates_correctly() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let mut w = workspace(1, 1, "this-workspace-name-is-very-long", "wsx/long");
+        w.setup_status = SetupStatus::Failed;
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let text = dump(&term, 120, 8);
+        let row = text
+            .lines()
+            .find(|l| l.contains("this-workspace") && l.contains("⚙!"))
+            .expect("row with long name + setup_failed glyph");
+        // Both glyphs present:
+        assert!(
+            row.contains('…'),
+            "expected name truncation ellipsis: {row}"
+        );
+        assert!(row.contains("⚙!"), "expected setup-failed glyph: {row}");
+        // The branch column should still start at the same probe_x as
+        // workspace_row_name_padded_to_fixed_width — i.e., the badge
+        // does NOT push the branch column to the right.
+        let probe_x: u16 = (2 + 1 + 1 + 1 + 1 + NAME_WIDTH + 3) as u16;
+        // Find the row's y. Iterate, find the row containing both markers.
+        let mut row_y = None;
+        for y in 0..8u16 {
+            let r: String = (0..120u16)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect();
+            if r.contains("this-workspace") && r.contains("⚙!") {
+                row_y = Some(y);
+                break;
+            }
+        }
+        let y = row_y.expect("row not found in buffer");
+        assert_ne!(
+            buf[(probe_x, y)].symbol(),
+            " ",
+            "branch column should start at probe_x even when badge is present"
+        );
     }
 }
 

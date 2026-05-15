@@ -16,6 +16,20 @@ pub fn open_in_terminal(worktree: &Path, configured: Option<&str>) -> Result<()>
     spawn_with_cwd(&cmd, worktree)
 }
 
+/// Resolve and launch the user's difftool on `worktree`, diffing against `base`.
+/// The command template can reference `{path}` and `{base}`. If neither
+/// appears, `{path}` is appended (same convention as the editor).
+pub fn open_diff(worktree: &Path, base: &str, configured: Option<&str>) -> Result<()> {
+    let cmd = resolve_diff_cmd(configured)?;
+    let path_str = worktree.to_string_lossy();
+    spawn_resolved(
+        &cmd,
+        worktree,
+        &[("path", path_str.as_ref()), ("base", base)],
+        Some(path_str.as_ref()),
+    )
+}
+
 fn resolve_editor_cmd(configured: Option<&str>) -> Result<String> {
     if let Some(c) = configured {
         if !c.trim().is_empty() {
@@ -34,6 +48,19 @@ fn resolve_editor_cmd(configured: Option<&str>) -> Result<String> {
     }
     Err(Error::UserInput(
         "no editor configured; set `wsx config set editor_cmd <cmd>` or $VISUAL / $EDITOR".into(),
+    ))
+}
+
+fn resolve_diff_cmd(configured: Option<&str>) -> Result<String> {
+    if let Some(c) = configured {
+        if !c.trim().is_empty() {
+            return Ok(c.to_string());
+        }
+    }
+    Err(Error::UserInput(
+        "no diff command configured; set `wsx config set diff_cmd <cmd>` \
+         (placeholders: `{path}`, `{base}`)"
+            .into(),
     ))
 }
 
@@ -259,6 +286,27 @@ mod tests {
     fn resolve_argv_with_empty_substitutions_returns_argv_unchanged() {
         let argv = resolve_argv("just a command", &[], None).unwrap();
         assert_eq!(argv, vec!["just", "a", "command"]);
+    }
+
+    #[test]
+    fn diff_errors_when_unconfigured() {
+        let r = resolve_diff_cmd(None);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn diff_uses_configured_first() {
+        assert_eq!(
+            resolve_diff_cmd(Some("my-diff {path} {base}")).unwrap(),
+            "my-diff {path} {base}"
+        );
+    }
+
+    #[test]
+    fn spawn_diff_substitutes_both_placeholders() {
+        let dir = std::env::temp_dir();
+        let r = open_diff(&dir, "main", Some("/bin/true --path={path} --base={base}"));
+        assert!(r.is_ok(), "open_diff failed: {r:?}");
     }
 
     #[test]

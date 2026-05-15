@@ -174,6 +174,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setup_reports_command_not_found() {
+        let repo = TempDir::new().unwrap();
+        let wt = TempDir::new().unwrap();
+        let r = run_setup(
+            Some("definitely-not-a-real-command-xyz"),
+            repo.path(),
+            wt.path(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        match r {
+            SetupResult::Failed { exit_code } => assert_eq!(exit_code, 127),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn setup_injects_env_vars() {
         let repo = TempDir::new().unwrap();
         let wt = TempDir::new().unwrap();

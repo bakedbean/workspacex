@@ -172,7 +172,7 @@ pub fn render(
     f.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
     let footer = Paragraph::new(
-        "[enter] attach   [n] new   [e] edit   [t] terminal   [d] archive   [q] quit",
+        "[↑/↓] move   [enter] attach   [n] new   [e] edit   [t] terminal   [d] archive   [q] quit",
     )
     .style(theme.dim_style());
     f.render_widget(footer, chunks[2]);
@@ -687,12 +687,22 @@ mod tests {
         term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
             .unwrap();
         let text = dump(&term, 120, 8);
-        assert!(text.contains("~3"), "missing modified count: {text}");
-        assert!(text.contains("?1"), "missing untracked count: {text}");
-        assert!(text.contains("\u{2191}2"), "missing ahead count: {text}");
+        // Check only the content lines, not the footer (which is the last line).
+        let lines: Vec<&str> = text.lines().collect();
+        let content = if lines.len() > 1 {
+            lines[..lines.len() - 1].join("\n")
+        } else {
+            text.clone()
+        };
+        assert!(content.contains("~3"), "missing modified count: {content}");
+        assert!(content.contains("?1"), "missing untracked count: {content}");
         assert!(
-            !text.contains("\u{2193}"),
-            "should not show zero behind: {text}"
+            content.contains("\u{2191}2"),
+            "missing ahead count: {content}"
+        );
+        assert!(
+            !content.contains("\u{2193}"),
+            "should not show zero behind: {content}"
         );
     }
 
@@ -1593,6 +1603,38 @@ mod tests {
             buf[(probe_x, y)].symbol(),
             " ",
             "branch column should start at probe_x even when badge is present"
+        );
+    }
+
+    #[test]
+    fn footer_includes_arrow_nav_hint() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let footer = text.lines().last().unwrap();
+        assert!(
+            footer.contains("[↑/↓] move"),
+            "footer missing arrow nav hint: {footer}"
         );
     }
 }

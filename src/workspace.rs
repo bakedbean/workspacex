@@ -409,7 +409,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(created.workspace.setup_status, SetupStatus::Ok);
-        assert!(created.workspace.worktree_path.join("wsx-setup-marker").exists());
+        assert!(
+            created
+                .workspace
+                .worktree_path
+                .join("wsx-setup-marker")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -423,9 +429,7 @@ mod tests {
         let scratch = TempDir::new().unwrap();
         let marker = scratch.path().join("wsx-archive-marker");
         let script = format!("touch '{}'", marker.display());
-        store
-            .set_repo_archive_script(id, Some(&script))
-            .unwrap();
+        store.set_repo_archive_script(id, Some(&script)).unwrap();
         let repo = store
             .repos()
             .unwrap()

@@ -437,7 +437,10 @@ impl SessionManager {
         mode: SpawnMode,
     ) -> Result<Arc<Session>> {
         if let Some(existing) = &self.pm {
-            if matches!(*existing.status.read().unwrap(), SessionStatus::Running { .. }) {
+            if matches!(
+                *existing.status.read().unwrap(),
+                SessionStatus::Running { .. }
+            ) {
                 return Ok(existing.clone());
             }
         }

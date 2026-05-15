@@ -49,9 +49,8 @@ pub fn render(
         f.render_widget(Paragraph::new(text).style(style), status_area);
     }
 
-    let footer = format!(
-        " {label}   [Ctrl-a d] detach   [Ctrl-a u] updates   [Ctrl-a a] send Ctrl-a "
-    );
+    let footer =
+        format!(" {label}   [Ctrl-a d] detach   [Ctrl-a u] updates   [Ctrl-a a] send Ctrl-a ");
     f.render_widget(Paragraph::new(footer).style(theme.dim_style()), footer_area);
 }
 

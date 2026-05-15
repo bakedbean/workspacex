@@ -79,8 +79,11 @@ pub fn write_workspaces_json(store: &Store, target: &Path) -> Result<()> {
         repos,
     };
 
-    let payload = serde_json::to_string_pretty(&dossier)
-        .map_err(|e| Error::Io(std::io::Error::other(format!("workspaces.json serialize: {e}"))))?;
+    let payload = serde_json::to_string_pretty(&dossier).map_err(|e| {
+        Error::Io(std::io::Error::other(format!(
+            "workspaces.json serialize: {e}"
+        )))
+    })?;
 
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
@@ -291,7 +294,9 @@ mod tests {
                 worktree_path: &ready_with_session,
             })
             .unwrap();
-        store.set_workspace_state(ws1, WorkspaceState::Ready).unwrap();
+        store
+            .set_workspace_state(ws1, WorkspaceState::Ready)
+            .unwrap();
         let ws2 = store
             .insert_workspace(&NewWorkspace {
                 repo_id,
@@ -300,7 +305,9 @@ mod tests {
                 worktree_path: &ready_no_session,
             })
             .unwrap();
-        store.set_workspace_state(ws2, WorkspaceState::Ready).unwrap();
+        store
+            .set_workspace_state(ws2, WorkspaceState::Ready)
+            .unwrap();
         let ws3 = store
             .insert_workspace(&NewWorkspace {
                 repo_id,

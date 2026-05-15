@@ -54,13 +54,7 @@ pub async fn fetch_branch_lifecycle(
 ) -> Result<Option<BranchLifecycle>> {
     let out = Command::new("gh")
         .current_dir(worktree)
-        .args([
-            "pr",
-            "view",
-            branch,
-            "--json",
-            "state,isDraft,mergeable",
-        ])
+        .args(["pr", "view", branch, "--json", "state,isDraft,mergeable"])
         .output()
         .await;
 

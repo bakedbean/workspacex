@@ -1,7 +1,7 @@
 //! Project Manager pane: renders PM PTY into a sub-rect with focus-aware title.
 
-use crate::pty::session::Session;
 use crate::pty::render::render_screen;
+use crate::pty::session::Session;
 use crate::ui::PaneFocus;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -30,10 +30,7 @@ pub fn render(
         PaneFocus::ProjectManager => "── Project Manager [Tab/Esc back · r refresh] ──",
         PaneFocus::Dashboard => "── Project Manager [Tab to focus] ──",
     };
-    f.render_widget(
-        Paragraph::new(title).style(theme.dim_style()),
-        title_area,
-    );
+    f.render_widget(Paragraph::new(title).style(theme.dim_style()), title_area);
 
     match session {
         Some(s) => {

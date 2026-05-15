@@ -3,6 +3,7 @@ use crate::ui::theme::Theme;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub enum Modal {
@@ -84,4 +85,171 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         )
         .style(style);
     f.render_widget(para, rect);
+}
+
+/// Render the floating workspace-updates panel. Reads live App state via
+/// borrowed slices so the panel updates on every render tick.
+#[allow(clippy::too_many_arguments)]
+pub fn render_updates_panel(
+    f: &mut Frame,
+    area: Rect,
+    repos: &[crate::store::Repo],
+    workspaces: &[(RepoId, crate::store::Workspace)],
+    events: &HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
+    activity: &HashMap<crate::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
+    needs_attention: &HashSet<crate::store::WorkspaceId>,
+    awaiting: &HashMap<crate::store::WorkspaceId, (String, i64)>,
+    now_ms: i64,
+    theme: &Theme,
+) {
+    // Sizing: ~80 cols wide, ~25 rows tall, but never larger than the area.
+    let w = area.width.clamp(20, 80);
+    let h = area.height.clamp(8, 25);
+    let rect = centered(area, w, h);
+    f.render_widget(Clear, rect);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Workspace updates ")
+        .style(theme.dim_style());
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let body_area = chunks[0];
+    let footer_area = chunks[1];
+
+    let mut lines: Vec<Line> = Vec::new();
+    for repo in repos {
+        lines.push(Line::from(Span::styled(
+            repo.name.clone(),
+            theme.header_style(),
+        )));
+        let mut ws_for_repo: Vec<&crate::store::Workspace> = workspaces
+            .iter()
+            .filter(|(rid, _)| *rid == repo.id)
+            .map(|(_, w)| w)
+            .collect();
+        // Sort: attention first (by most recent), then active/idle by recent,
+        // then resumable, then off, then failed.
+        ws_for_repo.sort_by_key(|w| {
+            let attention = if needs_attention.contains(&w.id) { 0 } else { 1 };
+            let activity_rank = match activity.get(&w.id).copied() {
+                Some(crate::ui::updates_bar::ActivityState::Awaiting)
+                | Some(crate::ui::updates_bar::ActivityState::Waiting) => 0,
+                Some(crate::ui::updates_bar::ActivityState::Active)
+                | Some(crate::ui::updates_bar::ActivityState::Idle) => 1,
+                Some(crate::ui::updates_bar::ActivityState::Off) => 2,
+                None => 3,
+            };
+            let failed = if w.state == crate::store::WorkspaceState::Failed {
+                1
+            } else {
+                0
+            };
+            let recency = -events
+                .get(&w.id)
+                .and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms))
+                .unwrap_or(0);
+            (attention, failed, activity_rank, recency)
+        });
+        if ws_for_repo.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  (no workspaces)".to_string(),
+                theme.dim_style(),
+            )));
+        } else {
+            for w in ws_for_repo {
+                lines.push(workspace_row(
+                    w,
+                    events.get(&w.id),
+                    activity.get(&w.id).copied(),
+                    needs_attention.contains(&w.id),
+                    awaiting.get(&w.id),
+                    now_ms,
+                    theme,
+                ));
+            }
+        }
+        lines.push(Line::from(""));
+    }
+    if repos.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "(no repos)".to_string(),
+            theme.dim_style(),
+        )));
+    }
+
+    f.render_widget(
+        Paragraph::new(lines).style(theme.dim_style()),
+        body_area,
+    );
+    f.render_widget(
+        Paragraph::new("[esc] close").style(theme.dim_style()),
+        footer_area,
+    );
+}
+
+fn workspace_row<'a>(
+    w: &'a crate::store::Workspace,
+    events: Option<&'a crate::events::WorkspaceEvents>,
+    activity: Option<crate::ui::updates_bar::ActivityState>,
+    needs_attention: bool,
+    awaiting: Option<&'a (String, i64)>,
+    now_ms: i64,
+    _theme: &Theme,
+) -> Line<'a> {
+    use crate::ui::updates_bar::{ActivityState, format_age};
+    let glyph = if w.state == crate::store::WorkspaceState::Failed {
+        '✕'
+    } else if needs_attention {
+        '⚠'
+    } else {
+        match activity {
+            Some(ActivityState::Active) | Some(ActivityState::Idle) => '●',
+            Some(ActivityState::Awaiting) | Some(ActivityState::Waiting) => '⚠',
+            Some(ActivityState::Off) | None => {
+                if events.and_then(|e| e.latest.as_ref()).is_some() {
+                    '↻'
+                } else {
+                    '○'
+                }
+            }
+        }
+    };
+    let (status_text, age_anchor_ms) = if let Some((tool, ts)) = awaiting {
+        (format!("awaiting permission: {tool}"), Some(*ts))
+    } else if needs_attention {
+        (
+            "waiting".to_string(),
+            events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms)),
+        )
+    } else if matches!(
+        activity,
+        Some(ActivityState::Active) | Some(ActivityState::Idle)
+    ) {
+        let text = events
+            .and_then(|e| e.latest.as_ref().map(|s| s.display.clone()))
+            .unwrap_or_else(|| "active".to_string());
+        let ts = events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms));
+        (text, ts)
+    } else if w.state == crate::store::WorkspaceState::Failed {
+        ("failed".to_string(), None)
+    } else if events.and_then(|e| e.latest.as_ref()).is_some() {
+        ("resumable".to_string(), None)
+    } else {
+        ("no session".to_string(), None)
+    };
+    let age = age_anchor_ms.map(|t| format_age(now_ms.saturating_sub(t)));
+    let suffix = match age {
+        Some(a) => format!(" ({a})"),
+        None => String::new(),
+    };
+    Line::from(format!(
+        "  {glyph} {:<20} {}{}",
+        w.name, status_text, suffix
+    ))
 }

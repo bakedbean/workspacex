@@ -387,7 +387,44 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
         }
     }
     if let Some(m) = &app.modal {
-        modal::render(f, area, m, &app.theme);
+        match m {
+            crate::ui::modal::Modal::UpdatesPanel => {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                let mut awaiting: std::collections::HashMap<
+                    crate::store::WorkspaceId,
+                    (String, i64),
+                > = std::collections::HashMap::new();
+                for (_rid, w) in &app.workspaces {
+                    if let Some(a) = app.awaiting_permission(w.id) {
+                        awaiting.insert(w.id, a);
+                    }
+                }
+                let activity_translated: std::collections::HashMap<
+                    crate::store::WorkspaceId,
+                    crate::ui::updates_bar::ActivityState,
+                > = app
+                    .workspace_activity
+                    .iter()
+                    .map(|(k, v)| (*k, translate_activity(*v)))
+                    .collect();
+                crate::ui::modal::render_updates_panel(
+                    f,
+                    area,
+                    &app.repos,
+                    &app.workspaces,
+                    &app.workspace_events,
+                    &activity_translated,
+                    &app.workspace_needs_attention,
+                    &awaiting,
+                    now_ms,
+                    &app.theme,
+                );
+            }
+            other => modal::render(f, area, other, &app.theme),
+        }
     }
 }
 
@@ -919,6 +956,17 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
     Ok(())
 }
 
+fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {
+    use crate::ui::updates_bar::ActivityState as U;
+    match a {
+        ActivityState::Active => U::Active,
+        ActivityState::Idle => U::Idle,
+        ActivityState::Waiting => U::Waiting,
+        ActivityState::Awaiting => U::Awaiting,
+        ActivityState::Off => U::Off,
+    }
+}
+
 /// Periodically check each live workspace's current git branch against
 /// the DB; if claude (or a user) renamed it, update name + branch in the
 /// store. Runs forever; cheap when nothing has drifted.
@@ -1145,6 +1193,79 @@ mod pm_state_tests {
             "q should not dismiss UpdatesPanel"
         );
         assert!(!app.quit, "q should not propagate to App::quit");
+    }
+
+    #[test]
+    fn updates_panel_render_shows_grouped_workspaces() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo1 = store
+            .add_repo(std::path::Path::new("/tmp/r1"), "repo-alpha", "")
+            .unwrap();
+        let ws1 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo1,
+                name: "alpha-ws",
+                branch: "repo-alpha/alpha-ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws1, WorkspaceState::Ready)
+            .unwrap();
+        let repo2 = store
+            .add_repo(std::path::Path::new("/tmp/r2"), "repo-beta", "")
+            .unwrap();
+        let ws2 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo2,
+                name: "beta-ws",
+                branch: "repo-beta/beta-ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/beta-ws"),
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws2, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel);
+
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Workspace updates"),
+            "missing panel title:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("repo-alpha"),
+            "missing repo header:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("alpha-ws"),
+            "missing workspace row:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("repo-beta"),
+            "missing repo header:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("beta-ws"),
+            "missing workspace row:\n{rendered}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

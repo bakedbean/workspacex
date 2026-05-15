@@ -144,6 +144,12 @@ pub struct App {
     pub workspace_activity: std::collections::HashMap<crate::store::WorkspaceId, ActivityState>,
     /// Workspaces whose alert hasn't been acknowledged (cleared on attach).
     pub workspace_needs_attention: std::collections::HashSet<crate::store::WorkspaceId>,
+    /// Processes detected per workspace (cwd inside the workspace's
+    /// worktree). Refreshed every ~10s by branch_drift_poll.
+    pub workspace_processes:
+        std::collections::HashMap<crate::store::WorkspaceId, Vec<crate::proc::ProcInfo>>,
+    /// Epoch-ms of last completed `proc::scan` — throttle source.
+    pub last_proc_scan_ms: i64,
     pub theme: crate::ui::theme::Theme,
     pub pm: Option<std::sync::Arc<crate::pty::session::Session>>,
     pub pm_visible: bool,
@@ -177,6 +183,8 @@ impl App {
             workspace_events: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
+            workspace_processes: std::collections::HashMap::new(),
+            last_proc_scan_ms: 0,
             theme,
             pm: None,
             pm_visible: false,
@@ -1377,6 +1385,39 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     }
                 }
             }
+        }
+
+        // 5) Per-workspace process scan. Throttled to once per 10 s globally —
+        //    lsof returns everything in a single call, so we don't pay per-workspace.
+        let should_scan = {
+            let g = app.lock().await;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            now_ms.saturating_sub(g.last_proc_scan_ms) >= 10_000
+        };
+        if should_scan {
+            let procs = crate::proc::scan().await;
+            let worktrees: Vec<(crate::store::WorkspaceId, std::path::PathBuf)> = {
+                let g = app.lock().await;
+                g.workspaces
+                    .iter()
+                    .map(|(_, w)| (w.id, w.worktree_path.clone()))
+                    .collect()
+            };
+            let worktree_refs: Vec<(crate::store::WorkspaceId, &std::path::Path)> = worktrees
+                .iter()
+                .map(|(id, path)| (*id, path.as_path()))
+                .collect();
+            let bucketed = crate::proc::bucket_by_worktree(&procs, &worktree_refs);
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let mut g = app.lock().await;
+            g.workspace_processes = bucketed;
+            g.last_proc_scan_ms = now_ms;
         }
     }
 }

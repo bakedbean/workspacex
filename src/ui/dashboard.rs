@@ -1,9 +1,14 @@
 use crate::app::SelectionTarget;
-use crate::store::{Repo, SetupStatus, Workspace, WorkspaceState};
+use crate::store::{Repo, Workspace, WorkspaceState};
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+
+// Column widths for the workspace row. Names and branches are truncated
+// or right-padded so the columns align vertically across rows.
+const NAME_WIDTH: usize = 20;
+const BRANCH_BLOCK_WIDTH: usize = 28;
 
 #[derive(Debug, Clone)]
 pub enum Item<'a> {
@@ -119,70 +124,36 @@ pub fn render(
                 if let Some(SelectionTarget::Workspace(id)) = selected
                     && id == workspace.id
                 {
-                    // The main workspace row is selectable; the sub-line
-                    // below it is not.
                     selected_idx = Some(list_items.len());
                 }
-                let dot = match (*session_running, &workspace.state, *has_prior_session) {
-                    (true, _, _) => "●",
-                    (false, WorkspaceState::Failed, _) => "✕",
-                    (false, _, true) => "↻",
-                    _ => "○",
-                };
-                let setup_badge = match workspace.setup_status {
-                    SetupStatus::Ok | SetupStatus::Skipped | SetupStatus::NotRun => "",
-                    SetupStatus::Failed => " [setup-failed]",
-                };
-                // Priority: a tool_use pending (permission prompt) > the
-                // agent stopped at end_turn awaiting user > PTY-recency.
-                // The first two are the user-actionable states and override
-                // the activity column entirely.
-                let activity = if awaiting_tool.is_some() {
-                    "awaiting"
-                } else if *stopped {
-                    "stopped"
-                } else {
-                    match (*seconds_since_activity, *has_prior_session) {
-                        (Some(s), _) if s < 2 => "active",
-                        (Some(s), _) if s < 30 => "idle",
-                        (Some(_), _) => "waiting",
-                        (None, true) => "resumable",
-                        (None, false) => "off",
-                    }
-                };
-                let branch_line =
-                    format_branch_label(&workspace.branch, nerd_fonts, *lifecycle, theme);
-                let status_str = status
-                    .map(|s| format_status(&s, nerd_fonts))
-                    .unwrap_or_default();
-                let attn = if *needs_attention { "!" } else { " " };
-                let mut spans: Vec<Span<'static>> = Vec::with_capacity(branch_line.spans.len() + 4);
-                spans.push(Span::raw(format!(
-                    "{attn} {dot} {name}  [",
-                    name = workspace.name
-                )));
-                spans.extend(branch_line.spans);
-                spans.push(Span::raw(format!("]  {status_str}")));
-                let right = format!("{activity}{setup_badge}");
-                let left_w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-                let right_w = right.chars().count();
-                let gap = inner_width.saturating_sub(left_w + right_w).max(1);
-                spans.push(Span::raw(" ".repeat(gap)));
-                spans.push(Span::raw(right));
-                list_items.push(ListItem::new(Line::from(spans)));
-                // Sub-line: if awaiting, always render the permission prompt
-                // (more urgent than whatever the last event happened to be);
-                // otherwise fall back to the latest event sub-line.
+                let main = workspace_main_row(
+                    workspace,
+                    *session_running,
+                    *seconds_since_activity,
+                    *has_prior_session,
+                    *status,
+                    *needs_attention,
+                    *lifecycle,
+                    awaiting_tool,
+                    *stopped,
+                    nerd_fonts,
+                    theme,
+                    inner_width,
+                );
+                list_items.push(ListItem::new(main));
+                // Sub-line: if awaiting, render the permission prompt;
+                // otherwise fall back to latest event. Setup-failed glyph
+                // lives in the main row's name column in Task 5.
                 if let Some((tool_name, first_seen_ms)) = awaiting_tool {
                     let age = format_age(*first_seen_ms);
                     let sub = format!(
-                        "    \u{2514} \u{26a0} awaiting permission: {} ({})",
+                        "      \u{2514} \u{26a0} awaiting permission: {} ({})",
                         tool_name, age
                     );
                     list_items.push(ListItem::new(sub).style(theme.dim_style()));
                 } else if let Some(ev) = latest_event {
                     let age = format_age(ev.timestamp_ms);
-                    let sub = format!("    \u{2514} {} ({})", ev.display, age);
+                    let sub = format!("      \u{2514} {} ({})", ev.display, age);
                     list_items.push(ListItem::new(sub).style(theme.dim_style()));
                 }
             }
@@ -371,10 +342,151 @@ fn format_branch_label(
     Line::from(span)
 }
 
+/// Right-pad `s` with spaces to `target` chars. If `s` is longer, truncate
+/// to `target - 1` chars and append `…`. char-count based (handles
+/// multi-byte chars correctly for the alignment math we care about).
+fn truncate_pad(s: &str, target: usize) -> String {
+    let len = s.chars().count();
+    if len == target {
+        s.to_string()
+    } else if len < target {
+        let mut out = s.to_string();
+        out.push_str(&" ".repeat(target - len));
+        out
+    } else {
+        let mut out: String = s.chars().take(target.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Compact relative-time label for the right-side age column: `5s`, `12s`,
+/// `5m`, `1h`. Returns `—` (em-dash) when timestamp is 0 (sentinel for "no
+/// meaningful age").
+fn format_age_compact(timestamp_ms: i64) -> String {
+    if timestamp_ms <= 0 {
+        return "—".to_string();
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let secs = ((now_ms - timestamp_ms) / 1000).max(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
+}
+
+/// Map an activity word to a style (color) per the spec.
+fn activity_style(label: &str, theme: &Theme) -> Style {
+    match label {
+        "awaiting" | "stopped" => theme.warn_style(),
+        "active" => theme.ok_style(),
+        "waiting" | "resumable" | "off" => theme.dim_style(),
+        _ => Style::default(),
+    }
+}
+
+/// Compose a workspace's main row as a `Line` of spans with fixed columns.
+/// Right-justifies the activity + age at the inner-width edge.
+#[allow(clippy::too_many_arguments)]
+fn workspace_main_row(
+    workspace: &Workspace,
+    session_running: bool,
+    seconds_since_activity: Option<u64>,
+    has_prior_session: bool,
+    status: Option<crate::git::WorkspaceStatus>,
+    needs_attention: bool,
+    lifecycle: Option<crate::forge::BranchLifecycle>,
+    awaiting_tool: &Option<(String, i64)>,
+    stopped: bool,
+    nerd: bool,
+    theme: &Theme,
+    inner_width: usize,
+) -> Line<'static> {
+    let dot = match (session_running, &workspace.state, has_prior_session) {
+        (true, _, _) => "●",
+        (false, WorkspaceState::Failed, _) => "✕",
+        (false, _, true) => "↻",
+        _ => "○",
+    };
+    let activity = if awaiting_tool.is_some() {
+        "awaiting"
+    } else if stopped {
+        "stopped"
+    } else {
+        match (seconds_since_activity, has_prior_session) {
+            (Some(s), _) if s < 2 => "active",
+            (Some(s), _) if s < 30 => "idle",
+            (Some(_), _) => "waiting",
+            (None, true) => "resumable",
+            (None, false) => "off",
+        }
+    };
+    // Age source: the most recent of awaiting_tool.first_seen_ms and
+    // (implicit) latest event isn't available here, so we use 0 as a
+    // sentinel — the sub-line carries the latest event's age.
+    let age_ms = match awaiting_tool {
+        Some((_, ts)) => *ts,
+        None => 0,
+    };
+    let name_padded = truncate_pad(&workspace.name, NAME_WIDTH);
+    let branch_line = format_branch_label(&workspace.branch, nerd, lifecycle, theme);
+    // Take the styled spans from branch_line; pad/truncate to BRANCH_BLOCK_WIDTH.
+    let branch_concat: String = branch_line
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    let branch_style = branch_line
+        .spans
+        .iter()
+        .find_map(|s| s.style.fg)
+        .map(|fg| Style::default().fg(fg));
+    let branch_padded = truncate_pad(&branch_concat, BRANCH_BLOCK_WIDTH);
+    let git_status = status.map(|s| format_status(&s, nerd)).unwrap_or_default();
+    let age = format_age_compact(age_ms);
+
+    let attn = if needs_attention { "!" } else { " " };
+
+    // Left side: indent + attn + glyph + name + gutter + branch + gutter + git
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::raw("  ".to_string()));
+    spans.push(Span::styled(attn.to_string(), theme.warn_style()));
+    spans.push(Span::raw(format!(" {dot} ")));
+    spans.push(Span::raw(name_padded));
+    spans.push(Span::raw("   ".to_string()));
+    match branch_style {
+        Some(style) => spans.push(Span::styled(branch_padded, style)),
+        None => spans.push(Span::raw(branch_padded)),
+    }
+    spans.push(Span::raw("   ".to_string()));
+    if !git_status.is_empty() {
+        spans.push(Span::styled(git_status.clone(), theme.dim_style()));
+    }
+
+    // Right side: activity + space + age
+    let right_text_w = activity.chars().count() + 1 + age.chars().count();
+    let left_w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let gap = inner_width.saturating_sub(left_w + right_text_w).max(1);
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.push(Span::styled(
+        activity.to_string(),
+        activity_style(activity, theme),
+    ));
+    spans.push(Span::raw(" ".to_string()));
+    spans.push(Span::styled(age, theme.dim_style()));
+    Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{RepoId, WorkspaceId};
+    use crate::store::{RepoId, SetupStatus, WorkspaceId};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
@@ -455,7 +567,10 @@ mod tests {
         })
         .unwrap();
         let text = dump(&term, 120, 8);
-        assert!(text.contains("demo") && text.contains("/repos/demo"), "missing header: {text}");
+        assert!(
+            text.contains("demo") && text.contains("/repos/demo"),
+            "missing header: {text}"
+        );
         assert!(text.contains("alpha"), "missing workspace name: {text}");
         assert!(text.contains("active"), "missing activity column: {text}");
     }
@@ -875,11 +990,19 @@ mod tests {
             .expect("row a");
         let row_long = lines
             .iter()
-            .find(|l| l.contains("very-long-workspace-name"))
+            .find(|l| l.contains("very-long-workspac"))
             .expect("row long");
-        // Find the column where "active" starts in each row.
-        let col_a = row_a.find("active").expect("active in row a");
-        let col_long = row_long.find("active").expect("active in row long");
+        // Find the *char* column where "active" starts in each row. Using char
+        // indices avoids false drift from multi-byte glyphs (e.g. `…`) that
+        // appear in truncated names/branches.
+        let char_pos = |row: &str, needle: &str| -> usize {
+            let byte_pos = row
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle} not in: {row}"));
+            row[..byte_pos].chars().count()
+        };
+        let col_a = char_pos(row_a, "active");
+        let col_long = char_pos(row_long, "active");
         // Allow ±2 chars tolerance for unicode glyph cell width quirks.
         let diff = (col_a as isize - col_long as isize).abs();
         assert!(
@@ -1123,7 +1246,10 @@ mod tests {
             .lines()
             .find(|l| l.contains("demo") && l.contains("/repos/demo"))
             .expect("repo header line");
-        assert!(hdr.contains("· 2"), "expected workspace count in header: {hdr}");
+        assert!(
+            hdr.contains("· 2"),
+            "expected workspace count in header: {hdr}"
+        );
     }
 
     #[test]
@@ -1169,6 +1295,186 @@ mod tests {
             .lines()
             .any(|l| l.contains("alpha") && l.contains("active"));
         assert!(!bad, "should not show 'active' when awaiting: {text}");
+    }
+
+    #[test]
+    fn workspace_row_name_padded_to_fixed_width() {
+        let mut term = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        let r = repo(1, "demo");
+        let w_short = workspace(1, 1, "ab", "wsx/ab");
+        let w_long = workspace(2, 1, "much-longer-name", "wsx/much-longer-name");
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_short,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w_long,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        // Find the y of each workspace row by scanning the buffer for the
+        // name. Then check that the glyph after the name column starts at
+        // the same x on both rows.
+        let find_y = |needle: &str| -> u16 {
+            for y in 0..12u16 {
+                let row: String = (0..120u16)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect();
+                if row.contains(needle) {
+                    return y;
+                }
+            }
+            panic!("not found: {needle}");
+        };
+        let y_short = find_y("ab ");
+        let y_long = find_y("much-longer-name");
+        // Branch column should start at the same x on both rows.
+        // x = 2 (indent) + 1 (attn) + 1 (sep) + 1 (dot) + 1 (sep) + 20 (name) + 3 (gutter) = 29
+        let probe_x = 29u16;
+        // After truncation/padding, both rows' branch glyph should appear at
+        // probe_x — the branch glyph differs but its starting x should match.
+        let short_at = buf[(probe_x, y_short)].symbol();
+        let long_at = buf[(probe_x, y_long)].symbol();
+        // Both should be non-space (the branch glyph or first branch char).
+        assert!(
+            short_at != " " && long_at != " ",
+            "branch column misaligned: short={short_at:?} long={long_at:?}"
+        );
+    }
+
+    #[test]
+    fn workspace_row_branch_truncated_with_ellipsis() {
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let very_long_branch = "feat/the-quick-brown-fox-jumps-over-the-lazy-dog";
+        let w = workspace(1, 1, "alpha", very_long_branch);
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: None,
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let text = dump(&term, 120, 8);
+        let row = text
+            .lines()
+            .find(|l| l.contains("alpha"))
+            .expect("alpha row");
+        assert!(
+            row.contains('…'),
+            "expected branch ellipsis truncation: {row}"
+        );
+    }
+
+    #[test]
+    fn activity_word_uses_warn_color_for_stopped() {
+        // Direct unit test of the style mapping.
+        let theme = Theme::default_theme();
+        let style_stopped = activity_style("stopped", &theme);
+        let style_awaiting = activity_style("awaiting", &theme);
+        assert_eq!(style_stopped.fg, Some(theme.warn));
+        assert_eq!(style_awaiting.fg, Some(theme.warn));
+    }
+
+    #[test]
+    fn activity_word_uses_ok_color_for_active() {
+        let theme = Theme::default_theme();
+        let style = activity_style("active", &theme);
+        assert_eq!(style.fg, Some(theme.ok));
+    }
+
+    #[test]
+    fn activity_word_uses_dim_for_off_and_resumable() {
+        let theme = Theme::default_theme();
+        assert_eq!(activity_style("off", &theme).fg, Some(theme.dim));
+        assert_eq!(activity_style("resumable", &theme).fg, Some(theme.dim));
+    }
+
+    #[test]
+    fn sub_line_indent_aligns_with_name_column() {
+        use crate::events::{EventKind, EventSnapshot};
+        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+        let r = repo(1, "demo");
+        let w = workspace(1, 1, "alpha", "wsx/alpha");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let ev = EventSnapshot {
+            kind: EventKind::AssistantText,
+            display: "hello".into(),
+            timestamp_ms: now - 5_000,
+        };
+        let items = vec![
+            Item::Header { repo: &r },
+            Item::Workspace {
+                repo: &r,
+                workspace: &w,
+                session_running: true,
+                seconds_since_activity: Some(0),
+                has_prior_session: false,
+                status: None,
+                latest_event: Some(ev),
+                needs_attention: false,
+                lifecycle: None,
+                awaiting_tool: None,
+                stopped: false,
+            },
+        ];
+        let mut state = DashboardState::default();
+        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+            .unwrap();
+        let buf = term.backend().buffer();
+        // Find the sub-line row (contains "hello") and confirm the └ glyph
+        // is at column 6.
+        let mut sub_y = None;
+        for y in 0..8u16 {
+            let row: String = (0..120u16)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect();
+            if row.contains("hello") && row.contains('└') {
+                sub_y = Some(y);
+                break;
+            }
+        }
+        let y = sub_y.expect("sub-line not found");
+        assert_eq!(buf[(6u16, y)].symbol(), "└");
     }
 }
 

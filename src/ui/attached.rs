@@ -44,8 +44,9 @@ pub fn render(
         f.render_widget(Paragraph::new(line).style(theme.warn_style()), status_area);
     }
 
-    let footer =
-        format!(" {label}   [Ctrl-x] d=detach u=updates e=edit t=term v=diff x=send-Ctrl-x ");
+    let footer = format!(
+        " {label}   [Ctrl-x] d=detach u=updates e=edit t=term v=diff k=procs x=send-Ctrl-x "
+    );
     f.render_widget(Paragraph::new(footer).style(theme.dim_style()), footer_area);
 }
 

@@ -101,6 +101,7 @@ Value sources:
 | `e` | Open the selected workspace in your editor (no-op on repo header) |
 | `t` | Open the selected workspace in a terminal (no-op on repo header) |
 | `v` | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |
+| `k` | Show processes running under the selected workspace's worktree (no-op on repo header) |
 | `d` | Archive the selected workspace (no-op on repo header) |
 | `q` | Quit (kills all running sessions) |
 | `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
@@ -128,6 +129,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x e` | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard) |
 | `Ctrl-x t` | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`) |
 | `Ctrl-x v` | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`) |
+| `Ctrl-x k` | Show processes running under the attached workspace's worktree |
 | `Ctrl-x x` | Send a literal `Ctrl-x` to claude |
 
 ## Editor, terminal, and diff integration
@@ -217,6 +219,40 @@ Workspaces — and the claude sessions running inside them — keep running whil
 - wsx's leader key is `Ctrl-x`, chosen specifically to not collide with tmux's default `Ctrl-b` prefix (or anyone's `Ctrl-a` customization). No tmux config needed.
 - **Mosh** drops in cleanly if your network is flaky: `mosh desktop -- tmux attach -t wsx`.
 - **Tailscale** (or any VPN) makes the host reachable from anywhere by a stable name without port-forwarding.
+
+## Process tracking
+
+`[k]` on the dashboard (or `Ctrl-x k` while attached) shows long-running
+processes whose current working directory is inside the selected
+workspace's worktree — dev servers, watchers, anything you started in
+that worktree from a terminal. Workspaces with detected processes show
+a `~N` count between the branch and activity columns on the dashboard.
+
+The modal lists each process's PID, command, and full cwd:
+
+    ─── Processes — fix-bug ──────
+      PID    COMMAND          CWD
+      12345  npm              /home/user/wt/fix-bug
+      12389  pytest           /home/user/wt/fix-bug/tests
+    ─────────────────────────────
+    [↑/↓] move   [k] term   [K] kill   [esc] close
+
+`k` sends `SIGTERM` to the highlighted process; `K` sends `SIGKILL`.
+After either, wsx immediately re-scans so the list reflects the new
+state.
+
+**Notes:**
+
+- Detection runs once every 10 seconds in the background via `lsof -d cwd`.
+- Shells and editors (bash, zsh, nvim, code, etc.) are filtered out so the
+  count surfaces what's interesting — your dev server, not the terminal
+  hosting it.
+- wsx never starts these processes itself. Launch them however you
+  like (the `[t]` terminal keybind is one option). The feature is
+  observability plus a kill hook, not lifecycle management.
+- Requires `lsof` to be installed (standard on most Linux/macOS setups).
+  If it's missing, the count stays at 0 and the modal shows "(no tracked
+  processes)" — no errors.
 
 ## Dashboard status indicators
 

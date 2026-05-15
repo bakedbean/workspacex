@@ -742,6 +742,15 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             // 'v' on a Repo header is intentionally a no-op.
         }
+        (KeyCode::Char('k'), _) => {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                app.modal = Some(Modal::ProcessList {
+                    workspace_id: id,
+                    selected: 0,
+                });
+            }
+            // 'k' on a Repo header is intentionally a no-op.
+        }
         (KeyCode::Char('d'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
                 let name = app
@@ -813,6 +822,48 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         _ => {}
     }
     Ok(())
+}
+
+/// Immediately re-run `proc::scan` and re-bucket. Used after a kill
+/// so the modal reflects the new state without waiting for the
+/// next 10s poll tick.
+async fn rescan_processes(app: &mut App) {
+    let procs = crate::proc::scan().await;
+    let worktrees: Vec<(crate::store::WorkspaceId, std::path::PathBuf)> = app
+        .workspaces
+        .iter()
+        .map(|(_, w)| (w.id, w.worktree_path.clone()))
+        .collect();
+    let worktree_refs: Vec<(crate::store::WorkspaceId, &std::path::Path)> = worktrees
+        .iter()
+        .map(|(id, path)| (*id, path.as_path()))
+        .collect();
+    app.workspace_processes = crate::proc::bucket_by_worktree(&procs, &worktree_refs);
+    app.last_proc_scan_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    // Clamp the modal's `selected` index after the list size changes.
+    // Read workspace_id out first (Copy) to avoid a simultaneous
+    // borrow of `app.workspace_processes` and `app.modal`.
+    let modal_ws_id = match &app.modal {
+        Some(Modal::ProcessList { workspace_id, .. }) => Some(*workspace_id),
+        _ => None,
+    };
+    if let Some(ws_id) = modal_ws_id {
+        let len = app
+            .workspace_processes
+            .get(&ws_id)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        if let Some(Modal::ProcessList { selected, .. }) = &mut app.modal {
+            *selected = if len == 0 {
+                0
+            } else {
+                (*selected).min(len - 1)
+            };
+        }
+    }
 }
 
 fn build_spawn_info(
@@ -930,6 +981,13 @@ async fn handle_key_attached(
                         });
                     }
                 }
+                return Ok(());
+            }
+            KeyCode::Char('k') => {
+                app.modal = Some(Modal::ProcessList {
+                    workspace_id: id,
+                    selected: 0,
+                });
                 return Ok(());
             }
             _ => return Ok(()),
@@ -1208,12 +1266,48 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 _ => {}
             }
         }
-        Modal::ProcessList { .. } => {
-            // Task 5 will wire arrow keys and kill controls. For now the
-            // modal isn't reachable from any keybind, but we still need
-            // an exhaustive arm — accept Esc to dismiss defensively.
-            if matches!(k.code, KeyCode::Esc) {
-                app.modal = None;
+        Modal::ProcessList {
+            workspace_id,
+            mut selected,
+        } => {
+            let procs = app
+                .workspace_processes
+                .get(&workspace_id)
+                .cloned()
+                .unwrap_or_default();
+            match k.code {
+                KeyCode::Esc => {
+                    app.modal = None;
+                }
+                KeyCode::Up => {
+                    selected = selected.saturating_sub(1);
+                    app.modal = Some(Modal::ProcessList {
+                        workspace_id,
+                        selected,
+                    });
+                }
+                KeyCode::Down => {
+                    if !procs.is_empty() {
+                        selected = (selected + 1).min(procs.len() - 1);
+                    }
+                    app.modal = Some(Modal::ProcessList {
+                        workspace_id,
+                        selected,
+                    });
+                }
+                KeyCode::Char('k') => {
+                    if let Some(p) = procs.get(selected) {
+                        let _ = crate::proc::kill_pid(p.pid, "TERM").await;
+                        rescan_processes(app).await;
+                    }
+                }
+                KeyCode::Char('K') => {
+                    if let Some(p) = procs.get(selected) {
+                        let _ = crate::proc::kill_pid(p.pid, "KILL").await;
+                        rescan_processes(app).await;
+                    }
+                }
+                _ => {}
             }
         }
     }

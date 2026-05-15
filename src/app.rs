@@ -372,14 +372,32 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .find(|(_, w)| w.id == *id)
                     .map(|(_, w)| w.name.clone())
                     .unwrap_or_default();
-                attached::resize_session(&session, area);
-                attached::render(f, area, &session, &label, &app.theme);
+                let row = if matches!(
+                    app.modal,
+                    Some(crate::ui::modal::Modal::UpdatesPanel)
+                ) {
+                    None
+                } else {
+                    compute_status_row(app, Some(*id))
+                };
+                let footer_rows = if row.is_some() { 2 } else { 1 };
+                attached::resize_session(&session, area, footer_rows);
+                attached::render(f, area, &session, &label, row.as_ref(), &app.theme);
             }
         }
         View::AttachedPm => {
             if let Some(session) = app.pm.as_ref() {
-                attached::resize_session(session, area);
-                attached::render(f, area, session, "project-manager", &app.theme);
+                let row = if matches!(
+                    app.modal,
+                    Some(crate::ui::modal::Modal::UpdatesPanel)
+                ) {
+                    None
+                } else {
+                    compute_status_row(app, None)
+                };
+                let footer_rows = if row.is_some() { 2 } else { 1 };
+                attached::resize_session(session, area, footer_rows);
+                attached::render(f, area, session, "project-manager", row.as_ref(), &app.theme);
             } else {
                 // PM session went away; bounce to dashboard on next event.
                 app.view = View::Dashboard;
@@ -956,6 +974,37 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
     Ok(())
 }
 
+fn compute_status_row(
+    app: &App,
+    attached_id: Option<crate::store::WorkspaceId>,
+) -> Option<crate::ui::updates_bar::UpdatesRow> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let candidates: Vec<crate::ui::updates_bar::WorkspaceUpdateInfo> = app
+        .workspaces
+        .iter()
+        .map(|(_, w)| {
+            let activity = app
+                .workspace_activity
+                .get(&w.id)
+                .copied()
+                .map(translate_activity)
+                .unwrap_or(crate::ui::updates_bar::ActivityState::Off);
+            crate::ui::updates_bar::WorkspaceUpdateInfo {
+                id: w.id,
+                name: w.name.as_str(),
+                events: app.workspace_events.get(&w.id),
+                activity,
+                needs_attention: app.workspace_needs_attention.contains(&w.id),
+                awaiting_tool: app.awaiting_permission(w.id),
+            }
+        })
+        .collect();
+    crate::ui::updates_bar::select_row(attached_id, &candidates, now_ms)
+}
+
 fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {
     use crate::ui::updates_bar::ActivityState as U;
     match a {
@@ -1266,6 +1315,152 @@ mod pm_state_tests {
             rendered.contains("beta-ws"),
             "missing workspace row:\n{rendered}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attached_view_shows_status_row_with_other_workspace_event() {
+        use crate::events::{EventKind, EventSnapshot, WorkspaceEvents};
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let attached_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "attached-here",
+                branch: "repo/attached-here",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/attached"),
+            })
+            .unwrap();
+        store
+            .set_workspace_state(attached_id, WorkspaceState::Ready)
+            .unwrap();
+        let other_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "the-other",
+                branch: "repo/the-other",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/other"),
+            })
+            .unwrap();
+        store
+            .set_workspace_state(other_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Spawn a session for the attached workspace so the view has a PTY to render.
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+        };
+        app.sessions
+            .spawn(attached_id, std::path::Path::new("."), 80, 24, mode)
+            .unwrap();
+        app.view = crate::ui::View::Attached(attached_id);
+        // Give "the-other" a recent event.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let ev = WorkspaceEvents {
+            latest: Some(EventSnapshot {
+                kind: EventKind::AssistantText,
+                display: "ran cargo test".to_string(),
+                timestamp_ms: now_ms - 3000,
+            }),
+            ..Default::default()
+        };
+        app.workspace_events.insert(other_id, ev);
+
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("the-other"),
+            "expected status row mention of the other workspace:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("ran cargo test"),
+            "expected status row event text:\n{rendered}"
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attached_view_no_status_row_when_no_other_activity() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let attached_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "only-one",
+                branch: "repo/only-one",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/only"),
+            })
+            .unwrap();
+        store
+            .set_workspace_state(attached_id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+        };
+        app.sessions
+            .spawn(attached_id, std::path::Path::new("."), 80, 24, mode)
+            .unwrap();
+        app.view = crate::ui::View::Attached(attached_id);
+
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        // The bottom row is the footer with "Ctrl-a d detach". The second-
+        // to-last row should NOT contain a status indicator glyph.
+        let h = buf.area.height;
+        let second_to_last: String = (0..buf.area.width)
+            .map(|x| buf[(x, h - 2)].symbol())
+            .collect();
+        assert!(
+            !second_to_last.contains('⚠'),
+            "unexpected attention glyph in row {}: {second_to_last:?}",
+            h - 2
+        );
+        assert!(
+            !second_to_last.contains('●'),
+            "unexpected activity glyph in row {}: {second_to_last:?}",
+            h - 2
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

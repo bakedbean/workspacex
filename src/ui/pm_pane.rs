@@ -34,10 +34,17 @@ pub fn render(
 
     match session {
         Some(s) => {
-            let parser = s.parser.lock().unwrap();
+            let offset = s
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let mut parser = s.parser.lock().unwrap();
+            parser.set_scrollback(offset);
             let screen = parser.screen();
             render_screen(screen, f.buffer_mut(), term_area);
-            if matches!(focus, PaneFocus::ProjectManager) && !screen.hide_cursor() {
+            if matches!(focus, PaneFocus::ProjectManager)
+                && !screen.hide_cursor()
+                && offset == 0
+            {
                 let (cy, cx) = screen.cursor_position();
                 f.set_cursor_position((term_area.x + cx, term_area.y + cy));
             }

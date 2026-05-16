@@ -30,11 +30,15 @@ pub fn render(
     let status_area = chunks[1];
     let footer_area = chunks[2];
 
-    let parser = session.parser.lock().unwrap();
+    let offset = session
+        .scrollback_offset
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let mut parser = session.parser.lock().unwrap();
+    parser.set_scrollback(offset);
     let screen = parser.screen();
     render_screen(screen, f.buffer_mut(), term_area);
     let (cy, cx) = screen.cursor_position();
-    if !screen.hide_cursor() {
+    if !screen.hide_cursor() && offset == 0 {
         f.set_cursor_position((term_area.x + cx, term_area.y + cy));
     }
     drop(parser);

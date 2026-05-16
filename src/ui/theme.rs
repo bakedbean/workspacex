@@ -1,4 +1,4 @@
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
@@ -124,7 +124,9 @@ impl Theme {
     }
 
     pub fn header_style(&self) -> Style {
-        let mut s = Style::default().fg(self.header_fg);
+        let mut s = Style::default()
+            .fg(self.header_fg)
+            .add_modifier(Modifier::BOLD);
         if let Some(bg) = self.header_bg {
             s = s.bg(bg);
         }

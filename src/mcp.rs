@@ -22,18 +22,18 @@ fn read_claude_json(path: &Path) -> Result<Option<Value>> {
     if s.trim().is_empty() {
         return Ok(None);
     }
-    let v: Value = serde_json::from_str(&s)
-        .map_err(|e| Error::Pty(format!("parse ~/.claude.json: {e}")))?;
+    let v: Value =
+        serde_json::from_str(&s).map_err(|e| Error::Pty(format!("parse ~/.claude.json: {e}")))?;
     Ok(Some(v))
 }
 
 /// Whether the mirror feature is enabled. Defaults to ON; the user can
 /// opt out with `wsx settings set mcp_mirror false`.
 pub fn enabled(store: &crate::store::Store) -> bool {
-    match store.get_setting("mcp_mirror").ok().flatten().as_deref() {
-        Some("false") | Some("off") | Some("0") | Some("no") => false,
-        _ => true,
-    }
+    !matches!(
+        store.get_setting("mcp_mirror").ok().flatten().as_deref(),
+        Some("false" | "off" | "0" | "no")
+    )
 }
 
 /// Mirror `projects[repo_path].mcpServers` → `projects[worktree_path].mcpServers`

@@ -37,6 +37,34 @@ pub fn mirror_mcp_servers(repo_path: &Path, worktree_path: &Path) -> Result<()> 
     mirror_into(&p, repo_path, worktree_path)
 }
 
+/// Remove `projects[worktree_path]` from `~/.claude.json`. No-op when
+/// the file or entry is missing. Best-effort: callers should ignore
+/// errors (log + continue).
+pub fn remove_worktree_entry(worktree_path: &Path) -> Result<()> {
+    let Some(p) = claude_json_path() else {
+        return Ok(());
+    };
+    remove_into(&p, worktree_path)
+}
+
+fn remove_into(claude_json: &Path, worktree: &Path) -> Result<()> {
+    let Some(mut root) = read_claude_json(claude_json)? else {
+        return Ok(());
+    };
+    let worktree_key = worktree.to_string_lossy().into_owned();
+    let Some(projects) = root
+        .as_object_mut()
+        .and_then(|o| o.get_mut("projects"))
+        .and_then(|p| p.as_object_mut())
+    else {
+        return Ok(());
+    };
+    if projects.remove(&worktree_key).is_none() {
+        return Ok(());
+    }
+    write_claude_json_atomic(claude_json, &root)
+}
+
 /// Pure form of `mirror_mcp_servers` that takes the claude.json path
 /// directly, for testability.
 fn mirror_into(claude_json: &Path, repo: &Path, worktree: &Path) -> Result<()> {
@@ -195,6 +223,43 @@ mod tests {
             after["projects"]["/wt"]["mcpServers"],
             serde_json::json!({"datadog": {"type": "http"}})
         );
+    }
+
+    #[test]
+    fn remove_into_no_file_is_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join("nope.json");
+        remove_into(&p, Path::new("/wt")).unwrap();
+        assert!(!p.exists());
+    }
+
+    #[test]
+    fn remove_into_no_entry_is_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        let original = serde_json::json!({"projects": {"/other": {}}});
+        write_json(&p, &original);
+        remove_into(&p, Path::new("/wt")).unwrap();
+        assert_eq!(read_json(&p), original);
+    }
+
+    #[test]
+    fn remove_into_drops_full_entry() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        write_json(
+            &p,
+            &serde_json::json!({
+                "projects": {
+                    "/r": {"mcpServers": {}},
+                    "/wt": {"mcpServers": {"x": {}}, "lastSessionId": "abc"}
+                }
+            }),
+        );
+        remove_into(&p, Path::new("/wt")).unwrap();
+        let after = read_json(&p);
+        assert!(after["projects"].get("/wt").is_none());
+        assert!(after["projects"]["/r"].is_object());
     }
 
     #[test]

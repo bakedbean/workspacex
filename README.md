@@ -80,6 +80,8 @@ Known keys:
 | `pm_enabled` | Enable the Project Manager pane (`p` keybind). Default ON; set to `off` / `false` / `0` / `no` to disable. |
 | `pm_custom_instructions` | Free-text appended to the project manager's system prompt. Same `@file` / empty-clears semantics as `custom_instructions`. |
 | `mcp_mirror` | Inherit MCP servers from the source repo into worktrees (see [MCP server inheritance](#mcp-server-inheritance)). Default ON; set to `off` / `false` / `0` / `no` to disable. |
+| `remote_control` | Pass `--remote-control` to claude on every spawn so the session is reachable via [claude.ai/code](https://claude.ai/code) and the Claude mobile app (see [Remote control](#remote-control)). Default ON; set to `off` / `false` / `0` / `no` to disable. |
+| `remote_control_sandbox` | When `remote_control` is on, also pass `--sandbox` for an extra safety wrapper on remote-issued commands. Default OFF; set to `on` / `true` / `1` / `yes` to enable. |
 
 Value sources:
 
@@ -512,6 +514,34 @@ wsx config set mcp_mirror false
 With it disabled, wsx never reads or writes `~/.claude.json`. You can
 still configure MCP servers per-workspace by running `claude mcp add
 ...` while attached.
+
+## Remote control
+
+Claude Code's `--remote-control` flag exposes a running session to
+[claude.ai/code](https://claude.ai/code) and the Claude iOS/Android
+apps. The local PTY behavior is unchanged — claude prints a session
+URL and a QR code at startup that you can scan from your phone or
+open in a browser to attach remotely.
+
+wsx passes `--remote-control` to every claude spawn (workspaces and
+the PM pane) by default, so any session is reachable from your phone
+without extra setup.
+
+**Toggle**: disable with `wsx config set remote_control false`. With
+it off, sessions are local-only and nothing is sent to Anthropic's
+relay servers.
+
+**Sandbox**: claude offers `--sandbox` as an extra safety wrapper for
+remote-issued commands. Disabled by default in wsx; enable with
+`wsx config set remote_control_sandbox true`.
+
+**Auth**: the relay rides on your claude.ai account. If you're not
+signed in or you're offline, the local session continues to work and
+the remote relay just fails silently.
+
+**Privacy**: enabling remote control routes session state through
+Anthropic's relay infrastructure. The session URL emitted in the PTY
+is also visible to anyone seeing your screen.
 
 ## Testing
 

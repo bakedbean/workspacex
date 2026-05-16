@@ -87,6 +87,8 @@ fn known_setting_key(k: &str) -> bool {
             | "pm_enabled"
             | "pm_custom_instructions"
             | "mcp_mirror"
+            | "remote_control"
+            | "remote_control_sandbox"
     )
 }
 
@@ -484,6 +486,12 @@ mod tests {
     #[test]
     fn accepts_mcp_mirror() {
         assert!(known_setting_key("mcp_mirror"));
+    }
+
+    #[test]
+    fn accepts_remote_control_settings() {
+        assert!(known_setting_key("remote_control"));
+        assert!(known_setting_key("remote_control_sandbox"));
     }
 
     #[test]

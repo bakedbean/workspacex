@@ -1081,10 +1081,7 @@ mod tests {
             let mut p = s.parser.lock().unwrap();
             p.set_scrollback(0);
             let live = p.screen().contents();
-            assert!(
-                live.contains("line 199"),
-                "live should show latest: {live}"
-            );
+            assert!(live.contains("line 199"), "live should show latest: {live}");
         }
         // After scrolling back, set_scrollback should reveal older lines.
         s.scroll_up(150);

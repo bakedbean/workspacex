@@ -777,8 +777,7 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
         View::Attached(id) => app.sessions.get(*id),
         View::AttachedPm => app.pm.clone(),
         View::Dashboard
-            if app.pm_visible
-                && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
+            if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
         {
             app.pm.clone()
         }

@@ -232,6 +232,21 @@ pub async fn refresh_pm(
     Ok(())
 }
 
+/// Open the PM pane and then send a refresh message so PM picks up the
+/// latest workspaces.json. Used by the `p` key handler on every reopen
+/// after the first (the first open goes through
+/// `open_pm_with_auto_summary` which already prompts an initial
+/// summary).
+pub async fn open_pm_with_refresh(
+    mgr: &mut crate::pty::session::SessionManager,
+    store: &Store,
+    pm_dir: &Path,
+    custom_instructions: Option<String>,
+) -> Result<()> {
+    open_pm(mgr, store, pm_dir, custom_instructions).await?;
+    refresh_pm(mgr, store, pm_dir).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,6 +475,49 @@ mod tests {
             screen.contains("status summary"),
             "expected auto-summary echoed by cat. screen: {screen:?}"
         );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_pm_with_refresh_sends_refresh_message_on_reopen() {
+        // Models the issue #28 fix: closing+reopening the PM pane (`p`)
+        // should refresh PM, not just rewrite workspaces.json silently.
+        let dir = TempDir::new().unwrap();
+        let wrapper = dir.path().join("claude-stub.sh");
+        std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&wrapper, perm).unwrap();
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", &wrapper);
+        }
+
+        let pm_root = dir.path().join("pm");
+        let store = Store::open_in_memory().unwrap();
+        store.add_repo(Path::new("/tmp/r"), "r", "").unwrap();
+        let mut mgr = crate::pty::session::SessionManager::new();
+        open_pm(&mut mgr, &store, &pm_root, None).await.unwrap();
+        let session = mgr.pm().expect("pm session");
+
+        // Prime the activity stream so send_text_when_settled has something
+        // to wait on.
+        session.writer.send(b"prime\n".to_vec()).await.unwrap();
+
+        // Simulate the reopen path: hide-then-show in the `p` handler now
+        // calls open_pm_with_refresh.
+        open_pm_with_refresh(&mut mgr, &store, &pm_root, None)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let screen = session.parser.lock().unwrap().screen().contents();
+        assert!(
+            screen.contains("Refresh"),
+            "expected refresh echo from cat. screen: {screen:?}"
+        );
+
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }

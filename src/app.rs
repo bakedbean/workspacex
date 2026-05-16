@@ -997,7 +997,15 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                         .ok()
                         .flatten();
                     let result = if app.pm_auto_summary_sent {
-                        crate::pm::open_pm(&mut app.sessions, &app.store, &pm_dir, custom).await
+                        // Reopen path: refresh so PM picks up workspace
+                        // changes that happened while the pane was hidden.
+                        crate::pm::open_pm_with_refresh(
+                            &mut app.sessions,
+                            &app.store,
+                            &pm_dir,
+                            custom,
+                        )
+                        .await
                     } else {
                         crate::pm::open_pm_with_auto_summary(
                             &mut app.sessions,

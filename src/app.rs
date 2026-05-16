@@ -836,7 +836,8 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         (KeyCode::Enter, _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
                 app.workspace_needs_attention.remove(&id);
-                if let Some((id, path, mode)) = build_spawn_info(app, id) {
+                if let Some((id, path, mode, repo_path)) = build_spawn_info(app, id) {
+                    maybe_mirror_mcp(app, &repo_path, &path);
                     let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
                     app.view = View::Attached(id);
                 }
@@ -1104,6 +1105,7 @@ fn build_spawn_info(
     crate::store::WorkspaceId,
     std::path::PathBuf,
     crate::pty::session::SpawnMode,
+    std::path::PathBuf,
 )> {
     let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
     let repo = app.repos.iter().find(|r| r.id == *rid)?;
@@ -1133,7 +1135,17 @@ fn build_spawn_info(
             yolo,
         }
     };
-    Some((ws_id, ws.worktree_path.clone(), mode))
+    Some((ws_id, ws.worktree_path.clone(), mode, repo.path.clone()))
+}
+
+/// Best-effort MCP server mirror. Logs and continues on any failure.
+fn maybe_mirror_mcp(app: &App, repo_path: &std::path::Path, worktree_path: &std::path::Path) {
+    if !crate::mcp::enabled(&app.store) {
+        return;
+    }
+    if let Err(e) = crate::mcp::mirror_mcp_servers(repo_path, worktree_path) {
+        tracing::warn!(error = %e, "failed to mirror MCP servers; continuing");
+    }
 }
 
 async fn handle_key_attached(
@@ -1491,7 +1503,8 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                         // Mirror the dashboard-attach flow: clear the
                         // alert, spawn (or resume) the PTY, switch view.
                         app.workspace_needs_attention.remove(&ws_id);
-                        if let Some((id, path, mode)) = build_spawn_info(app, ws_id) {
+                        if let Some((id, path, mode, repo_path)) = build_spawn_info(app, ws_id) {
+                            maybe_mirror_mcp(app, &repo_path, &path);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
                             app.view = View::Attached(id);
                         }

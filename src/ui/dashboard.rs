@@ -312,7 +312,7 @@ fn repo_header_lines(
         Span::styled(repo.name.clone(), theme.header_style()),
         Span::styled(
             format!(" · {} · {}", repo.path.display(), count),
-            theme.dim_style(),
+            theme.path_style(),
         ),
     ]);
     let rule_text: String = "─".repeat(inner_width);

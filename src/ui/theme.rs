@@ -10,6 +10,9 @@ pub struct Theme {
     pub selected_bg: Color,
     /// Sub-lines, empty hints, dashboard footer.
     pub dim: Color,
+    /// Repo header's path/count tail — distinct muted tone so the path
+    /// doesn't blur into the workspace sub-lines (which use `dim`).
+    pub path: Color,
     /// Success/positive states (reserved for future per-span styling).
     pub ok: Color,
     /// Warning/in-progress states (reserved).
@@ -29,9 +32,10 @@ impl Theme {
         Self {
             header_fg: Color::Cyan,
             header_bg: Some(Color::Reset),
-            selected_fg: Color::Black,
-            selected_bg: Color::Cyan,
+            selected_fg: Color::White,
+            selected_bg: Color::DarkGray,
             dim: Color::DarkGray,
+            path: Color::Indexed(67), // 256-color SteelBlue3 — muted blue
             ok: Color::Green,
             warn: Color::Yellow,
             err: Color::Red,
@@ -49,14 +53,16 @@ impl Theme {
         let yellow = Color::Rgb(0xf1, 0xfa, 0x8c);
         let red = Color::Rgb(0xff, 0x55, 0x55);
         let comment = Color::Rgb(0x62, 0x72, 0xa4);
-        let bg = Color::Rgb(0x28, 0x2a, 0x36);
+        let current_line = Color::Rgb(0x44, 0x47, 0x5a);
+        let foreground = Color::Rgb(0xf8, 0xf8, 0xf2);
         let _ = cyan; // reserved for later use
         Self {
             header_fg: purple,
             header_bg: None,
-            selected_fg: bg,
-            selected_bg: pink,
+            selected_fg: foreground,
+            selected_bg: current_line,
             dim: comment,
+            path: Color::Rgb(0x82, 0x90, 0xb4), // softer blue-grey
             ok: green,
             warn: yellow,
             err: red,
@@ -75,12 +81,16 @@ impl Theme {
         let green = Color::Rgb(0x99, 0xad, 0x6a); // string
         let purple = Color::Rgb(0xc6, 0xb6, 0xee); // variable
         let gray = Color::Rgb(0x88, 0x88, 0x88); // comment
+        let cursor_line = Color::Rgb(0x33, 0x33, 0x33); // jellybeans CursorLine
+        let fg = Color::Rgb(0xe8, 0xe8, 0xd3); // jellybeans Normal fg
+        let _ = (bg, yellow);
         Self {
             header_fg: blue,
             header_bg: None,
-            selected_fg: bg,
-            selected_bg: yellow,
+            selected_fg: fg,
+            selected_bg: cursor_line,
             dim: gray,
+            path: Color::Rgb(0xb8, 0xa0, 0x78), // warmer tan, clearer separation from gray
             ok: green,
             warn: orange,
             err: red,
@@ -92,19 +102,23 @@ impl Theme {
     pub fn nord() -> Self {
         // https://www.nordtheme.com/docs/colors-and-palettes
         let polar0 = Color::Rgb(0x2e, 0x34, 0x40); // background
+        let polar1 = Color::Rgb(0x3b, 0x42, 0x52); // selection bg
         let polar3 = Color::Rgb(0x4c, 0x56, 0x6a); // muted
+        let snow_storm1 = Color::Rgb(0xd8, 0xde, 0xe9);
         let frost1 = Color::Rgb(0x88, 0xc0, 0xd0); // header cyan
         let aurora_red = Color::Rgb(0xbf, 0x61, 0x6a);
         let aurora_orange = Color::Rgb(0xd0, 0x87, 0x70);
         let aurora_yellow = Color::Rgb(0xeb, 0xcb, 0x8b);
         let aurora_green = Color::Rgb(0xa3, 0xbe, 0x8c);
         let aurora_purple = Color::Rgb(0xb4, 0x8e, 0xad);
+        let _ = polar0;
         Self {
             header_fg: frost1,
             header_bg: None,
-            selected_fg: polar0,
-            selected_bg: frost1,
+            selected_fg: snow_storm1,
+            selected_bg: polar1,
             dim: polar3,
+            path: Color::Rgb(0x81, 0xa1, 0xc1), // Nord frost3
             ok: aurora_green,
             warn: aurora_yellow,
             err: aurora_red,
@@ -137,6 +151,9 @@ impl Theme {
     }
     pub fn dim_style(&self) -> Style {
         Style::default().fg(self.dim)
+    }
+    pub fn path_style(&self) -> Style {
+        Style::default().fg(self.path)
     }
     pub fn ok_style(&self) -> Style {
         Style::default().fg(self.ok)

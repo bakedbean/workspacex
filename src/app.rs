@@ -809,6 +809,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             _ => {
                 if let Some(session) = app.pm.as_ref() {
                     if let Some(bytes) = encode_key_for_pty(&k) {
+                        session.scroll_to_live();
                         let _ = session.writer.send(bytes).await;
                     }
                 }
@@ -1150,6 +1151,7 @@ async fn handle_key_attached(
             }
             KeyCode::Char('x') => {
                 // Send a literal Ctrl-x (0x18) to claude.
+                session.scroll_to_live();
                 let _ = session.writer.send(vec![0x18]).await;
                 return Ok(());
             }
@@ -1222,6 +1224,7 @@ async fn handle_key_attached(
     }
     let bytes = encode_key(k);
     if !bytes.is_empty() {
+        session.scroll_to_live();
         let _ = session.writer.send(bytes).await;
     }
     // Auto-rename capture (local mode only): buffer printable chars; on Enter,
@@ -1303,6 +1306,7 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
             }
             KeyCode::Char('x') => {
                 // Send a literal Ctrl-x (0x18) to claude.
+                session.scroll_to_live();
                 let _ = session.writer.send(vec![0x18]).await;
                 return Ok(());
             }
@@ -1319,6 +1323,7 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
     }
     let bytes = encode_key(k);
     if !bytes.is_empty() {
+        session.scroll_to_live();
         let _ = session.writer.send(bytes).await;
     }
     Ok(())
@@ -2565,5 +2570,67 @@ mod pm_state_tests {
         // No PM, no attached workspace; view is Dashboard.
         // Just verify the call doesn't panic.
         handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn keystroke_to_pty_resets_scrollback() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        assert!(app.sessions.get(ws_id).unwrap().is_scrolled());
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !app.sessions.get(ws_id).unwrap().is_scrolled(),
+            "any keystroke flowing to PTY must snap to live"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leader_keystroke_does_not_reset_scrollback() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        // Ctrl-x is the leader. It's consumed by wsx and never reaches the PTY.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+        assert!(
+            app.sessions.get(ws_id).unwrap().is_scrolled(),
+            "leader key consumed by wsx; offset should be preserved"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn arrow_key_resets_scrollback_and_forwards_to_pty() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        // Up arrow flows to the PTY (Claude Code prompt history) — must
+        // also snap scrollback back to live.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.sessions.get(ws_id).unwrap().is_scrolled());
     }
 }

@@ -53,6 +53,10 @@ pub struct Session {
     pub writer: mpsc::Sender<Vec<u8>>,
     pub status: Arc<RwLock<SessionStatus>>,
     pub activity_ms: Arc<AtomicU64>,
+    /// Rows back from live tail. 0 = live. The render path calls
+    /// `parser.set_scrollback(offset)` before reading `parser.screen()`,
+    /// so vt100 clamps to whatever scrollback actually exists.
+    pub scrollback_offset: std::sync::atomic::AtomicUsize,
     // Wrapped in Mutex so Session is Sync — required because App is held in
     // an Arc<tokio::sync::Mutex<App>> that gets passed to `tokio::spawn` for
     // the branch-drift poller.
@@ -81,6 +85,31 @@ impl Session {
     /// Idempotent; safe to call multiple times.
     pub fn kill(&self) {
         let _ = self.killer.lock().unwrap().kill();
+    }
+
+    pub fn scroll_up(&self, rows: usize) {
+        use std::sync::atomic::Ordering;
+        let cur = self.scrollback_offset.load(Ordering::Relaxed);
+        self.scrollback_offset
+            .store(cur.saturating_add(rows), Ordering::Relaxed);
+    }
+
+    pub fn scroll_down(&self, rows: usize) {
+        use std::sync::atomic::Ordering;
+        let cur = self.scrollback_offset.load(Ordering::Relaxed);
+        self.scrollback_offset
+            .store(cur.saturating_sub(rows), Ordering::Relaxed);
+    }
+
+    pub fn scroll_to_live(&self) {
+        self.scrollback_offset
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_scrolled(&self) -> bool {
+        self.scrollback_offset
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
     }
 
     pub fn capture_char(&self, c: char) {
@@ -382,6 +411,7 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16, mode: SpawnMode) -> Resul
         writer: tx,
         status,
         activity_ms,
+        scrollback_offset: std::sync::atomic::AtomicUsize::new(0),
         master: Mutex::new(pair.master),
         killer: Mutex::new(killer),
         prompt,
@@ -957,5 +987,116 @@ mod tests {
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
+    }
+
+    /// Construct a real PTY-backed Session for scrollback unit tests. Uses
+    /// `cat` as the child so spawn succeeds without claude on the path.
+    fn spawn_for_test() -> Session {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", echo_bin());
+        }
+        let cwd = PathBuf::from(".");
+        let s = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                yolo: false,
+            },
+        )
+        .expect("spawn_session for scrollback test");
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+        s
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_scroll_offset_starts_at_zero() {
+        let s = spawn_for_test();
+        assert_eq!(
+            s.scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert!(!s.is_scrolled());
+        s.kill();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_scroll_up_advances_offset() {
+        let s = spawn_for_test();
+        s.scroll_up(5);
+        assert_eq!(
+            s.scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            5
+        );
+        assert!(s.is_scrolled());
+        s.kill();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_scroll_down_is_saturating() {
+        let s = spawn_for_test();
+        s.scroll_up(3);
+        s.scroll_down(10);
+        assert_eq!(
+            s.scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        s.kill();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn session_scroll_to_live_zeroes_offset() {
+        let s = spawn_for_test();
+        s.scroll_up(42);
+        s.scroll_to_live();
+        assert_eq!(
+            s.scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert!(!s.is_scrolled());
+        s.kill();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scrollback_offset_reveals_older_content_via_set_scrollback() {
+        let s = spawn_for_test();
+        // Feed enough output to overflow the 24-row screen so vt100 moves
+        // rows into the scrollback buffer.
+        {
+            let mut p = s.parser.lock().unwrap();
+            for i in 0..200 {
+                p.process(format!("line {i}\r\n").as_bytes());
+            }
+        }
+        // Live view shows the latest line.
+        {
+            let mut p = s.parser.lock().unwrap();
+            p.set_scrollback(0);
+            let live = p.screen().contents();
+            assert!(live.contains("line 199"), "live should show latest: {live}");
+        }
+        // After scrolling back, set_scrollback should reveal older lines.
+        s.scroll_up(150);
+        {
+            let mut p = s.parser.lock().unwrap();
+            p.set_scrollback(
+                s.scrollback_offset
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
+            let scrolled = p.screen().contents();
+            assert!(
+                !scrolled.contains("line 199"),
+                "scrolled view must not include latest: {scrolled}"
+            );
+        }
+        s.kill();
     }
 }

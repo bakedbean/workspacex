@@ -309,7 +309,9 @@ impl App {
 
 pub type SharedApp = Arc<Mutex<App>>;
 
-use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event as CtEvent, EventStream, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -740,10 +742,47 @@ async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
                 }
             }
         }
+        CtEvent::Mouse(m) => handle_mouse(app, m),
         CtEvent::Resize(_, _) => {}
         _ => {}
     }
     Ok(())
+}
+
+fn handle_mouse(app: &App, m: MouseEvent) {
+    match m.kind {
+        MouseEventKind::ScrollUp => scroll_active(app, 3, true),
+        MouseEventKind::ScrollDown => scroll_active(app, 3, false),
+        _ => {}
+    }
+}
+
+/// Apply a scroll delta to whichever session is currently in focus.
+/// `up=true` scrolls toward older content (higher offset).
+fn scroll_active(app: &App, rows: usize, up: bool) {
+    let Some(session) = active_session(app) else {
+        return;
+    };
+    if up {
+        session.scroll_up(rows);
+    } else {
+        session.scroll_down(rows);
+    }
+}
+
+/// Returns the session that should receive scroll input given the current
+/// view + focus, or None when there is no targetable session.
+fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Session>> {
+    match &app.view {
+        View::Attached(id) => app.sessions.get(*id),
+        View::AttachedPm => app.pm.clone(),
+        View::Dashboard
+            if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
+        {
+            app.pm.clone()
+        }
+        _ => None,
+    }
 }
 
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
@@ -769,6 +808,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             _ => {
                 if let Some(session) = app.pm.as_ref() {
                     if let Some(bytes) = encode_key_for_pty(&k) {
+                        session.scroll_to_live();
                         let _ = session.writer.send(bytes).await;
                     }
                 }
@@ -1110,6 +1150,7 @@ async fn handle_key_attached(
             }
             KeyCode::Char('x') => {
                 // Send a literal Ctrl-x (0x18) to claude.
+                session.scroll_to_live();
                 let _ = session.writer.send(vec![0x18]).await;
                 return Ok(());
             }
@@ -1182,6 +1223,7 @@ async fn handle_key_attached(
     }
     let bytes = encode_key(k);
     if !bytes.is_empty() {
+        session.scroll_to_live();
         let _ = session.writer.send(bytes).await;
     }
     // Auto-rename capture (local mode only): buffer printable chars; on Enter,
@@ -1263,6 +1305,7 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
             }
             KeyCode::Char('x') => {
                 // Send a literal Ctrl-x (0x18) to claude.
+                session.scroll_to_live();
                 let _ = session.writer.send(vec![0x18]).await;
                 return Ok(());
             }
@@ -1279,6 +1322,7 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
     }
     let bytes = encode_key(k);
     if !bytes.is_empty() {
+        session.scroll_to_live();
         let _ = session.writer.send(bytes).await;
     }
     Ok(())
@@ -2386,5 +2430,206 @@ mod pm_state_tests {
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
+    }
+
+    fn mouse_event(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn spawn_pm_for_test(app: &mut App) {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let cwd = PathBuf::from(".");
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            yolo: false,
+        };
+        let s = app.sessions.spawn_pm(&cwd, 80, 24, mode).unwrap();
+        app.pm = Some(s);
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    fn spawn_attached_workspace(app: &mut App) -> crate::store::WorkspaceId {
+        use crate::store::NewWorkspace;
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "scrollback-test",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+            })
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            yolo: false,
+        };
+        app.sessions
+            .spawn(ws_id, std::path::Path::new("."), 80, 24, mode)
+            .unwrap();
+        app.view = crate::ui::View::Attached(ws_id);
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+        ws_id
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_up_scrolls_attached_workspace() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp));
+        assert_eq!(
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3,
+            "one wheel notch = 3 rows"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_down_decreases_offset_saturating() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(5);
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollDown));
+        assert_eq!(
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_targets_pm_when_pm_attached() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        spawn_pm_for_test(&mut app);
+        app.view = crate::ui::View::AttachedPm;
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp));
+        assert_eq!(
+            app.pm
+                .as_ref()
+                .unwrap()
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_targets_pm_in_dashboard_when_pm_focused() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        spawn_pm_for_test(&mut app);
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+        // view stays Dashboard.
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp));
+        assert_eq!(
+            app.pm
+                .as_ref()
+                .unwrap()
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_noop_when_dashboard_focused_no_target() {
+        let store = Store::open_in_memory().unwrap();
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // No PM, no attached workspace; view is Dashboard.
+        // Just verify the call doesn't panic.
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn keystroke_to_pty_resets_scrollback() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        assert!(app.sessions.get(ws_id).unwrap().is_scrolled());
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !app.sessions.get(ws_id).unwrap().is_scrolled(),
+            "any keystroke flowing to PTY must snap to live"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leader_keystroke_does_not_reset_scrollback() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        // Ctrl-x is the leader. It's consumed by wsx and never reaches the PTY.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+        assert!(
+            app.sessions.get(ws_id).unwrap().is_scrolled(),
+            "leader key consumed by wsx; offset should be preserved"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn arrow_key_resets_scrollback_and_forwards_to_pty() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        // Up arrow flows to the PTY (Claude Code prompt history) — must
+        // also snap scrollback back to live.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.sessions.get(ws_id).unwrap().is_scrolled());
     }
 }

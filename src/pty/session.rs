@@ -236,7 +236,11 @@ pub enum SpawnMode {
 /// pre-authorizes `Bash(git branch:*)` so the rename runs without a
 /// permission prompt. When `mode` is `Continue`, passes `--continue` so
 /// claude resumes the most recent persisted session for this worktree.
-pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
+pub fn build_claude_command(
+    cwd: &Path,
+    mode: &SpawnMode,
+    remote: crate::remote::RemoteOpts,
+) -> CommandBuilder {
     let bin = std::env::var("WSX_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
     let mut cmd = CommandBuilder::new(bin);
     cmd.cwd(cwd);
@@ -297,6 +301,13 @@ pub fn build_claude_command(cwd: &Path, mode: &SpawnMode) -> CommandBuilder {
         cmd.arg("Bash(git branch:*)");
     }
 
+    if remote.enabled {
+        cmd.arg("--remote-control");
+        if remote.sandbox {
+            cmd.arg("--sandbox");
+        }
+    }
+
     let combined = match (rename_prompt, custom) {
         (None, None) => None,
         (Some(r), None) => Some(r),
@@ -336,7 +347,13 @@ fn render_rename_system_prompt(current_branch: &str, branch_prefix: &str) -> Str
     )
 }
 
-pub fn spawn_session(cwd: &Path, cols: u16, rows: u16, mode: SpawnMode) -> Result<Session> {
+pub fn spawn_session(
+    cwd: &Path,
+    cols: u16,
+    rows: u16,
+    mode: SpawnMode,
+    remote: crate::remote::RemoteOpts,
+) -> Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -349,7 +366,7 @@ pub fn spawn_session(cwd: &Path, cols: u16, rows: u16, mode: SpawnMode) -> Resul
 
     let mut child = pair
         .slave
-        .spawn_command(build_claude_command(cwd, &mode))
+        .spawn_command(build_claude_command(cwd, &mode, remote))
         .map_err(|e| Error::Pty(format!("spawn: {e}")))?;
     drop(pair.slave);
 
@@ -452,6 +469,7 @@ impl SessionManager {
         cols: u16,
         rows: u16,
         mode: SpawnMode,
+        remote: crate::remote::RemoteOpts,
     ) -> Result<Arc<Session>> {
         if let Some(s) = self.sessions.get(&id) {
             if matches!(*s.status.read().unwrap(), SessionStatus::Running { .. }) {
@@ -459,7 +477,7 @@ impl SessionManager {
             }
             // Otherwise fall through and respawn.
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows, mode)?);
+        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote)?);
         self.sessions.insert(id, session.clone());
         Ok(session)
     }
@@ -474,6 +492,7 @@ impl SessionManager {
         cols: u16,
         rows: u16,
         mode: SpawnMode,
+        remote: crate::remote::RemoteOpts,
     ) -> Result<Arc<Session>> {
         if let Some(existing) = &self.pm {
             if matches!(
@@ -483,7 +502,7 @@ impl SessionManager {
                 return Ok(existing.clone());
             }
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows, mode)?);
+        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote)?);
         self.pm = Some(session.clone());
         Ok(session)
     }
@@ -534,6 +553,7 @@ mod tests {
                 custom_instructions: None,
                 yolo: false,
             },
+            crate::remote::RemoteOpts::disabled(),
         )
         .unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
@@ -561,6 +581,7 @@ mod tests {
                 custom_instructions: None,
                 yolo: false,
             },
+            crate::remote::RemoteOpts::disabled(),
         );
         assert!(result.is_err());
         unsafe {
@@ -591,6 +612,7 @@ mod tests {
                     custom_instructions: None,
                     yolo: false,
                 },
+                crate::remote::RemoteOpts::disabled(),
             )
             .unwrap();
         // sh -i would run forever; we just check the session was Running.
@@ -630,6 +652,7 @@ mod tests {
                 custom_instructions: None,
                 yolo: false,
             },
+            crate::remote::RemoteOpts::disabled(),
         )
         .unwrap();
 
@@ -663,7 +686,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode);
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -696,7 +719,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode);
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
         let idx = argv
@@ -719,7 +742,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode);
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -737,7 +760,7 @@ mod tests {
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode);
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             argv.iter()
@@ -753,7 +776,7 @@ mod tests {
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode);
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
         assert!(
@@ -771,7 +794,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode);
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -860,7 +883,7 @@ mod tests {
             custom_instructions: None,
             resume: false,
         };
-        let cmd = build_claude_command(&cwd, &mode);
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--dangerously-skip-permissions"), "{dbg}");
         assert!(!dbg.contains("--allowedTools"), "{dbg}");
@@ -883,12 +906,98 @@ mod tests {
             custom_instructions: None,
             resume: true,
         };
-        let cmd = build_claude_command(&cwd, &mode);
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--continue"), "{dbg}");
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
+    }
+
+    #[test]
+    fn build_claude_command_appends_remote_control_when_enabled() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            yolo: false,
+        };
+        let opts = crate::remote::RemoteOpts {
+            enabled: true,
+            sandbox: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, opts);
+        let argv = cmd.get_argv();
+        assert!(
+            argv.iter()
+                .any(|a| a == std::ffi::OsStr::new("--remote-control")),
+            "expected --remote-control flag, argv: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == std::ffi::OsStr::new("--sandbox")),
+            "expected no --sandbox flag, argv: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn build_claude_command_appends_sandbox_when_enabled() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            yolo: false,
+        };
+        let opts = crate::remote::RemoteOpts {
+            enabled: true,
+            sandbox: true,
+        };
+        let cmd = build_claude_command(&cwd, &mode, opts);
+        let argv = cmd.get_argv();
+        assert!(
+            argv.iter()
+                .any(|a| a == std::ffi::OsStr::new("--remote-control"))
+        );
+        assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--sandbox")));
+    }
+
+    #[test]
+    fn build_claude_command_omits_remote_control_when_disabled() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            yolo: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a == std::ffi::OsStr::new("--remote-control")),
+            "expected no --remote-control flag, argv: {argv:?}"
+        );
+        assert!(!argv.iter().any(|a| a == std::ffi::OsStr::new("--sandbox")));
+    }
+
+    #[test]
+    fn build_claude_command_remote_control_applies_to_pm_mode() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
+            custom_instructions: None,
+            resume: false,
+        };
+        let opts = crate::remote::RemoteOpts {
+            enabled: true,
+            sandbox: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, opts);
+        let argv = cmd.get_argv();
+        assert!(
+            argv.iter()
+                .any(|a| a == std::ffi::OsStr::new("--remote-control")),
+            "expected --remote-control in PM argv: {argv:?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -906,6 +1015,7 @@ mod tests {
                 custom_instructions: None,
                 yolo: false,
             },
+            crate::remote::RemoteOpts::disabled(),
         )
         .unwrap();
         // Prime cat with some output so activity_ms is populated, then let it settle.
@@ -935,7 +1045,9 @@ mod tests {
             custom_instructions: None,
             resume: false,
         };
-        let s = mgr.spawn_pm(&cwd, 80, 24, mode).unwrap();
+        let s = mgr
+            .spawn_pm(&cwd, 80, 24, mode, crate::remote::RemoteOpts::disabled())
+            .unwrap();
         assert!(mgr.pm().is_some());
         // Second spawn while running is a no-op (returns existing).
         let mode2 = SpawnMode::ProjectManager {
@@ -943,7 +1055,9 @@ mod tests {
             custom_instructions: None,
             resume: false,
         };
-        let s2 = mgr.spawn_pm(&cwd, 80, 24, mode2).unwrap();
+        let s2 = mgr
+            .spawn_pm(&cwd, 80, 24, mode2, crate::remote::RemoteOpts::disabled())
+            .unwrap();
         assert!(Arc::ptr_eq(&s, &s2));
         // kill_all also kills PM.
         mgr.kill_all();
@@ -975,6 +1089,7 @@ mod tests {
                 custom_instructions: None,
                 yolo: false,
             },
+            crate::remote::RemoteOpts::disabled(),
         )
         .unwrap();
         // Do NOT send any input — cat stays silent, activity_ms never gets set.
@@ -1005,6 +1120,7 @@ mod tests {
                 custom_instructions: None,
                 yolo: false,
             },
+            crate::remote::RemoteOpts::disabled(),
         )
         .expect("spawn_session for scrollback test");
         unsafe {

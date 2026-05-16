@@ -838,7 +838,8 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.workspace_needs_attention.remove(&id);
                 if let Some((id, path, mode, repo_path)) = build_spawn_info(app, id) {
                     maybe_mirror_mcp(app, &repo_path, &path);
-                    let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
+                    let remote = crate::remote::RemoteOpts::from_store(&app.store);
+                    let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
                     app.view = View::Attached(id);
                 }
             }
@@ -1505,7 +1506,8 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                         app.workspace_needs_attention.remove(&ws_id);
                         if let Some((id, path, mode, repo_path)) = build_spawn_info(app, ws_id) {
                             maybe_mirror_mcp(app, &repo_path, &path);
-                            let _ = app.sessions.spawn(id, &path, 80, 24, mode)?;
+                            let remote = crate::remote::RemoteOpts::from_store(&app.store);
+                            let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
                             app.view = View::Attached(id);
                         }
                     }
@@ -2316,7 +2318,14 @@ mod pm_state_tests {
             yolo: false,
         };
         app.sessions
-            .spawn(attached_id, std::path::Path::new("."), 80, 24, mode)
+            .spawn(
+                attached_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote::RemoteOpts::disabled(),
+            )
             .unwrap();
         app.view = crate::ui::View::Attached(attached_id);
         // The new status row exclusively surfaces workspaces with
@@ -2380,7 +2389,14 @@ mod pm_state_tests {
             yolo: false,
         };
         app.sessions
-            .spawn(attached_id, std::path::Path::new("."), 80, 24, mode)
+            .spawn(
+                attached_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote::RemoteOpts::disabled(),
+            )
             .unwrap();
         app.view = crate::ui::View::Attached(attached_id);
 
@@ -2423,7 +2439,10 @@ mod pm_state_tests {
             custom_instructions: None,
             yolo: false,
         };
-        let s = app.sessions.spawn_pm(&cwd, 80, 24, mode).unwrap();
+        let s = app
+            .sessions
+            .spawn_pm(&cwd, 80, 24, mode, crate::remote::RemoteOpts::disabled())
+            .unwrap();
         app.pm = Some(s);
         app.view = crate::ui::View::AttachedPm;
 
@@ -2472,7 +2491,10 @@ mod pm_state_tests {
             custom_instructions: None,
             yolo: false,
         };
-        let s = app.sessions.spawn_pm(&cwd, 80, 24, mode).unwrap();
+        let s = app
+            .sessions
+            .spawn_pm(&cwd, 80, 24, mode, crate::remote::RemoteOpts::disabled())
+            .unwrap();
         app.pm = Some(s);
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
@@ -2504,7 +2526,14 @@ mod pm_state_tests {
             yolo: false,
         };
         app.sessions
-            .spawn(ws_id, std::path::Path::new("."), 80, 24, mode)
+            .spawn(
+                ws_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote::RemoteOpts::disabled(),
+            )
             .unwrap();
         app.view = crate::ui::View::Attached(ws_id);
         unsafe {

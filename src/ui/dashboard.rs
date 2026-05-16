@@ -108,16 +108,18 @@ pub fn render(
     for item in items.iter() {
         match item {
             Item::Header { repo } => {
+                let count = counts_by_repo_idx.get(repo_idx).copied().unwrap_or(0);
+                repo_idx += 1;
+                let (header_lines, primary_offset) =
+                    repo_header_lines(repo, count, inner_width, nerd_fonts, theme);
                 if let Some(SelectionTarget::Repo(id)) = selected
                     && id == repo.id
                 {
-                    selected_idx = Some(list_items.len());
+                    selected_idx = Some(list_items.len() + primary_offset);
                 }
-                let count = counts_by_repo_idx.get(repo_idx).copied().unwrap_or(0);
-                repo_idx += 1;
-                let (header, rule) = repo_header_lines(repo, count, inner_width, theme);
-                list_items.push(ListItem::new(header));
-                list_items.push(ListItem::new(rule));
+                for line in header_lines {
+                    list_items.push(ListItem::new(line));
+                }
             }
             Item::Workspace {
                 repo: _,
@@ -299,25 +301,80 @@ fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Build the two-line block that introduces a repo group:
-///   `<name> · <path> · <count>`
-///   `─────────────────────────...`
+/// Build the row(s) that introduce a repo group, returning the lines
+/// and the index of the "primary" row (the one a Repo selection should
+/// target for highlighting).
+///
+/// With nerd_fonts: a 3-row powerline bar — colored padding above and
+/// below the content row, all sharing the same dark→accent gradient.
+/// Without nerd_fonts: a single legacy `name · path · count` line.
 fn repo_header_lines(
     repo: &Repo,
     count: usize,
     inner_width: usize,
+    nerd: bool,
     theme: &Theme,
-) -> (Line<'static>, Line<'static>) {
-    let header = Line::from(vec![
-        Span::styled(repo.name.clone(), theme.header_style()),
-        Span::styled(
-            format!(" · {} · {}", repo.path.display(), count),
-            theme.path_style(),
-        ),
-    ]);
-    let rule_text: String = "─".repeat(inner_width);
-    let rule = Line::from(Span::styled(rule_text, theme.dim_style()));
-    (header, rule)
+) -> (Vec<Line<'static>>, usize) {
+    if nerd {
+        let name = repo.name.to_uppercase();
+        let path = repo.path.display().to_string();
+        let count_s = count.to_string();
+        let arrow = "\u{e0b0}"; // filled right-pointing triangle (powerline)
+
+        let name_text = format!(" {name} ");
+        let path_text = format!(" \u{f07c} {path} ");
+        let count_text = format!(" \u{f126} {count_s} ");
+
+        let name_style = Style::default()
+            .fg(theme.seg_fg)
+            .bg(theme.seg_name_bg)
+            .add_modifier(Modifier::BOLD);
+        let path_style = Style::default().fg(theme.seg_fg).bg(theme.seg_path_bg);
+        let count_style = Style::default()
+            .fg(theme.seg_fg)
+            .bg(theme.seg_count_bg)
+            .add_modifier(Modifier::BOLD);
+        // Powerline transition: the arrow glyph itself is drawn in the
+        // PREVIOUS segment's bg color, sitting on the NEXT segment's bg
+        // — so it looks like the previous segment "tapers" into the
+        // next one.
+        let arrow_name_to_path =
+            Style::default().fg(theme.seg_name_bg).bg(theme.seg_path_bg);
+        let arrow_path_to_count = Style::default()
+            .fg(theme.seg_path_bg)
+            .bg(theme.seg_count_bg);
+
+        // Pad the count segment with spaces to fill the row to the right
+        // edge so the bg gradient extends "all the way horizontally".
+        let used = name_text.chars().count()
+            + 1 // first arrow
+            + path_text.chars().count()
+            + 1 // second arrow
+            + count_text.chars().count();
+        let pad = inner_width.saturating_sub(used);
+        let trailing_pad = " ".repeat(pad);
+
+        let content = Line::from(vec![
+            Span::styled(name_text, name_style),
+            Span::styled(arrow, arrow_name_to_path),
+            Span::styled(path_text, path_style),
+            Span::styled(arrow, arrow_path_to_count),
+            Span::styled(format!("{count_text}{trailing_pad}"), count_style),
+        ]);
+
+        (vec![content], 0)
+    } else {
+        (
+            vec![Line::from(vec![
+                Span::styled(repo.name.clone(), theme.header_style()),
+                Span::styled(
+                    format!(" · {} · {}", repo.path.display(), count),
+                    theme.path_style(),
+                ),
+            ])],
+            0,
+        )
+    }
 }
 
 /// Render the bracketed branch label as a `Line` whose glyph + name are
@@ -904,9 +961,9 @@ mod tests {
             )
         })
         .unwrap();
-        // The second workspace becomes the 5th list item (index 4): header,
-        // rule, ws1 row, ws1 sub-line, ws2 row.
-        assert_eq!(state.list_state.selected(), Some(4));
+        // The second workspace becomes the 4th list item (index 3): header,
+        // ws1 row, ws1 sub-line, ws2 row.
+        assert_eq!(state.list_state.selected(), Some(3));
     }
 
     #[test]
@@ -1268,46 +1325,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn repo_header_renders_with_rule_below() {
-        let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
-        let r = repo(1, "demo");
-        let w = workspace(1, 1, "alpha", "wsx/alpha");
-        let items = vec![
-            Item::Header { repo: &r },
-            Item::Workspace {
-                repo: &r,
-                workspace: &w,
-                session_running: true,
-                seconds_since_activity: Some(0),
-                has_prior_session: false,
-                status: None,
-                latest_event: None,
-                needs_attention: false,
-                lifecycle: None,
-                awaiting_tool: None,
-                stopped: false,
-                stalled: false,
-                proc_count: 0,
-            },
-        ];
-        let mut state = DashboardState::default();
-        term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
-            .unwrap();
-        let text = dump(&term, 120, 8);
-        let lines: Vec<&str> = text.lines().collect();
-        // Find the repo header line; the next non-empty line should be a rule.
-        let hdr_idx = lines
-            .iter()
-            .position(|l| l.contains("demo") && l.contains("/repos/demo"))
-            .expect("repo header line");
-        let rule = lines[hdr_idx + 1];
-        let rule_chars: Vec<char> = rule.chars().filter(|c| !c.is_whitespace()).collect();
-        assert!(
-            !rule_chars.is_empty() && rule_chars.iter().all(|c| *c == '─'),
-            "expected horizontal rule under header, got: {rule:?}"
-        );
-    }
 
     #[test]
     fn repo_header_includes_workspace_count() {

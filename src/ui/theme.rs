@@ -13,6 +13,12 @@ pub struct Theme {
     /// Repo header's path/count tail — distinct muted tone so the path
     /// doesn't blur into the workspace sub-lines (which use `dim`).
     pub path: Color,
+    /// Powerline-style repo header segment bgs (gradient: dark → mid →
+    /// accent), all sharing `seg_fg` for text contrast.
+    pub seg_name_bg: Color,
+    pub seg_path_bg: Color,
+    pub seg_count_bg: Color,
+    pub seg_fg: Color,
     /// Success/positive states (reserved for future per-span styling).
     pub ok: Color,
     /// Warning/in-progress states (reserved).
@@ -36,6 +42,11 @@ impl Theme {
             selected_bg: Color::DarkGray,
             dim: Color::DarkGray,
             path: Color::Indexed(67), // 256-color SteelBlue3 — muted blue
+            // Powerline gradient: subtle, dark steps.
+            seg_name_bg: Color::Indexed(233),
+            seg_path_bg: Color::Indexed(235),
+            seg_count_bg: Color::Indexed(237),
+            seg_fg: Color::Indexed(250),
             ok: Color::Green,
             warn: Color::Yellow,
             err: Color::Red,
@@ -63,6 +74,10 @@ impl Theme {
             selected_bg: current_line,
             dim: comment,
             path: Color::Rgb(0x82, 0x90, 0xb4), // softer blue-grey
+            seg_name_bg: Color::Rgb(0x1d, 0x1f, 0x29),
+            seg_path_bg: Color::Rgb(0x26, 0x28, 0x33),
+            seg_count_bg: Color::Rgb(0x2f, 0x32, 0x3d),
+            seg_fg: foreground,
             ok: green,
             warn: yellow,
             err: red,
@@ -91,6 +106,10 @@ impl Theme {
             selected_bg: cursor_line,
             dim: gray,
             path: Color::Rgb(0xb8, 0xa0, 0x78), // warmer tan, clearer separation from gray
+            seg_name_bg: Color::Rgb(0x10, 0x10, 0x10),
+            seg_path_bg: Color::Rgb(0x1c, 0x1c, 0x1c),
+            seg_count_bg: Color::Rgb(0x26, 0x26, 0x26),
+            seg_fg: fg,
             ok: green,
             warn: orange,
             err: red,
@@ -119,6 +138,10 @@ impl Theme {
             selected_bg: polar1,
             dim: polar3,
             path: Color::Rgb(0x81, 0xa1, 0xc1), // Nord frost3
+            seg_name_bg: Color::Rgb(0x22, 0x26, 0x2e),
+            seg_path_bg: Color::Rgb(0x2a, 0x2e, 0x36),
+            seg_count_bg: Color::Rgb(0x32, 0x37, 0x42),
+            seg_fg: snow_storm1,
             ok: aurora_green,
             warn: aurora_yellow,
             err: aurora_red,

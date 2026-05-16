@@ -2,6 +2,15 @@
 
 Terminal UI for managing Claude Code sessions in git worktrees.
 
+## Key features
+
+- **Parallel Claude sessions in git worktrees** — every workspace is its own branch + worktree; switch with one key.
+- **Cross-session attention alerts** — terminal bell + `!` marker when a session is awaiting permission or has gone idle.
+- **Activity sub-line per workspace** — see the latest tool call or message from each session at a glance.
+- **Project Manager pane** — a dedicated Claude session that summarizes what every workspace is for, where it's at, and what's next.
+- **Remote control** — attach from claude.ai/code or the mobile app; or run wsx in tmux+ssh for full-fidelity desktop access.
+- **Frictionless workflow** — auto-rename branches from your first prompt, per-repo setup/archive scripts, editor/terminal/diff hooks.
+
 ## Quick start
 
 ```bash

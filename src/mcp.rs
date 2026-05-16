@@ -27,6 +27,47 @@ fn read_claude_json(path: &Path) -> Result<Option<Value>> {
     Ok(Some(v))
 }
 
+/// Mirror `projects[repo_path].mcpServers` → `projects[worktree_path].mcpServers`
+/// in `~/.claude.json`. No-op when the file or the source entry is absent.
+/// Errors are returned but callers should treat them as best-effort.
+pub fn mirror_mcp_servers(repo_path: &Path, worktree_path: &Path) -> Result<()> {
+    let Some(p) = claude_json_path() else {
+        return Ok(());
+    };
+    mirror_into(&p, repo_path, worktree_path)
+}
+
+/// Pure form of `mirror_mcp_servers` that takes the claude.json path
+/// directly, for testability.
+fn mirror_into(claude_json: &Path, repo: &Path, worktree: &Path) -> Result<()> {
+    let Some(mut root) = read_claude_json(claude_json)? else {
+        return Ok(());
+    };
+    let repo_key = repo.to_string_lossy().into_owned();
+    let worktree_key = worktree.to_string_lossy().into_owned();
+    let Some(servers) = root
+        .get("projects")
+        .and_then(|p| p.get(&repo_key))
+        .and_then(|r| r.get("mcpServers"))
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let projects = root
+        .as_object_mut()
+        .and_then(|o| o.get_mut("projects"))
+        .and_then(|p| p.as_object_mut())
+        .ok_or_else(|| Error::Pty("projects is not an object".into()))?;
+    let entry = projects
+        .entry(worktree_key)
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    let obj = entry
+        .as_object_mut()
+        .ok_or_else(|| Error::Pty("worktree entry is not an object".into()))?;
+    obj.insert("mcpServers".into(), servers);
+    write_claude_json_atomic(claude_json, &root)
+}
+
 fn write_claude_json_atomic(path: &Path, value: &Value) -> Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     let pid = std::process::id();
@@ -70,6 +111,90 @@ mod tests {
         std::fs::write(&p, r#"{"foo": 1}"#).unwrap();
         let v = read_claude_json(&p).unwrap().unwrap();
         assert_eq!(v["foo"], serde_json::json!(1));
+    }
+
+    fn write_json(path: &Path, v: &Value) {
+        std::fs::write(path, serde_json::to_string_pretty(v).unwrap()).unwrap();
+    }
+
+    fn read_json(path: &Path) -> Value {
+        let s = std::fs::read_to_string(path).unwrap();
+        serde_json::from_str(&s).unwrap()
+    }
+
+    #[test]
+    fn mirror_into_no_file_is_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join("nope.json");
+        mirror_into(&p, Path::new("/r"), Path::new("/wt")).unwrap();
+        assert!(!p.exists());
+    }
+
+    #[test]
+    fn mirror_into_no_source_entry_is_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        let original = serde_json::json!({
+            "projects": {"/some/other": {"mcpServers": {"x": {}}}}
+        });
+        write_json(&p, &original);
+        mirror_into(&p, Path::new("/r"), Path::new("/wt")).unwrap();
+        assert_eq!(read_json(&p), original);
+    }
+
+    #[test]
+    fn mirror_into_no_source_mcp_is_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        let original = serde_json::json!({
+            "projects": {"/r": {"lastSessionId": "abc"}}
+        });
+        write_json(&p, &original);
+        mirror_into(&p, Path::new("/r"), Path::new("/wt")).unwrap();
+        assert_eq!(read_json(&p), original);
+    }
+
+    #[test]
+    fn mirror_into_happy_path_creates_worktree_entry() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        write_json(
+            &p,
+            &serde_json::json!({
+                "projects": {"/r": {"mcpServers": {"datadog": {"type": "http"}}}}
+            }),
+        );
+        mirror_into(&p, Path::new("/r"), Path::new("/wt")).unwrap();
+        let after = read_json(&p);
+        assert_eq!(
+            after["projects"]["/wt"]["mcpServers"],
+            serde_json::json!({"datadog": {"type": "http"}})
+        );
+    }
+
+    #[test]
+    fn mirror_into_preserves_existing_worktree_fields() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        write_json(
+            &p,
+            &serde_json::json!({
+                "projects": {
+                    "/r": {"mcpServers": {"datadog": {"type": "http"}}},
+                    "/wt": {"lastSessionId": "keep-me", "mcpServers": {"old": {}}}
+                }
+            }),
+        );
+        mirror_into(&p, Path::new("/r"), Path::new("/wt")).unwrap();
+        let after = read_json(&p);
+        assert_eq!(
+            after["projects"]["/wt"]["lastSessionId"],
+            serde_json::json!("keep-me")
+        );
+        assert_eq!(
+            after["projects"]["/wt"]["mcpServers"],
+            serde_json::json!({"datadog": {"type": "http"}})
+        );
     }
 
     #[test]

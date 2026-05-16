@@ -86,6 +86,7 @@ fn known_setting_key(k: &str) -> bool {
             | "theme"
             | "pm_enabled"
             | "pm_custom_instructions"
+            | "mcp_mirror"
     )
 }
 
@@ -478,6 +479,11 @@ mod tests {
     #[test]
     fn accepts_diff_cmd() {
         assert!(known_setting_key("diff_cmd"));
+    }
+
+    #[test]
+    fn accepts_mcp_mirror() {
+        assert!(known_setting_key("mcp_mirror"));
     }
 
     #[test]

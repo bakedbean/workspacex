@@ -29,7 +29,11 @@ impl RemoteOpts {
 /// Defaults ON. Off-values: `false` / `off` / `0` / `no`.
 pub fn enabled(store: &crate::store::Store) -> bool {
     !matches!(
-        store.get_setting("remote_control").ok().flatten().as_deref(),
+        store
+            .get_setting("remote_control")
+            .ok()
+            .flatten()
+            .as_deref(),
         Some("false" | "off" | "0" | "no")
     )
 }

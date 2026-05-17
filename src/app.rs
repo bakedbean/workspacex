@@ -209,6 +209,11 @@ pub struct App {
     pub pm_visible: bool,
     pub focus: crate::ui::PaneFocus,
     pub pm_auto_summary_sent: bool,
+    /// Rects of the rendered chip row buttons from the last draw tick.
+    /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
+    pub chip_rects: Vec<ratatui::layout::Rect>,
+    /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
+    pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
 }
 
 impl App {
@@ -245,6 +250,8 @@ impl App {
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
             pm_auto_summary_sent: false,
+            chip_rects: Vec::new(),
+            pinned_commands_cache: Vec::new(),
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -417,6 +424,10 @@ pub async fn run<B: Backend + std::io::Write>(
 fn draw(f: &mut ratatui::Frame, app: &mut App) {
     use crate::ui::{attached, dashboard, modal};
     let area = f.area();
+    // Clear chip state at the start of every frame; only View::Attached
+    // overwrites these with live values.
+    app.chip_rects.clear();
+    app.pinned_commands_cache.clear();
     match &app.view {
         View::Dashboard => {
             let (dashboard_area, pm_area) = if app.pm_visible {
@@ -599,17 +610,33 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 } else {
                     compute_attention_line(app, Some(*id), max_width)
                 };
-                let pinned: &[crate::pinned::PinnedCommand] = &[];
+                // Resolve pinned commands before resize_session so that
+                // pinned_present is accurate for layout calculations.
+                let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
+                let repo_pinned =
+                    app.workspaces
+                        .iter()
+                        .find(|(_, w)| w.id == *id)
+                        .and_then(|(_, w)| {
+                            app.repos
+                                .iter()
+                                .find(|r| r.id == w.repo_id)
+                                .and_then(|r| r.pinned_commands.clone())
+                        });
+                let pinned =
+                    crate::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
                 attached::resize_session(&session, area, line.is_some(), !pinned.is_empty());
-                let _chip_rects = attached::render(
+                let chip_rects = attached::render(
                     f,
                     area,
                     &session,
                     &label,
                     line.as_deref(),
-                    pinned,
+                    &pinned,
                     &app.theme,
                 );
+                app.chip_rects = chip_rects;
+                app.pinned_commands_cache = pinned;
             }
         }
         View::AttachedPm => {
@@ -623,8 +650,11 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 } else {
                     compute_attention_line(app, None, max_width)
                 };
+                // PM pane is out of scope for pinned commands per spec.
+                // Pass empty slice; chip_rects / pinned_commands_cache stay
+                // cleared from the top of draw().
                 let pinned: &[crate::pinned::PinnedCommand] = &[];
-                attached::resize_session(session, area, line.is_some(), !pinned.is_empty());
+                attached::resize_session(session, area, line.is_some(), false);
                 let _chip_rects = attached::render(
                     f,
                     area,

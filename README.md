@@ -164,7 +164,15 @@ If `pinned_commands` is configured (globally or per-repo), a one-row chip strip 
 
 Fire a chip with `Ctrl-x <digit>` (1-9) or by clicking on it. The chip's command + `\r` is written to claude exactly as if you'd typed and submitted it.
 
-Configure with one entry per line:
+Configure via the standard config CLI:
+
+```bash
+wsx config edit pinned_commands               # opens $EDITOR on the current value
+wsx config set pinned_commands @./pinned.txt  # load from a file
+wsx config set pinned_commands ""             # clear
+```
+
+One entry per line:
 
 ```
 PR=/pull-request

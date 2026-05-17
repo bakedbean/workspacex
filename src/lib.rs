@@ -8,6 +8,7 @@ pub mod forge;
 pub mod git;
 pub mod mcp;
 pub mod names;
+pub mod pinned;
 pub mod pm;
 pub mod proc;
 pub mod pty;

@@ -1,0 +1,168 @@
+//! Pinned commands: parses a newline-separated `Label=command` list into
+//! addressable chips for the attached view.
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedCommand {
+    /// Text shown in the chip. Already trimmed; not yet width-truncated
+    /// (render decides what fits).
+    pub label: String,
+    /// Bytes sent to the claude PTY (sans the trailing `\r`).
+    pub command: String,
+}
+
+pub fn parse(text: &str) -> Vec<PinnedCommand> {
+    text.lines()
+        .filter_map(|raw| {
+            let line = raw.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let (label, command) = match line.split_once('=') {
+                Some((lhs, rhs)) => (lhs.trim().to_string(), rhs.trim().to_string()),
+                None => (line.to_string(), line.to_string()),
+            };
+            if label.is_empty() || command.is_empty() {
+                return None;
+            }
+            Some(PinnedCommand { label, command })
+        })
+        .collect()
+}
+
+pub fn resolve(global: Option<&str>, repo: Option<&str>) -> Vec<PinnedCommand> {
+    let repo_has_value = repo.map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let source = if repo_has_value { repo } else { global };
+    match source {
+        Some(text) => parse(text),
+        None => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_labeled_line() {
+        let out = parse("PR=/pull-request");
+        assert_eq!(
+            out,
+            vec![PinnedCommand {
+                label: "PR".into(),
+                command: "/pull-request".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_unlabeled_line_uses_command_as_label() {
+        let out = parse("/feedback");
+        assert_eq!(
+            out,
+            vec![PinnedCommand {
+                label: "/feedback".into(),
+                command: "/feedback".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_skips_blank_lines() {
+        let out = parse("PR=/pull-request\n\n/feedback\n");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].label, "PR");
+        assert_eq!(out[1].label, "/feedback");
+    }
+
+    #[test]
+    fn parse_trims_both_sides_of_equals() {
+        let out = parse("  Loop  =   /loop /babysit-prs   ");
+        assert_eq!(
+            out,
+            vec![PinnedCommand {
+                label: "Loop".into(),
+                command: "/loop /babysit-prs".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_keeps_internal_spaces_in_command() {
+        let out = parse("X=/loop /babysit-prs");
+        assert_eq!(out[0].command, "/loop /babysit-prs");
+    }
+
+    #[test]
+    fn parse_treats_only_first_equals_as_separator() {
+        // The label is everything before the first `=`. Anything after is the
+        // command, including further `=` characters (rare but valid for some
+        // commands).
+        let out = parse("Kv=/set FOO=bar");
+        assert_eq!(
+            out,
+            vec![PinnedCommand {
+                label: "Kv".into(),
+                command: "/set FOO=bar".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_returns_lines_past_nine_uncapped() {
+        // Render layer caps at 9; parser does not.
+        let input = (1..=12)
+            .map(|n| format!("/cmd{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(parse(&input).len(), 12);
+    }
+
+    #[test]
+    fn parse_drops_empty_label_or_command() {
+        // A line that's just `=` is malformed; drop it. A line where the
+        // command after `=` is empty after trim is also dropped.
+        assert!(parse("=").is_empty());
+        assert!(parse("Label=").is_empty());
+        assert!(parse("=cmd").is_empty()); // label is empty after trim
+    }
+
+    #[test]
+    fn resolve_repo_overrides_global() {
+        let out = resolve(Some("A=/global"), Some("B=/repo"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "B");
+    }
+
+    #[test]
+    fn resolve_empty_repo_falls_back_to_global() {
+        let out = resolve(Some("A=/global"), Some(""));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "A");
+    }
+
+    #[test]
+    fn resolve_whitespace_only_repo_falls_back_to_global() {
+        let out = resolve(Some("A=/global"), Some("   \n  \n"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "A");
+    }
+
+    #[test]
+    fn resolve_no_repo_uses_global() {
+        let out = resolve(Some("A=/global"), None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "A");
+    }
+
+    #[test]
+    fn resolve_both_none_returns_empty() {
+        assert!(resolve(None, None).is_empty());
+    }
+
+    #[test]
+    fn resolve_no_global_uses_repo() {
+        let out = resolve(None, Some("B=/repo"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "B");
+    }
+}

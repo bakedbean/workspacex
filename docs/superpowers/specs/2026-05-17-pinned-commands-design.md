@@ -1,6 +1,6 @@
 # Pinned commands in the attached view — Design
 
-**Issue:** TBD (file before implementation lands).
+**Issue:** [#37](https://github.com/bakedbean/workspacex/issues/37)
 
 ## Goal
 

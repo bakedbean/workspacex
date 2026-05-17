@@ -1281,6 +1281,16 @@ async fn handle_key_attached(
                 });
                 return Ok(());
             }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as u8 - b'1') as usize;
+                if let Some(cmd) = app.pinned_commands_cache.get(idx) {
+                    let mut bytes = cmd.command.as_bytes().to_vec();
+                    bytes.push(b'\r');
+                    session.scroll_to_live();
+                    let _ = session.writer.send(bytes).await;
+                }
+                return Ok(());
+            }
             _ => return Ok(()),
         }
     }
@@ -2727,5 +2737,94 @@ mod pm_state_tests {
         .await
         .unwrap();
         assert!(!app.sessions.get(ws_id).unwrap().is_scrolled());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leader_digit_sends_pinned_command_to_pty() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // Populate the cache directly (Task 7's resolution path is tested
+        // separately via the resolve() unit tests).
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+
+        // Ctrl-x leader.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+
+        // '1' — fires chip 1, clears leader.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending);
+
+        // cat echoes input back. Verify the screen eventually contains
+        // the command text.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "expected '/pull-request' on screen; got: {screen_text:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leader_digit_out_of_range_is_noop() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // Only one chip in the cache.
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+
+        // Ctrl-x leader.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+
+        // '5' — index 4, out of range for a 1-element cache.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending);
+
+        // No bytes should have been written; cat hasn't echoed anything.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            !screen_text.contains("/pull-request"),
+            "out-of-range digit must not fire any chip; got: {screen_text:?}"
+        );
     }
 }

@@ -36,6 +36,13 @@ pub enum CliAction {
     RepoEditArchive {
         name: String,
     },
+    RepoSetPinnedCommands {
+        name: String,
+        source: ValueSource,
+    },
+    RepoEditPinnedCommands {
+        name: String,
+    },
     ConfigGet {
         key: String,
     },
@@ -192,6 +199,24 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                     .next()
                     .ok_or_else(|| Error::UserInput("repo edit-archive <name>".into()))?;
                 Ok(CliAction::RepoEditArchive { name })
+            }
+            Some("set-pinned-commands") => {
+                let name = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-pinned-commands <name> <value-or-@file>".into())
+                })?;
+                let value = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-pinned-commands <name> <value-or-@file>".into())
+                })?;
+                Ok(CliAction::RepoSetPinnedCommands {
+                    name,
+                    source: ValueSource::from_arg(value),
+                })
+            }
+            Some("edit-pinned-commands") => {
+                let name = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("repo edit-pinned-commands <name>".into()))?;
+                Ok(CliAction::RepoEditPinnedCommands { name })
             }
             other => Err(Error::UserInput(format!("unknown repo action: {other:?}"))),
         },
@@ -358,6 +383,40 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             } else {
                 store.set_repo_archive_script(r.id, Some(&new_value))?;
                 println!("set archive for {name} ({} chars)", new_value.len());
+            }
+        }
+        CliAction::RepoSetPinnedCommands { name, source } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let value = source.resolve()?;
+            if value.trim().is_empty() {
+                store.set_repo_pinned_commands(r.id, None)?;
+                println!("cleared pinned commands for {name}");
+            } else {
+                store.set_repo_pinned_commands(r.id, Some(&value))?;
+                println!("set pinned commands for {name} ({} chars)", value.len());
+            }
+        }
+        CliAction::RepoEditPinnedCommands { name } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let current = r.pinned_commands.clone().unwrap_or_default();
+            let new_value = open_in_editor("pinned-commands", &current)?;
+            let new_value = new_value.trim_end_matches('\n').to_string();
+            if new_value.trim().is_empty() {
+                store.set_repo_pinned_commands(r.id, None)?;
+                println!("cleared pinned commands for {name}");
+            } else if new_value == current {
+                println!("pinned commands unchanged");
+            } else {
+                store.set_repo_pinned_commands(r.id, Some(&new_value))?;
+                println!("set pinned commands for {name} ({} chars)", new_value.len());
             }
         }
         CliAction::ConfigGet { key } => match store.get_setting(&key)? {
@@ -570,6 +629,44 @@ mod tests {
         match a {
             CliAction::ConfigSet { key, .. } => assert_eq!(key, "pinned_commands"),
             other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_repo_set_pinned_commands_literal() {
+        let a = parse(&["repo", "set-pinned-commands", "demo", "PR=/pull-request"]).unwrap();
+        match a {
+            CliAction::RepoSetPinnedCommands {
+                name,
+                source: ValueSource::Literal(v),
+            } => {
+                assert_eq!(name, "demo");
+                assert_eq!(v, "PR=/pull-request");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_repo_set_pinned_commands_at_file() {
+        let a = parse(&["repo", "set-pinned-commands", "demo", "@./pinned.txt"]).unwrap();
+        match a {
+            CliAction::RepoSetPinnedCommands {
+                name,
+                source: ValueSource::File(p),
+            } => {
+                assert_eq!(name, "demo");
+                assert_eq!(p, std::path::PathBuf::from("./pinned.txt"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_repo_edit_pinned_commands() {
+        match parse(&["repo", "edit-pinned-commands", "demo"]).unwrap() {
+            CliAction::RepoEditPinnedCommands { name } => assert_eq!(name, "demo"),
+            other => panic!("unexpected: {other:?}"),
         }
     }
 }

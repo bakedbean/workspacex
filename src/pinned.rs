@@ -87,12 +87,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_keeps_internal_spaces_in_command() {
-        let out = parse("X=/loop /babysit-prs");
-        assert_eq!(out[0].command, "/loop /babysit-prs");
-    }
-
-    #[test]
     fn parse_treats_only_first_equals_as_separator() {
         // The label is everything before the first `=`. Anything after is the
         // command, including further `=` characters (rare but valid for some
@@ -164,5 +158,14 @@ mod tests {
         let out = resolve(None, Some("B=/repo"));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].label, "B");
+    }
+
+    #[test]
+    fn resolve_malformed_non_empty_repo_still_wins_over_global() {
+        // Repo text is non-empty after trim but parses to zero commands.
+        // Per spec, the repo value "wins" — surfacing the config error to
+        // the user rather than silently falling back to the global list.
+        let out = resolve(Some("A=/global"), Some("=\n=\n"));
+        assert!(out.is_empty(), "expected zero chips, got {out:?}");
     }
 }

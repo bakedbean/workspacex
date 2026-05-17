@@ -599,10 +599,17 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 } else {
                     compute_attention_line(app, Some(*id), max_width)
                 };
-                let footer_rows = if line.is_some() { 2 } else { 1 };
-                attached::resize_session(&session, area, footer_rows);
-                let _chip_rects =
-                    attached::render(f, area, &session, &label, line.as_deref(), &[], &app.theme);
+                let pinned: &[crate::pinned::PinnedCommand] = &[];
+                attached::resize_session(&session, area, line.is_some(), !pinned.is_empty());
+                let _chip_rects = attached::render(
+                    f,
+                    area,
+                    &session,
+                    &label,
+                    line.as_deref(),
+                    pinned,
+                    &app.theme,
+                );
             }
         }
         View::AttachedPm => {
@@ -616,15 +623,15 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 } else {
                     compute_attention_line(app, None, max_width)
                 };
-                let footer_rows = if line.is_some() { 2 } else { 1 };
-                attached::resize_session(session, area, footer_rows);
+                let pinned: &[crate::pinned::PinnedCommand] = &[];
+                attached::resize_session(session, area, line.is_some(), !pinned.is_empty());
                 let _chip_rects = attached::render(
                     f,
                     area,
                     session,
                     "project-manager",
                     line.as_deref(),
-                    &[],
+                    pinned,
                     &app.theme,
                 );
             } else {

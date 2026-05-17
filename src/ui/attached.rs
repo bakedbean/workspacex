@@ -1,3 +1,4 @@
+use crate::pinned::{PinnedCommand, truncate_label};
 use crate::pty::render::render_screen;
 use crate::pty::session::Session;
 use crate::ui::theme::Theme;
@@ -18,7 +19,7 @@ pub fn render(
     session: &Arc<Session>,
     label: &str,
     attention_line: Option<&str>,
-    pinned: &[crate::pinned::PinnedCommand],
+    pinned: &[PinnedCommand],
     theme: &Theme,
 ) -> Vec<Rect> {
     let chip_height = if pinned.is_empty() { 0 } else { 1 };
@@ -60,31 +61,40 @@ pub fn render(
     );
     f.render_widget(Paragraph::new(footer).style(theme.dim_style()), footer_area);
 
-    if chip_height == 1 {
+    if !pinned.is_empty() {
         render_chip_row(f, chip_area, pinned, theme)
     } else {
         Vec::new()
     }
 }
 
-pub fn resize_session(session: &Arc<Session>, area: Rect, footer_rows: u16) {
-    let _ = session.resize(area.width, area.height.saturating_sub(footer_rows));
+/// Resize the PTY to fill the terminal sub-area.
+/// `attention_line_present` and `pinned_present` should reflect what `render`
+/// will draw so that the PTY height matches the actual terminal area height.
+pub fn resize_session(
+    session: &Arc<Session>,
+    area: Rect,
+    attention_line_present: bool,
+    pinned_present: bool,
+) {
+    let footer: u16 = 1;
+    let attention: u16 = if attention_line_present { 1 } else { 0 };
+    let chip: u16 = if pinned_present { 1 } else { 0 };
+    let non_term_height = footer + attention + chip;
+    let _ = session.resize(area.width, area.height.saturating_sub(non_term_height));
 }
 
 /// Compute the clickable Rect for each chip that fits within `area`.
 /// Returns one Rect per chip rendered left-to-right; chips that don't fit
 /// are dropped from the end. The full chip text is `[N] <label>` joined by
 /// 3-space gaps. Labels are individually truncated to 12 columns first.
-pub fn layout_chip_row(
-    area: ratatui::layout::Rect,
-    pinned: &[crate::pinned::PinnedCommand],
-) -> Vec<ratatui::layout::Rect> {
+pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     let mut rects = Vec::new();
     let mut x = area.x;
     let max_x = area.x.saturating_add(area.width);
     const GAP: u16 = 3;
     for (i, cmd) in pinned.iter().enumerate().take(9) {
-        let label = crate::pinned::truncate_label(&cmd.label, 12);
+        let label = truncate_label(&cmd.label, 12);
         // Chip text: "[N] label"  (4 chars for "[N] " plus label chars)
         let chip_chars = 4 + label.chars().count() as u16;
         if i > 0 {
@@ -93,7 +103,7 @@ pub fn layout_chip_row(
         if x.saturating_add(chip_chars) > max_x {
             break;
         }
-        rects.push(ratatui::layout::Rect {
+        rects.push(Rect {
             x,
             y: area.y,
             width: chip_chars,
@@ -106,17 +116,17 @@ pub fn layout_chip_row(
 
 fn render_chip_row(
     f: &mut Frame,
-    area: ratatui::layout::Rect,
-    pinned: &[crate::pinned::PinnedCommand],
+    area: Rect,
+    pinned: &[PinnedCommand],
     theme: &Theme,
-) -> Vec<ratatui::layout::Rect> {
+) -> Vec<Rect> {
     let rects = layout_chip_row(area, pinned);
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 3);
-    for (i, _r) in rects.iter().enumerate() {
+    for (i, (_rect, cmd)) in rects.iter().zip(pinned.iter()).enumerate() {
         if i > 0 {
             spans.push(Span::raw("   "));
         }
-        let label = crate::pinned::truncate_label(&pinned[i].label, 12);
+        let label = truncate_label(&cmd.label, 12);
         spans.push(Span::styled(format!("[{}]", i + 1), theme.dim_style()));
         spans.push(Span::raw(format!(" {label}")));
     }

@@ -89,6 +89,7 @@ fn known_setting_key(k: &str) -> bool {
             | "mcp_mirror"
             | "remote_control"
             | "remote_control_sandbox"
+            | "pinned_commands"
     )
 }
 
@@ -560,6 +561,15 @@ mod tests {
         match parse(&["repo", "edit-archive", "demo"]).unwrap() {
             CliAction::RepoEditArchive { name } => assert_eq!(name, "demo"),
             _ => panic!("wrong action"),
+        }
+    }
+
+    #[test]
+    fn config_set_accepts_pinned_commands_key() {
+        let a = parse(&["config", "set", "pinned_commands", "/feedback"]).unwrap();
+        match a {
+            CliAction::ConfigSet { key, .. } => assert_eq!(key, "pinned_commands"),
+            other => panic!("unexpected action: {other:?}"),
         }
     }
 }

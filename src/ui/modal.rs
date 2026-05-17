@@ -436,7 +436,7 @@ pub fn render_repo_settings(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let rows: [(crate::app::RepoSettingField, Option<&str>); 4] = [
+    let rows: [(crate::app::RepoSettingField, Option<&str>); 5] = [
         (
             crate::app::RepoSettingField::BranchPrefix,
             if repo.branch_prefix.is_empty() {
@@ -456,6 +456,10 @@ pub fn render_repo_settings(
         (
             crate::app::RepoSettingField::ArchiveScript,
             repo.archive_script.as_deref(),
+        ),
+        (
+            crate::app::RepoSettingField::PinnedCommands,
+            repo.pinned_commands.as_deref(),
         ),
     ];
 

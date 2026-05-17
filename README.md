@@ -9,6 +9,7 @@ Terminal UI for managing Claude Code sessions in git worktrees.
 - **Activity sub-line per workspace** — see the latest tool call or message from each session at a glance.
 - **Project Manager pane** — a dedicated Claude session that summarizes what every workspace is for, where it's at, and what's next.
 - **Remote control** — attach from claude.ai/code or the mobile app; or run wsx in tmux+ssh for full-fidelity desktop access.
+- **Pinned commands** — define your `/pull-request`, `/feedback`, `/ultrareview` shortcuts once; fire them with `Ctrl-x <digit>` or a click while attached.
 - **Frictionless workflow** — auto-rename branches from your first prompt, per-repo setup/archive scripts, editor/terminal/diff hooks.
 
 ## Quick start
@@ -66,6 +67,13 @@ wsx repo set-instructions <name> <value-or-@file>
 
 Sets per-repo custom instructions appended to claude's system prompt for sessions in this repo. Pass `""` to clear. Use `@/path/to/file.md` to read the value from a file.
 
+```
+wsx repo set-pinned-commands <name> <value-or-@file>
+wsx repo edit-pinned-commands <name>
+```
+
+Per-repo override of `pinned_commands`. Empty value clears the override; resolution then falls back to the global setting.
+
 ### Global settings
 
 ```
@@ -91,6 +99,7 @@ Known keys:
 | `mcp_mirror` | Inherit MCP servers from the source repo into worktrees (see [MCP server inheritance](#mcp-server-inheritance)). Default ON; set to `off` / `false` / `0` / `no` to disable. |
 | `remote_control` | Pass `--remote-control` to claude on every spawn so the session is reachable via [claude.ai/code](https://claude.ai/code) and the Claude mobile app (see [Remote control](#remote-control)). Default ON; set to `off` / `false` / `0` / `no` to disable. |
 | `remote_control_sandbox` | When `remote_control` is on, also pass `--sandbox` for an extra safety wrapper on remote-issued commands. Default OFF; set to `on` / `true` / `1` / `yes` to enable. |
+| `pinned_commands` | Newline-separated list of `Label=command` (or bare `command`) entries. Each becomes a chip in the attached view, fired via `Ctrl-x <digit>` or click. Max 9 visible/keyable. Per-repo override available via `wsx repo set-pinned-commands`. |
 
 Value sources:
 
@@ -144,6 +153,37 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x v` | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`) |
 | `Ctrl-x k` | Show processes running under the attached workspace's worktree |
 | `Ctrl-x x` | Send a literal `Ctrl-x` to claude |
+
+#### Pinned commands
+
+If `pinned_commands` is configured (globally or per-repo), a one-row chip strip appears between the claude pane and the footer. Each chip shows `[N] Label`:
+
+```
+[1] PR   [2] FB   [3] /loop /baby…   [4] UR
+```
+
+Fire a chip with `Ctrl-x <digit>` (1-9) or by clicking on it. The chip's command + `\r` is written to claude exactly as if you'd typed and submitted it.
+
+Configure via the standard config CLI:
+
+```bash
+wsx config edit pinned_commands               # opens $EDITOR on the current value
+wsx config set pinned_commands @./pinned.txt  # load from a file
+wsx config set pinned_commands ""             # clear
+```
+
+One entry per line:
+
+```
+PR=/pull-request
+FB=/feedback
+/loop /babysit-prs
+UR=/ultrareview
+```
+
+`Label=command` shows the label as the chip; a bare line uses the command itself (truncated past 12 columns). Both sides of `=` are trimmed.
+
+At narrow terminal widths trailing chips drop from view; their keyboard shortcuts still work.
 
 #### Mouse, scrollback, and text selection
 

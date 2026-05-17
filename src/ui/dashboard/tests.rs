@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::store::{RepoId, SetupStatus, WorkspaceId};
 use ratatui::Terminal;
@@ -14,6 +13,7 @@ fn repo(id: i64, name: &str) -> Repo {
         custom_instructions: None,
         setup_script: None,
         archive_script: None,
+        pinned_commands: None,
         created_at: 0,
     }
 }

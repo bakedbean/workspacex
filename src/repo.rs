@@ -103,6 +103,7 @@ mod settings_tests {
             custom_instructions: instructions.map(|s| s.to_string()),
             setup_script: None,
             archive_script: None,
+            pinned_commands: None,
             created_at: 0,
         }
     }

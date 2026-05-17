@@ -34,6 +34,7 @@ pub struct Repo {
     pub custom_instructions: Option<String>,
     pub setup_script: Option<String>,
     pub archive_script: Option<String>,
+    pub pinned_commands: Option<String>,
     pub created_at: i64,
 }
 
@@ -139,6 +140,18 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 4", [])?;
         }
+        if v < 5 {
+            let has_col: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'pinned_commands'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_col == 0 {
+                self.conn
+                    .execute("ALTER TABLE repos ADD COLUMN pinned_commands TEXT", [])?;
+            }
+            self.conn.execute("PRAGMA user_version = 5", [])?;
+        }
         Ok(())
     }
 
@@ -162,7 +175,7 @@ impl Store {
     pub fn repos(&self) -> Result<Vec<Repo>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, path, branch_prefix, custom_instructions, \
-                    setup_script, archive_script, created_at \
+                    setup_script, archive_script, pinned_commands, created_at \
              FROM repos ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -174,7 +187,8 @@ impl Store {
                 custom_instructions: r.get(4)?,
                 setup_script: r.get(5)?,
                 archive_script: r.get(6)?,
-                created_at: r.get(7)?,
+                pinned_commands: r.get(7)?,
+                created_at: r.get(8)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -211,6 +225,14 @@ impl Store {
     pub fn set_repo_archive_script(&self, id: RepoId, value: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE repos SET archive_script = ?1 WHERE id = ?2",
+            rusqlite::params![value, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_repo_pinned_commands(&self, id: RepoId, value: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET pinned_commands = ?1 WHERE id = ?2",
             rusqlite::params![value, id.0],
         )?;
         Ok(())
@@ -555,6 +577,31 @@ mod tests {
 
         store.set_repo_archive_script(id, None).unwrap();
         assert_eq!(store.repos().unwrap()[0].archive_script, None);
+    }
+
+    #[test]
+    fn set_repo_pinned_commands_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/x"), "demo", "").unwrap();
+        store
+            .set_repo_pinned_commands(id, Some("PR=/pull-request"))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(repo.pinned_commands.as_deref(), Some("PR=/pull-request"));
+
+        store.set_repo_pinned_commands(id, None).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert!(repo.pinned_commands.is_none());
     }
 
     #[test]

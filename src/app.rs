@@ -890,11 +890,20 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) => app.quit = true,
         (KeyCode::Up, _) => {
-            app.dashboard.selected = app.dashboard.selected.saturating_sub(1);
+            let max = app.selectable.len().saturating_sub(1);
+            app.dashboard.selected = if app.dashboard.selected == 0 {
+                max
+            } else {
+                app.dashboard.selected - 1
+            };
         }
         (KeyCode::Down, _) => {
             let max = app.selectable.len().saturating_sub(1);
-            app.dashboard.selected = (app.dashboard.selected + 1).min(max);
+            app.dashboard.selected = if app.dashboard.selected >= max {
+                0
+            } else {
+                app.dashboard.selected + 1
+            };
         }
         (KeyCode::Enter, _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
@@ -2127,6 +2136,58 @@ mod pm_state_tests {
         .await
         .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_down_at_last_entry_wraps_to_first() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![
+            SelectionTarget::Repo(crate::store::RepoId(1)),
+            SelectionTarget::Repo(crate::store::RepoId(2)),
+            SelectionTarget::Repo(crate::store::RepoId(3)),
+        ];
+        app.dashboard.selected = 2;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(
+            app.dashboard.selected, 0,
+            "Down at last should wrap to first"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_up_at_first_entry_wraps_to_last() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![
+            SelectionTarget::Repo(crate::store::RepoId(1)),
+            SelectionTarget::Repo(crate::store::RepoId(2)),
+            SelectionTarget::Repo(crate::store::RepoId(3)),
+        ];
+        app.dashboard.selected = 0;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.selected, 2, "Up at first should wrap to last");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_down_in_middle_advances_normally() {
+        // Sanity check that wrap-around didn't break the non-edge case.
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![
+            SelectionTarget::Repo(crate::store::RepoId(1)),
+            SelectionTarget::Repo(crate::store::RepoId(2)),
+            SelectionTarget::Repo(crate::store::RepoId(3)),
+        ];
+        app.dashboard.selected = 1;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.selected, 2);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

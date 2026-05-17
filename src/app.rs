@@ -601,7 +601,8 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 };
                 let footer_rows = if line.is_some() { 2 } else { 1 };
                 attached::resize_session(&session, area, footer_rows);
-                attached::render(f, area, &session, &label, line.as_deref(), &app.theme);
+                let _chip_rects =
+                    attached::render(f, area, &session, &label, line.as_deref(), &[], &app.theme);
             }
         }
         View::AttachedPm => {
@@ -617,12 +618,13 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 };
                 let footer_rows = if line.is_some() { 2 } else { 1 };
                 attached::resize_session(session, area, footer_rows);
-                attached::render(
+                let _chip_rects = attached::render(
                     f,
                     area,
                     session,
                     "project-manager",
                     line.as_deref(),
+                    &[],
                     &app.theme,
                 );
             } else {

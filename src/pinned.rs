@@ -38,6 +38,16 @@ pub fn resolve(global: Option<&str>, repo: Option<&str>) -> Vec<PinnedCommand> {
     }
 }
 
+/// Truncate a chip label to fit within `max_cols` columns. If `s` exceeds
+/// the budget, returns `s` truncated to `max_cols - 1` chars + `…`.
+pub fn truncate_label(s: &str, max_cols: usize) -> String {
+    if s.chars().count() <= max_cols {
+        return s.to_string();
+    }
+    let keep: String = s.chars().take(max_cols.saturating_sub(1)).collect();
+    format!("{keep}…")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +177,20 @@ mod tests {
         // the user rather than silently falling back to the global list.
         let out = resolve(Some("A=/global"), Some("=\n=\n"));
         assert!(out.is_empty(), "expected zero chips, got {out:?}");
+    }
+
+    #[test]
+    fn truncate_label_short_passthrough() {
+        assert_eq!(truncate_label("PR", 12), "PR");
+    }
+
+    #[test]
+    fn truncate_label_long_uses_ellipsis() {
+        assert_eq!(truncate_label("/loop /babysit-prs", 12), "/loop /baby…");
+    }
+
+    #[test]
+    fn truncate_label_exact_width_passthrough() {
+        assert_eq!(truncate_label("abcdefghijkl", 12), "abcdefghijkl");
     }
 }

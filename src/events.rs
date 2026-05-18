@@ -189,7 +189,7 @@ impl WorkspaceEvents {
         let trimmed = text.trim_end_matches(|c: char| {
             c.is_whitespace() || matches!(c, '*' | '_' | '`')
         });
-        trimmed.chars().next_back() == Some('?')
+        trimmed.ends_with('?')
     }
 
     /// True iff claude appears to have stalled mid-tool-chain: the JSONL

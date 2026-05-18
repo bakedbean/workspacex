@@ -40,15 +40,17 @@ pub enum RepoSettingField {
     SetupScript,
     ArchiveScript,
     PinnedCommands,
+    RelatedRepos,
 }
 
 impl RepoSettingField {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::BranchPrefix,
         Self::CustomInstructions,
         Self::SetupScript,
         Self::ArchiveScript,
         Self::PinnedCommands,
+        Self::RelatedRepos,
     ];
 
     pub fn label(self) -> &'static str {
@@ -58,6 +60,7 @@ impl RepoSettingField {
             Self::SetupScript => "setup_script",
             Self::ArchiveScript => "archive_script",
             Self::PinnedCommands => "pinned_commands",
+            Self::RelatedRepos => "related_repos",
         }
     }
 }
@@ -353,6 +356,9 @@ where
             }
             RepoSettingField::PinnedCommands => {
                 (repo.pinned_commands.clone().unwrap_or_default(), "txt")
+            }
+            RepoSettingField::RelatedRepos => {
+                (repo.related_repos.clone().unwrap_or_default(), "txt")
             }
         }
     };
@@ -1225,6 +1231,7 @@ fn apply_repo_setting(
         RepoSettingField::SetupScript => app.store.set_repo_setup_script(repo_id, opt),
         RepoSettingField::ArchiveScript => app.store.set_repo_archive_script(repo_id, opt),
         RepoSettingField::PinnedCommands => app.store.set_repo_pinned_commands(repo_id, opt),
+        RepoSettingField::RelatedRepos => app.store.set_repo_related_repos(repo_id, opt),
     }
 }
 
@@ -1716,12 +1723,12 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = Some(Modal::RepoSettings { repo_id, selected });
             }
             KeyCode::Enter => {
-                let field = RepoSettingField::ALL[selected.min(4)];
+                let field = RepoSettingField::ALL[selected.min(5)];
                 app.pending_edit = Some(PendingEdit { repo_id, field });
                 app.modal = None;
             }
             KeyCode::Char('d') => {
-                let field = RepoSettingField::ALL[selected.min(4)];
+                let field = RepoSettingField::ALL[selected.min(5)];
                 let _ = apply_repo_setting(app, repo_id, field, "");
                 let _ = app.refresh();
                 app.modal = Some(Modal::RepoSettings { repo_id, selected });

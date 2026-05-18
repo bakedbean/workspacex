@@ -351,9 +351,11 @@ where
             RepoSettingField::CustomInstructions => {
                 (repo.custom_instructions.clone().unwrap_or_default(), "md")
             }
-            RepoSettingField::SetupScript => (repo.setup_script.clone().unwrap_or_default(), "sh"),
+            RepoSettingField::SetupScript => {
+                (repo.setup_script.clone().unwrap_or_default(), "bash")
+            }
             RepoSettingField::ArchiveScript => {
-                (repo.archive_script.clone().unwrap_or_default(), "sh")
+                (repo.archive_script.clone().unwrap_or_default(), "bash")
             }
             RepoSettingField::PinnedCommands => {
                 (repo.pinned_commands.clone().unwrap_or_default(), "txt")
@@ -603,7 +605,11 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // If any leaf's session has gone away (e.g. workspace was
             // archived from elsewhere), bounce back to dashboard. Matches
             // the previous single-pane fallback at handle_key_attached.
-            if state.leaves().iter().any(|id| app.sessions.get(*id).is_none()) {
+            if state
+                .leaves()
+                .iter()
+                .any(|id| app.sessions.get(*id).is_none())
+            {
                 app.view = View::Dashboard;
                 return;
             }
@@ -645,8 +651,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .find(|r| r.id == w.repo_id)
                         .and_then(|r| r.pinned_commands.clone())
                 });
-            let pinned =
-                crate::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
+            let pinned = crate::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
 
             let (pane_area, chip_area, status_area, footer_area) =
                 attached::layout_chrome(area, line.is_some(), !pinned.is_empty());
@@ -662,21 +667,25 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
             // Build PaneSpec list. Use owned sessions + labels to keep
             // them alive while rendering.
-            let pane_data: Vec<(std::sync::Arc<crate::pty::session::Session>, String, ratatui::layout::Rect, bool)> =
-                pane_layouts
-                    .into_iter()
-                    .filter_map(|(ws_id, path, rect)| {
-                        let session = app.sessions.get(ws_id)?;
-                        let label = app
-                            .workspaces
-                            .iter()
-                            .find(|(_, w)| w.id == ws_id)
-                            .map(|(_, w)| w.name.clone())
-                            .unwrap_or_default();
-                        let focused = path == state.focus;
-                        Some((session, label, rect, focused))
-                    })
-                    .collect();
+            let pane_data: Vec<(
+                std::sync::Arc<crate::pty::session::Session>,
+                String,
+                ratatui::layout::Rect,
+                bool,
+            )> = pane_layouts
+                .into_iter()
+                .filter_map(|(ws_id, path, rect)| {
+                    let session = app.sessions.get(ws_id)?;
+                    let label = app
+                        .workspaces
+                        .iter()
+                        .find(|(_, w)| w.id == ws_id)
+                        .map(|(_, w)| w.name.clone())
+                        .unwrap_or_default();
+                    let focused = path == state.focus;
+                    Some((session, label, rect, focused))
+                })
+                .collect();
             let specs: Vec<crate::ui::attached::PaneSpec<'_>> = pane_data
                 .iter()
                 .map(|(s, l, r, f)| crate::ui::attached::PaneSpec {
@@ -1191,51 +1200,44 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 });
             }
         }
-        (KeyCode::Char('p'), _) => {
-            if pm_enabled(&app.store) {
-                if app.pm_visible {
-                    // Hide pane; session stays alive.
-                    app.pm_visible = false;
-                    app.focus = crate::ui::PaneFocus::Dashboard;
+        (KeyCode::Char('p'), _) if pm_enabled(&app.store) => {
+            if app.pm_visible {
+                // Hide pane; session stays alive.
+                app.pm_visible = false;
+                app.focus = crate::ui::PaneFocus::Dashboard;
+            } else {
+                // Open pane. Spawn if not yet spawned this run.
+                let dirs = crate::config::Dirs::discover();
+                let pm_dir = dirs.pm_dir();
+                let custom = app
+                    .store
+                    .get_setting("pm_custom_instructions")
+                    .ok()
+                    .flatten();
+                let result = if app.pm_auto_summary_sent {
+                    // Reopen path: refresh so PM picks up workspace
+                    // changes that happened while the pane was hidden.
+                    crate::pm::open_pm_with_refresh(&mut app.sessions, &app.store, &pm_dir, custom)
+                        .await
                 } else {
-                    // Open pane. Spawn if not yet spawned this run.
-                    let dirs = crate::config::Dirs::discover();
-                    let pm_dir = dirs.pm_dir();
-                    let custom = app
-                        .store
-                        .get_setting("pm_custom_instructions")
-                        .ok()
-                        .flatten();
-                    let result = if app.pm_auto_summary_sent {
-                        // Reopen path: refresh so PM picks up workspace
-                        // changes that happened while the pane was hidden.
-                        crate::pm::open_pm_with_refresh(
-                            &mut app.sessions,
-                            &app.store,
-                            &pm_dir,
-                            custom,
-                        )
-                        .await
-                    } else {
-                        crate::pm::open_pm_with_auto_summary(
-                            &mut app.sessions,
-                            &app.store,
-                            &pm_dir,
-                            custom,
-                        )
-                        .await
-                    };
-                    if let Err(e) = result {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                        return Ok(());
-                    }
-                    app.pm_auto_summary_sent = true;
-                    app.pm = app.sessions.pm();
-                    app.pm_visible = true;
-                    app.focus = crate::ui::PaneFocus::ProjectManager;
+                    crate::pm::open_pm_with_auto_summary(
+                        &mut app.sessions,
+                        &app.store,
+                        &pm_dir,
+                        custom,
+                    )
+                    .await
+                };
+                if let Err(e) = result {
+                    app.modal = Some(Modal::Error {
+                        message: e.to_string(),
+                    });
+                    return Ok(());
                 }
+                app.pm_auto_summary_sent = true;
+                app.pm = app.sessions.pm();
+                app.pm_visible = true;
+                app.focus = crate::ui::PaneFocus::ProjectManager;
             }
         }
         _ => {}
@@ -2784,7 +2786,9 @@ mod pm_state_tests {
                     yolo: false,
                 })
                 .unwrap();
-            store.set_workspace_state(id, WorkspaceState::Ready).unwrap();
+            store
+                .set_workspace_state(id, WorkspaceState::Ready)
+                .unwrap();
             ids.push(id);
         }
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();

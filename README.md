@@ -10,6 +10,7 @@ Terminal UI for managing Claude Code sessions in git worktrees.
 - **Project Manager pane** — a dedicated Claude session that summarizes what every workspace is for, where it's at, and what's next.
 - **Remote control** — attach from claude.ai/code or the mobile app; or run wsx in tmux+ssh for full-fidelity desktop access.
 - **Pinned commands** — define your `/pull-request`, `/feedback`, `/ultrareview` shortcuts once; fire them with `Ctrl-x <digit>` or a click while attached.
+- **Related repos** — declare related wsx repos per primary repo; workspaces spawn with `--add-dir` for each and a read-only system prompt so claude can read but won't edit them.
 - **Frictionless workflow** — auto-rename branches from your first prompt, per-repo setup/archive scripts, editor/terminal/diff hooks.
 
 ## Quick start
@@ -73,6 +74,13 @@ wsx repo edit-pinned-commands <name>
 ```
 
 Per-repo override of `pinned_commands`. Empty value clears the override; resolution then falls back to the global setting.
+
+```
+wsx repo set-related-repos <name> <value-or-@file>
+wsx repo edit-related-repos <name>
+```
+
+Per-repo list of other wsx-registered repos that workspaces in this repo should reference. Comma-separated names (e.g. `frontend,marketing`). At spawn time wsx looks each name up in the repo registry and passes `--add-dir <source-path>` to claude. Unknown names are silently skipped (logged via `RUST_LOG=wsx=info`).
 
 ### Global settings
 
@@ -545,6 +553,25 @@ The editor needs to be a terminal-native editor that returns when you
 quit (vim, nvim, helix, micro, nano). GUI editors that return
 immediately without a `--wait` flag will appear to "save nothing" —
 keep `$EDITOR` pointed at a CLI editor for this flow.
+
+## Related repos
+
+When you work across multiple repos that need to know about each other (a backend, a frontend, a marketing site), declare related repos per primary repo:
+
+```bash
+wsx repo set-related-repos backend frontend,marketing
+```
+
+When you spawn a workspace in `backend`, wsx invokes claude with `--add-dir` pointing at each related repo's source path. Claude can read, grep, and reference files in those directories freely.
+
+To prevent claude from accidentally editing files in the source paths of related repos (which would land changes on whatever branch the source is on), wsx also appends a system-prompt instruction telling claude:
+
+- Treat those directories as read-only.
+- If changes are needed there, ask the user to create a new wsx workspace in that repo and switch to it.
+
+This is a soft guard, not a tool-level lock — it relies on claude following the instruction. The same trust model as `custom_instructions`.
+
+Unknown names in the list (e.g. a repo you renamed or unregistered) are logged and skipped at spawn time; the spawn still proceeds with the recognized names.
 
 ## MCP server inheritance
 

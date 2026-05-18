@@ -502,11 +502,11 @@ fn workspace_main_row(
             // Permission prompt — single character, both nerd + ascii.
             (true, _, _, _) => "!",
             // Question — nerd-font question circle vs ascii fallback.
-            (false, Some(crate::app::StoppedKind::AwaitingAnswer), _, true) => "\u{f128}",
+            (false, Some(crate::app::StoppedKind::AwaitingAnswer), _, true) => "\u{f128}", // nf-fa-question_circle
             (false, Some(crate::app::StoppedKind::AwaitingAnswer), _, false) => "?",
             // Complete — nerd-font check circle vs ascii fallback.
-            (false, Some(crate::app::StoppedKind::Complete), _, true) => "\u{f058}",
-            (false, Some(crate::app::StoppedKind::Complete), _, false) => "\u{2713}",
+            (false, Some(crate::app::StoppedKind::Complete), _, true) => "\u{f058}", // nf-fa-check_circle
+            (false, Some(crate::app::StoppedKind::Complete), _, false) => "\u{2713}", // ✓ CHECK MARK
             // Stalled — keep `!`.
             (false, None, true, _) => "!",
             // Defensive default — needs_attention is true but no specific cause;
@@ -516,10 +516,7 @@ fn workspace_main_row(
     } else {
         " "
     };
-    let attn_style = match (awaiting_tool.is_some(), stopped_kind) {
-        (false, Some(crate::app::StoppedKind::Complete)) => theme.ok_style(),
-        _ => theme.warn_style(),
-    };
+    let attn_style = activity_style(activity, theme);
 
     // Left side: indent + attn + glyph + name + gutter + branch + gutter + git
     let mut spans: Vec<Span<'static>> = Vec::new();

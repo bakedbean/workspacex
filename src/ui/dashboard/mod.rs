@@ -187,7 +187,7 @@ pub fn render(
     f.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
     let footer = Paragraph::new(
-        "[↑/↓] move   [enter] attach   [n] new   [N] new (YOLO)   [e] edit   [t] terminal   [v] diff   [k] procs   [s] settings   [d] archive   [q] quit",
+        "[n] new   [N] new (YOLO)   [e] edit   [t] terminal   [v] diff   [k] procs   [s] settings   [d] archive   [q] quit",
     )
     .style(theme.dim_style());
     f.render_widget(footer, chunks[2]);

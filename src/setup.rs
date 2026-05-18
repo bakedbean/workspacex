@@ -46,12 +46,14 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
     worktree: &Path,
     mut on_line: F,
 ) -> Result<SetupResult> {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let mut cmd = Command::new(&shell);
+    cmd.arg("-ilc")
         .arg(script)
         .current_dir(worktree)
         .env("WSX_REPO_ROOT", repo_root)
         .env("WSX_WORKTREE", worktree)
+        .env("ITERM_SHELL_INTEGRATION_INSTALLED", "Yes")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);

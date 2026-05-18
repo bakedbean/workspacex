@@ -12,6 +12,7 @@ pub mod pinned;
 pub mod pm;
 pub mod proc;
 pub mod pty;
+pub mod related;
 pub mod remote;
 pub mod repo;
 pub mod setup;

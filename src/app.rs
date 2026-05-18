@@ -40,15 +40,17 @@ pub enum RepoSettingField {
     SetupScript,
     ArchiveScript,
     PinnedCommands,
+    RelatedRepos,
 }
 
 impl RepoSettingField {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::BranchPrefix,
         Self::CustomInstructions,
         Self::SetupScript,
         Self::ArchiveScript,
         Self::PinnedCommands,
+        Self::RelatedRepos,
     ];
 
     pub fn label(self) -> &'static str {
@@ -58,6 +60,7 @@ impl RepoSettingField {
             Self::SetupScript => "setup_script",
             Self::ArchiveScript => "archive_script",
             Self::PinnedCommands => "pinned_commands",
+            Self::RelatedRepos => "related_repos",
         }
     }
 }
@@ -353,6 +356,9 @@ where
             }
             RepoSettingField::PinnedCommands => {
                 (repo.pinned_commands.clone().unwrap_or_default(), "txt")
+            }
+            RepoSettingField::RelatedRepos => {
+                (repo.related_repos.clone().unwrap_or_default(), "txt")
             }
         }
     };
@@ -1225,6 +1231,7 @@ fn apply_repo_setting(
         RepoSettingField::SetupScript => app.store.set_repo_setup_script(repo_id, opt),
         RepoSettingField::ArchiveScript => app.store.set_repo_archive_script(repo_id, opt),
         RepoSettingField::PinnedCommands => app.store.set_repo_pinned_commands(repo_id, opt),
+        RepoSettingField::RelatedRepos => app.store.set_repo_related_repos(repo_id, opt),
     }
 }
 
@@ -1243,9 +1250,27 @@ fn build_spawn_info(
         .ok()
         .flatten();
     let yolo = ws.yolo;
+    // Resolve related repos (per-repo names → source paths), filter out
+    // the spawning repo itself, build the read-only system-prompt
+    // fragment, and fold it into custom_instructions before claude sees it.
+    let resolved = crate::related::resolve(repo.related_repos.as_deref(), &app.repos);
+    let resolved: Vec<(String, std::path::PathBuf)> = resolved
+        .into_iter()
+        .filter(|(_, p)| p != &repo.path)
+        .collect();
+    let additional_dirs: Vec<std::path::PathBuf> =
+        resolved.iter().map(|(_, p)| p.clone()).collect();
+    let related_prompt = crate::related::build_read_only_prompt(&resolved);
+    let custom = match (custom, related_prompt) {
+        (None, None) => None,
+        (Some(c), None) => Some(c),
+        (None, Some(r)) => Some(r),
+        (Some(c), Some(r)) => Some(format!("{c}\n\n{r}")),
+    };
     let mode = if crate::pty::session::has_prior_session(&ws.worktree_path) {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
+            additional_dirs,
             yolo,
         }
     } else {
@@ -1262,6 +1287,7 @@ fn build_spawn_info(
         crate::pty::session::SpawnMode::Fresh {
             rename_ctx,
             custom_instructions: custom,
+            additional_dirs,
             yolo,
         }
     };
@@ -1716,12 +1742,14 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = Some(Modal::RepoSettings { repo_id, selected });
             }
             KeyCode::Enter => {
-                let field = RepoSettingField::ALL[selected.min(4)];
+                let field = RepoSettingField::ALL
+                    [selected.min(RepoSettingField::ALL.len().saturating_sub(1))];
                 app.pending_edit = Some(PendingEdit { repo_id, field });
                 app.modal = None;
             }
             KeyCode::Char('d') => {
-                let field = RepoSettingField::ALL[selected.min(4)];
+                let field = RepoSettingField::ALL
+                    [selected.min(RepoSettingField::ALL.len().saturating_sub(1))];
                 let _ = apply_repo_setting(app, repo_id, field, "");
                 let _ = app.refresh();
                 app.modal = Some(Modal::RepoSettings { repo_id, selected });
@@ -2506,6 +2534,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         app.sessions
@@ -2577,6 +2606,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         app.sessions
@@ -2628,6 +2658,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let s = app
@@ -2680,6 +2711,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let s = app
@@ -2714,6 +2746,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         app.sessions
@@ -3126,5 +3159,104 @@ mod pm_state_tests {
     fn paste_char_to_key_passes_through_printable() {
         let k = paste_char_to_key('a');
         assert!(matches!(k.code, KeyCode::Char('a')));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_spawn_info_resolves_related_repos_to_additional_dirs() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let backend_id = store
+            .add_repo(std::path::Path::new("/work/backend"), "backend", "")
+            .unwrap();
+        let _frontend_id = store
+            .add_repo(std::path::Path::new("/work/frontend"), "frontend", "")
+            .unwrap();
+        store
+            .set_repo_related_repos(backend_id, Some("frontend"))
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: backend_id,
+                name: "test-ws",
+                branch: "backend/test-ws",
+                worktree_path: std::path::Path::new("/wt/test-ws"),
+                yolo: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let info = build_spawn_info(&app, ws_id);
+        assert!(info.is_some());
+        let (_id, _path, mode, _repo_path) = info.unwrap();
+        match mode {
+            crate::pty::session::SpawnMode::Fresh {
+                additional_dirs,
+                custom_instructions,
+                ..
+            } => {
+                assert_eq!(
+                    additional_dirs,
+                    vec![std::path::PathBuf::from("/work/frontend")],
+                    "additional_dirs should resolve to frontend's source path"
+                );
+                let prompt = custom_instructions.expect("read-only fragment must be folded in");
+                assert!(
+                    prompt.contains("/work/frontend"),
+                    "system prompt missing related path: {prompt}"
+                );
+                assert!(
+                    prompt.contains("MUST NOT edit"),
+                    "system prompt missing read-only directive: {prompt}"
+                );
+            }
+            other => panic!("expected Fresh mode; got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_spawn_info_filters_self_reference() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let backend_id = store
+            .add_repo(std::path::Path::new("/work/backend"), "backend", "")
+            .unwrap();
+        store
+            .set_repo_related_repos(backend_id, Some("backend"))
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: backend_id,
+                name: "test-ws",
+                branch: "backend/test-ws",
+                worktree_path: std::path::Path::new("/wt/test-ws"),
+                yolo: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let (_id, _path, mode, _repo_path) = build_spawn_info(&app, ws_id).unwrap();
+        match mode {
+            crate::pty::session::SpawnMode::Fresh {
+                additional_dirs,
+                custom_instructions,
+                ..
+            } => {
+                assert!(
+                    additional_dirs.is_empty(),
+                    "self-reference must be filtered"
+                );
+                assert!(
+                    custom_instructions.is_none(),
+                    "no related dirs => no fragment"
+                );
+            }
+            other => panic!("expected Fresh mode; got {other:?}"),
+        }
     }
 }

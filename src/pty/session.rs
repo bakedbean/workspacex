@@ -208,12 +208,14 @@ pub enum SpawnMode {
     Fresh {
         rename_ctx: Option<RenameContext>,
         custom_instructions: Option<String>,
+        additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
     },
     /// Resume the most recent prior session in this worktree via `--continue`.
     /// `yolo` adds `--dangerously-skip-permissions`.
     Continue {
         custom_instructions: Option<String>,
+        additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
     },
     /// Spawn the project-manager session. Embeds the PM system prompt and
@@ -223,6 +225,8 @@ pub enum SpawnMode {
     ProjectManager {
         workspaces_json_path: std::path::PathBuf,
         custom_instructions: Option<String>,
+        // PM has no owning repo, so always empty. Kept for uniformity.
+        additional_dirs: Vec<std::path::PathBuf>,
         resume: bool,
     },
 }
@@ -248,47 +252,71 @@ pub fn build_claude_command(
         cmd.env(k, v);
     }
 
-    let (rename_prompt, custom, allow_git_branch, add_continue, skip_permissions) = match mode {
-        SpawnMode::Continue {
-            custom_instructions,
-            yolo,
-        } => (None, custom_instructions.clone(), false, true, *yolo),
-        SpawnMode::Fresh {
-            rename_ctx,
-            custom_instructions,
-            yolo,
-        } => {
-            let rename_mode =
-                std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
-            let (rp, allow) = if let Some(ctx) = rename_ctx {
-                if rename_mode == "claude" {
-                    (
-                        Some(render_rename_system_prompt(
-                            &ctx.current_branch,
-                            &ctx.branch_prefix,
-                        )),
-                        true,
-                    )
+    let (rename_prompt, custom, allow_git_branch, add_continue, skip_permissions, add_dirs) =
+        match mode {
+            SpawnMode::Continue {
+                custom_instructions,
+                additional_dirs,
+                yolo,
+            } => (
+                None,
+                custom_instructions.clone(),
+                false,
+                true,
+                *yolo,
+                additional_dirs.clone(),
+            ),
+            SpawnMode::Fresh {
+                rename_ctx,
+                custom_instructions,
+                additional_dirs,
+                yolo,
+            } => {
+                let rename_mode =
+                    std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
+                let (rp, allow) = if let Some(ctx) = rename_ctx {
+                    if rename_mode == "claude" {
+                        (
+                            Some(render_rename_system_prompt(
+                                &ctx.current_branch,
+                                &ctx.branch_prefix,
+                            )),
+                            true,
+                        )
+                    } else {
+                        (None, false)
+                    }
                 } else {
                     (None, false)
-                }
-            } else {
-                (None, false)
-            };
-            (rp, custom_instructions.clone(), allow, false, *yolo)
-        }
-        SpawnMode::ProjectManager {
-            workspaces_json_path: _,
-            custom_instructions,
-            resume,
-        } => (
-            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
-            None,
-            false,
-            *resume,
-            true,
-        ),
-    };
+                };
+                (
+                    rp,
+                    custom_instructions.clone(),
+                    allow,
+                    false,
+                    *yolo,
+                    additional_dirs.clone(),
+                )
+            }
+            SpawnMode::ProjectManager {
+                workspaces_json_path: _,
+                custom_instructions,
+                additional_dirs,
+                resume,
+            } => (
+                Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+                None,
+                false,
+                *resume,
+                true,
+                additional_dirs.clone(),
+            ),
+        };
+
+    for dir in &add_dirs {
+        cmd.arg("--add-dir");
+        cmd.arg(dir);
+    }
 
     if add_continue {
         cmd.arg("--continue");
@@ -551,6 +579,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                additional_dirs: vec![],
                 yolo: false,
             },
             crate::remote::RemoteOpts::disabled(),
@@ -579,6 +608,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                additional_dirs: vec![],
                 yolo: false,
             },
             crate::remote::RemoteOpts::disabled(),
@@ -610,6 +640,7 @@ mod tests {
                 SpawnMode::Fresh {
                     rename_ctx: None,
                     custom_instructions: None,
+                    additional_dirs: vec![],
                     yolo: false,
                 },
                 crate::remote::RemoteOpts::disabled(),
@@ -650,6 +681,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                additional_dirs: vec![],
                 yolo: false,
             },
             crate::remote::RemoteOpts::disabled(),
@@ -683,6 +715,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(ctx),
             custom_instructions: Some("Use tabs not spaces".into()),
+            additional_dirs: vec![],
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
@@ -716,6 +749,7 @@ mod tests {
     fn system_prompt_continue_passes_custom_only() {
         let mode = SpawnMode::Continue {
             custom_instructions: Some("Use ruff".into()),
+            additional_dirs: vec![],
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
@@ -739,6 +773,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
@@ -757,6 +792,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
@@ -773,6 +809,7 @@ mod tests {
     fn yolo_continue_emits_skip_permissions() {
         let mode = SpawnMode::Continue {
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
@@ -791,6 +828,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
@@ -881,6 +919,7 @@ mod tests {
         let mode = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
             custom_instructions: None,
+            additional_dirs: vec![],
             resume: false,
         };
         let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
@@ -904,6 +943,7 @@ mod tests {
         let mode = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
             custom_instructions: None,
+            additional_dirs: vec![],
             resume: true,
         };
         let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
@@ -920,6 +960,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let opts = crate::remote::RemoteOpts {
@@ -945,6 +986,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let opts = crate::remote::RemoteOpts {
@@ -966,6 +1008,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
@@ -985,6 +1028,7 @@ mod tests {
         let mode = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
             custom_instructions: None,
+            additional_dirs: vec![],
             resume: false,
         };
         let opts = crate::remote::RemoteOpts {
@@ -1000,6 +1044,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_claude_command_emits_add_dir_per_related_path() {
+        let cwd = PathBuf::from("/tmp/test");
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![
+                PathBuf::from("/work/frontend"),
+                PathBuf::from("/work/marketing"),
+            ],
+            yolo: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let args: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+        // Two pairs of (--add-dir, <path>) in order.
+        let positions: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--add-dir")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            positions.len(),
+            2,
+            "expected two --add-dir flags; got: {args:?}"
+        );
+        assert_eq!(args[positions[0] + 1], "/work/frontend");
+        assert_eq!(args[positions[1] + 1], "/work/marketing");
+    }
+
+    #[test]
+    fn build_claude_command_omits_add_dir_when_no_related() {
+        let cwd = PathBuf::from("/tmp/test");
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let args: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+        assert!(!args.iter().any(|a| a == "--add-dir"), "got: {args:?}");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_text_when_settled_writes_after_quiet_window() {
         unsafe {
@@ -1013,6 +1109,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                additional_dirs: vec![],
                 yolo: false,
             },
             crate::remote::RemoteOpts::disabled(),
@@ -1043,6 +1140,7 @@ mod tests {
         let mode = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/wsx-test-pm/workspaces.json"),
             custom_instructions: None,
+            additional_dirs: vec![],
             resume: false,
         };
         let s = mgr
@@ -1053,6 +1151,7 @@ mod tests {
         let mode2 = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/wsx-test-pm/workspaces.json"),
             custom_instructions: None,
+            additional_dirs: vec![],
             resume: false,
         };
         let s2 = mgr
@@ -1087,6 +1186,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                additional_dirs: vec![],
                 yolo: false,
             },
             crate::remote::RemoteOpts::disabled(),
@@ -1118,6 +1218,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                additional_dirs: vec![],
                 yolo: false,
             },
             crate::remote::RemoteOpts::disabled(),

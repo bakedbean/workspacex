@@ -182,6 +182,7 @@ pub async fn open_pm(
     let mode = crate::pty::session::SpawnMode::ProjectManager {
         workspaces_json_path: workspaces_json,
         custom_instructions,
+        additional_dirs: vec![],
         resume,
     };
     let remote = crate::remote::RemoteOpts::from_store(store);

@@ -152,7 +152,8 @@ fn sort_key(
     };
     let activity_rank = match activity.get(&w.id).copied() {
         Some(crate::ui::updates_bar::ActivityState::Awaiting)
-        | Some(crate::ui::updates_bar::ActivityState::Stopped)
+        | Some(crate::ui::updates_bar::ActivityState::AwaitingAnswer)
+        | Some(crate::ui::updates_bar::ActivityState::Complete)
         | Some(crate::ui::updates_bar::ActivityState::Stalled)
         | Some(crate::ui::updates_bar::ActivityState::Waiting) => 0,
         Some(crate::ui::updates_bar::ActivityState::Active)
@@ -287,7 +288,8 @@ fn workspace_row<'a>(
         match activity {
             Some(ActivityState::Active) | Some(ActivityState::Idle) => '●',
             Some(ActivityState::Awaiting)
-            | Some(ActivityState::Stopped)
+            | Some(ActivityState::AwaitingAnswer)
+            | Some(ActivityState::Complete)
             | Some(ActivityState::Stalled)
             | Some(ActivityState::Waiting) => '⚠',
             Some(ActivityState::Off) | None => {

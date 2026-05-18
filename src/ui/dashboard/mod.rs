@@ -29,12 +29,9 @@ pub enum Item<'a> {
         /// permission prompt). Carries (tool name, first-seen epoch ms) so
         /// we can render the elapsed wait time in the sub-line.
         awaiting_tool: Option<(String, i64)>,
-        /// True when the assistant's most recent `stop_reason` indicates
-        /// the agent finished its turn and is awaiting human input
-        /// (`end_turn`, `max_tokens`, `stop_sequence`) and the user has
-        /// not yet replied. Distinct from `awaiting_tool` (permission
-        /// prompts), which has higher priority in the activity column.
-        stopped: bool,
+        /// Why the agent paused. `None` when no stop_reason or when
+        /// the user has already replied.
+        stopped_kind: Option<crate::app::StoppedKind>,
         /// True when Claude has stalled mid-tool-chain: the JSONL log
         /// hasn't been appended for >60s, no tool_use is pending, and
         /// at least one stop_reason has been observed. Catches sessions
@@ -130,7 +127,7 @@ pub fn render(
                 needs_attention,
                 lifecycle,
                 awaiting_tool,
-                stopped,
+                stopped_kind,
                 stalled,
                 proc_count,
             } => {
@@ -148,7 +145,7 @@ pub fn render(
                     *needs_attention,
                     *lifecycle,
                     awaiting_tool,
-                    *stopped,
+                    *stopped_kind,
                     *stalled,
                     *proc_count,
                     nerd_fonts,
@@ -245,33 +242,38 @@ fn format_age(timestamp_ms: i64) -> String {
     }
 }
 
-/// Build the top summary line: `wsx · N workspaces[ · K awaiting][ · M stopped]`.
+/// Build the top summary line: `wsx · N workspaces[ · K permission][ · Q question][ · C complete][ · S stalled]`.
 /// State suffixes are omitted when their count is zero. `wsx` uses the header
-/// style; ` · `, the numeric totals, and the labels use dim style — except
-/// alertable counts (`awaiting`, `stopped`), whose numeric value uses warn.
+/// style; ` · `, the numeric totals, and the labels use dim style. Alertable
+/// counts (`permission`, `question`, `stalled`) use warn for the numeric value;
+/// `complete` uses ok.
 fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
     let mut total = 0usize;
     let mut awaiting = 0usize;
-    let mut stopped_n = 0usize;
+    let mut question = 0usize;
+    let mut complete = 0usize;
     let mut stalled_n = 0usize;
     for item in items {
         if let Item::Workspace {
             awaiting_tool,
-            stopped,
+            stopped_kind,
             stalled,
             ..
         } = item
         {
             total += 1;
             // Priority matches `classify_activity_with_events`: awaiting >
-            // stopped > stalled. A workspace with multiple flags counts
-            // only toward its highest-priority bucket.
+            // stopped_kind > stalled. A workspace with multiple flags
+            // counts only toward its highest-priority bucket.
             if awaiting_tool.is_some() {
                 awaiting += 1;
-            } else if *stopped {
-                stopped_n += 1;
-            } else if *stalled {
-                stalled_n += 1;
+            } else {
+                match stopped_kind {
+                    Some(crate::app::StoppedKind::AwaitingAnswer) => question += 1,
+                    Some(crate::app::StoppedKind::Complete) => complete += 1,
+                    None if *stalled => stalled_n += 1,
+                    None => {}
+                }
             }
         }
     }
@@ -284,12 +286,17 @@ fn top_summary_line(items: &[Item], theme: &Theme) -> Line<'static> {
     if awaiting > 0 {
         spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
         spans.push(Span::styled(format!("{awaiting}"), theme.warn_style()));
-        spans.push(Span::styled(" awaiting".to_string(), theme.dim_style()));
+        spans.push(Span::styled(" permission".to_string(), theme.dim_style()));
     }
-    if stopped_n > 0 {
+    if question > 0 {
         spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
-        spans.push(Span::styled(format!("{stopped_n}"), theme.warn_style()));
-        spans.push(Span::styled(" stopped".to_string(), theme.dim_style()));
+        spans.push(Span::styled(format!("{question}"), theme.warn_style()));
+        spans.push(Span::styled(" question".to_string(), theme.dim_style()));
+    }
+    if complete > 0 {
+        spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
+        spans.push(Span::styled(format!("{complete}"), theme.ok_style()));
+        spans.push(Span::styled(" complete".to_string(), theme.dim_style()));
     }
     if stalled_n > 0 {
         spans.push(Span::styled(" · ".to_string(), theme.dim_style()));
@@ -408,8 +415,8 @@ fn format_age_compact(timestamp_ms: i64) -> String {
 /// Map an activity word to a style (color) per the spec.
 fn activity_style(label: &str, theme: &Theme) -> Style {
     match label {
-        "awaiting" | "stopped" | "stalled" => theme.warn_style(),
-        "active" => theme.ok_style(),
+        "awaiting" | "question" | "stalled" => theme.warn_style(),
+        "complete" | "active" => theme.ok_style(),
         "idle" => Style::default(),
         "waiting" | "resumable" | "off" => theme.dim_style(),
         _ => Style::default(),
@@ -428,7 +435,7 @@ fn workspace_main_row(
     needs_attention: bool,
     lifecycle: Option<crate::forge::BranchLifecycle>,
     awaiting_tool: &Option<(String, i64)>,
-    stopped: bool,
+    stopped_kind: Option<crate::app::StoppedKind>,
     stalled: bool,
     proc_count: usize,
     nerd: bool,
@@ -443,17 +450,18 @@ fn workspace_main_row(
     };
     let activity = if awaiting_tool.is_some() {
         "awaiting"
-    } else if stopped {
-        "stopped"
-    } else if stalled {
-        "stalled"
     } else {
-        match (seconds_since_activity, has_prior_session) {
-            (Some(s), _) if s < 2 => "active",
-            (Some(s), _) if s < 30 => "idle",
-            (Some(_), _) => "waiting",
-            (None, true) => "resumable",
-            (None, false) => "off",
+        match stopped_kind {
+            Some(crate::app::StoppedKind::AwaitingAnswer) => "question",
+            Some(crate::app::StoppedKind::Complete) => "complete",
+            None if stalled => "stalled",
+            None => match (seconds_since_activity, has_prior_session) {
+                (Some(s), _) if s < 2 => "active",
+                (Some(s), _) if s < 30 => "idle",
+                (Some(_), _) => "waiting",
+                (None, true) => "resumable",
+                (None, false) => "off",
+            },
         }
     };
     // Age source: the most recent of awaiting_tool.first_seen_ms and

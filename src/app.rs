@@ -72,14 +72,29 @@ pub struct PendingEdit {
     pub field: RepoSettingField,
 }
 
+/// Why the agent paused at end-of-turn. Distinguishes "asked the user
+/// something and is waiting for an answer" from "finished a task".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoppedKind {
+    /// The agent invoked `AskUserQuestion` or `ExitPlanMode` and the
+    /// user hasn't responded yet, OR the final assistant text ended
+    /// with `?` (fallback). Maps to the "?" dashboard glyph.
+    AwaitingAnswer,
+    /// The agent finished without asking the user anything. Maps to
+    /// the "✓" dashboard glyph.
+    Complete,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
-    /// The agent has stopped its turn and is awaiting human input. Derived
-    /// from the JSONL `stop_reason` field — the only reliable "agent is
-    /// done" signal. Higher priority than PTY-recency states.
-    Stopped,
+    /// The agent has stopped its turn and is waiting for an answer
+    /// from the user. Higher priority than PTY-recency states.
+    AwaitingAnswer,
+    /// The agent has stopped its turn with a completed task and is
+    /// awaiting acknowledgment. Higher priority than PTY-recency states.
+    Complete,
     /// A tool_use has been pending for ≥3s (almost always a permission
-    /// prompt). Higher priority than `Stopped`.
+    /// prompt). Higher priority than `AwaitingAnswer` / `Complete`.
     Awaiting,
     /// < 2s since last PTY output.
     Active,
@@ -87,9 +102,7 @@ pub enum ActivityState {
     Idle,
     /// Claude has stalled between turns: the JSONL log hasn't been
     /// appended for >60s, no tool_use is pending, and we've seen at
-    /// least one stop_reason in this session. Catches the case where
-    /// Claude crashes/hangs after a tool_result without ever writing
-    /// a terminal stop_reason (end_turn). Alertable.
+    /// least one stop_reason in this session. Alertable.
     Stalled,
     /// More than 30s since last PTY output but no JSONL stop signal.
     /// Retained for the recency column; does NOT drive the bell.
@@ -99,11 +112,14 @@ pub enum ActivityState {
 }
 
 impl ActivityState {
-    /// States that should fire a bell + `!` marker when entered.
+    /// States that should fire a bell + attention marker when entered.
     pub fn is_alertable(self) -> bool {
         matches!(
             self,
-            ActivityState::Stopped | ActivityState::Awaiting | ActivityState::Stalled
+            ActivityState::AwaitingAnswer
+                | ActivityState::Complete
+                | ActivityState::Awaiting
+                | ActivityState::Stalled
         )
     }
 }
@@ -118,25 +134,25 @@ fn classify_activity(secs: Option<u64>) -> ActivityState {
 }
 
 /// Compute the activity state for a workspace, combining JSONL-derived
-/// signals (`stop_reason` + pending tool_uses + stall detection) with
-/// PTY-output recency.
+/// signals with PTY-output recency.
 ///
-/// Priority: `Awaiting` (tool_use pending ≥3s) > `Stopped` (assistant
-/// stop_reason = end_turn/max_tokens/stop_sequence and user hasn't replied)
-/// > `Stalled` (JSONL quiet >60s mid-tool-chain) > PTY-recency
-/// > (Active/Idle/Waiting) > Off (no session).
+/// Priority: `Awaiting` (permission prompt) > `AwaitingAnswer` /
+/// `Complete` (turn ended) > `Stalled` (mid-tool-chain quiet) >
+/// PTY-recency > `Off`.
 fn classify_activity_with_events(
     secs: Option<u64>,
     running: bool,
     awaiting: bool,
-    stopped: bool,
+    stopped_kind: Option<StoppedKind>,
     stalled: bool,
 ) -> ActivityState {
     if awaiting {
         return ActivityState::Awaiting;
     }
-    if stopped {
-        return ActivityState::Stopped;
+    match stopped_kind {
+        Some(StoppedKind::AwaitingAnswer) => return ActivityState::AwaitingAnswer,
+        Some(StoppedKind::Complete) => return ActivityState::Complete,
+        None => {}
     }
     if stalled {
         return ActivityState::Stalled;
@@ -485,10 +501,18 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
-                    let stopped = app
-                        .workspace_events
-                        .get(&ws.id)
-                        .is_some_and(|e| e.is_awaiting_user());
+                    let stopped_kind = app.workspace_events.get(&ws.id).and_then(|e| {
+                        if !e.is_awaiting_user() {
+                            return None;
+                        }
+                        if e.pending_question_tool().is_some()
+                            || e.last_text_ends_with_question()
+                        {
+                            Some(StoppedKind::AwaitingAnswer)
+                        } else {
+                            Some(StoppedKind::Complete)
+                        }
+                    });
                     let stalled = app
                         .workspace_events
                         .get(&ws.id)
@@ -505,7 +529,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .get(&ws.id)
                             .and_then(|e| e.latest.clone()),
                         needs_attention,
-                        stopped,
+                        stopped_kind,
                         stalled,
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         awaiting_tool: awaiting,
@@ -558,16 +582,30 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
-                let stopped = app
-                    .workspace_events
-                    .get(&ws.id)
-                    .is_some_and(|e| e.is_awaiting_user());
+                let stopped_kind = app.workspace_events.get(&ws.id).and_then(|e| {
+                    if !e.is_awaiting_user() {
+                        return None;
+                    }
+                    // Tool detection has priority over text heuristic.
+                    if e.pending_question_tool().is_some() {
+                        Some(StoppedKind::AwaitingAnswer)
+                    } else if e.last_text_ends_with_question() {
+                        Some(StoppedKind::AwaitingAnswer)
+                    } else {
+                        Some(StoppedKind::Complete)
+                    }
+                });
                 let stalled = app
                     .workspace_events
                     .get(&ws.id)
                     .is_some_and(|e| e.is_stalled(now_ms, 60_000));
-                let activity =
-                    classify_activity_with_events(secs, running, awaiting, stopped, stalled);
+                let activity = classify_activity_with_events(
+                    secs,
+                    running,
+                    awaiting,
+                    stopped_kind,
+                    stalled,
+                );
                 let prev = app.workspace_activity.get(&ws.id).copied();
                 if activity.is_alertable() && prev != Some(activity) && notifications_on {
                     app.workspace_needs_attention.insert(ws.id);
@@ -1950,7 +1988,8 @@ fn compute_attention_line(
 fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {
     use crate::ui::updates_bar::ActivityState as U;
     match a {
-        ActivityState::Stopped => U::Stopped,
+        ActivityState::AwaitingAnswer => U::AwaitingAnswer,
+        ActivityState::Complete => U::Complete,
         ActivityState::Awaiting => U::Awaiting,
         ActivityState::Active => U::Active,
         ActivityState::Idle => U::Idle,
@@ -2168,17 +2207,39 @@ mod activity_classifier_tests {
     fn awaiting_wins_over_stopped_over_recency() {
         // awaiting (permission) beats everything.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, true, true, false),
+            classify_activity_with_events(
+                Some(0),
+                true,
+                true,
+                Some(StoppedKind::Complete),
+                false,
+            ),
             ActivityState::Awaiting
         );
         assert_eq!(
-            classify_activity_with_events(Some(0), true, true, false, false),
+            classify_activity_with_events(Some(0), true, true, None, false),
             ActivityState::Awaiting
         );
         // stopped beats PTY recency.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, true, false),
-            ActivityState::Stopped
+            classify_activity_with_events(
+                Some(0),
+                true,
+                false,
+                Some(StoppedKind::Complete),
+                false,
+            ),
+            ActivityState::Complete
+        );
+        assert_eq!(
+            classify_activity_with_events(
+                Some(0),
+                true,
+                false,
+                Some(StoppedKind::AwaitingAnswer),
+                false,
+            ),
+            ActivityState::AwaitingAnswer
         );
     }
 
@@ -2187,8 +2248,24 @@ mod activity_classifier_tests {
         // If we have a terminal stop_reason waiting on the user, that
         // takes priority over the stall detector.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, true, true),
-            ActivityState::Stopped
+            classify_activity_with_events(
+                Some(0),
+                true,
+                false,
+                Some(StoppedKind::Complete),
+                true,
+            ),
+            ActivityState::Complete
+        );
+        assert_eq!(
+            classify_activity_with_events(
+                Some(0),
+                true,
+                false,
+                Some(StoppedKind::AwaitingAnswer),
+                true,
+            ),
+            ActivityState::AwaitingAnswer
         );
     }
 
@@ -2196,11 +2273,11 @@ mod activity_classifier_tests {
     fn stalled_wins_over_pty_recency() {
         // Stall detector fires before PTY-recency Active/Idle/Waiting.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, false, true),
+            classify_activity_with_events(Some(0), true, false, None, true),
             ActivityState::Stalled
         );
         assert_eq!(
-            classify_activity_with_events(Some(60), true, false, false, true),
+            classify_activity_with_events(Some(60), true, false, None, true),
             ActivityState::Stalled
         );
     }
@@ -2208,12 +2285,12 @@ mod activity_classifier_tests {
     #[test]
     fn no_session_is_off_even_if_running_false() {
         assert_eq!(
-            classify_activity_with_events(None, false, false, false, false),
+            classify_activity_with_events(None, false, false, None, false),
             ActivityState::Off
         );
         // Even with pty seconds, if running=false → Off.
         assert_eq!(
-            classify_activity_with_events(Some(5), false, false, false, false),
+            classify_activity_with_events(Some(5), false, false, None, false),
             ActivityState::Off
         );
     }
@@ -2222,7 +2299,7 @@ mod activity_classifier_tests {
     fn awaiting_fires_even_when_session_not_running() {
         // A pending tool_use is a strong signal regardless of pty state.
         assert_eq!(
-            classify_activity_with_events(None, false, true, false, false),
+            classify_activity_with_events(None, false, true, None, false),
             ActivityState::Awaiting
         );
     }
@@ -2230,22 +2307,23 @@ mod activity_classifier_tests {
     #[test]
     fn pty_recency_drives_active_idle_waiting_when_no_event_signals() {
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, false, false),
+            classify_activity_with_events(Some(0), true, false, None, false),
             ActivityState::Active
         );
         assert_eq!(
-            classify_activity_with_events(Some(10), true, false, false, false),
+            classify_activity_with_events(Some(10), true, false, None, false),
             ActivityState::Idle
         );
         assert_eq!(
-            classify_activity_with_events(Some(60), true, false, false, false),
+            classify_activity_with_events(Some(60), true, false, None, false),
             ActivityState::Waiting
         );
     }
 
     #[test]
     fn is_alertable_includes_stopped_awaiting_and_stalled() {
-        assert!(ActivityState::Stopped.is_alertable());
+        assert!(ActivityState::AwaitingAnswer.is_alertable());
+        assert!(ActivityState::Complete.is_alertable());
         assert!(ActivityState::Awaiting.is_alertable());
         assert!(ActivityState::Stalled.is_alertable());
         assert!(!ActivityState::Active.is_alertable());

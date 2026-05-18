@@ -13,12 +13,14 @@ use crate::store::WorkspaceId;
 /// re-export-friendly enum so updates_bar doesn't depend on app.rs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
-    Stopped,
+    /// Agent paused waiting for the user to answer a question.
+    AwaitingAnswer,
+    /// Agent finished a task and is awaiting acknowledgment.
+    Complete,
     Awaiting,
     Active,
     Idle,
-    /// Claude has stalled mid-tool-chain (JSONL quiet >60s with a
-    /// pending stop_reason and no outstanding tool_use). Alertable.
+    /// Claude has stalled mid-tool-chain.
     Stalled,
     Waiting,
     Off,

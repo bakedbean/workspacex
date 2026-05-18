@@ -186,9 +186,8 @@ impl WorkspaceEvents {
         let Some(text) = self.last_assistant_text.as_deref() else {
             return false;
         };
-        let trimmed = text.trim_end_matches(|c: char| {
-            c.is_whitespace() || matches!(c, '*' | '_' | '`')
-        });
+        let trimmed =
+            text.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '*' | '_' | '`'));
         trimmed.ends_with('?')
     }
 

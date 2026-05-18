@@ -540,8 +540,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
-                    let stopped_kind =
-                        app.workspace_events.get(&ws.id).and_then(derive_stopped_kind);
+                    let stopped_kind = app
+                        .workspace_events
+                        .get(&ws.id)
+                        .and_then(derive_stopped_kind);
                     let stalled = app
                         .workspace_events
                         .get(&ws.id)
@@ -611,19 +613,16 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
-                let stopped_kind =
-                    app.workspace_events.get(&ws.id).and_then(derive_stopped_kind);
+                let stopped_kind = app
+                    .workspace_events
+                    .get(&ws.id)
+                    .and_then(derive_stopped_kind);
                 let stalled = app
                     .workspace_events
                     .get(&ws.id)
                     .is_some_and(|e| e.is_stalled(now_ms, 60_000));
-                let activity = classify_activity_with_events(
-                    secs,
-                    running,
-                    awaiting,
-                    stopped_kind,
-                    stalled,
-                );
+                let activity =
+                    classify_activity_with_events(secs, running, awaiting, stopped_kind, stalled);
                 let prev = app.workspace_activity.get(&ws.id).copied();
                 if activity.is_alertable() && prev != Some(activity) && notifications_on {
                     app.workspace_needs_attention.insert(ws.id);
@@ -2294,13 +2293,7 @@ mod activity_classifier_tests {
     fn awaiting_wins_over_stopped_over_recency() {
         // awaiting (permission) beats everything.
         assert_eq!(
-            classify_activity_with_events(
-                Some(0),
-                true,
-                true,
-                Some(StoppedKind::Complete),
-                false,
-            ),
+            classify_activity_with_events(Some(0), true, true, Some(StoppedKind::Complete), false,),
             ActivityState::Awaiting
         );
         assert_eq!(
@@ -2309,13 +2302,7 @@ mod activity_classifier_tests {
         );
         // stopped beats PTY recency.
         assert_eq!(
-            classify_activity_with_events(
-                Some(0),
-                true,
-                false,
-                Some(StoppedKind::Complete),
-                false,
-            ),
+            classify_activity_with_events(Some(0), true, false, Some(StoppedKind::Complete), false,),
             ActivityState::Complete
         );
         assert_eq!(
@@ -2335,13 +2322,7 @@ mod activity_classifier_tests {
         // If we have a terminal stop_reason waiting on the user, that
         // takes priority over the stall detector.
         assert_eq!(
-            classify_activity_with_events(
-                Some(0),
-                true,
-                false,
-                Some(StoppedKind::Complete),
-                true,
-            ),
+            classify_activity_with_events(Some(0), true, false, Some(StoppedKind::Complete), true,),
             ActivityState::Complete
         );
         assert_eq!(
@@ -3945,10 +3926,7 @@ mod derive_stopped_kind_tests {
         evt.last_stop_reason = Some(StopReason::ToolUse);
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
-        assert_eq!(
-            derive_stopped_kind(&evt),
-            Some(StoppedKind::AwaitingAnswer)
-        );
+        assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
     }
 
     #[test]
@@ -3957,10 +3935,7 @@ mod derive_stopped_kind_tests {
         evt.last_stop_reason = Some(StopReason::ToolUse);
         evt.pending_tool_uses
             .insert("t1".into(), ("ExitPlanMode".into(), 0));
-        assert_eq!(
-            derive_stopped_kind(&evt),
-            Some(StoppedKind::AwaitingAnswer)
-        );
+        assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
     }
 
     #[test]
@@ -3978,10 +3953,7 @@ mod derive_stopped_kind_tests {
         evt.last_stop_reason = Some(StopReason::EndTurn);
         evt.user_replied_since_stop = false;
         evt.last_assistant_text = Some("Want me to also handle X?".into());
-        assert_eq!(
-            derive_stopped_kind(&evt),
-            Some(StoppedKind::AwaitingAnswer)
-        );
+        assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
     }
 
     #[test]

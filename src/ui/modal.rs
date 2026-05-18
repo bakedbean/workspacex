@@ -283,9 +283,7 @@ fn workspace_row<'a>(
     let glyph = if w.state == crate::store::WorkspaceState::Failed {
         '✕'
     } else if needs_attention {
-        activity
-            .map(glyph_for_activity)
-            .unwrap_or('⚠')
+        activity.map(glyph_for_activity).unwrap_or('⚠')
     } else {
         match activity {
             Some(ActivityState::Active) | Some(ActivityState::Idle) => '●',
@@ -606,10 +604,7 @@ mod workspace_row_tests {
             &theme,
         );
         let body = line_text(&line);
-        assert!(
-            body.contains('\u{2713}'),
-            "expected '✓' glyph in: {body}"
-        );
+        assert!(body.contains('\u{2713}'), "expected '✓' glyph in: {body}");
         assert!(
             body.contains("complete"),
             "expected 'complete' status text in: {body}"

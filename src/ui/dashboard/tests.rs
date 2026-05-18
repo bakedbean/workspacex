@@ -335,7 +335,10 @@ fn renders_question_glyph_for_awaiting_answer() {
     .unwrap();
     let text = dump(&term, 120, 8);
     assert!(text.contains("?"), "expected '?' attention marker: {text}");
-    assert!(text.contains("question"), "expected 'question' activity label: {text}");
+    assert!(
+        text.contains("question"),
+        "expected 'question' activity label: {text}"
+    );
 }
 
 #[test]
@@ -362,13 +365,17 @@ fn renders_check_glyph_for_complete() {
         },
     ];
     let mut state = DashboardState::default();
-    term.draw(|f| {
-        render(f, f.area(), &items, None, false, &t(), &mut state)
-    })
-    .unwrap();
+    term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
+        .unwrap();
     let text = dump(&term, 120, 8);
-    assert!(text.contains("\u{2713}"), "expected '✓' attention marker: {text}");
-    assert!(text.contains("complete"), "expected 'complete' activity label: {text}");
+    assert!(
+        text.contains("\u{2713}"),
+        "expected '✓' attention marker: {text}"
+    );
+    assert!(
+        text.contains("complete"),
+        "expected 'complete' activity label: {text}"
+    );
 }
 
 #[test]

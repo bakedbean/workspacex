@@ -7,59 +7,61 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::sync::Arc;
 
-/// Render the attached-workspace view. When `attention_line` is `Some`, a
-/// one-line indicator listing other workspaces that need attention is
-/// inserted above the footer; when `None`, the term gets that row back.
-/// When `pinned` is non-empty, a one-row chip bar is inserted between the
-/// terminal area and the status/footer rows.
-/// Returns the per-chip clickable Rects for mouse hit-testing.
-pub fn render(
+/// One pane in the attached view: a workspace's PTY plus its label,
+/// the rect it occupies, and whether it's the focused pane (cursor + chip
+/// chrome). For the single-pane case the slice has one entry; for vim-style
+/// splits there's one entry per leaf.
+pub struct PaneSpec<'a> {
+    pub session: &'a Arc<Session>,
+    pub label: &'a str,
+    pub rect: Rect,
+    pub focused: bool,
+}
+
+/// Render one or more attached panes plus the shared chrome (optional
+/// chip row, optional attention line, footer). Returns the per-chip
+/// clickable Rects for mouse hit-testing.
+///
+/// Layout (top to bottom):
+///   - the pane area, subdivided per `panes[i].rect` (which the caller
+///     pre-computed from `SplitTree::layout`),
+///   - one row of pinned-command chips (only when `pinned` is non-empty),
+///   - one row of cross-workspace attention status (only when `Some`),
+///   - one row of footer hints.
+///
+/// When there are multiple panes, each pane also gets a 1-row title bar
+/// at the top of its rect showing the workspace name and a focus marker.
+/// Single-pane mode skips the title bar so it looks identical to the
+/// previous single-attached view.
+#[allow(clippy::too_many_arguments)]
+pub fn render_panes(
     f: &mut Frame,
-    area: Rect,
-    session: &Arc<Session>,
-    label: &str,
+    panes: &[PaneSpec<'_>],
+    chip_area: Rect,
+    status_area: Rect,
+    footer_area: Rect,
+    footer_label: &str,
+    multi_pane_footer: bool,
     attention_line: Option<&str>,
     pinned: &[PinnedCommand],
     theme: &Theme,
 ) -> Vec<Rect> {
-    let chip_height = if pinned.is_empty() { 0 } else { 1 };
-    let status_height = if attention_line.is_some() { 1 } else { 0 };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(chip_height),
-            Constraint::Length(status_height),
-            Constraint::Length(1),
-        ])
-        .split(area);
-    let term_area = chunks[0];
-    let chip_area = chunks[1];
-    let status_area = chunks[2];
-    let footer_area = chunks[3];
+    let show_titles = panes.len() > 1;
 
-    let offset = session
-        .scrollback_offset
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let mut parser = session.parser.lock().unwrap();
-    parser.set_scrollback(offset);
-    let screen = parser.screen();
-    render_screen(screen, f.buffer_mut(), term_area);
-    let (cy, cx) = screen.cursor_position();
-    if !screen.hide_cursor() && offset == 0 {
-        f.set_cursor_position((term_area.x + cx, term_area.y + cy));
+    for pane in panes {
+        render_one_pane(f, pane, show_titles, theme);
     }
-    drop(parser);
 
     if let Some(text) = attention_line {
         let line = format!(" ⚠ {text}");
         f.render_widget(Paragraph::new(line).style(theme.warn_style()), status_area);
     }
 
-    let footer = format!(
-        " {label}   [Ctrl-x] d: detach, u: updates, e: edit, t: term, v: diff, k: procs, x: send-Ctrl-x "
+    let footer_text = footer_text(footer_label, multi_pane_footer);
+    f.render_widget(
+        Paragraph::new(footer_text).style(theme.dim_style()),
+        footer_area,
     );
-    f.render_widget(Paragraph::new(footer).style(theme.dim_style()), footer_area);
 
     if !pinned.is_empty() {
         render_chip_row(f, chip_area, pinned, theme)
@@ -68,20 +70,87 @@ pub fn render(
     }
 }
 
-/// Resize the PTY to fill the terminal sub-area.
-/// `attention_line_present` and `pinned_present` should reflect what `render`
-/// will draw so that the PTY height matches the actual terminal area height.
-pub fn resize_session(
-    session: &Arc<Session>,
+fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: &Theme) {
+    let (title_area, term_area) = if show_title {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(1)])
+            .split(pane.rect);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, pane.rect)
+    };
+
+    if let Some(area) = title_area {
+        let marker = if pane.focused { '●' } else { '○' };
+        let body = format!(" {marker} {} ", pane.label);
+        let style = if pane.focused {
+            theme.selected_style()
+        } else {
+            theme.dim_style()
+        };
+        f.render_widget(Paragraph::new(body).style(style), area);
+    }
+
+    let offset = pane
+        .session
+        .scrollback_offset
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let mut parser = pane.session.parser.lock().unwrap();
+    parser.set_scrollback(offset);
+    let screen = parser.screen();
+    render_screen(screen, f.buffer_mut(), term_area);
+    if pane.focused {
+        let (cy, cx) = screen.cursor_position();
+        if !screen.hide_cursor() && offset == 0 {
+            f.set_cursor_position((term_area.x + cx, term_area.y + cy));
+        }
+    }
+    drop(parser);
+}
+
+/// Carve the attached view's full `area` into pane / chip / status /
+/// footer sub-areas. Empty-height rects are returned for absent rows so
+/// the caller can pass them straight through to `render_panes`.
+pub fn layout_chrome(
     area: Rect,
-    attention_line_present: bool,
+    attention_present: bool,
     pinned_present: bool,
-) {
-    let footer: u16 = 1;
-    let attention: u16 = if attention_line_present { 1 } else { 0 };
-    let chip: u16 = if pinned_present { 1 } else { 0 };
-    let non_term_height = footer + attention + chip;
-    let _ = session.resize(area.width, area.height.saturating_sub(non_term_height));
+) -> (Rect, Rect, Rect, Rect) {
+    let chip_h = if pinned_present { 1 } else { 0 };
+    let status_h = if attention_present { 1 } else { 0 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(chip_h),
+            Constraint::Length(status_h),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    (chunks[0], chunks[1], chunks[2], chunks[3])
+}
+
+/// Resize a session's PTY to fill its pane area (minus a per-pane title
+/// row when `multi_pane` is true).
+pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
+    let title: u16 = if multi_pane { 1 } else { 0 };
+    let _ = session.resize(
+        pane_rect.width,
+        pane_rect.height.saturating_sub(title),
+    );
+}
+
+fn footer_text(label: &str, multi_pane: bool) -> String {
+    if multi_pane {
+        format!(
+            " {label}   [Ctrl-x] d: close pane, arrows: focus, u: updates, e: edit, t: term, v: diff, k: procs, x: send-Ctrl-x "
+        )
+    } else {
+        format!(
+            " {label}   [Ctrl-x] d: detach, u: updates, e: edit, t: term, v: diff, k: procs, x: send-Ctrl-x "
+        )
+    }
 }
 
 /// Compute the clickable Rect for each chip that fits within `area`.

@@ -2,15 +2,18 @@ pub mod attached;
 pub mod dashboard;
 pub mod modal;
 pub mod pm_pane;
+pub mod split;
 pub mod theme;
 pub mod updates_bar;
 
-use crate::store::WorkspaceId;
+pub use split::{AttachedState, SplitDirection, SplitTree};
 
 #[derive(Debug, Clone)]
 pub enum View {
     Dashboard,
-    Attached(WorkspaceId),
+    /// One or more workspace PTYs arranged in a recursive vim-style split
+    /// tree, with one pane focused for input.
+    Attached(AttachedState),
     /// Full-screen view of the Project Manager session. Reached from the
     /// dashboard's PM pane via `Ctrl-O`; detach back with `Ctrl-x d`.
     AttachedPm,

@@ -154,8 +154,9 @@ Keystrokes are forwarded to the running `claude` session, except:
 
 | Key | Action |
 |---|---|
-| `Ctrl-x d` | Detach back to the dashboard (session keeps running) |
-| `Ctrl-x u` | Open the floating updates panel (shows other workspaces' state) |
+| `Ctrl-x d` | Close the focused pane. When only one pane is open, detaches back to the dashboard (session keeps running). |
+| `Ctrl-x ←/→/↑/↓` | Move focus between split panes in that direction (vim's `Ctrl-w` motions). |
+| `Ctrl-x u` | Open the floating updates panel (shows other workspaces' state; supports `v`/`s` to open in a split) |
 | `Ctrl-x e` | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard) |
 | `Ctrl-x t` | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`) |
 | `Ctrl-x v` | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`) |
@@ -421,6 +422,37 @@ workspaces in the background. Two affordances surface that:
   with their current state and latest event. Press `Esc` to close. The
   panel re-renders live, so ages count up and attention flags appear/clear
   in real time.
+
+  From the panel, the selected workspace can be opened three ways:
+
+  | Key | Action |
+  |---|---|
+  | `Enter` | Switch the current pane to the selected workspace (replaces it). |
+  | `v` | Open the selected workspace in a vertical split (panes side by side, vim's `:vsplit`). |
+  | `s` | Open the selected workspace in a horizontal split (panes stacked, vim's `:split`). |
+
+## Split panes
+
+Multiple workspace PTYs can be tiled in the attached view, vim-style. Any
+pane can be split again — recursively — into a tree of vertical and
+horizontal splits. Each pane shows a 1-line title bar with the workspace
+name and a `●` marker on the focused pane (which receives keystrokes).
+
+The flow:
+
+1. Attach to a workspace as usual (`Enter` on the dashboard).
+2. Press `Ctrl-x u` to open the updates panel.
+3. Move to another workspace; press `v` (vertical) or `s` (horizontal) to
+   add it as a new pane alongside the current one. Focus jumps to the
+   new pane.
+4. Navigate between panes with `Ctrl-x ←/→/↑/↓` — direction-aware
+   walking up the split tree, like vim's `Ctrl-w` motions.
+5. Close the focused pane with `Ctrl-x d`. The other panes keep
+   running; when the last pane closes you detach back to the dashboard.
+
+When you split the *focused* pane again in the same direction as its
+parent, the new pane is inserted as a sibling instead of nesting deeper —
+matches vim and keeps the tree shallow.
 
 ## Themes
 

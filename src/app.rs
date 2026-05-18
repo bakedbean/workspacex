@@ -314,8 +314,10 @@ impl App {
         self.selectable.get(self.dashboard.selected).copied()
     }
 
-    /// If the workspace has any tool_use pending for ≥3s, return the oldest
-    /// pending tool's (name, first-seen epoch ms). Returns None otherwise.
+    /// If the workspace has any pending tool_use that is a real permission
+    /// prompt (NOT AskUserQuestion / ExitPlanMode, which are question tools
+    /// surfaced separately as AwaitingAnswer), return the oldest pending
+    /// tool's (name, first-seen epoch ms). Returns None otherwise.
     ///
     /// 3 seconds is well past the latency of any auto-approved tool, so a
     /// pending entry that crosses that threshold is almost certainly waiting
@@ -329,6 +331,9 @@ impl App {
         const STALE_MS: i64 = 3000;
         let mut oldest: Option<(&str, i64)> = None;
         for (name, ts) in evt.pending_tool_uses.values() {
+            if name == "AskUserQuestion" || name == "ExitPlanMode" {
+                continue;
+            }
             let age = now - *ts;
             if age >= STALE_MS {
                 match oldest {
@@ -339,6 +344,26 @@ impl App {
             }
         }
         oldest.map(|(n, ts)| (n.to_string(), ts))
+    }
+}
+
+/// Derive the StoppedKind for a workspace based on its WorkspaceEvents.
+/// Returns Some when the agent is paused waiting on the user (either
+/// mid-turn with a pending question tool, or end-of-turn with a
+/// trailing question / completion).
+fn derive_stopped_kind(e: &crate::events::WorkspaceEvents) -> Option<StoppedKind> {
+    // Question tools fire even without a terminal stop_reason — the model
+    // is mid-turn but has explicitly asked the user something.
+    if e.pending_question_tool().is_some() {
+        return Some(StoppedKind::AwaitingAnswer);
+    }
+    if !e.is_awaiting_user() {
+        return None;
+    }
+    if e.last_text_ends_with_question() {
+        Some(StoppedKind::AwaitingAnswer)
+    } else {
+        Some(StoppedKind::Complete)
     }
 }
 
@@ -513,19 +538,8 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
-                    let stopped_kind = app.workspace_events.get(&ws.id).and_then(|e| {
-                        if !e.is_awaiting_user() {
-                            return None;
-                        }
-                        // Tool detection has priority over text heuristic.
-                        if e.pending_question_tool().is_some() {
-                            Some(StoppedKind::AwaitingAnswer)
-                        } else if e.last_text_ends_with_question() {
-                            Some(StoppedKind::AwaitingAnswer)
-                        } else {
-                            Some(StoppedKind::Complete)
-                        }
-                    });
+                    let stopped_kind =
+                        app.workspace_events.get(&ws.id).and_then(derive_stopped_kind);
                     let stalled = app
                         .workspace_events
                         .get(&ws.id)
@@ -595,19 +609,8 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
-                let stopped_kind = app.workspace_events.get(&ws.id).and_then(|e| {
-                    if !e.is_awaiting_user() {
-                        return None;
-                    }
-                    // Tool detection has priority over text heuristic.
-                    if e.pending_question_tool().is_some() {
-                        Some(StoppedKind::AwaitingAnswer)
-                    } else if e.last_text_ends_with_question() {
-                        Some(StoppedKind::AwaitingAnswer)
-                    } else {
-                        Some(StoppedKind::Complete)
-                    }
-                });
+                let stopped_kind =
+                    app.workspace_events.get(&ws.id).and_then(derive_stopped_kind);
                 let stalled = app
                     .workspace_events
                     .get(&ws.id)
@@ -3905,5 +3908,73 @@ mod bell_tests {
             bell_pattern_for(ActivityState::AwaitingAnswer, &store),
             BellPattern::Single
         ));
+    }
+}
+
+#[cfg(test)]
+mod derive_stopped_kind_tests {
+    use super::*;
+    use crate::events::{StopReason, WorkspaceEvents};
+
+    #[test]
+    fn returns_none_when_idle() {
+        let evt = WorkspaceEvents::default();
+        assert_eq!(derive_stopped_kind(&evt), None);
+    }
+
+    #[test]
+    fn awaiting_answer_when_question_tool_pending_mid_turn() {
+        // AskUserQuestion is in flight: stop_reason is ToolUse (so
+        // is_awaiting_user() returns false), but the question tool is in
+        // pending_tool_uses. Should still classify as AwaitingAnswer.
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::ToolUse);
+        evt.pending_tool_uses
+            .insert("t1".into(), ("AskUserQuestion".into(), 0));
+        assert_eq!(
+            derive_stopped_kind(&evt),
+            Some(StoppedKind::AwaitingAnswer)
+        );
+    }
+
+    #[test]
+    fn awaiting_answer_when_exit_plan_mode_pending_mid_turn() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::ToolUse);
+        evt.pending_tool_uses
+            .insert("t1".into(), ("ExitPlanMode".into(), 0));
+        assert_eq!(
+            derive_stopped_kind(&evt),
+            Some(StoppedKind::AwaitingAnswer)
+        );
+    }
+
+    #[test]
+    fn complete_when_end_turn_with_no_question_signal() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::EndTurn);
+        evt.user_replied_since_stop = false;
+        evt.last_assistant_text = Some("Done.".into());
+        assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::Complete));
+    }
+
+    #[test]
+    fn awaiting_answer_when_end_turn_with_trailing_question() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::EndTurn);
+        evt.user_replied_since_stop = false;
+        evt.last_assistant_text = Some("Want me to also handle X?".into());
+        assert_eq!(
+            derive_stopped_kind(&evt),
+            Some(StoppedKind::AwaitingAnswer)
+        );
+    }
+
+    #[test]
+    fn none_when_user_has_already_replied() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::EndTurn);
+        evt.user_replied_since_stop = true;
+        assert_eq!(derive_stopped_kind(&evt), None);
     }
 }

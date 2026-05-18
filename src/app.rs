@@ -351,9 +351,11 @@ where
             RepoSettingField::CustomInstructions => {
                 (repo.custom_instructions.clone().unwrap_or_default(), "md")
             }
-            RepoSettingField::SetupScript => (repo.setup_script.clone().unwrap_or_default(), "sh"),
+            RepoSettingField::SetupScript => {
+                (repo.setup_script.clone().unwrap_or_default(), "bash")
+            }
             RepoSettingField::ArchiveScript => {
-                (repo.archive_script.clone().unwrap_or_default(), "sh")
+                (repo.archive_script.clone().unwrap_or_default(), "bash")
             }
             RepoSettingField::PinnedCommands => {
                 (repo.pinned_commands.clone().unwrap_or_default(), "txt")

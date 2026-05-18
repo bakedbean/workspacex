@@ -564,7 +564,7 @@ wsx repo edit-setup   <repo-name>
 wsx repo edit-archive <repo-name>
 ```
 
-Each script is executed as `sh -c "$value"` with `cwd` set to the new worktree and two extra env vars: `WSX_REPO_ROOT` (the source repo) and `WSX_WORKTREE` (the new worktree). Setup failure does not block the workspace from being usable; it's surfaced as a `[setup-failed]` badge on the dashboard. Passing an empty value clears the script.
+Each script is executed as `$SHELL -ilc "$value"` (interactive + login) with `cwd` set to the new worktree and two extra env vars: `WSX_REPO_ROOT` (the source repo) and `WSX_WORKTREE` (the new worktree). Running as a login + interactive shell means your `~/.zprofile` and `~/.zshrc` (or bash equivalents) are sourced first, so tools activated there — `mise`, `direnv`, `asdf`, aliases — are available to the script. If `$SHELL` is unset, empty, or points at a POSIX-only shell (`sh`, `dash`, `ash`) that doesn't support `-l`, wsx falls back to `/bin/bash`. Setup failure does not block the workspace from being usable; it's surfaced as a `[setup-failed]` badge on the dashboard. Passing an empty value clears the script.
 
 ### Editing in the TUI
 

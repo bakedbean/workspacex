@@ -46,7 +46,20 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
     worktree: &Path,
     mut on_line: F,
 ) -> Result<SetupResult> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .filter(|s| {
+            // POSIX-only shells (dash, ash, real /bin/sh on Linux) don't
+            // support `-l` and would refuse to start. Fall back to bash so
+            // -ilc semantics are honored regardless of host shell.
+            let name = std::path::Path::new(s)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            !matches!(name, "sh" | "dash" | "ash")
+        })
+        .unwrap_or_else(|| "/bin/bash".to_string());
     let mut cmd = Command::new(&shell);
     cmd.arg("-ilc")
         .arg(script)

@@ -505,9 +505,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         if !e.is_awaiting_user() {
                             return None;
                         }
-                        if e.pending_question_tool().is_some()
-                            || e.last_text_ends_with_question()
-                        {
+                        // Tool detection has priority over text heuristic.
+                        if e.pending_question_tool().is_some() {
+                            Some(StoppedKind::AwaitingAnswer)
+                        } else if e.last_text_ends_with_question() {
                             Some(StoppedKind::AwaitingAnswer)
                         } else {
                             Some(StoppedKind::Complete)
@@ -547,14 +548,15 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
 
             // Commit the new activity states + fire bell on transitions
-            // into an alertable state (Stopped or Awaiting). Fires on:
+            // into an alertable state. Fires on:
             //   - first observation of a workspace already in an alertable
             //     state (e.g. wsx just started, agent was already waiting),
-            //   - transition from any non-alertable state into Stopped or
-            //     Awaiting,
+            //   - transition from any non-alertable state into
+            //     AwaitingAnswer / Complete / Awaiting / Stalled,
             //   - transition between two different alertable states
-            //     (e.g. Stopped -> Awaiting when a permission prompt arrives
-            //     while the user hasn't yet replied to the prior end_turn).
+            //     (e.g. Complete -> Awaiting when a permission prompt
+            //     arrives while the user hasn't yet replied to the prior
+            //     end_turn).
             // Does NOT re-fire while an alertable state persists across
             // polls.
             let mut should_ring = false;

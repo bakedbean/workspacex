@@ -170,7 +170,7 @@ impl WorkspaceEvents {
     /// prompt. Returns the first match (order across HashMap iteration is
     /// unspecified, but in practice at most one such tool is pending).
     pub fn pending_question_tool(&self) -> Option<&str> {
-        for (name, _ts) in self.pending_tool_uses.values() {
+        for (name, _) in self.pending_tool_uses.values() {
             if name == "AskUserQuestion" || name == "ExitPlanMode" {
                 return Some(name.as_str());
             }
@@ -359,9 +359,9 @@ pub struct ParsedLine {
     /// Tool_result lines wrapped as `user` do not set this.
     pub is_user_text: bool,
     /// The text of the last `text` content block in this assistant message.
-    /// Used by the classifier in app.rs to compute the "trailing `?`"
-    /// fallback. None for any non-assistant line, or for assistant
-    /// messages with no text blocks.
+    /// Forwarded to `WorkspaceEvents.last_assistant_text`; consumed by
+    /// `WorkspaceEvents::last_text_ends_with_question`. None for any
+    /// non-assistant line, or for assistant messages with no text blocks.
     pub last_assistant_text: Option<String>,
 }
 

@@ -74,7 +74,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             name_buffer, yolo, ..
         } => (
             if *yolo {
-                "new workspace (YOLO)"
+                "new workspace (permissive)"
             } else {
                 "new workspace"
             },

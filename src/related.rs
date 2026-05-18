@@ -83,7 +83,11 @@ mod tests {
     fn parse_comma_separated_with_whitespace() {
         assert_eq!(
             parse(" frontend , marketing,backend "),
-            vec!["frontend".to_string(), "marketing".to_string(), "backend".to_string()]
+            vec![
+                "frontend".to_string(),
+                "marketing".to_string(),
+                "backend".to_string()
+            ]
         );
     }
 
@@ -123,7 +127,10 @@ mod tests {
     fn resolve_drops_unknown_names() {
         let repos = vec![repo(1, "frontend", "/work/frontend")];
         let out = resolve(Some("frontend, ghost"), &repos);
-        assert_eq!(out, vec![("frontend".to_string(), PathBuf::from("/work/frontend"))]);
+        assert_eq!(
+            out,
+            vec![("frontend".to_string(), PathBuf::from("/work/frontend"))]
+        );
     }
 
     #[test]
@@ -149,7 +156,10 @@ mod tests {
         let r = vec![("frontend".to_string(), PathBuf::from("/work/frontend"))];
         let out = build_read_only_prompt(&r).unwrap();
         assert!(out.contains("/work/frontend"), "prompt missing path: {out}");
-        assert!(out.contains("wsx repo: frontend"), "prompt missing label: {out}");
+        assert!(
+            out.contains("wsx repo: frontend"),
+            "prompt missing label: {out}"
+        );
         assert!(
             out.contains("MUST NOT edit"),
             "prompt missing read-only directive: {out}"

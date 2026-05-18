@@ -283,13 +283,17 @@ fn workspace_row<'a>(
     let glyph = if w.state == crate::store::WorkspaceState::Failed {
         '✕'
     } else if needs_attention {
-        '⚠'
+        match activity {
+            Some(ActivityState::AwaitingAnswer) => '?',
+            Some(ActivityState::Complete) => '\u{2713}', // ✓ CHECK MARK
+            _ => '⚠',
+        }
     } else {
         match activity {
             Some(ActivityState::Active) | Some(ActivityState::Idle) => '●',
+            Some(ActivityState::AwaitingAnswer) => '?',
+            Some(ActivityState::Complete) => '\u{2713}',
             Some(ActivityState::Awaiting)
-            | Some(ActivityState::AwaitingAnswer)
-            | Some(ActivityState::Complete)
             | Some(ActivityState::Stalled)
             | Some(ActivityState::Waiting) => '⚠',
             Some(ActivityState::Off) | None => {
@@ -304,8 +308,14 @@ fn workspace_row<'a>(
     let (status_text, age_anchor_ms) = if let Some((tool, ts)) = awaiting {
         (format!("awaiting permission: {tool}"), Some(*ts))
     } else if needs_attention {
+        let label = match activity {
+            Some(ActivityState::AwaitingAnswer) => "question",
+            Some(ActivityState::Complete) => "complete",
+            Some(ActivityState::Stalled) => "stalled",
+            _ => "waiting",
+        };
         (
-            "waiting".to_string(),
+            label.to_string(),
             events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms)),
         )
     } else if matches!(
@@ -531,5 +541,98 @@ mod preview_tests {
     #[test]
     fn preview_value_empty_returns_empty() {
         assert_eq!(preview_value("", 60), "");
+    }
+}
+
+#[cfg(test)]
+mod workspace_row_tests {
+    use super::*;
+    use crate::store::{Workspace, WorkspaceId, WorkspaceState};
+    use crate::ui::updates_bar::ActivityState;
+    use std::path::PathBuf;
+
+    fn fixture_workspace(name: &str) -> Workspace {
+        Workspace {
+            id: WorkspaceId(1),
+            repo_id: crate::store::RepoId(1),
+            name: name.to_string(),
+            branch: "main".to_string(),
+            worktree_path: PathBuf::from("/tmp/ws"),
+            state: WorkspaceState::Ready,
+            setup_status: crate::store::SetupStatus::Ok,
+            created_at: 0,
+            yolo: false,
+        }
+    }
+
+    /// Concatenate every span's content into a single String so tests can
+    /// match against the rendered text regardless of styling.
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn workspace_row_uses_question_glyph_for_awaiting_answer() {
+        let theme = Theme::default_theme();
+        let w = fixture_workspace("alpha");
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::AwaitingAnswer),
+            true,
+            None,
+            false,
+            10_000,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(body.contains("? "), "expected '?' glyph in: {body}");
+        assert!(
+            body.contains("question"),
+            "expected 'question' status text in: {body}"
+        );
+    }
+
+    #[test]
+    fn workspace_row_uses_check_glyph_for_complete() {
+        let theme = Theme::default_theme();
+        let w = fixture_workspace("alpha");
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::Complete),
+            true,
+            None,
+            false,
+            10_000,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(
+            body.contains('\u{2713}'),
+            "expected '✓' glyph in: {body}"
+        );
+        assert!(
+            body.contains("complete"),
+            "expected 'complete' status text in: {body}"
+        );
+    }
+
+    #[test]
+    fn workspace_row_uses_warning_glyph_for_awaiting_permission() {
+        let theme = Theme::default_theme();
+        let w = fixture_workspace("alpha");
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::Awaiting),
+            true,
+            None,
+            false,
+            10_000,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(body.contains('⚠'), "expected '⚠' glyph in: {body}");
     }
 }

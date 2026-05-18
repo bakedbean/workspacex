@@ -43,6 +43,13 @@ pub enum CliAction {
     RepoEditPinnedCommands {
         name: String,
     },
+    RepoSetRelatedRepos {
+        name: String,
+        source: ValueSource,
+    },
+    RepoEditRelatedRepos {
+        name: String,
+    },
     ConfigGet {
         key: String,
     },
@@ -217,6 +224,24 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                     .next()
                     .ok_or_else(|| Error::UserInput("repo edit-pinned-commands <name>".into()))?;
                 Ok(CliAction::RepoEditPinnedCommands { name })
+            }
+            Some("set-related-repos") => {
+                let name = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-related-repos <name> <value-or-@file>".into())
+                })?;
+                let value = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-related-repos <name> <value-or-@file>".into())
+                })?;
+                Ok(CliAction::RepoSetRelatedRepos {
+                    name,
+                    source: ValueSource::from_arg(value),
+                })
+            }
+            Some("edit-related-repos") => {
+                let name = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("repo edit-related-repos <name>".into()))?;
+                Ok(CliAction::RepoEditRelatedRepos { name })
             }
             other => Err(Error::UserInput(format!("unknown repo action: {other:?}"))),
         },
@@ -417,6 +442,40 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             } else {
                 store.set_repo_pinned_commands(r.id, Some(&new_value))?;
                 println!("set pinned commands for {name} ({} chars)", new_value.len());
+            }
+        }
+        CliAction::RepoSetRelatedRepos { name, source } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let value = source.resolve()?;
+            if value.trim().is_empty() {
+                store.set_repo_related_repos(r.id, None)?;
+                println!("cleared related repos for {name}");
+            } else {
+                store.set_repo_related_repos(r.id, Some(&value))?;
+                println!("set related repos for {name} ({} chars)", value.len());
+            }
+        }
+        CliAction::RepoEditRelatedRepos { name } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let current = r.related_repos.clone().unwrap_or_default();
+            let new_value = open_in_editor("related-repos", &current)?;
+            let new_value = new_value.trim_end_matches('\n').to_string();
+            if new_value.trim().is_empty() {
+                store.set_repo_related_repos(r.id, None)?;
+                println!("cleared related repos for {name}");
+            } else if new_value == current {
+                println!("related repos unchanged");
+            } else {
+                store.set_repo_related_repos(r.id, Some(&new_value))?;
+                println!("set related repos for {name} ({} chars)", new_value.len());
             }
         }
         CliAction::ConfigGet { key } => match store.get_setting(&key)? {
@@ -666,6 +725,37 @@ mod tests {
     fn parse_repo_edit_pinned_commands() {
         match parse(&["repo", "edit-pinned-commands", "demo"]).unwrap() {
             CliAction::RepoEditPinnedCommands { name } => assert_eq!(name, "demo"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_repo_set_related_repos_literal() {
+        let a = parse(&["repo", "set-related-repos", "backend", "frontend,marketing"]).unwrap();
+        match a {
+            CliAction::RepoSetRelatedRepos { name, source } => {
+                assert_eq!(name, "backend");
+                assert!(matches!(source, ValueSource::Literal(ref s) if s == "frontend,marketing"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_repo_set_related_repos_at_file() {
+        let a = parse(&["repo", "set-related-repos", "backend", "@./related.txt"]).unwrap();
+        match a {
+            CliAction::RepoSetRelatedRepos { source, .. } => {
+                assert!(matches!(source, ValueSource::File(_)));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_repo_edit_related_repos() {
+        match parse(&["repo", "edit-related-repos", "backend"]).unwrap() {
+            CliAction::RepoEditRelatedRepos { name } => assert_eq!(name, "backend"),
             other => panic!("unexpected: {other:?}"),
         }
     }

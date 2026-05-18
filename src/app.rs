@@ -559,7 +559,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             //     end_turn).
             // Does NOT re-fire while an alertable state persists across
             // polls.
-            let mut should_ring = false;
+            let mut bells_to_ring: Vec<ActivityState> = Vec::new();
             for (_rid, ws) in &app.workspaces {
                 let session = app.sessions.get(ws.id);
                 let running = session.as_ref().is_some_and(|s| {
@@ -611,14 +611,12 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 let prev = app.workspace_activity.get(&ws.id).copied();
                 if activity.is_alertable() && prev != Some(activity) && notifications_on {
                     app.workspace_needs_attention.insert(ws.id);
-                    should_ring = true;
+                    bells_to_ring.push(activity);
                 }
                 app.workspace_activity.insert(ws.id, activity);
             }
-            if should_ring {
-                use std::io::Write;
-                let _ = std::io::stdout().write_all(b"\x07");
-                let _ = std::io::stdout().flush();
+            for state in bells_to_ring {
+                fire_bell(state, &app.store);
             }
 
             let selected = app.selected_target();
@@ -884,6 +882,70 @@ fn notifications_enabled(store: &crate::store::Store) -> bool {
         Some("off") | Some("false") | Some("0") | Some("no") => false,
         _ => true, // default ON
     }
+}
+
+/// Bell patterns: how many `\x07` bytes to emit, with spacing.
+#[derive(Debug, Clone, Copy)]
+enum BellPattern {
+    Off,
+    Single,
+    Double,
+    Triple,
+}
+
+impl BellPattern {
+    fn from_setting(s: Option<&str>) -> Option<Self> {
+        match s {
+            Some("off") | Some("false") | Some("0") => Some(BellPattern::Off),
+            Some("single") => Some(BellPattern::Single),
+            Some("double") => Some(BellPattern::Double),
+            Some("triple") => Some(BellPattern::Triple),
+            _ => None, // caller uses its own default
+        }
+    }
+}
+
+/// Pick the bell pattern for a given alertable state. Reads per-state
+/// overrides from the store, falling back to sensible defaults.
+fn bell_pattern_for(state: ActivityState, store: &crate::store::Store) -> BellPattern {
+    let (key, default_pattern) = match state {
+        ActivityState::AwaitingAnswer => ("notification_bell_question", BellPattern::Double),
+        ActivityState::Complete => ("notification_bell_complete", BellPattern::Single),
+        ActivityState::Awaiting => ("notification_bell_permission", BellPattern::Single),
+        ActivityState::Stalled => ("notification_bell_stalled", BellPattern::Triple),
+        // Non-alertable states never call fire_bell, but be safe.
+        _ => return BellPattern::Off,
+    };
+    let stored = store.get_setting(key).ok().flatten();
+    BellPattern::from_setting(stored.as_deref()).unwrap_or(default_pattern)
+}
+
+/// Emit a terminal-bell pattern for an alertable state. Multi-bell
+/// patterns spawn a detached thread to space the writes (~120ms apart)
+/// so the engine event loop isn't blocked.
+fn fire_bell(state: ActivityState, store: &crate::store::Store) {
+    use std::io::Write;
+    let pattern = bell_pattern_for(state, store);
+    let count = match pattern {
+        BellPattern::Off => return,
+        BellPattern::Single => 1,
+        BellPattern::Double => 2,
+        BellPattern::Triple => 3,
+    };
+    if count == 1 {
+        let _ = std::io::stdout().write_all(b"\x07");
+        let _ = std::io::stdout().flush();
+        return;
+    }
+    std::thread::spawn(move || {
+        for i in 0..count {
+            if i > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(120));
+            }
+            let _ = std::io::stdout().write_all(b"\x07");
+            let _ = std::io::stdout().flush();
+        }
+    });
 }
 
 async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
@@ -3776,5 +3838,36 @@ mod pm_state_tests {
             }
             other => panic!("expected Fresh mode; got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod bell_tests {
+    use super::*;
+
+    #[test]
+    fn bell_pattern_off_for_non_alertable() {
+        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        assert!(matches!(
+            bell_pattern_for(ActivityState::Active, &store),
+            BellPattern::Off
+        ));
+    }
+
+    #[test]
+    fn bell_pattern_defaults_match_spec() {
+        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        assert!(matches!(
+            bell_pattern_for(ActivityState::AwaitingAnswer, &store),
+            BellPattern::Double
+        ));
+        assert!(matches!(
+            bell_pattern_for(ActivityState::Complete, &store),
+            BellPattern::Single
+        ));
+        assert!(matches!(
+            bell_pattern_for(ActivityState::Stalled, &store),
+            BellPattern::Triple
+        ));
     }
 }

@@ -1253,6 +1253,7 @@ fn build_spawn_info(
     let mode = if crate::pty::session::has_prior_session(&ws.worktree_path) {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
+            additional_dirs: vec![],
             yolo,
         }
     } else {
@@ -1269,6 +1270,7 @@ fn build_spawn_info(
         crate::pty::session::SpawnMode::Fresh {
             rename_ctx,
             custom_instructions: custom,
+            additional_dirs: vec![],
             yolo,
         }
     };
@@ -2513,6 +2515,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         app.sessions
@@ -2584,6 +2587,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         app.sessions
@@ -2635,6 +2639,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let s = app
@@ -2687,6 +2692,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         let s = app
@@ -2721,6 +2727,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            additional_dirs: vec![],
             yolo: false,
         };
         app.sessions

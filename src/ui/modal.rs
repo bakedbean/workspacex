@@ -152,7 +152,8 @@ fn sort_key(
     };
     let activity_rank = match activity.get(&w.id).copied() {
         Some(crate::ui::updates_bar::ActivityState::Awaiting)
-        | Some(crate::ui::updates_bar::ActivityState::Stopped)
+        | Some(crate::ui::updates_bar::ActivityState::AwaitingAnswer)
+        | Some(crate::ui::updates_bar::ActivityState::Complete)
         | Some(crate::ui::updates_bar::ActivityState::Stalled)
         | Some(crate::ui::updates_bar::ActivityState::Waiting) => 0,
         Some(crate::ui::updates_bar::ActivityState::Active)
@@ -278,16 +279,19 @@ fn workspace_row<'a>(
     now_ms: i64,
     theme: &Theme,
 ) -> Line<'a> {
-    use crate::ui::updates_bar::{ActivityState, format_age};
+    use crate::ui::updates_bar::{ActivityState, format_age, glyph_for_activity};
     let glyph = if w.state == crate::store::WorkspaceState::Failed {
         '✕'
     } else if needs_attention {
-        '⚠'
+        activity
+            .map(glyph_for_activity)
+            .unwrap_or('⚠')
     } else {
         match activity {
             Some(ActivityState::Active) | Some(ActivityState::Idle) => '●',
+            Some(ActivityState::AwaitingAnswer) => '?',
+            Some(ActivityState::Complete) => '\u{2713}',
             Some(ActivityState::Awaiting)
-            | Some(ActivityState::Stopped)
             | Some(ActivityState::Stalled)
             | Some(ActivityState::Waiting) => '⚠',
             Some(ActivityState::Off) | None => {
@@ -302,8 +306,14 @@ fn workspace_row<'a>(
     let (status_text, age_anchor_ms) = if let Some((tool, ts)) = awaiting {
         (format!("awaiting permission: {tool}"), Some(*ts))
     } else if needs_attention {
+        let label = match activity {
+            Some(ActivityState::AwaitingAnswer) => "question",
+            Some(ActivityState::Complete) => "complete",
+            Some(ActivityState::Stalled) => "stalled",
+            _ => "waiting",
+        };
         (
-            "waiting".to_string(),
+            label.to_string(),
             events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms)),
         )
     } else if matches!(
@@ -529,5 +539,103 @@ mod preview_tests {
     #[test]
     fn preview_value_empty_returns_empty() {
         assert_eq!(preview_value("", 60), "");
+    }
+}
+
+#[cfg(test)]
+mod workspace_row_tests {
+    use super::*;
+    use crate::store::{Workspace, WorkspaceId, WorkspaceState};
+    use crate::ui::updates_bar::ActivityState;
+    use std::path::PathBuf;
+
+    fn fixture_workspace(name: &str) -> Workspace {
+        Workspace {
+            id: WorkspaceId(1),
+            repo_id: crate::store::RepoId(1),
+            name: name.to_string(),
+            branch: "main".to_string(),
+            worktree_path: PathBuf::from("/tmp/ws"),
+            state: WorkspaceState::Ready,
+            setup_status: crate::store::SetupStatus::Ok,
+            created_at: 0,
+            yolo: false,
+        }
+    }
+
+    /// Concatenate every span's content into a single String so tests can
+    /// match against the rendered text regardless of styling.
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn workspace_row_uses_question_glyph_for_awaiting_answer() {
+        let theme = Theme::default_theme();
+        let w = fixture_workspace("alpha");
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::AwaitingAnswer),
+            true,
+            None,
+            false,
+            10_000,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(body.contains("? "), "expected '?' glyph in: {body}");
+        assert!(
+            body.contains("question"),
+            "expected 'question' status text in: {body}"
+        );
+    }
+
+    #[test]
+    fn workspace_row_uses_check_glyph_for_complete() {
+        let theme = Theme::default_theme();
+        let w = fixture_workspace("alpha");
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::Complete),
+            true,
+            None,
+            false,
+            10_000,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(
+            body.contains('\u{2713}'),
+            "expected '✓' glyph in: {body}"
+        );
+        assert!(
+            body.contains("complete"),
+            "expected 'complete' status text in: {body}"
+        );
+    }
+
+    #[test]
+    fn workspace_row_shows_permission_tool_in_status_text() {
+        let theme = Theme::default_theme();
+        let w = fixture_workspace("alpha");
+        let awaiting = ("Bash".to_string(), 5_000i64);
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::Awaiting),
+            true,
+            Some(&awaiting),
+            false,
+            10_000,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(body.contains('⚠'), "expected '⚠' glyph in: {body}");
+        assert!(
+            body.contains("awaiting permission: Bash"),
+            "expected permission tool name in status text: {body}"
+        );
     }
 }

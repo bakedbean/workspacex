@@ -72,14 +72,29 @@ pub struct PendingEdit {
     pub field: RepoSettingField,
 }
 
+/// Why the agent paused at end-of-turn. Distinguishes "asked the user
+/// something and is waiting for an answer" from "finished a task".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoppedKind {
+    /// The agent invoked `AskUserQuestion` or `ExitPlanMode` and the
+    /// user hasn't responded yet, OR the final assistant text ended
+    /// with `?` (fallback). Maps to the "?" dashboard glyph.
+    AwaitingAnswer,
+    /// The agent finished without asking the user anything. Maps to
+    /// the "✓" dashboard glyph.
+    Complete,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
-    /// The agent has stopped its turn and is awaiting human input. Derived
-    /// from the JSONL `stop_reason` field — the only reliable "agent is
-    /// done" signal. Higher priority than PTY-recency states.
-    Stopped,
+    /// The agent has stopped its turn and is waiting for an answer
+    /// from the user. Higher priority than PTY-recency states.
+    AwaitingAnswer,
+    /// The agent has stopped its turn with a completed task and is
+    /// awaiting acknowledgment. Higher priority than PTY-recency states.
+    Complete,
     /// A tool_use has been pending for ≥3s (almost always a permission
-    /// prompt). Higher priority than `Stopped`.
+    /// prompt). Higher priority than `AwaitingAnswer` / `Complete`.
     Awaiting,
     /// < 2s since last PTY output.
     Active,
@@ -87,9 +102,7 @@ pub enum ActivityState {
     Idle,
     /// Claude has stalled between turns: the JSONL log hasn't been
     /// appended for >60s, no tool_use is pending, and we've seen at
-    /// least one stop_reason in this session. Catches the case where
-    /// Claude crashes/hangs after a tool_result without ever writing
-    /// a terminal stop_reason (end_turn). Alertable.
+    /// least one stop_reason in this session. Alertable.
     Stalled,
     /// More than 30s since last PTY output but no JSONL stop signal.
     /// Retained for the recency column; does NOT drive the bell.
@@ -99,11 +112,14 @@ pub enum ActivityState {
 }
 
 impl ActivityState {
-    /// States that should fire a bell + `!` marker when entered.
+    /// States that should fire a bell + attention marker when entered.
     pub fn is_alertable(self) -> bool {
         matches!(
             self,
-            ActivityState::Stopped | ActivityState::Awaiting | ActivityState::Stalled
+            ActivityState::AwaitingAnswer
+                | ActivityState::Complete
+                | ActivityState::Awaiting
+                | ActivityState::Stalled
         )
     }
 }
@@ -118,25 +134,25 @@ fn classify_activity(secs: Option<u64>) -> ActivityState {
 }
 
 /// Compute the activity state for a workspace, combining JSONL-derived
-/// signals (`stop_reason` + pending tool_uses + stall detection) with
-/// PTY-output recency.
+/// signals with PTY-output recency.
 ///
-/// Priority: `Awaiting` (tool_use pending ≥3s) > `Stopped` (assistant
-/// stop_reason = end_turn/max_tokens/stop_sequence and user hasn't replied)
-/// > `Stalled` (JSONL quiet >60s mid-tool-chain) > PTY-recency
-/// > (Active/Idle/Waiting) > Off (no session).
+/// Priority: `Awaiting` (permission prompt) > `AwaitingAnswer` /
+/// `Complete` (turn ended) > `Stalled` (mid-tool-chain quiet) >
+/// PTY-recency > `Off`.
 fn classify_activity_with_events(
     secs: Option<u64>,
     running: bool,
     awaiting: bool,
-    stopped: bool,
+    stopped_kind: Option<StoppedKind>,
     stalled: bool,
 ) -> ActivityState {
     if awaiting {
         return ActivityState::Awaiting;
     }
-    if stopped {
-        return ActivityState::Stopped;
+    match stopped_kind {
+        Some(StoppedKind::AwaitingAnswer) => return ActivityState::AwaitingAnswer,
+        Some(StoppedKind::Complete) => return ActivityState::Complete,
+        None => {}
     }
     if stalled {
         return ActivityState::Stalled;
@@ -218,6 +234,10 @@ pub struct App {
     pub chip_rects: Vec<ratatui::layout::Rect>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
+    /// Bells queued up by the most recent draw tick. Drained and fired
+    /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
+    /// with ratatui's escape sequences. See Task 4 / Critical review.
+    pub pending_bells: Vec<ActivityState>,
 }
 
 impl App {
@@ -256,6 +276,7 @@ impl App {
             pm_auto_summary_sent: false,
             chip_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
+            pending_bells: Vec::new(),
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -293,8 +314,10 @@ impl App {
         self.selectable.get(self.dashboard.selected).copied()
     }
 
-    /// If the workspace has any tool_use pending for ≥3s, return the oldest
-    /// pending tool's (name, first-seen epoch ms). Returns None otherwise.
+    /// If the workspace has any pending tool_use that is a real permission
+    /// prompt (NOT AskUserQuestion / ExitPlanMode, which are question tools
+    /// surfaced separately as AwaitingAnswer), return the oldest pending
+    /// tool's (name, first-seen epoch ms). Returns None otherwise.
     ///
     /// 3 seconds is well past the latency of any auto-approved tool, so a
     /// pending entry that crosses that threshold is almost certainly waiting
@@ -308,6 +331,9 @@ impl App {
         const STALE_MS: i64 = 3000;
         let mut oldest: Option<(&str, i64)> = None;
         for (name, ts) in evt.pending_tool_uses.values() {
+            if name == "AskUserQuestion" || name == "ExitPlanMode" {
+                continue;
+            }
             let age = now - *ts;
             if age >= STALE_MS {
                 match oldest {
@@ -318,6 +344,26 @@ impl App {
             }
         }
         oldest.map(|(n, ts)| (n.to_string(), ts))
+    }
+}
+
+/// Derive the StoppedKind for a workspace based on its WorkspaceEvents.
+/// Returns Some when the agent is paused waiting on the user (either
+/// mid-turn with a pending question tool, or end-of-turn with a
+/// trailing question / completion).
+fn derive_stopped_kind(e: &crate::events::WorkspaceEvents) -> Option<StoppedKind> {
+    // Question tools fire even without a terminal stop_reason — the model
+    // is mid-turn but has explicitly asked the user something.
+    if e.pending_question_tool().is_some() {
+        return Some(StoppedKind::AwaitingAnswer);
+    }
+    if !e.is_awaiting_user() {
+        return None;
+    }
+    if e.last_text_ends_with_question() {
+        Some(StoppedKind::AwaitingAnswer)
+    } else {
+        Some(StoppedKind::Complete)
     }
 }
 
@@ -414,6 +460,13 @@ pub async fn run<B: Backend + std::io::Write>(
         {
             let mut g = app.lock().await;
             terminal.draw(|f| draw(f, &mut g))?;
+            // Drain bells queued during draw and fire them OUTSIDE the draw
+            // closure so writes to stdout don't interleave with ratatui's
+            // frame flush (mid-escape `\x07` is undefined per VT spec).
+            let bells = std::mem::take(&mut g.pending_bells);
+            for state in bells {
+                fire_bell(state, &g.store);
+            }
             if g.quit {
                 break;
             }
@@ -487,10 +540,8 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
-                    let stopped = app
-                        .workspace_events
-                        .get(&ws.id)
-                        .is_some_and(|e| e.is_awaiting_user());
+                    let stopped_kind =
+                        app.workspace_events.get(&ws.id).and_then(derive_stopped_kind);
                     let stalled = app
                         .workspace_events
                         .get(&ws.id)
@@ -507,7 +558,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .get(&ws.id)
                             .and_then(|e| e.latest.clone()),
                         needs_attention,
-                        stopped,
+                        stopped_kind,
                         stalled,
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         awaiting_tool: awaiting,
@@ -525,17 +576,17 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
 
             // Commit the new activity states + fire bell on transitions
-            // into an alertable state (Stopped or Awaiting). Fires on:
+            // into an alertable state. Fires on:
             //   - first observation of a workspace already in an alertable
             //     state (e.g. wsx just started, agent was already waiting),
-            //   - transition from any non-alertable state into Stopped or
-            //     Awaiting,
+            //   - transition from any non-alertable state into
+            //     AwaitingAnswer / Complete / Awaiting / Stalled,
             //   - transition between two different alertable states
-            //     (e.g. Stopped -> Awaiting when a permission prompt arrives
-            //     while the user hasn't yet replied to the prior end_turn).
+            //     (e.g. Complete -> Awaiting when a permission prompt
+            //     arrives while the user hasn't yet replied to the prior
+            //     end_turn).
             // Does NOT re-fire while an alertable state persists across
             // polls.
-            let mut should_ring = false;
             for (_rid, ws) in &app.workspaces {
                 let session = app.sessions.get(ws.id);
                 let running = session.as_ref().is_some_and(|s| {
@@ -560,27 +611,25 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
-                let stopped = app
-                    .workspace_events
-                    .get(&ws.id)
-                    .is_some_and(|e| e.is_awaiting_user());
+                let stopped_kind =
+                    app.workspace_events.get(&ws.id).and_then(derive_stopped_kind);
                 let stalled = app
                     .workspace_events
                     .get(&ws.id)
                     .is_some_and(|e| e.is_stalled(now_ms, 60_000));
-                let activity =
-                    classify_activity_with_events(secs, running, awaiting, stopped, stalled);
+                let activity = classify_activity_with_events(
+                    secs,
+                    running,
+                    awaiting,
+                    stopped_kind,
+                    stalled,
+                );
                 let prev = app.workspace_activity.get(&ws.id).copied();
                 if activity.is_alertable() && prev != Some(activity) && notifications_on {
                     app.workspace_needs_attention.insert(ws.id);
-                    should_ring = true;
+                    app.pending_bells.push(activity);
                 }
                 app.workspace_activity.insert(ws.id, activity);
-            }
-            if should_ring {
-                use std::io::Write;
-                let _ = std::io::stdout().write_all(b"\x07");
-                let _ = std::io::stdout().flush();
             }
 
             let selected = app.selected_target();
@@ -853,6 +902,80 @@ fn notifications_enabled(store: &crate::store::Store) -> bool {
         Some("off") | Some("false") | Some("0") | Some("no") => false,
         _ => true, // default ON
     }
+}
+
+/// Bell patterns: how many `\x07` bytes to emit, with spacing.
+#[derive(Debug, Clone, Copy)]
+enum BellPattern {
+    Off,
+    Single,
+    Double,
+    Triple,
+}
+
+impl BellPattern {
+    fn from_setting(s: Option<&str>) -> Option<Self> {
+        match s {
+            Some("off") | Some("false") | Some("0") => Some(BellPattern::Off),
+            Some("single") => Some(BellPattern::Single),
+            Some("double") => Some(BellPattern::Double),
+            Some("triple") => Some(BellPattern::Triple),
+            _ => None, // caller uses its own default
+        }
+    }
+}
+
+/// Pick the bell pattern for a given alertable state. Reads per-state
+/// overrides from the store, falling back to sensible defaults.
+fn bell_pattern_for(state: ActivityState, store: &crate::store::Store) -> BellPattern {
+    let (key, default_pattern) = match state {
+        ActivityState::AwaitingAnswer => ("notification_bell_question", BellPattern::Double),
+        ActivityState::Complete => ("notification_bell_complete", BellPattern::Single),
+        ActivityState::Awaiting => ("notification_bell_permission", BellPattern::Single),
+        ActivityState::Stalled => ("notification_bell_stalled", BellPattern::Triple),
+        // Non-alertable states never call fire_bell, but be safe.
+        _ => return BellPattern::Off,
+    };
+    let stored = store.get_setting(key).ok().flatten();
+    BellPattern::from_setting(stored.as_deref()).unwrap_or(default_pattern)
+}
+
+/// Emit a terminal-bell pattern for an alertable state. Multi-bell
+/// patterns spawn a detached thread to space the writes (~120ms apart)
+/// so the engine event loop isn't blocked.
+///
+/// Residual race: the first bell fires synchronously outside ratatui's
+/// `draw()` closure (see the run loop's drain of `pending_bells`), but
+/// the 2nd/3rd bells in a Double/Triple sequence land 120ms+ later,
+/// which can overlap with subsequent frame flushes. `\x07` mid-escape
+/// is undefined per the VT spec but is silently dropped by iTerm2 and
+/// other modern terminals; visible corruption has not been observed.
+/// The fully race-free alternative is a synchronized bell worker
+/// coordinating with the TUI backend — non-trivial refactor for a
+/// theoretical issue. Reassess if real-world corruption appears.
+fn fire_bell(state: ActivityState, store: &crate::store::Store) {
+    use std::io::Write;
+    let pattern = bell_pattern_for(state, store);
+    let count = match pattern {
+        BellPattern::Off => return,
+        BellPattern::Single => 1,
+        BellPattern::Double => 2,
+        BellPattern::Triple => 3,
+    };
+    if count == 1 {
+        let _ = std::io::stdout().write_all(b"\x07");
+        let _ = std::io::stdout().flush();
+        return;
+    }
+    std::thread::spawn(move || {
+        for i in 0..count {
+            if i > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(120));
+            }
+            let _ = std::io::stdout().write_all(b"\x07");
+            let _ = std::io::stdout().flush();
+        }
+    });
 }
 
 async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
@@ -1952,7 +2075,8 @@ fn compute_attention_line(
 fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {
     use crate::ui::updates_bar::ActivityState as U;
     match a {
-        ActivityState::Stopped => U::Stopped,
+        ActivityState::AwaitingAnswer => U::AwaitingAnswer,
+        ActivityState::Complete => U::Complete,
         ActivityState::Awaiting => U::Awaiting,
         ActivityState::Active => U::Active,
         ActivityState::Idle => U::Idle,
@@ -2071,6 +2195,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         last_stop_reason,
                         human_replied_after_last_stop,
                         reset_from_zero,
+                        last_assistant_text,
                     } = update;
                     let mut g = app.lock().await;
                     let evt = g.workspace_events.entry(id).or_default();
@@ -2115,6 +2240,9 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     }
                     if human_replied_after_last_stop {
                         evt.user_replied_since_stop = true;
+                    }
+                    if let Some(text) = last_assistant_text {
+                        evt.last_assistant_text = Some(text);
                     }
                     for e in events {
                         crate::events::push_event(evt, e);
@@ -2166,17 +2294,39 @@ mod activity_classifier_tests {
     fn awaiting_wins_over_stopped_over_recency() {
         // awaiting (permission) beats everything.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, true, true, false),
+            classify_activity_with_events(
+                Some(0),
+                true,
+                true,
+                Some(StoppedKind::Complete),
+                false,
+            ),
             ActivityState::Awaiting
         );
         assert_eq!(
-            classify_activity_with_events(Some(0), true, true, false, false),
+            classify_activity_with_events(Some(0), true, true, None, false),
             ActivityState::Awaiting
         );
         // stopped beats PTY recency.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, true, false),
-            ActivityState::Stopped
+            classify_activity_with_events(
+                Some(0),
+                true,
+                false,
+                Some(StoppedKind::Complete),
+                false,
+            ),
+            ActivityState::Complete
+        );
+        assert_eq!(
+            classify_activity_with_events(
+                Some(0),
+                true,
+                false,
+                Some(StoppedKind::AwaitingAnswer),
+                false,
+            ),
+            ActivityState::AwaitingAnswer
         );
     }
 
@@ -2185,8 +2335,24 @@ mod activity_classifier_tests {
         // If we have a terminal stop_reason waiting on the user, that
         // takes priority over the stall detector.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, true, true),
-            ActivityState::Stopped
+            classify_activity_with_events(
+                Some(0),
+                true,
+                false,
+                Some(StoppedKind::Complete),
+                true,
+            ),
+            ActivityState::Complete
+        );
+        assert_eq!(
+            classify_activity_with_events(
+                Some(0),
+                true,
+                false,
+                Some(StoppedKind::AwaitingAnswer),
+                true,
+            ),
+            ActivityState::AwaitingAnswer
         );
     }
 
@@ -2194,11 +2360,11 @@ mod activity_classifier_tests {
     fn stalled_wins_over_pty_recency() {
         // Stall detector fires before PTY-recency Active/Idle/Waiting.
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, false, true),
+            classify_activity_with_events(Some(0), true, false, None, true),
             ActivityState::Stalled
         );
         assert_eq!(
-            classify_activity_with_events(Some(60), true, false, false, true),
+            classify_activity_with_events(Some(60), true, false, None, true),
             ActivityState::Stalled
         );
     }
@@ -2206,12 +2372,12 @@ mod activity_classifier_tests {
     #[test]
     fn no_session_is_off_even_if_running_false() {
         assert_eq!(
-            classify_activity_with_events(None, false, false, false, false),
+            classify_activity_with_events(None, false, false, None, false),
             ActivityState::Off
         );
         // Even with pty seconds, if running=false → Off.
         assert_eq!(
-            classify_activity_with_events(Some(5), false, false, false, false),
+            classify_activity_with_events(Some(5), false, false, None, false),
             ActivityState::Off
         );
     }
@@ -2220,7 +2386,7 @@ mod activity_classifier_tests {
     fn awaiting_fires_even_when_session_not_running() {
         // A pending tool_use is a strong signal regardless of pty state.
         assert_eq!(
-            classify_activity_with_events(None, false, true, false, false),
+            classify_activity_with_events(None, false, true, None, false),
             ActivityState::Awaiting
         );
     }
@@ -2228,22 +2394,23 @@ mod activity_classifier_tests {
     #[test]
     fn pty_recency_drives_active_idle_waiting_when_no_event_signals() {
         assert_eq!(
-            classify_activity_with_events(Some(0), true, false, false, false),
+            classify_activity_with_events(Some(0), true, false, None, false),
             ActivityState::Active
         );
         assert_eq!(
-            classify_activity_with_events(Some(10), true, false, false, false),
+            classify_activity_with_events(Some(10), true, false, None, false),
             ActivityState::Idle
         );
         assert_eq!(
-            classify_activity_with_events(Some(60), true, false, false, false),
+            classify_activity_with_events(Some(60), true, false, None, false),
             ActivityState::Waiting
         );
     }
 
     #[test]
     fn is_alertable_includes_stopped_awaiting_and_stalled() {
-        assert!(ActivityState::Stopped.is_alertable());
+        assert!(ActivityState::AwaitingAnswer.is_alertable());
+        assert!(ActivityState::Complete.is_alertable());
         assert!(ActivityState::Awaiting.is_alertable());
         assert!(ActivityState::Stalled.is_alertable());
         assert!(!ActivityState::Active.is_alertable());
@@ -3696,5 +3863,132 @@ mod pm_state_tests {
             }
             other => panic!("expected Fresh mode; got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod bell_tests {
+    use super::*;
+
+    #[test]
+    fn bell_pattern_off_for_non_alertable() {
+        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        assert!(matches!(
+            bell_pattern_for(ActivityState::Active, &store),
+            BellPattern::Off
+        ));
+    }
+
+    #[test]
+    fn bell_pattern_defaults_match_spec() {
+        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        assert!(matches!(
+            bell_pattern_for(ActivityState::AwaitingAnswer, &store),
+            BellPattern::Double
+        ));
+        assert!(matches!(
+            bell_pattern_for(ActivityState::Complete, &store),
+            BellPattern::Single
+        ));
+        assert!(matches!(
+            bell_pattern_for(ActivityState::Awaiting, &store),
+            BellPattern::Single
+        ));
+        assert!(matches!(
+            bell_pattern_for(ActivityState::Stalled, &store),
+            BellPattern::Triple
+        ));
+    }
+
+    #[test]
+    fn bell_pattern_override_off_suppresses_default() {
+        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        store
+            .set_setting("notification_bell_question", "off")
+            .unwrap();
+        assert!(matches!(
+            bell_pattern_for(ActivityState::AwaitingAnswer, &store),
+            BellPattern::Off
+        ));
+    }
+
+    #[test]
+    fn bell_pattern_override_single_replaces_default_double() {
+        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        store
+            .set_setting("notification_bell_question", "single")
+            .unwrap();
+        assert!(matches!(
+            bell_pattern_for(ActivityState::AwaitingAnswer, &store),
+            BellPattern::Single
+        ));
+    }
+}
+
+#[cfg(test)]
+mod derive_stopped_kind_tests {
+    use super::*;
+    use crate::events::{StopReason, WorkspaceEvents};
+
+    #[test]
+    fn returns_none_when_idle() {
+        let evt = WorkspaceEvents::default();
+        assert_eq!(derive_stopped_kind(&evt), None);
+    }
+
+    #[test]
+    fn awaiting_answer_when_question_tool_pending_mid_turn() {
+        // AskUserQuestion is in flight: stop_reason is ToolUse (so
+        // is_awaiting_user() returns false), but the question tool is in
+        // pending_tool_uses. Should still classify as AwaitingAnswer.
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::ToolUse);
+        evt.pending_tool_uses
+            .insert("t1".into(), ("AskUserQuestion".into(), 0));
+        assert_eq!(
+            derive_stopped_kind(&evt),
+            Some(StoppedKind::AwaitingAnswer)
+        );
+    }
+
+    #[test]
+    fn awaiting_answer_when_exit_plan_mode_pending_mid_turn() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::ToolUse);
+        evt.pending_tool_uses
+            .insert("t1".into(), ("ExitPlanMode".into(), 0));
+        assert_eq!(
+            derive_stopped_kind(&evt),
+            Some(StoppedKind::AwaitingAnswer)
+        );
+    }
+
+    #[test]
+    fn complete_when_end_turn_with_no_question_signal() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::EndTurn);
+        evt.user_replied_since_stop = false;
+        evt.last_assistant_text = Some("Done.".into());
+        assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::Complete));
+    }
+
+    #[test]
+    fn awaiting_answer_when_end_turn_with_trailing_question() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::EndTurn);
+        evt.user_replied_since_stop = false;
+        evt.last_assistant_text = Some("Want me to also handle X?".into());
+        assert_eq!(
+            derive_stopped_kind(&evt),
+            Some(StoppedKind::AwaitingAnswer)
+        );
+    }
+
+    #[test]
+    fn none_when_user_has_already_replied() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::EndTurn);
+        evt.user_replied_since_stop = true;
+        assert_eq!(derive_stopped_kind(&evt), None);
     }
 }

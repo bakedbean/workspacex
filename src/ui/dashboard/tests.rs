@@ -66,7 +66,7 @@ fn renders_repo_header_with_indented_workspace() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -126,7 +126,7 @@ fn renders_multiple_repos_grouped() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -143,7 +143,7 @@ fn renders_multiple_repos_grouped() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -186,7 +186,7 @@ fn renders_status_counts_plain() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -238,7 +238,7 @@ fn renders_status_counts_nerd() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -280,7 +280,7 @@ fn renders_event_subline_when_event_present() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -295,6 +295,80 @@ fn renders_event_subline_when_event_present() {
         "missing event body: {text}"
     );
     assert!(text.contains("s ago"), "missing relative time: {text}");
+}
+
+#[test]
+fn renders_question_glyph_for_awaiting_answer() {
+    let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+    let r = repo(1, "demo");
+    let w = workspace(1, 1, "alpha", "alpha");
+    let items = vec![
+        Item::Header { repo: &r },
+        Item::Workspace {
+            repo: &r,
+            workspace: &w,
+            session_running: true,
+            seconds_since_activity: Some(0),
+            has_prior_session: false,
+            status: None,
+            latest_event: None,
+            needs_attention: true,
+            lifecycle: None,
+            awaiting_tool: None,
+            stopped_kind: Some(crate::app::StoppedKind::AwaitingAnswer),
+            stalled: false,
+            proc_count: 0,
+        },
+    ];
+    let mut state = DashboardState::default();
+    term.draw(|f| {
+        render(
+            f,
+            f.area(),
+            &items,
+            None,
+            false, // ASCII (nerd_fonts = false)
+            &t(),
+            &mut state,
+        )
+    })
+    .unwrap();
+    let text = dump(&term, 120, 8);
+    assert!(text.contains("?"), "expected '?' attention marker: {text}");
+    assert!(text.contains("question"), "expected 'question' activity label: {text}");
+}
+
+#[test]
+fn renders_check_glyph_for_complete() {
+    let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+    let r = repo(1, "demo");
+    let w = workspace(1, 1, "alpha", "alpha");
+    let items = vec![
+        Item::Header { repo: &r },
+        Item::Workspace {
+            repo: &r,
+            workspace: &w,
+            session_running: true,
+            seconds_since_activity: Some(0),
+            has_prior_session: false,
+            status: None,
+            latest_event: None,
+            needs_attention: true,
+            lifecycle: None,
+            awaiting_tool: None,
+            stopped_kind: Some(crate::app::StoppedKind::Complete),
+            stalled: false,
+            proc_count: 0,
+        },
+    ];
+    let mut state = DashboardState::default();
+    term.draw(|f| {
+        render(f, f.area(), &items, None, false, &t(), &mut state)
+    })
+    .unwrap();
+    let text = dump(&term, 120, 8);
+    assert!(text.contains("\u{2713}"), "expected '✓' attention marker: {text}");
+    assert!(text.contains("complete"), "expected 'complete' activity label: {text}");
 }
 
 #[test]
@@ -328,7 +402,7 @@ fn selection_skips_event_subline() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -343,7 +417,7 @@ fn selection_skips_event_subline() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -386,7 +460,7 @@ fn renders_clean_workspace_with_no_status() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -426,7 +500,7 @@ fn renders_attention_mark_when_needs_attention() {
             needs_attention: true,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -465,7 +539,7 @@ fn no_attention_mark_by_default() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -509,7 +583,7 @@ fn activity_is_right_justified() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -524,7 +598,7 @@ fn activity_is_right_justified() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -583,7 +657,7 @@ fn top_summary_shows_total_and_alertable_counts() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -598,7 +672,7 @@ fn top_summary_shows_total_and_alertable_counts() {
             needs_attention: true,
             lifecycle: None,
             awaiting_tool: Some(("Bash".into(), 0)),
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -613,7 +687,7 @@ fn top_summary_shows_total_and_alertable_counts() {
             needs_attention: true,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: true,
+            stopped_kind: Some(crate::app::StoppedKind::Complete),
             stalled: false,
             proc_count: 0,
         },
@@ -625,8 +699,11 @@ fn top_summary_shows_total_and_alertable_counts() {
     let top = text.lines().next().unwrap().trim();
     assert!(top.contains("wsx"), "missing 'wsx': {top}");
     assert!(top.contains("3 workspaces"), "missing total: {top}");
-    assert!(top.contains("1 awaiting"), "missing awaiting count: {top}");
-    assert!(top.contains("1 stopped"), "missing stopped count: {top}");
+    assert!(
+        top.contains("1 permission"),
+        "missing permission count: {top}"
+    );
+    assert!(top.contains("1 complete"), "missing complete count: {top}");
 }
 
 #[test]
@@ -647,7 +724,7 @@ fn top_summary_omits_zero_alertable_counts() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -659,12 +736,16 @@ fn top_summary_omits_zero_alertable_counts() {
     let top = text.lines().next().unwrap().trim();
     assert!(top.contains("1 workspace"), "missing total: {top}");
     assert!(
-        !top.contains("awaiting"),
-        "unexpected awaiting in quiet top: {top}"
+        !top.contains("permission"),
+        "unexpected permission in quiet top: {top}"
     );
     assert!(
-        !top.contains("stopped"),
-        "unexpected stopped in quiet top: {top}"
+        !top.contains("question"),
+        "unexpected question in quiet top: {top}"
+    );
+    assert!(
+        !top.contains("complete"),
+        "unexpected complete in quiet top: {top}"
     );
 }
 
@@ -679,8 +760,9 @@ fn top_summary_handles_zero_workspaces() {
     let top = text.lines().next().unwrap().trim();
     assert!(top.contains("wsx"), "missing wsx: {top}");
     assert!(top.contains("0 workspaces"), "expected zero count: {top}");
-    assert!(!top.contains("awaiting"), "unexpected awaiting: {top}");
-    assert!(!top.contains("stopped"), "unexpected stopped: {top}");
+    assert!(!top.contains("permission"), "unexpected permission: {top}");
+    assert!(!top.contains("question"), "unexpected question: {top}");
+    assert!(!top.contains("complete"), "unexpected complete: {top}");
 }
 
 #[test]
@@ -701,7 +783,7 @@ fn outer_border_is_absent() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -744,7 +826,7 @@ fn repo_header_renders_with_rule_below() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -786,7 +868,7 @@ fn repo_header_includes_workspace_count() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -801,7 +883,7 @@ fn repo_header_includes_workspace_count() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -843,7 +925,7 @@ fn renders_awaiting_overrides_activity_and_sub_line() {
             lifecycle: None,
             // 10s ago — well past the 3s threshold.
             awaiting_tool: Some(("Bash".into(), now_ms - 10_000)),
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -886,7 +968,7 @@ fn workspace_row_name_padded_to_fixed_width() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -901,7 +983,7 @@ fn workspace_row_name_padded_to_fixed_width() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -960,7 +1042,7 @@ fn workspace_row_branch_truncated_with_ellipsis() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -980,13 +1062,20 @@ fn workspace_row_branch_truncated_with_ellipsis() {
 }
 
 #[test]
-fn activity_word_uses_warn_color_for_stopped() {
+fn activity_word_uses_warn_color_for_question_and_awaiting() {
     // Direct unit test of the style mapping.
     let theme = Theme::default_theme();
-    let style_stopped = activity_style("stopped", &theme);
+    let style_question = activity_style("question", &theme);
     let style_awaiting = activity_style("awaiting", &theme);
-    assert_eq!(style_stopped.fg, Some(theme.warn));
+    assert_eq!(style_question.fg, Some(theme.warn));
     assert_eq!(style_awaiting.fg, Some(theme.warn));
+}
+
+#[test]
+fn activity_word_uses_ok_color_for_complete() {
+    let theme = Theme::default_theme();
+    let style = activity_style("complete", &theme);
+    assert_eq!(style.fg, Some(theme.ok));
 }
 
 #[test]
@@ -1037,7 +1126,7 @@ fn sub_line_indent_aligns_with_name_column() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -1081,7 +1170,7 @@ fn setup_failed_glyph_appears_after_name() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -1120,7 +1209,7 @@ fn yolo_workspace_name_uses_warn_style() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -1172,7 +1261,7 @@ fn non_yolo_workspace_name_not_warn_styled() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -1221,7 +1310,7 @@ fn setup_failed_glyph_with_long_name_truncates_correctly() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },
@@ -1282,7 +1371,7 @@ fn workspace_row_shows_proc_count_when_nonzero() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 3,
         },
@@ -1313,7 +1402,7 @@ fn workspace_row_hides_proc_count_when_zero() {
             needs_attention: false,
             lifecycle: None,
             awaiting_tool: None,
-            stopped: false,
+            stopped_kind: None,
             stalled: false,
             proc_count: 0,
         },

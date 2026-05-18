@@ -121,6 +121,10 @@ pub struct WorkspaceEvents {
     /// `is_stalled` to detect sessions where claude has gone quiet
     /// mid-tool-chain without writing a terminal stop_reason.
     pub last_log_activity_ms: i64,
+    /// The text of the most recent assistant text content block, if any.
+    /// Used by the question-vs-complete classifier to decide whether a
+    /// stopped turn ended on a trailing `?`. Cleared on session reset.
+    pub last_assistant_text: Option<String>,
 }
 
 impl Default for WorkspaceEvents {
@@ -134,6 +138,7 @@ impl Default for WorkspaceEvents {
             last_stop_reason: None,
             user_replied_since_stop: false,
             last_log_activity_ms: 0,
+            last_assistant_text: None,
         }
     }
 }
@@ -147,6 +152,7 @@ impl WorkspaceEvents {
         self.last_stop_reason = None;
         self.user_replied_since_stop = false;
         self.last_log_activity_ms = 0;
+        self.last_assistant_text = None;
     }
 
     /// The agent is stopped and the human hasn't replied yet.
@@ -156,6 +162,34 @@ impl WorkspaceEvents {
                 .last_stop_reason
                 .as_ref()
                 .is_some_and(StopReason::is_awaiting_user)
+    }
+
+    /// If any pending `tool_use` is `AskUserQuestion` or `ExitPlanMode`,
+    /// return the tool name. These tools mean "the agent has explicitly
+    /// asked the human for input" — distinct from a generic permission
+    /// prompt. Returns the first match (order across HashMap iteration is
+    /// unspecified, but in practice at most one such tool is pending).
+    pub fn pending_question_tool(&self) -> Option<&str> {
+        for (name, _) in self.pending_tool_uses.values() {
+            if name == "AskUserQuestion" || name == "ExitPlanMode" {
+                return Some(name.as_str());
+            }
+        }
+        None
+    }
+
+    /// True iff the most recent assistant text block ends with `?` (after
+    /// stripping trailing whitespace and markdown noise — `*`, `_`, `` ` ``).
+    /// Fallback signal used by the question-vs-complete classifier when
+    /// neither `AskUserQuestion` nor `ExitPlanMode` was invoked.
+    pub fn last_text_ends_with_question(&self) -> bool {
+        let Some(text) = self.last_assistant_text.as_deref() else {
+            return false;
+        };
+        let trimmed = text.trim_end_matches(|c: char| {
+            c.is_whitespace() || matches!(c, '*' | '_' | '`')
+        });
+        trimmed.ends_with('?')
     }
 
     /// True iff claude appears to have stalled mid-tool-chain: the JSONL
@@ -199,6 +233,10 @@ pub struct TailUpdate {
     /// shrank since the previous call (truncation or replacement). The caller
     /// should treat all prior session-derived state as stale.
     pub reset_from_zero: bool,
+    /// The most recent assistant text block observed in this batch, if
+    /// any. The caller stores this on WorkspaceEvents for the classifier.
+    /// None means "no new text in this batch" — keep the prior value.
+    pub last_assistant_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +337,9 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
         if parsed.is_user_text {
             update.human_replied_after_last_stop = true;
         }
+        if let Some(text) = parsed.last_assistant_text {
+            update.last_assistant_text = Some(text);
+        }
     }
     update.new_offset = consumed;
     Ok(update)
@@ -317,6 +358,11 @@ pub struct ParsedLine {
     /// True if this line is a plain-text user message (real human input).
     /// Tool_result lines wrapped as `user` do not set this.
     pub is_user_text: bool,
+    /// The text of the last `text` content block in this assistant message.
+    /// Forwarded to `WorkspaceEvents.last_assistant_text`; consumed by
+    /// `WorkspaceEvents::last_text_ends_with_question`. None for any
+    /// non-assistant line, or for assistant messages with no text blocks.
+    pub last_assistant_text: Option<String>,
 }
 
 /// Parse a single JSONL line into a [`ParsedLine`]. Malformed lines and
@@ -422,6 +468,12 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
             }
             _ => {}
         }
+    }
+    // Capture the final text block for the classifier BEFORE returning down
+    // the tool-use display path. The display preference (tool > text) is
+    // unchanged; we just also remember the text for downstream classification.
+    if let Some(t) = last_text {
+        out.last_assistant_text = Some(t.to_string());
     }
     if let Some((name, input)) = last_tool {
         let body = if name == "Bash" {
@@ -1043,6 +1095,102 @@ mod tests {
             }
         }
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn pending_question_tool_matches_ask_user_question() {
+        let mut evt = WorkspaceEvents::default();
+        evt.pending_tool_uses
+            .insert("t1".into(), ("AskUserQuestion".into(), 1));
+        assert_eq!(evt.pending_question_tool(), Some("AskUserQuestion"));
+    }
+
+    #[test]
+    fn pending_question_tool_matches_exit_plan_mode() {
+        let mut evt = WorkspaceEvents::default();
+        evt.pending_tool_uses
+            .insert("t1".into(), ("ExitPlanMode".into(), 1));
+        assert_eq!(evt.pending_question_tool(), Some("ExitPlanMode"));
+    }
+
+    #[test]
+    fn pending_question_tool_ignores_other_tools() {
+        let mut evt = WorkspaceEvents::default();
+        evt.pending_tool_uses
+            .insert("t1".into(), ("Bash".into(), 1));
+        evt.pending_tool_uses
+            .insert("t2".into(), ("Read".into(), 2));
+        assert_eq!(evt.pending_question_tool(), None);
+    }
+
+    #[test]
+    fn last_text_ends_with_question_true_for_simple_question() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_assistant_text = Some("Want me to also handle X?".into());
+        assert!(evt.last_text_ends_with_question());
+    }
+
+    #[test]
+    fn last_text_ends_with_question_strips_trailing_markdown() {
+        // Claude often writes `Want me to refactor `foo`?*` where the literal
+        // final char is `*` — we still want this classified as a question.
+        let mut evt = WorkspaceEvents::default();
+        evt.last_assistant_text = Some("Want me to refactor `foo`?*".into());
+        assert!(evt.last_text_ends_with_question());
+    }
+
+    #[test]
+    fn last_text_ends_with_question_strips_trailing_whitespace() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_assistant_text = Some("Should I proceed?\n   ".into());
+        assert!(evt.last_text_ends_with_question());
+    }
+
+    #[test]
+    fn last_text_ends_with_question_false_for_period_ending() {
+        let mut evt = WorkspaceEvents::default();
+        evt.last_assistant_text = Some("Done. Let me know if you'd like changes.".into());
+        assert!(!evt.last_text_ends_with_question());
+    }
+
+    #[test]
+    fn last_text_ends_with_question_false_when_question_in_middle() {
+        // A `?` in the middle followed by a declarative final sentence should
+        // not trip the heuristic. Only the trailing char (after markdown trim)
+        // matters.
+        let mut evt = WorkspaceEvents::default();
+        evt.last_assistant_text = Some("I considered: does this work? Yes, it works.".into());
+        assert!(!evt.last_text_ends_with_question());
+    }
+
+    #[test]
+    fn parse_assistant_captures_last_text_for_classifier() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Want me to also run tests?"}],"stop_reason":"end_turn"},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(
+            parsed.last_assistant_text.as_deref(),
+            Some("Want me to also run tests?")
+        );
+    }
+
+    #[test]
+    fn parse_assistant_skips_capturing_text_when_only_tool_use() {
+        // When the assistant message has only tool_use blocks, there is no
+        // trailing text to feed the classifier. `last_assistant_text` stays None.
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(parsed.last_assistant_text, None);
+    }
+
+    #[test]
+    fn last_text_ends_with_question_false_for_empty_or_missing() {
+        let evt = WorkspaceEvents::default();
+        assert!(!evt.last_text_ends_with_question());
+        let mut evt = evt;
+        evt.last_assistant_text = Some(String::new());
+        assert!(!evt.last_text_ends_with_question());
+        evt.last_assistant_text = Some("   \n  ".into());
+        assert!(!evt.last_text_ends_with_question());
     }
 
     #[test]

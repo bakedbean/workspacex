@@ -13,12 +13,14 @@ use crate::store::WorkspaceId;
 /// re-export-friendly enum so updates_bar doesn't depend on app.rs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityState {
-    Stopped,
+    /// Agent paused waiting for the user to answer a question.
+    AwaitingAnswer,
+    /// Agent finished a task and is awaiting acknowledgment.
+    Complete,
     Awaiting,
     Active,
     Idle,
-    /// Claude has stalled mid-tool-chain (JSONL quiet >60s with a
-    /// pending stop_reason and no outstanding tool_use). Alertable.
+    /// Claude has stalled mid-tool-chain.
     Stalled,
     Waiting,
     Off,
@@ -49,6 +51,25 @@ pub struct AttentionEntry {
     /// Anchor epoch-ms for the "(5m)" age display. The most recent of:
     /// pending tool_use timestamp, latest event timestamp, or `now`.
     pub age_anchor_ms: i64,
+    /// The activity state that triggered this entry. Drives the
+    /// status-row glyph (?/✓/⚠) so the user can tell at a glance
+    /// whether a workspace is waiting for an answer, finished a
+    /// task, or hit a permission prompt.
+    pub activity: ActivityState,
+}
+
+/// One-char glyph for the inline status row. Mirrors the dashboard's
+/// attn-marker vocabulary so users see the same icons in both surfaces.
+pub fn glyph_for_activity(a: ActivityState) -> char {
+    match a {
+        ActivityState::AwaitingAnswer => '?',
+        ActivityState::Complete => '\u{2713}', // ✓ CHECK MARK
+        ActivityState::Awaiting | ActivityState::Stalled => '⚠',
+        // Defensive default — non-alertable states shouldn't appear
+        // in the status row (collect_attention filters by
+        // needs_attention) but be safe.
+        _ => '⚠',
+    }
 }
 
 /// Collect every workspace whose `needs_attention` flag is set, excluding
@@ -77,6 +98,7 @@ pub fn collect_attention(
                 repo_name: c.repo_name.to_string(),
                 name: c.name.to_string(),
                 age_anchor_ms,
+                activity: c.activity,
             }
         })
         .collect();
@@ -103,7 +125,8 @@ pub fn format_attention_line(
         .iter()
         .map(|e| {
             let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
-            format!("{}/{} ({})", e.repo_name, e.name, age)
+            let g = glyph_for_activity(e.activity);
+            format!("{} {}/{} ({})", g, e.repo_name, e.name, age)
         })
         .collect();
     let sep = " │ ";
@@ -285,16 +308,18 @@ mod tests {
                 repo_name: "a".into(),
                 name: "x".into(),
                 age_anchor_ms: 9_000, // 1s before now
+                activity: ActivityState::Awaiting,
             },
             AttentionEntry {
                 workspace_id: WorkspaceId(2),
                 repo_name: "b".into(),
                 name: "y".into(),
                 age_anchor_ms: 5_000, // 5s before now
+                activity: ActivityState::Awaiting,
             },
         ];
         let line = format_attention_line(&entries, 10_000, 80).expect("line");
-        assert_eq!(line, "a/x (1s) │ b/y (5s)");
+        assert_eq!(line, "⚠ a/x (1s) │ ⚠ b/y (5s)");
     }
 
     #[test]
@@ -305,9 +330,11 @@ mod tests {
                 repo_name: format!("repo{i}"),
                 name: format!("ws{i}"),
                 age_anchor_ms: 10_000 - i * 1000,
+                activity: ActivityState::Awaiting,
             })
             .collect();
-        // Width tight enough to fit 2 entries + "… +3 more".
+        // Width 35: fits 1 entry ("⚠ repo0/ws0 (1s)", ~18 chars) plus the
+        // "… +N more" overflow suffix; remaining 4 entries become the suffix.
         let line = format_attention_line(&entries, 10_000, 35).expect("line");
         assert!(line.contains("… +"), "expected overflow marker: {line}");
         assert!(line.ends_with("more"), "{line}");
@@ -327,10 +354,50 @@ mod tests {
             repo_name: "extremely-long-repo-name".into(),
             name: "workspace-name".into(),
             age_anchor_ms: 9_000,
+            activity: ActivityState::Awaiting,
         }];
         let line = format_attention_line(&entries, 10_000, 10).expect("line");
         assert!(line.ends_with('…'), "expected ellipsis truncation: {line}");
         assert!(line.chars().count() <= 10);
+    }
+
+    #[test]
+    fn format_attention_line_uses_question_glyph_for_awaiting_answer() {
+        let entries = vec![AttentionEntry {
+            workspace_id: WorkspaceId(1),
+            repo_name: "demo".into(),
+            name: "alpha".into(),
+            age_anchor_ms: 0,
+            activity: ActivityState::AwaitingAnswer,
+        }];
+        let line = format_attention_line(&entries, 5_000, 80).expect("line");
+        assert!(line.starts_with("? demo/alpha"), "got: {line}");
+    }
+
+    #[test]
+    fn format_attention_line_uses_check_glyph_for_complete() {
+        let entries = vec![AttentionEntry {
+            workspace_id: WorkspaceId(1),
+            repo_name: "demo".into(),
+            name: "alpha".into(),
+            age_anchor_ms: 0,
+            activity: ActivityState::Complete,
+        }];
+        let line = format_attention_line(&entries, 5_000, 80).expect("line");
+        assert!(line.starts_with("\u{2713} demo/alpha"), "got: {line}");
+    }
+
+    #[test]
+    fn format_attention_line_uses_warning_glyph_for_awaiting_permission() {
+        let entries = vec![AttentionEntry {
+            workspace_id: WorkspaceId(1),
+            repo_name: "demo".into(),
+            name: "alpha".into(),
+            age_anchor_ms: 0,
+            activity: ActivityState::Awaiting,
+        }];
+        let line = format_attention_line(&entries, 5_000, 80).expect("line");
+        assert!(line.starts_with("⚠ demo/alpha"), "got: {line}");
     }
 
     #[test]

@@ -104,6 +104,7 @@ mod settings_tests {
             setup_script: None,
             archive_script: None,
             pinned_commands: None,
+            related_repos: None,
             created_at: 0,
         }
     }

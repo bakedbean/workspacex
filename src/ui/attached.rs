@@ -135,10 +135,7 @@ pub fn layout_chrome(
 /// row when `multi_pane` is true).
 pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
     let title: u16 = if multi_pane { 1 } else { 0 };
-    let _ = session.resize(
-        pane_rect.width,
-        pane_rect.height.saturating_sub(title),
-    );
+    let _ = session.resize(pane_rect.width, pane_rect.height.saturating_sub(title));
 }
 
 fn footer_text(label: &str, multi_pane: bool) -> String {

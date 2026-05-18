@@ -290,8 +290,9 @@ impl SplitTree {
                     SplitDirection::Horizontal => LayoutDirection::Vertical,
                 };
                 let n = children.len() as u32;
-                let constraints: Vec<Constraint> =
-                    (0..children.len()).map(|_| Constraint::Ratio(1, n)).collect();
+                let constraints: Vec<Constraint> = (0..children.len())
+                    .map(|_| Constraint::Ratio(1, n))
+                    .collect();
                 let chunks = Layout::default()
                     .direction(dir)
                     .constraints(constraints)

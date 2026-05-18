@@ -234,6 +234,10 @@ pub struct App {
     pub chip_rects: Vec<ratatui::layout::Rect>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
+    /// Bells queued up by the most recent draw tick. Drained and fired
+    /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
+    /// with ratatui's escape sequences. See Task 4 / Critical review.
+    pub pending_bells: Vec<ActivityState>,
 }
 
 impl App {
@@ -272,6 +276,7 @@ impl App {
             pm_auto_summary_sent: false,
             chip_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
+            pending_bells: Vec::new(),
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -428,6 +433,13 @@ pub async fn run<B: Backend + std::io::Write>(
         {
             let mut g = app.lock().await;
             terminal.draw(|f| draw(f, &mut g))?;
+            // Drain bells queued during draw and fire them OUTSIDE the draw
+            // closure so writes to stdout don't interleave with ratatui's
+            // frame flush (mid-escape `\x07` is undefined per VT spec).
+            let bells = std::mem::take(&mut g.pending_bells);
+            for state in bells {
+                fire_bell(state, &g.store);
+            }
             if g.quit {
                 break;
             }
@@ -559,7 +571,6 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             //     end_turn).
             // Does NOT re-fire while an alertable state persists across
             // polls.
-            let mut bells_to_ring: Vec<ActivityState> = Vec::new();
             for (_rid, ws) in &app.workspaces {
                 let session = app.sessions.get(ws.id);
                 let running = session.as_ref().is_some_and(|s| {
@@ -611,12 +622,9 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 let prev = app.workspace_activity.get(&ws.id).copied();
                 if activity.is_alertable() && prev != Some(activity) && notifications_on {
                     app.workspace_needs_attention.insert(ws.id);
-                    bells_to_ring.push(activity);
+                    app.pending_bells.push(activity);
                 }
                 app.workspace_activity.insert(ws.id, activity);
-            }
-            for state in bells_to_ring {
-                fire_bell(state, &app.store);
             }
 
             let selected = app.selected_target();
@@ -3866,8 +3874,36 @@ mod bell_tests {
             BellPattern::Single
         ));
         assert!(matches!(
+            bell_pattern_for(ActivityState::Awaiting, &store),
+            BellPattern::Single
+        ));
+        assert!(matches!(
             bell_pattern_for(ActivityState::Stalled, &store),
             BellPattern::Triple
+        ));
+    }
+
+    #[test]
+    fn bell_pattern_override_off_suppresses_default() {
+        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        store
+            .set_setting("notification_bell_question", "off")
+            .unwrap();
+        assert!(matches!(
+            bell_pattern_for(ActivityState::AwaitingAnswer, &store),
+            BellPattern::Off
+        ));
+    }
+
+    #[test]
+    fn bell_pattern_override_single_replaces_default_double() {
+        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        store
+            .set_setting("notification_bell_question", "single")
+            .unwrap();
+        assert!(matches!(
+            bell_pattern_for(ActivityState::AwaitingAnswer, &store),
+            BellPattern::Single
         ));
     }
 }

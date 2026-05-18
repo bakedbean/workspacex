@@ -810,26 +810,43 @@ pub(crate) fn wrap_paste_bytes(content: &str) -> Vec<u8> {
     out
 }
 
+/// Translate a pasted character into the `KeyEvent` crossterm would have
+/// emitted if it were typed live. Matters for the non-attached fallback:
+/// `\n`/`\r` are Enter (modal submit), `\t` is Tab (focus / autocomplete),
+/// printable chars pass through as `Char(c)`.
+fn paste_char_to_key(c: char) -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyEvent, KeyModifiers};
+    let code = match c {
+        '\n' | '\r' => KeyCode::Enter,
+        '\t' => KeyCode::Tab,
+        _ => KeyCode::Char(c),
+    };
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
 async fn handle_paste(app: &mut App, content: String) -> Result<()> {
-    // Pick the destination session for the current view. PM-attached
-    // pastes go to the PM session; dashboard pastes (e.g. into the New
-    // Workspace modal's name field) fall back to per-char dispatch so
-    // existing modal text-input keeps working.
-    let session = match &app.view {
-        View::Attached(id) => app.sessions.get(*id),
-        View::AttachedPm => app.pm.clone(),
-        View::Dashboard => None,
+    // PTY path: forward the whole paste as one bracketed sequence to
+    // whichever session is currently driving the foreground (attached
+    // workspace, full-screen PM, or the embedded PM pane when focused
+    // on the dashboard). When a modal owns the input (e.g. New Workspace
+    // name field), skip this branch so the per-char fallback can feed
+    // the modal handler.
+    let session = if app.modal.is_none() {
+        active_session(app)
+    } else {
+        None
     };
     if let Some(session) = session {
         session.scroll_to_live();
         let _ = session.writer.send(wrap_paste_bytes(&content)).await;
         return Ok(());
     }
-    // Non-attached fallback: forward each char as if typed. Preserves
-    // paste-into-NewWorkspace-name behavior.
+    // Non-attached fallback: forward each char as if typed, translating
+    // control chars to the KeyCodes crossterm would have emitted live so
+    // modal handlers see paste-with-newlines as multiple Enter presses
+    // rather than literal '\n' Chars.
     for c in content.chars() {
-        let k = crossterm::event::KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
-        dispatch_key(app, k).await?;
+        dispatch_key(app, paste_char_to_key(c)).await?;
     }
     Ok(())
 }
@@ -3061,5 +3078,53 @@ mod pm_state_tests {
             screen_text.contains("hello paste"),
             "paste content must reach the PTY; got: {screen_text:?}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn paste_in_dashboard_with_pm_focused_sends_bracketed_to_pm() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        spawn_pm_for_test(&mut app);
+        // Dashboard view + PM visible + PM focused — same condition that
+        // routes keystrokes to the PM session.
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+
+        handle_event(&mut app, CtEvent::Paste("hello pm".into()))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let pm = app.pm.as_ref().unwrap();
+        let parser = pm.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("hello pm"),
+            "PM-focused paste must reach the PM PTY; got: {screen_text:?}"
+        );
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_newline_to_enter() {
+        let k = paste_char_to_key('\n');
+        assert!(matches!(k.code, KeyCode::Enter));
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_cr_to_enter() {
+        let k = paste_char_to_key('\r');
+        assert!(matches!(k.code, KeyCode::Enter));
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_tab() {
+        let k = paste_char_to_key('\t');
+        assert!(matches!(k.code, KeyCode::Tab));
+    }
+
+    #[test]
+    fn paste_char_to_key_passes_through_printable() {
+        let k = paste_char_to_key('a');
+        assert!(matches!(k.code, KeyCode::Char('a')));
     }
 }

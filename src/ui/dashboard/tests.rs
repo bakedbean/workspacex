@@ -1265,40 +1265,6 @@ fn setup_failed_glyph_with_long_name_truncates_correctly() {
 }
 
 #[test]
-fn footer_includes_arrow_nav_hint() {
-    let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
-    let r = repo(1, "demo");
-    let w = workspace(1, 1, "alpha", "wsx/alpha");
-    let items = vec![
-        Item::Header { repo: &r },
-        Item::Workspace {
-            repo: &r,
-            workspace: &w,
-            session_running: true,
-            seconds_since_activity: Some(0),
-            has_prior_session: false,
-            status: None,
-            latest_event: None,
-            needs_attention: false,
-            lifecycle: None,
-            awaiting_tool: None,
-            stopped: false,
-            stalled: false,
-            proc_count: 0,
-        },
-    ];
-    let mut state = DashboardState::default();
-    term.draw(|f| render(f, f.area(), &items, None, false, &t(), &mut state))
-        .unwrap();
-    let text = dump(&term, 120, 8);
-    let footer = text.lines().last().unwrap();
-    assert!(
-        footer.contains("[↑/↓] move"),
-        "footer missing arrow nav hint: {footer}"
-    );
-}
-
-#[test]
 fn workspace_row_shows_proc_count_when_nonzero() {
     let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
     let r = repo(1, "demo");

@@ -125,6 +125,14 @@ pub struct WorkspaceEvents {
     /// Used by the question-vs-complete classifier to decide whether a
     /// stopped turn ended on a trailing `?`. Cleared on session reset.
     pub last_assistant_text: Option<String>,
+    /// True when the most recent user-side signal in the session was an
+    /// interrupt sentinel — Claude Code writes
+    /// `[Request interrupted by user for tool use]` as a user text block
+    /// when the human cancels the agent mid-tool-call. The agent never
+    /// emits a follow-up `end_turn` for these, so without this flag the
+    /// session drifts into `Stalled` after 60s. Cleared by any subsequent
+    /// real assistant message or real user text.
+    pub last_user_interrupted: bool,
 }
 
 impl Default for WorkspaceEvents {
@@ -139,6 +147,7 @@ impl Default for WorkspaceEvents {
             user_replied_since_stop: false,
             last_log_activity_ms: 0,
             last_assistant_text: None,
+            last_user_interrupted: false,
         }
     }
 }
@@ -153,6 +162,7 @@ impl WorkspaceEvents {
         self.user_replied_since_stop = false;
         self.last_log_activity_ms = 0;
         self.last_assistant_text = None;
+        self.last_user_interrupted = false;
     }
 
     /// The agent is stopped and the human hasn't replied yet.
@@ -236,6 +246,12 @@ pub struct TailUpdate {
     /// any. The caller stores this on WorkspaceEvents for the classifier.
     /// None means "no new text in this batch" — keep the prior value.
     pub last_assistant_text: Option<String>,
+    /// Final interrupt-sentinel state at the end of the batch.
+    /// `Some(true)`  — batch ended with an interrupt sentinel,
+    /// `Some(false)` — batch saw something that overrides the sentinel
+    ///                 (a real assistant message or real user text),
+    /// `None`        — batch was silent on this signal; caller keeps prior.
+    pub last_user_interrupted: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -332,9 +348,17 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
         if let Some(sr) = parsed.stop_reason {
             update.last_stop_reason = Some(sr);
             update.human_replied_after_last_stop = false;
+            // A new assistant message means the agent is past any prior
+            // interrupt.
+            update.last_user_interrupted = Some(false);
         }
         if parsed.is_user_text {
             update.human_replied_after_last_stop = true;
+            // Real user text overrides any prior interrupt sentinel.
+            update.last_user_interrupted = Some(false);
+        }
+        if parsed.user_interrupt_sentinel {
+            update.last_user_interrupted = Some(true);
         }
         if let Some(text) = parsed.last_assistant_text {
             update.last_assistant_text = Some(text);
@@ -362,6 +386,11 @@ pub struct ParsedLine {
     /// `WorkspaceEvents::last_text_ends_with_question`. None for any
     /// non-assistant line, or for assistant messages with no text blocks.
     pub last_assistant_text: Option<String>,
+    /// True if this user line is the Claude Code "[Request interrupted by
+    /// user for tool use]" sentinel. Doesn't set `is_user_text`: the
+    /// sentinel is system-generated, not a real human reply, so the
+    /// `human_replied_after_last_stop` machinery should ignore it.
+    pub user_interrupt_sentinel: bool,
 }
 
 /// Parse a single JSONL line into a [`ParsedLine`]. Malformed lines and
@@ -411,15 +440,30 @@ fn parse_user(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
             let Some(bt) = block.get("type").and_then(|t| t.as_str()) else {
                 continue;
             };
-            if bt == "tool_result"
-                && let Some(id) = block.get("tool_use_id").and_then(|i| i.as_str())
-            {
-                out.tool_use_resolves.push(id.to_string());
+            match bt {
+                "tool_result" => {
+                    if let Some(id) = block.get("tool_use_id").and_then(|i| i.as_str()) {
+                        out.tool_use_resolves.push(id.to_string());
+                    }
+                }
+                "text" => {
+                    if let Some(t) = block.get("text").and_then(|t| t.as_str())
+                        && t == INTERRUPT_SENTINEL
+                    {
+                        out.user_interrupt_sentinel = true;
+                    }
+                }
+                _ => {}
             }
         }
     }
     out
 }
+
+/// Exact text Claude Code writes as a synthetic user message when the
+/// human cancels an in-flight tool call. Used to distinguish "agent was
+/// interrupted" from "agent is stalled."
+const INTERRUPT_SENTINEL: &str = "[Request interrupted by user for tool use]";
 
 fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     let mut out = ParsedLine::default();
@@ -1190,6 +1234,91 @@ mod tests {
         assert!(!evt.last_text_ends_with_question());
         evt.last_assistant_text = Some("   \n  ".into());
         assert!(!evt.last_text_ends_with_question());
+    }
+
+    #[test]
+    fn parse_user_detects_interrupt_sentinel() {
+        // Claude Code writes this exact text as a synthetic user message
+        // when the human cancels mid-tool-call.
+        let line = r#"{"type":"user","timestamp":"2026-05-18T13:52:22.478Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(parsed.user_interrupt_sentinel);
+        // The sentinel is system-generated, not a real reply — must not
+        // be counted as the user replying.
+        assert!(!parsed.is_user_text);
+        // And it shouldn't emit a display event either.
+        assert!(parsed.event.is_none());
+    }
+
+    #[test]
+    fn parse_user_does_not_flag_other_text_blocks() {
+        // A real user text block looking similar but not exact must NOT
+        // be treated as the sentinel.
+        let line = r#"{"type":"user","timestamp":"2026-05-18T13:52:22.478Z","message":{"role":"user","content":[{"type":"text","text":"Request interrupted by user (typed manually)"}]}}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(!parsed.user_interrupt_sentinel);
+    }
+
+    #[test]
+    fn tail_session_flags_interrupt_as_last_signal() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let assistant = r#"{"type":"assistant","timestamp":"2026-05-18T13:51:01.236Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#;
+        let tool_result = r#"{"type":"user","timestamp":"2026-05-18T13:52:22.470Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#;
+        let interrupt = r#"{"type":"user","timestamp":"2026-05-18T13:52:22.478Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "{assistant}").unwrap();
+        writeln!(f, "{tool_result}").unwrap();
+        writeln!(f, "{interrupt}").unwrap();
+        let u = tail_session(&path, 0).unwrap();
+        assert_eq!(u.last_user_interrupted, Some(true));
+        // And the interrupt sentinel must not count as a human reply.
+        assert!(!u.human_replied_after_last_stop);
+    }
+
+    #[test]
+    fn tail_session_clears_interrupt_when_assistant_replies_later() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let interrupt = r#"{"type":"user","timestamp":"2026-05-18T13:52:22.478Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
+        let assistant_after = r#"{"type":"assistant","timestamp":"2026-05-18T13:55:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"resumed"}]}}"#;
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "{interrupt}").unwrap();
+        writeln!(f, "{assistant_after}").unwrap();
+        let u = tail_session(&path, 0).unwrap();
+        assert_eq!(u.last_user_interrupted, Some(false));
+    }
+
+    #[test]
+    fn tail_session_clears_interrupt_when_real_user_text_follows() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let interrupt = r#"{"type":"user","timestamp":"2026-05-18T13:52:22.478Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
+        let real_user = r#"{"type":"user","timestamp":"2026-05-18T13:55:00.000Z","message":{"role":"user","content":"actually try again"}}"#;
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "{interrupt}").unwrap();
+        writeln!(f, "{real_user}").unwrap();
+        let u = tail_session(&path, 0).unwrap();
+        assert_eq!(u.last_user_interrupted, Some(false));
+    }
+
+    #[test]
+    fn tail_session_silent_batch_keeps_interrupt_signal_none() {
+        // A batch with no stop_reason, no user text, no interrupt
+        // sentinel must leave the field as None so the caller doesn't
+        // overwrite the sticky workspace state.
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        // Just a tool_result, no other signals.
+        let tool_result = r#"{"type":"user","timestamp":"2026-05-18T13:52:22.470Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#;
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "{tool_result}").unwrap();
+        let u = tail_session(&path, 0).unwrap();
+        assert_eq!(u.last_user_interrupted, None);
     }
 
     #[test]

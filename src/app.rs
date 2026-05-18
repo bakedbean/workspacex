@@ -212,6 +212,14 @@ pub struct App {
         std::collections::HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity: std::collections::HashMap<crate::store::WorkspaceId, ActivityState>,
+    /// Workspaces whose JSONL events have been read at least once by the
+    /// tail loop. Until a workspace is in this set the classifier's output
+    /// is provisional (it can only see session-liveness, not stop_reason),
+    /// so we hold off on recording activity / firing bells for it. Without
+    /// this gate the classifier flickers from Active → AwaitingAnswer the
+    /// instant the tail loop catches up, which the bell loop would treat
+    /// as a legitimate transition and ring on cold start.
+    pub workspace_events_scanned: std::collections::HashSet<crate::store::WorkspaceId>,
     /// Workspaces whose alert hasn't been acknowledged (cleared on attach).
     pub workspace_needs_attention: std::collections::HashSet<crate::store::WorkspaceId>,
     /// Processes detected per workspace (cwd inside the workspace's
@@ -238,6 +246,9 @@ pub struct App {
     /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
     /// with ratatui's escape sequences. See Task 4 / Critical review.
     pub pending_bells: Vec<ActivityState>,
+    /// When the process started — used to distinguish cold-start
+    /// first-observations (suppress bell) from mid-session ones (ring).
+    pub started_at: std::time::Instant,
 }
 
 impl App {
@@ -265,6 +276,7 @@ impl App {
             pr_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
+            workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
             workspace_processes: std::collections::HashMap::new(),
             last_proc_scan_ms: 0,
@@ -277,6 +289,7 @@ impl App {
             chip_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
+            started_at: std::time::Instant::now(),
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -356,6 +369,13 @@ fn derive_stopped_kind(e: &crate::events::WorkspaceEvents) -> Option<StoppedKind
     // is mid-turn but has explicitly asked the user something.
     if e.pending_question_tool().is_some() {
         return Some(StoppedKind::AwaitingAnswer);
+    }
+    // A user-initiated interrupt mid-tool-call ends the turn from the
+    // agent's perspective: it was told to stop. Claude Code logs this as
+    // a synthetic user text block but never emits a follow-up end_turn,
+    // so without this branch the session drifts into Stalled after 60s.
+    if e.last_user_interrupted {
+        return Some(StoppedKind::Complete);
     }
     if !e.is_awaiting_user() {
         return None;
@@ -577,18 +597,23 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 items.push(dashboard::Item::Spacer);
             }
 
-            // Commit the new activity states + fire bell on transitions
-            // into an alertable state. Fires on:
-            //   - first observation of a workspace already in an alertable
-            //     state (e.g. wsx just started, agent was already waiting),
+            // Commit the new activity states. Fires the bell on:
             //   - transition from any non-alertable state into
             //     AwaitingAnswer / Complete / Awaiting / Stalled,
             //   - transition between two different alertable states
             //     (e.g. Complete -> Awaiting when a permission prompt
             //     arrives while the user hasn't yet replied to the prior
             //     end_turn).
-            // Does NOT re-fire while an alertable state persists across
-            // polls.
+            // Activity is not recorded — and the bell is not considered —
+            // until the tail loop has scanned the workspace's JSONL at
+            // least once (see `workspace_events_scanned`). Without that
+            // gate the classifier flickers from a provisional Active to
+            // a real AwaitingAnswer/Complete the instant events arrive,
+            // which would ring on cold start for every already-waiting
+            // workspace. Once scanned, the first observation still skips
+            // the bell (see `alert_decision`) so the visual marker can
+            // surface alertable state without making noise. Does NOT
+            // re-fire while an alertable state persists across polls.
             for (_rid, ws) in &app.workspaces {
                 let session = app.sessions.get(ws.id);
                 let running = session.as_ref().is_some_and(|s| {
@@ -623,12 +648,25 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .is_some_and(|e| e.is_stalled(now_ms, 60_000));
                 let activity =
                     classify_activity_with_events(secs, running, awaiting, stopped_kind, stalled);
-                let prev = app.workspace_activity.get(&ws.id).copied();
-                if activity.is_alertable() && prev != Some(activity) && notifications_on {
-                    app.workspace_needs_attention.insert(ws.id);
-                    app.pending_bells.push(activity);
+                // Until the tail loop has scanned this workspace's JSONL
+                // at least once the classifier can't see stop_reason, so
+                // `activity` is provisional (typically Active). Recording
+                // it would let the bell loop perceive the first post-scan
+                // classification as a transition and ring on cold start.
+                // See `workspace_events_scanned`.
+                if app.workspace_events_scanned.contains(&ws.id) {
+                    let prev = app.workspace_activity.get(&ws.id).copied();
+                    let is_cold_start = app.started_at.elapsed() < COLD_START_WINDOW;
+                    let (mark_attention, fire_bell) =
+                        alert_decision(prev, activity, notifications_on, is_cold_start);
+                    if mark_attention {
+                        app.workspace_needs_attention.insert(ws.id);
+                    }
+                    if fire_bell {
+                        app.pending_bells.push(activity);
+                    }
+                    app.workspace_activity.insert(ws.id, activity);
                 }
-                app.workspace_activity.insert(ws.id, activity);
             }
 
             let selected = app.selected_target();
@@ -922,6 +960,36 @@ impl BellPattern {
             _ => None, // caller uses its own default
         }
     }
+}
+
+/// Window after wsx starts during which a first-observation of an
+/// alertable workspace is treated as cold-start noise (visual marker
+/// only, no bell). Sized to comfortably cover the 2s tail-loop tick so
+/// every initial scan lands inside the window.
+const COLD_START_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Decide what to do when a workspace's activity classification changes.
+/// Returns `(mark_attention, fire_bell)`.
+///
+/// During the cold-start window the bell is suppressed on the very first
+/// observation of a workspace (`prev.is_none()`), so wsx doesn't ring
+/// once per workspace at launch when several agents were already waiting
+/// before startup. The visual attention marker still fires so the
+/// dashboard reflects current state. Outside the window a first
+/// observation rings normally — a workspace that just appeared
+/// (newly created or freshly imported) and is already alertable is
+/// something the user wants to be notified about.
+fn alert_decision(
+    prev: Option<ActivityState>,
+    activity: ActivityState,
+    notifications_on: bool,
+    is_cold_start: bool,
+) -> (bool, bool) {
+    if !notifications_on || !activity.is_alertable() || prev == Some(activity) {
+        return (false, false);
+    }
+    let fire_bell = prev.is_some() || !is_cold_start;
+    (true, fire_bell)
 }
 
 /// Pick the bell pattern for a given alertable state. Reads per-state
@@ -2195,6 +2263,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         human_replied_after_last_stop,
                         reset_from_zero,
                         last_assistant_text,
+                        last_user_interrupted,
                     } = update;
                     let mut g = app.lock().await;
                     let evt = g.workspace_events.entry(id).or_default();
@@ -2243,9 +2312,22 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     if let Some(text) = last_assistant_text {
                         evt.last_assistant_text = Some(text);
                     }
+                    // Sticky between batches: only overwrite when the batch
+                    // had a definitive signal. Some(true) = batch ended on
+                    // the interrupt sentinel; Some(false) = batch had a
+                    // newer assistant message or real user text overriding
+                    // it; None = batch was silent on this axis.
+                    if let Some(v) = last_user_interrupted {
+                        evt.last_user_interrupted = v;
+                    }
                     for e in events {
                         crate::events::push_event(evt, e);
                     }
+                    // First successful tail of this workspace's JSONL.
+                    // After this point the classifier sees the agent's
+                    // real stop_reason, so the bell loop can start
+                    // trusting activity transitions for this workspace.
+                    g.workspace_events_scanned.insert(id);
                 }
             }
         }
@@ -3904,6 +3986,99 @@ mod bell_tests {
             BellPattern::Single
         ));
     }
+
+    #[test]
+    fn alert_decision_suppresses_bell_on_first_observation_during_cold_start() {
+        // Cold start: prev is None, workspace already alertable.
+        // Visual marker should light up, bell should stay silent.
+        let (mark, ring) = alert_decision(None, ActivityState::AwaitingAnswer, true, true);
+        assert!(mark, "visual marker must surface on first observation");
+        assert!(!ring, "bell must NOT ring during cold start");
+    }
+
+    #[test]
+    fn alert_decision_rings_on_first_observation_after_cold_start() {
+        // A new workspace appears mid-session and is already alertable
+        // (e.g. it raced ahead and asked a question before the tail loop
+        // could record an intermediate Active). User wants to know.
+        let (mark, ring) = alert_decision(None, ActivityState::AwaitingAnswer, true, false);
+        assert!(mark);
+        assert!(
+            ring,
+            "bell must ring for a fresh workspace after cold start"
+        );
+    }
+
+    #[test]
+    fn alert_decision_rings_on_transition_into_alertable() {
+        // Active -> AwaitingAnswer: real mid-session transition, ring
+        // regardless of cold-start window.
+        for is_cold_start in [true, false] {
+            let (mark, ring) = alert_decision(
+                Some(ActivityState::Active),
+                ActivityState::AwaitingAnswer,
+                true,
+                is_cold_start,
+            );
+            assert!(mark);
+            assert!(ring, "transition with prev=Some must always ring");
+        }
+    }
+
+    #[test]
+    fn alert_decision_rings_on_transition_between_alertable_states() {
+        // Complete -> Awaiting: permission prompt arrives before the user
+        // replied to a prior end_turn. Both alertable, different — ring.
+        let (mark, ring) = alert_decision(
+            Some(ActivityState::Complete),
+            ActivityState::Awaiting,
+            true,
+            false,
+        );
+        assert!(mark);
+        assert!(ring);
+    }
+
+    #[test]
+    fn alert_decision_silent_when_alertable_state_persists() {
+        // Re-classifying as the same alertable state across polls must
+        // not re-ring or re-mark.
+        let (mark, ring) = alert_decision(
+            Some(ActivityState::AwaitingAnswer),
+            ActivityState::AwaitingAnswer,
+            true,
+            false,
+        );
+        assert!(!mark);
+        assert!(!ring);
+    }
+
+    #[test]
+    fn alert_decision_silent_for_non_alertable_target() {
+        // Transition into Active or Idle is not an alert.
+        let (mark, ring) = alert_decision(
+            Some(ActivityState::Complete),
+            ActivityState::Active,
+            true,
+            false,
+        );
+        assert!(!mark);
+        assert!(!ring);
+    }
+
+    #[test]
+    fn alert_decision_silent_when_notifications_off() {
+        // Global notification kill switch suppresses everything, even
+        // legitimate mid-session transitions.
+        let (mark, ring) = alert_decision(
+            Some(ActivityState::Active),
+            ActivityState::AwaitingAnswer,
+            false,
+            false,
+        );
+        assert!(!mark);
+        assert!(!ring);
+    }
 }
 
 #[cfg(test)]
@@ -3962,5 +4137,31 @@ mod derive_stopped_kind_tests {
         evt.last_stop_reason = Some(StopReason::EndTurn);
         evt.user_replied_since_stop = true;
         assert_eq!(derive_stopped_kind(&evt), None);
+    }
+
+    #[test]
+    fn complete_when_user_interrupted_mid_tool_use() {
+        // The exact failure case observed in the lively-myrtle session:
+        // last assistant emitted a Bash tool_use (stop_reason=tool_use),
+        // tool resolved, then the human hit interrupt. Without the
+        // interrupt branch wsx falls through to Stalled after 60s; with
+        // it, this is Complete (the agent was told to stop).
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::ToolUse);
+        evt.last_user_interrupted = true;
+        assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::Complete));
+    }
+
+    #[test]
+    fn awaiting_answer_still_wins_over_interrupt_if_question_tool_pending() {
+        // Edge case: interrupt fires while an AskUserQuestion is in
+        // flight. The pending question tool should take precedence —
+        // there's a real question to answer.
+        let mut evt = WorkspaceEvents::default();
+        evt.last_stop_reason = Some(StopReason::ToolUse);
+        evt.last_user_interrupted = true;
+        evt.pending_tool_uses
+            .insert("t1".into(), ("AskUserQuestion".into(), 0));
+        assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
     }
 }

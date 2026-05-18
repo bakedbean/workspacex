@@ -2069,6 +2069,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         last_stop_reason,
                         human_replied_after_last_stop,
                         reset_from_zero,
+                        last_assistant_text,
                     } = update;
                     let mut g = app.lock().await;
                     let evt = g.workspace_events.entry(id).or_default();
@@ -2113,6 +2114,9 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     }
                     if human_replied_after_last_stop {
                         evt.user_replied_since_stop = true;
+                    }
+                    if let Some(text) = last_assistant_text {
+                        evt.last_assistant_text = Some(text);
                     }
                     for e in events {
                         crate::events::push_event(evt, e);

@@ -777,20 +777,59 @@ fn notifications_enabled(store: &crate::store::Store) -> bool {
 
 async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
     match evt {
-        CtEvent::Key(k) if k.kind == KeyEventKind::Press => {
-            if app.modal.is_some() {
-                handle_key_modal(app, k).await?;
-            } else {
-                match &app.view {
-                    View::Dashboard => handle_key_dashboard(app, k).await?,
-                    View::Attached(id) => handle_key_attached(app, *id, k).await?,
-                    View::AttachedPm => handle_key_attached_pm(app, k).await?,
-                }
-            }
-        }
+        CtEvent::Key(k) if k.kind == KeyEventKind::Press => dispatch_key(app, k).await?,
         CtEvent::Mouse(m) => handle_mouse(app, m).await,
+        CtEvent::Paste(content) => handle_paste(app, content).await?,
         CtEvent::Resize(_, _) => {}
         _ => {}
+    }
+    Ok(())
+}
+
+async fn dispatch_key(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    if app.modal.is_some() {
+        handle_key_modal(app, k).await?;
+    } else {
+        match &app.view {
+            View::Dashboard => handle_key_dashboard(app, k).await?,
+            View::Attached(id) => handle_key_attached(app, *id, k).await?,
+            View::AttachedPm => handle_key_attached_pm(app, k).await?,
+        }
+    }
+    Ok(())
+}
+
+/// Wrap a paste payload with the bracketed-paste escape markers claude
+/// reads to render `[Pasted N lines]` instead of treating the content as
+/// typed input. The output is what gets written to the PTY in one send.
+pub(crate) fn wrap_paste_bytes(content: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(content.len() + 12);
+    out.extend_from_slice(b"\x1b[200~");
+    out.extend_from_slice(content.as_bytes());
+    out.extend_from_slice(b"\x1b[201~");
+    out
+}
+
+async fn handle_paste(app: &mut App, content: String) -> Result<()> {
+    // Pick the destination session for the current view. PM-attached
+    // pastes go to the PM session; dashboard pastes (e.g. into the New
+    // Workspace modal's name field) fall back to per-char dispatch so
+    // existing modal text-input keeps working.
+    let session = match &app.view {
+        View::Attached(id) => app.sessions.get(*id),
+        View::AttachedPm => app.pm.clone(),
+        View::Dashboard => None,
+    };
+    if let Some(session) = session {
+        session.scroll_to_live();
+        let _ = session.writer.send(wrap_paste_bytes(&content)).await;
+        return Ok(());
+    }
+    // Non-attached fallback: forward each char as if typed. Preserves
+    // paste-into-NewWorkspace-name behavior.
+    for c in content.chars() {
+        let k = crossterm::event::KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        dispatch_key(app, k).await?;
     }
     Ok(())
 }
@@ -2978,6 +3017,49 @@ mod pm_state_tests {
         assert!(
             !screen_text.contains("/pull-request"),
             "click outside any chip must not fire; got: {screen_text:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_paste_bytes_wraps_with_bracketed_markers() {
+        let out = wrap_paste_bytes("hello world");
+        assert_eq!(out, b"\x1b[200~hello world\x1b[201~");
+    }
+
+    #[test]
+    fn wrap_paste_bytes_handles_empty_content() {
+        // Edge case: a paste of empty string still emits the markers so the
+        // far side sees a zero-length paste boundary rather than nothing.
+        let out = wrap_paste_bytes("");
+        assert_eq!(out, b"\x1b[200~\x1b[201~");
+    }
+
+    #[test]
+    fn wrap_paste_bytes_preserves_multiline_and_special_chars() {
+        let out = wrap_paste_bytes("line1\nline2\t  trailing");
+        assert_eq!(out, b"\x1b[200~line1\nline2\t  trailing\x1b[201~");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn paste_in_attached_view_sends_bracketed_payload_to_pty() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let _ws_id = spawn_attached_workspace(&mut app);
+
+        handle_event(&mut app, CtEvent::Paste("hello paste".into()))
+            .await
+            .unwrap();
+
+        // cat echoes input back. The bracketed-paste markers are unknown
+        // CSI sequences to vt100 and get swallowed; the inner content
+        // appears on the screen verbatim.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = active_session(&app).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("hello paste"),
+            "paste content must reach the PTY; got: {screen_text:?}"
         );
     }
 }

@@ -3,3 +3,5 @@
 *.db-journal
 *.db-wal
 *.db-shm
+
+tags

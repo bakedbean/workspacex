@@ -60,7 +60,7 @@ pub struct AttentionEntry {
 
 /// One-char glyph for the inline status row. Mirrors the dashboard's
 /// attn-marker vocabulary so users see the same icons in both surfaces.
-fn glyph_for_activity(a: ActivityState) -> char {
+pub fn glyph_for_activity(a: ActivityState) -> char {
     match a {
         ActivityState::AwaitingAnswer => '?',
         ActivityState::Complete => '\u{2713}', // ✓ CHECK MARK
@@ -333,7 +333,8 @@ mod tests {
                 activity: ActivityState::Awaiting,
             })
             .collect();
-        // Width tight enough to fit 2 entries + "… +3 more".
+        // Width 35: fits 1 entry ("⚠ repo0/ws0 (1s)", ~18 chars) plus the
+        // "… +N more" overflow suffix; remaining 4 entries become the suffix.
         let line = format_attention_line(&entries, 10_000, 35).expect("line");
         assert!(line.contains("… +"), "expected overflow marker: {line}");
         assert!(line.ends_with("more"), "{line}");

@@ -279,15 +279,13 @@ fn workspace_row<'a>(
     now_ms: i64,
     theme: &Theme,
 ) -> Line<'a> {
-    use crate::ui::updates_bar::{ActivityState, format_age};
+    use crate::ui::updates_bar::{ActivityState, format_age, glyph_for_activity};
     let glyph = if w.state == crate::store::WorkspaceState::Failed {
         '✕'
     } else if needs_attention {
-        match activity {
-            Some(ActivityState::AwaitingAnswer) => '?',
-            Some(ActivityState::Complete) => '\u{2713}', // ✓ CHECK MARK
-            _ => '⚠',
-        }
+        activity
+            .map(glyph_for_activity)
+            .unwrap_or('⚠')
     } else {
         match activity {
             Some(ActivityState::Active) | Some(ActivityState::Idle) => '●',
@@ -619,20 +617,25 @@ mod workspace_row_tests {
     }
 
     #[test]
-    fn workspace_row_uses_warning_glyph_for_awaiting_permission() {
+    fn workspace_row_shows_permission_tool_in_status_text() {
         let theme = Theme::default_theme();
         let w = fixture_workspace("alpha");
+        let awaiting = ("Bash".to_string(), 5_000i64);
         let line = workspace_row(
             &w,
             None,
             Some(ActivityState::Awaiting),
             true,
-            None,
+            Some(&awaiting),
             false,
             10_000,
             &theme,
         );
         let body = line_text(&line);
         assert!(body.contains('⚠'), "expected '⚠' glyph in: {body}");
+        assert!(
+            body.contains("awaiting permission: Bash"),
+            "expected permission tool name in status text: {body}"
+        );
     }
 }

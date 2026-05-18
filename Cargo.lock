@@ -1728,6 +1728,7 @@ dependencies = [
  "dirs",
  "fnug-vt100",
  "futures",
+ "libc",
  "portable-pty",
  "rand",
  "ratatui",

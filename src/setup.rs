@@ -71,6 +71,22 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
+    // An interactive shell (`-i`) sets up job control on its inherited TTY:
+    // it calls `tcsetpgrp` to become the foreground process group, which
+    // bumps wsx into the background. Our next TUI write then trips SIGTTOU
+    // and suspends us. Put the child in a brand-new session so it has no
+    // controlling terminal and cannot hijack ours; rc-file sourcing still
+    // happens because `-i` governs that, not job control.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::Setup(format!("spawn: {e}")))?;

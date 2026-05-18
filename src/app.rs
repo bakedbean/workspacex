@@ -777,20 +777,76 @@ fn notifications_enabled(store: &crate::store::Store) -> bool {
 
 async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
     match evt {
-        CtEvent::Key(k) if k.kind == KeyEventKind::Press => {
-            if app.modal.is_some() {
-                handle_key_modal(app, k).await?;
-            } else {
-                match &app.view {
-                    View::Dashboard => handle_key_dashboard(app, k).await?,
-                    View::Attached(id) => handle_key_attached(app, *id, k).await?,
-                    View::AttachedPm => handle_key_attached_pm(app, k).await?,
-                }
-            }
-        }
+        CtEvent::Key(k) if k.kind == KeyEventKind::Press => dispatch_key(app, k).await?,
         CtEvent::Mouse(m) => handle_mouse(app, m).await,
+        CtEvent::Paste(content) => handle_paste(app, content).await?,
         CtEvent::Resize(_, _) => {}
         _ => {}
+    }
+    Ok(())
+}
+
+async fn dispatch_key(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    if app.modal.is_some() {
+        handle_key_modal(app, k).await?;
+    } else {
+        match &app.view {
+            View::Dashboard => handle_key_dashboard(app, k).await?,
+            View::Attached(id) => handle_key_attached(app, *id, k).await?,
+            View::AttachedPm => handle_key_attached_pm(app, k).await?,
+        }
+    }
+    Ok(())
+}
+
+/// Wrap a paste payload with the bracketed-paste escape markers claude
+/// reads to render `[Pasted N lines]` instead of treating the content as
+/// typed input. The output is what gets written to the PTY in one send.
+pub(crate) fn wrap_paste_bytes(content: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(content.len() + 12);
+    out.extend_from_slice(b"\x1b[200~");
+    out.extend_from_slice(content.as_bytes());
+    out.extend_from_slice(b"\x1b[201~");
+    out
+}
+
+/// Translate a pasted character into the `KeyEvent` crossterm would have
+/// emitted if it were typed live. Matters for the non-attached fallback:
+/// `\n`/`\r` are Enter (modal submit), `\t` is Tab (focus / autocomplete),
+/// printable chars pass through as `Char(c)`.
+fn paste_char_to_key(c: char) -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyEvent, KeyModifiers};
+    let code = match c {
+        '\n' | '\r' => KeyCode::Enter,
+        '\t' => KeyCode::Tab,
+        _ => KeyCode::Char(c),
+    };
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+async fn handle_paste(app: &mut App, content: String) -> Result<()> {
+    // PTY path: forward the whole paste as one bracketed sequence to
+    // whichever session is currently driving the foreground (attached
+    // workspace, full-screen PM, or the embedded PM pane when focused
+    // on the dashboard). When a modal owns the input (e.g. New Workspace
+    // name field), skip this branch so the per-char fallback can feed
+    // the modal handler.
+    let session = if app.modal.is_none() {
+        active_session(app)
+    } else {
+        None
+    };
+    if let Some(session) = session {
+        session.scroll_to_live();
+        let _ = session.writer.send(wrap_paste_bytes(&content)).await;
+        return Ok(());
+    }
+    // Non-attached fallback: forward each char as if typed, translating
+    // control chars to the KeyCodes crossterm would have emitted live so
+    // modal handlers see paste-with-newlines as multiple Enter presses
+    // rather than literal '\n' Chars.
+    for c in content.chars() {
+        dispatch_key(app, paste_char_to_key(c)).await?;
     }
     Ok(())
 }
@@ -2979,5 +3035,96 @@ mod pm_state_tests {
             !screen_text.contains("/pull-request"),
             "click outside any chip must not fire; got: {screen_text:?}"
         );
+    }
+
+    #[test]
+    fn wrap_paste_bytes_wraps_with_bracketed_markers() {
+        let out = wrap_paste_bytes("hello world");
+        assert_eq!(out, b"\x1b[200~hello world\x1b[201~");
+    }
+
+    #[test]
+    fn wrap_paste_bytes_handles_empty_content() {
+        // Edge case: a paste of empty string still emits the markers so the
+        // far side sees a zero-length paste boundary rather than nothing.
+        let out = wrap_paste_bytes("");
+        assert_eq!(out, b"\x1b[200~\x1b[201~");
+    }
+
+    #[test]
+    fn wrap_paste_bytes_preserves_multiline_and_special_chars() {
+        let out = wrap_paste_bytes("line1\nline2\t  trailing");
+        assert_eq!(out, b"\x1b[200~line1\nline2\t  trailing\x1b[201~");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn paste_in_attached_view_sends_bracketed_payload_to_pty() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let _ws_id = spawn_attached_workspace(&mut app);
+
+        handle_event(&mut app, CtEvent::Paste("hello paste".into()))
+            .await
+            .unwrap();
+
+        // cat echoes input back. The bracketed-paste markers are unknown
+        // CSI sequences to vt100 and get swallowed; the inner content
+        // appears on the screen verbatim.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = active_session(&app).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("hello paste"),
+            "paste content must reach the PTY; got: {screen_text:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn paste_in_dashboard_with_pm_focused_sends_bracketed_to_pm() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        spawn_pm_for_test(&mut app);
+        // Dashboard view + PM visible + PM focused — same condition that
+        // routes keystrokes to the PM session.
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+
+        handle_event(&mut app, CtEvent::Paste("hello pm".into()))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let pm = app.pm.as_ref().unwrap();
+        let parser = pm.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("hello pm"),
+            "PM-focused paste must reach the PM PTY; got: {screen_text:?}"
+        );
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_newline_to_enter() {
+        let k = paste_char_to_key('\n');
+        assert!(matches!(k.code, KeyCode::Enter));
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_cr_to_enter() {
+        let k = paste_char_to_key('\r');
+        assert!(matches!(k.code, KeyCode::Enter));
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_tab() {
+        let k = paste_char_to_key('\t');
+        assert!(matches!(k.code, KeyCode::Tab));
+    }
+
+    #[test]
+    fn paste_char_to_key_passes_through_printable() {
+        let k = paste_char_to_key('a');
+        assert!(matches!(k.code, KeyCode::Char('a')));
     }
 }

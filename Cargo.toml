@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
+crossterm = { version = "0.28", features = ["event-stream", "bracketed-paste"] }
 portable-pty = "0.9"
 vt100 = { version = "0.15.2", package = "fnug-vt100" }
 tokio = { version = "1", features = ["full"] }

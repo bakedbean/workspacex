@@ -259,8 +259,10 @@ pub fn render_updates_panel(
 
     f.render_widget(Paragraph::new(lines).style(theme.dim_style()), body_area);
     f.render_widget(
-        Paragraph::new("[\u{2191}/\u{2193}] move   [enter] switch   [esc] close")
-            .style(theme.dim_style()),
+        Paragraph::new(
+            "[\u{2191}/\u{2193}] move   [enter] switch   [v] vsplit   [s] hsplit   [esc] close",
+        )
+        .style(theme.dim_style()),
         footer_area,
     );
 }

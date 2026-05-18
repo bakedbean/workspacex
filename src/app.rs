@@ -6,6 +6,7 @@ use crate::store::{Repo, Store, Workspace, WorkspaceId};
 use crate::ui::View;
 use crate::ui::dashboard::DashboardState;
 use crate::ui::modal::Modal;
+use crate::ui::split::{Arrow, AttachedState, CloseOutcome, SplitDirection};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -598,53 +599,108 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 crate::ui::pm_pane::render(f, pm_area, app.pm.as_ref(), app.focus, &app.theme);
             }
         }
-        View::Attached(id) => {
-            if let Some(session) = app.sessions.get(*id) {
-                let label = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == *id)
-                    .map(|(_, w)| w.name.clone())
-                    .unwrap_or_default();
-                // The status row gets the inner width minus the "⚠ " prefix
-                // (glyph + space) that `attached::render` prepends.
-                let max_width = (area.width as usize).saturating_sub(3);
-                let line = if matches!(
-                    app.modal,
-                    Some(crate::ui::modal::Modal::UpdatesPanel { .. })
-                ) {
-                    None
-                } else {
-                    compute_attention_line(app, Some(*id), max_width)
-                };
-                // Resolve pinned commands before resize_session so that
-                // pinned_present is accurate for layout calculations.
-                let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
-                let repo_pinned =
-                    app.workspaces
-                        .iter()
-                        .find(|(_, w)| w.id == *id)
-                        .and_then(|(_, w)| {
-                            app.repos
-                                .iter()
-                                .find(|r| r.id == w.repo_id)
-                                .and_then(|r| r.pinned_commands.clone())
-                        });
-                let pinned =
-                    crate::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
-                attached::resize_session(&session, area, line.is_some(), !pinned.is_empty());
-                let chip_rects = attached::render(
-                    f,
-                    area,
-                    &session,
-                    &label,
-                    line.as_deref(),
-                    &pinned,
-                    &app.theme,
-                );
-                app.chip_rects = chip_rects;
-                app.pinned_commands_cache = pinned;
+        View::Attached(state) => {
+            // If any leaf's session has gone away (e.g. workspace was
+            // archived from elsewhere), bounce back to dashboard. Matches
+            // the previous single-pane fallback at handle_key_attached.
+            if state.leaves().iter().any(|id| app.sessions.get(*id).is_none()) {
+                app.view = View::Dashboard;
+                return;
             }
+            let focused_id = match state.focused_id() {
+                Some(id) => id,
+                None => {
+                    app.view = View::Dashboard;
+                    return;
+                }
+            };
+            let focused_label = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == focused_id)
+                .map(|(_, w)| w.name.clone())
+                .unwrap_or_default();
+
+            // The status row gets the inner width minus the "⚠ " prefix
+            // (glyph + space) that `attached::render_panes` prepends.
+            let max_width = (area.width as usize).saturating_sub(3);
+            let line = if matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::UpdatesPanel { .. })
+            ) {
+                None
+            } else {
+                compute_attention_line(app, Some(focused_id), max_width)
+            };
+
+            // Pinned commands resolve against the FOCUSED pane's workspace.
+            let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
+            let repo_pinned = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == focused_id)
+                .and_then(|(_, w)| {
+                    app.repos
+                        .iter()
+                        .find(|r| r.id == w.repo_id)
+                        .and_then(|r| r.pinned_commands.clone())
+                });
+            let pinned =
+                crate::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
+
+            let (pane_area, chip_area, status_area, footer_area) =
+                attached::layout_chrome(area, line.is_some(), !pinned.is_empty());
+            let pane_layouts = state.layout(pane_area);
+            let multi_pane = pane_layouts.len() > 1;
+
+            // Resize each session's PTY to its pane area (minus title row when multi-pane).
+            for (ws_id, _path, rect) in &pane_layouts {
+                if let Some(session) = app.sessions.get(*ws_id) {
+                    attached::resize_pane(&session, *rect, multi_pane);
+                }
+            }
+
+            // Build PaneSpec list. Use owned sessions + labels to keep
+            // them alive while rendering.
+            let pane_data: Vec<(std::sync::Arc<crate::pty::session::Session>, String, ratatui::layout::Rect, bool)> =
+                pane_layouts
+                    .into_iter()
+                    .filter_map(|(ws_id, path, rect)| {
+                        let session = app.sessions.get(ws_id)?;
+                        let label = app
+                            .workspaces
+                            .iter()
+                            .find(|(_, w)| w.id == ws_id)
+                            .map(|(_, w)| w.name.clone())
+                            .unwrap_or_default();
+                        let focused = path == state.focus;
+                        Some((session, label, rect, focused))
+                    })
+                    .collect();
+            let specs: Vec<crate::ui::attached::PaneSpec<'_>> = pane_data
+                .iter()
+                .map(|(s, l, r, f)| crate::ui::attached::PaneSpec {
+                    session: s,
+                    label: l.as_str(),
+                    rect: *r,
+                    focused: *f,
+                })
+                .collect();
+
+            let chip_rects = attached::render_panes(
+                f,
+                &specs,
+                chip_area,
+                status_area,
+                footer_area,
+                &focused_label,
+                multi_pane,
+                line.as_deref(),
+                &pinned,
+                &app.theme,
+            );
+            app.chip_rects = chip_rects;
+            app.pinned_commands_cache = pinned;
         }
         View::AttachedPm => {
             if let Some(session) = app.pm.as_ref() {
@@ -658,15 +714,24 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     compute_attention_line(app, None, max_width)
                 };
                 // PM pane is out of scope for pinned commands per spec.
-                // Pass empty slice; chip_rects / pinned_commands_cache stay
-                // cleared from the top of draw().
                 let pinned: &[crate::pinned::PinnedCommand] = &[];
-                attached::resize_session(session, area, line.is_some(), false);
-                let _chip_rects = attached::render(
-                    f,
-                    area,
+                let (pane_area, chip_area, status_area, footer_area) =
+                    attached::layout_chrome(area, line.is_some(), false);
+                attached::resize_pane(session, pane_area, false);
+                let specs = [crate::ui::attached::PaneSpec {
                     session,
+                    label: "project-manager",
+                    rect: pane_area,
+                    focused: true,
+                }];
+                let _chip_rects = attached::render_panes(
+                    f,
+                    &specs,
+                    chip_area,
+                    status_area,
+                    footer_area,
                     "project-manager",
+                    false,
                     line.as_deref(),
                     pinned,
                     &app.theme,
@@ -798,7 +863,16 @@ async fn dispatch_key(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()
     } else {
         match &app.view {
             View::Dashboard => handle_key_dashboard(app, k).await?,
-            View::Attached(id) => handle_key_attached(app, *id, k).await?,
+            View::Attached(state) => {
+                let id = match state.focused_id() {
+                    Some(id) => id,
+                    None => {
+                        app.view = View::Dashboard;
+                        return Ok(());
+                    }
+                };
+                handle_key_attached(app, id, k).await?
+            }
             View::AttachedPm => handle_key_attached_pm(app, k).await?,
         }
     }
@@ -899,7 +973,7 @@ fn scroll_active(app: &App, rows: usize, up: bool) {
 /// view + focus, or None when there is no targetable session.
 fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Session>> {
     match &app.view {
-        View::Attached(id) => app.sessions.get(*id),
+        View::Attached(state) => state.focused_id().and_then(|id| app.sessions.get(id)),
         View::AttachedPm => app.pm.clone(),
         View::Dashboard
             if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
@@ -974,7 +1048,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     maybe_mirror_mcp(app, &repo_path, &path);
                     let remote = crate::remote::RemoteOpts::from_store(&app.store);
                     let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
-                    app.view = View::Attached(id);
+                    app.view = View::Attached(AttachedState::single(id));
                 }
             }
             Some(SelectionTarget::Repo(id)) => {
@@ -1321,7 +1395,34 @@ async fn handle_key_attached(
         app.leader_pending = false;
         match k.code {
             KeyCode::Char('d') => {
+                // In multi-pane mode, close just the focused pane; the
+                // other panes' sessions keep running. Detach to dashboard
+                // only when the last pane closes.
+                if let View::Attached(state) = &mut app.view {
+                    if state.leaf_count() > 1 {
+                        match state.close_focused() {
+                            CloseOutcome::Focus(_) => return Ok(()),
+                            CloseOutcome::Empty => {
+                                app.view = View::Dashboard;
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
                 app.view = View::Dashboard;
+                return Ok(());
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                let arrow = match k.code {
+                    KeyCode::Left => Arrow::Left,
+                    KeyCode::Right => Arrow::Right,
+                    KeyCode::Up => Arrow::Up,
+                    KeyCode::Down => Arrow::Down,
+                    _ => unreachable!(),
+                };
+                if let View::Attached(state) = &mut app.view {
+                    state.focus_direction(arrow);
+                }
                 return Ok(());
             }
             KeyCode::Char('x') => {
@@ -1673,7 +1774,53 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                             maybe_mirror_mcp(app, &repo_path, &path);
                             let remote = crate::remote::RemoteOpts::from_store(&app.store);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
-                            app.view = View::Attached(id);
+                            app.view = View::Attached(AttachedState::single(id));
+                        }
+                    }
+                    app.modal = None;
+                }
+                KeyCode::Char('v') | KeyCode::Char('s') => {
+                    // Vim-style splits: 'v' = vertical (panes side-by-side),
+                    // 's' = horizontal (stacked). Only valid when there's
+                    // already an attached pane to split — otherwise behaves
+                    // like Enter (just attach).
+                    let dir = if matches!(k.code, KeyCode::Char('v')) {
+                        SplitDirection::Vertical
+                    } else {
+                        SplitDirection::Horizontal
+                    };
+                    if let Some(ws_id) = order.get(selected_now).copied() {
+                        app.workspace_needs_attention.remove(&ws_id);
+                        if let Some((id, path, mode, repo_path)) = build_spawn_info(app, ws_id) {
+                            maybe_mirror_mcp(app, &repo_path, &path);
+                            let remote = crate::remote::RemoteOpts::from_store(&app.store);
+                            let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
+                            match &mut app.view {
+                                View::Attached(state) => {
+                                    // Same pane already focused: switch focus
+                                    // instead of splitting onto itself.
+                                    if state.focused_id() == Some(id) {
+                                        // no-op
+                                    } else if state.leaves().contains(&id) {
+                                        // Already open in another pane —
+                                        // just refocus there.
+                                        if let Some(p) = state
+                                            .tree
+                                            .leaf_paths()
+                                            .into_iter()
+                                            .find(|p| state.tree.leaf_at(p) == Some(id))
+                                        {
+                                            state.focus = p;
+                                        }
+                                    } else {
+                                        state.split(dir, id);
+                                    }
+                                }
+                                _ => {
+                                    // No attached pane yet — attach plainly.
+                                    app.view = View::Attached(AttachedState::single(id));
+                                }
+                            }
                         }
                     }
                     app.modal = None;
@@ -2389,7 +2536,7 @@ mod pm_state_tests {
         .unwrap();
         assert!(app.modal.is_none(), "Enter should close the modal");
         assert!(
-            matches!(app.view, crate::ui::View::Attached(id) if id == ws_id),
+            matches!(&app.view, crate::ui::View::Attached(s) if s.focused_id() == Some(ws_id)),
             "Enter should switch view to the selected workspace; got {:?}",
             app.view
         );
@@ -2397,6 +2544,293 @@ mod pm_state_tests {
             !app.workspace_needs_attention.contains(&ws_id),
             "attention flag should clear on Enter"
         );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_v_splits_attached_view_vertically() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("/tmp/wsx-split-1"),
+                yolo: false,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new("/tmp/wsx-split-2"),
+                yolo: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Pre-spawn the "first" workspace and attach to it. Use `.` for the
+        // spawn cwd so the PTY actually starts; the store-level
+        // worktree_path is just a unique key for the row.
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                first_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote::RemoteOpts::disabled(),
+            )
+            .unwrap();
+        let second_mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                second_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                second_mode,
+                crate::remote::RemoteOpts::disabled(),
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(first_id));
+
+        // Open Updates panel, point at the second workspace, press 'v'.
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        // The renderer's order is grouped/sorted; in this minimal setup both
+        // workspaces are in `repo`. Find the index of `second_id` from the
+        // module's ordering helper.
+        let order = crate::ui::modal::ordered_workspaces_for_panel(
+            &app.repos,
+            &app.workspaces,
+            &app.workspace_events,
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+        let target_idx = order.iter().position(|id| *id == second_id).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: target_idx,
+        });
+        handle_key_modal(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "v should close the modal");
+        match &app.view {
+            crate::ui::View::Attached(state) => {
+                assert_eq!(state.leaf_count(), 2, "v should produce a 2-pane split");
+                assert!(state.leaves().contains(&first_id));
+                assert!(state.leaves().contains(&second_id));
+                // Focus should be on the newly added pane.
+                assert_eq!(state.focused_id(), Some(second_id));
+            }
+            other => panic!("expected Attached view; got {other:?}"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_d_closes_focused_pane_when_split() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("/tmp/wsx-close-1"),
+                yolo: false,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new("/tmp/wsx-close-2"),
+                yolo: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        for id in [first_id, second_id] {
+            let mode = crate::pty::session::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            app.sessions
+                .spawn(
+                    id,
+                    std::path::Path::new("."),
+                    80,
+                    24,
+                    mode,
+                    crate::remote::RemoteOpts::disabled(),
+                )
+                .unwrap();
+        }
+        // Start in a 2-pane split with `second` focused.
+        let mut state = AttachedState::single(first_id);
+        state.split(SplitDirection::Vertical, second_id);
+        app.view = crate::ui::View::Attached(state);
+
+        // Ctrl-x d closes JUST the focused pane; should leave `first` alone.
+        handle_key_attached(
+            &mut app,
+            second_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+        handle_key_attached(
+            &mut app,
+            second_id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(state) => {
+                assert_eq!(state.leaf_count(), 1, "should drop down to 1 pane");
+                assert_eq!(state.focused_id(), Some(first_id));
+            }
+            other => panic!("expected Attached view; got {other:?}"),
+        }
+
+        // Ctrl-x d on the last pane detaches fully.
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_arrow_moves_focus_in_split() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let mut ids = Vec::new();
+        for name in ["a", "b"] {
+            let id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name,
+                    branch: &format!("repo/{name}"),
+                    worktree_path: &std::path::PathBuf::from(format!("/tmp/wsx-arrow-{name}")),
+                    yolo: false,
+                })
+                .unwrap();
+            store.set_workspace_state(id, WorkspaceState::Ready).unwrap();
+            ids.push(id);
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        for id in &ids {
+            let mode = crate::pty::session::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            app.sessions
+                .spawn(
+                    *id,
+                    std::path::Path::new("."),
+                    80,
+                    24,
+                    mode,
+                    crate::remote::RemoteOpts::disabled(),
+                )
+                .unwrap();
+        }
+        let mut state = AttachedState::single(ids[0]);
+        state.split(SplitDirection::Vertical, ids[1]);
+        // Focus is on ids[1] post-split.
+        app.view = crate::ui::View::Attached(state);
+
+        handle_key_attached(
+            &mut app,
+            ids[1],
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            ids[1],
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(state) => {
+                assert_eq!(state.focused_id(), Some(ids[0]));
+            }
+            other => panic!("expected Attached view; got {other:?}"),
+        }
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
@@ -2547,7 +2981,7 @@ mod pm_state_tests {
                 crate::remote::RemoteOpts::disabled(),
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(attached_id);
+        app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
         // The new status row exclusively surfaces workspaces with
         // `needs_attention` set — recent activity alone no longer qualifies.
         app.workspace_needs_attention.insert(other_id);
@@ -2619,7 +3053,7 @@ mod pm_state_tests {
                 crate::remote::RemoteOpts::disabled(),
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(attached_id);
+        app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
 
         let backend = TestBackend::new(80, 24);
         let mut term = Terminal::new(backend).unwrap();
@@ -2759,7 +3193,7 @@ mod pm_state_tests {
                 crate::remote::RemoteOpts::disabled(),
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(ws_id);
+        app.view = crate::ui::View::Attached(AttachedState::single(ws_id));
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }

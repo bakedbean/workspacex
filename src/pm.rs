@@ -250,26 +250,63 @@ pub async fn open_pm_with_refresh(
 }
 
 #[cfg(test)]
-#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use crate::store::{NewWorkspace, Store, WorkspaceState};
-    use std::sync::Mutex;
+    use std::ffi::{OsStr, OsString};
+    use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
 
     // Several tests mutate process-global env vars ($HOME so
     // `has_prior_session` reads from a tempdir, and $WSX_CLAUDE_BIN so
     // PM spawns a cat wrapper instead of real claude). Those tests must
-    // not run in parallel, or one's `remove_var` clobbers another's
-    // setup.
+    // not run in parallel, or one's restore clobbers another's setup.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn open_pm_spawns_session_and_writes_workspaces_json() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+    /// RAII guard for env-mutating tests: acquires `ENV_LOCK`, stashes
+    /// the original value of any env var it sets, and restores them on
+    /// drop — even on panic. Replaces hand-rolled save/restore code so
+    /// a failed assertion can't leak stale env into subsequent tests.
+    struct EnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved: Vec<(String, Option<OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            Self {
+                _lock: lock,
+                saved: Vec::new(),
+            }
         }
+
+        fn set(&mut self, key: &str, value: impl AsRef<OsStr>) {
+            self.saved.push((key.to_string(), std::env::var_os(key)));
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, prior) in self.saved.drain(..).rev() {
+                unsafe {
+                    match prior {
+                        Some(v) => std::env::set_var(&key, v),
+                        None => std::env::remove_var(&key),
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
+    async fn open_pm_spawns_session_and_writes_workspaces_json() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", "/usr/bin/cat");
         let dir = TempDir::new().unwrap();
         let pm_root = dir.path().join("pm");
         let store = Store::open_in_memory().unwrap();
@@ -278,21 +315,15 @@ mod tests {
         open_pm(&mut mgr, &store, &pm_root, None).await.unwrap();
         assert!(mgr.pm().is_some(), "expected pm session");
         assert!(pm_root.join("workspaces.json").exists());
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[test]
     fn workspaces_json_filters_failed_pending_and_never_started() {
         // Point HOME at a tempdir so `has_prior_session` looks at our stubbed
         // session log dirs, not the developer's real ~/.claude/projects/.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut env = EnvGuard::new();
         let home = TempDir::new().unwrap();
-        let saved_home = std::env::var("HOME").ok();
-        unsafe {
-            std::env::set_var("HOME", home.path());
-        }
+        env.set("HOME", home.path());
 
         let wt_root = TempDir::new().unwrap();
         let ready_with_session = wt_root.path().join("ready-with-session");
@@ -359,13 +390,6 @@ mod tests {
         assert!(!text.contains("\"name\": \"ready-no-session\""), "{text}");
         assert!(!text.contains("\"name\": \"broken\""), "{text}");
         assert!(text.contains("\"generated_at_epoch_seconds\""), "{text}");
-
-        unsafe {
-            match saved_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
     }
 
     #[test]
@@ -410,10 +434,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
     async fn refresh_pm_rewrites_json_and_sends_message() {
         // Same shell-wrapper trick as open_pm_with_auto_summary test: cat
         // chokes on PM flags so we wrap it.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut env = EnvGuard::new();
         let dir = TempDir::new().unwrap();
         let wrapper = dir.path().join("claude-stub.sh");
         std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
@@ -422,9 +447,7 @@ mod tests {
         perm.set_mode(0o755);
         std::fs::set_permissions(&wrapper, perm).unwrap();
 
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", &wrapper);
-        }
+        env.set("WSX_CLAUDE_BIN", &wrapper);
         let pm_root = dir.path().join("pm");
         let store = Store::open_in_memory().unwrap();
         store.add_repo(Path::new("/tmp/r"), "r", "").unwrap();
@@ -451,17 +474,15 @@ mod tests {
             screen.contains("Refresh"),
             "expected refresh echo. screen: {screen:?}"
         );
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
     async fn open_pm_with_auto_summary_writes_message_after_settle() {
         // /usr/bin/cat chokes on `--allowedTools` and other PM flags, so we
         // wrap it in a tiny shell script that ignores its args and execs cat
         // reading stdin. The wrapper is a tempfile we drop after the test.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut env = EnvGuard::new();
         let dir = TempDir::new().unwrap();
         let wrapper = dir.path().join("claude-stub.sh");
         std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
@@ -470,9 +491,7 @@ mod tests {
         perm.set_mode(0o755);
         std::fs::set_permissions(&wrapper, perm).unwrap();
 
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", &wrapper);
-        }
+        env.set("WSX_CLAUDE_BIN", &wrapper);
         let pm_root = dir.path().join("pm");
         let store = Store::open_in_memory().unwrap();
         store.add_repo(Path::new("/tmp/r"), "r", "").unwrap();
@@ -490,18 +509,16 @@ mod tests {
             screen.contains("status summary"),
             "expected auto-summary echoed by cat. screen: {screen:?}"
         );
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
     async fn open_pm_with_auto_summary_sends_refresh_on_resume() {
         // Issue #42: across wsx runs, PM resumes via --continue and its
         // conversation memory of workspaces.json is stale. The first `p`
         // open in the new run must send a refresh prompt, not return
         // silently.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut env = EnvGuard::new();
         let dir = TempDir::new().unwrap();
         let wrapper = dir.path().join("claude-stub.sh");
         std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
@@ -509,17 +526,12 @@ mod tests {
         let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
         perm.set_mode(0o755);
         std::fs::set_permissions(&wrapper, perm).unwrap();
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", &wrapper);
-        }
+        env.set("WSX_CLAUDE_BIN", &wrapper);
 
         // Override HOME so has_prior_session looks at our stub, not the
         // developer's real ~/.claude/projects/.
         let home = TempDir::new().unwrap();
-        let saved_home = std::env::var("HOME").ok();
-        unsafe {
-            std::env::set_var("HOME", home.path());
-        }
+        env.set("HOME", home.path());
 
         // Create pm_dir up-front so canonicalize succeeds, then stub a
         // jsonl at the encoded session-log path so has_prior_session
@@ -552,21 +564,14 @@ mod tests {
             !screen.contains("status summary"),
             "did not expect auto-summary message on resume. screen: {screen:?}"
         );
-
-        unsafe {
-            match saved_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
     async fn open_pm_with_refresh_sends_refresh_message_on_reopen() {
         // Models the issue #28 fix: closing+reopening the PM pane (`p`)
         // should refresh PM, not just rewrite workspaces.json silently.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut env = EnvGuard::new();
         let dir = TempDir::new().unwrap();
         let wrapper = dir.path().join("claude-stub.sh");
         std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
@@ -574,9 +579,7 @@ mod tests {
         let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
         perm.set_mode(0o755);
         std::fs::set_permissions(&wrapper, perm).unwrap();
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", &wrapper);
-        }
+        env.set("WSX_CLAUDE_BIN", &wrapper);
 
         let pm_root = dir.path().join("pm");
         let store = Store::open_in_memory().unwrap();
@@ -600,9 +603,5 @@ mod tests {
             screen.contains("Refresh"),
             "expected refresh echo from cat. screen: {screen:?}"
         );
-
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 }

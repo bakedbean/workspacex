@@ -934,6 +934,16 @@ fn bell_pattern_for(state: ActivityState, store: &crate::store::Store) -> BellPa
 /// Emit a terminal-bell pattern for an alertable state. Multi-bell
 /// patterns spawn a detached thread to space the writes (~120ms apart)
 /// so the engine event loop isn't blocked.
+///
+/// Residual race: the first bell fires synchronously outside ratatui's
+/// `draw()` closure (see the run loop's drain of `pending_bells`), but
+/// the 2nd/3rd bells in a Double/Triple sequence land 120ms+ later,
+/// which can overlap with subsequent frame flushes. `\x07` mid-escape
+/// is undefined per the VT spec but is silently dropped by iTerm2 and
+/// other modern terminals; visible corruption has not been observed.
+/// The fully race-free alternative is a synchronized bell worker
+/// coordinating with the TUI backend — non-trivial refactor for a
+/// theoretical issue. Reassess if real-world corruption appears.
 fn fire_bell(state: ActivityState, store: &crate::store::Store) {
     use std::io::Write;
     let pattern = bell_pattern_for(state, store);

@@ -56,39 +56,63 @@ Introducing two new enum variants instead of a sub-kind on `Stopped` forces ever
 
 ## Classification logic
 
-Lives in `src/events.rs`, extending `parse_jsonl_line` (~lines 327-457) and the `TailUpdate` struct returned to `app.rs`.
+The classification splits across two layers: **primitives on `WorkspaceEvents`** (in `src/events.rs`) and a **derivation helper in `src/app.rs`** that combines them with the existing `is_awaiting_user()` and `pending_tool_uses` signals.
 
-**New types on `TailUpdate`:**
+**Primitives on `WorkspaceEvents`** (added to the existing struct, not to `TailUpdate`):
 
 ```rust
-pub enum TurnOutcome {
-    AwaitingAnswer { reason: AnswerReason },
-    Complete,
-    // None of these when stop_reason isn't set yet — turn is still in flight.
-}
+// New field on WorkspaceEvents — populated by parse_assistant whenever
+// an assistant message has a text content block. Carried through
+// TailUpdate.last_assistant_text and stored on WorkspaceEvents.
+pub last_assistant_text: Option<String>,
 
-pub enum AnswerReason {
-    AskUserQuestionTool,   // model invoked AskUserQuestion, no tool_result yet
-    ExitPlanModeTool,      // model invoked ExitPlanMode, no tool_result yet
-    TrailingQuestionMark,  // fallback — final text sentence ends with '?'
+// New methods on WorkspaceEvents:
+pub fn pending_question_tool(&self) -> Option<&str>;        // filters pending_tool_uses for AskUserQuestion / ExitPlanMode
+pub fn last_text_ends_with_question(&self) -> bool;         // trims trailing whitespace + `*` `_` `` ` ``, then checks last char
+```
+
+This keeps the existing `TailUpdate` shape unchanged. No `TurnOutcome` or `AnswerReason` enums — the primitives are simple enough that the derivation lives in one place (in `app.rs`) and consumers read state directly off `WorkspaceEvents`.
+
+**Derivation in `src/app.rs`** (`fn derive_stopped_kind(e: &WorkspaceEvents) -> Option<StoppedKind>`):
+
+```rust
+fn derive_stopped_kind(e: &WorkspaceEvents) -> Option<StoppedKind> {
+    // Question tools fire even mid-turn — the model has explicitly
+    // asked the user something. stop_reason at this point is ToolUse,
+    // so is_awaiting_user() is false. Short-circuit BEFORE that gate.
+    if e.pending_question_tool().is_some() {
+        return Some(StoppedKind::AwaitingAnswer);
+    }
+    if !e.is_awaiting_user() {
+        return None;
+    }
+    if e.last_text_ends_with_question() {
+        Some(StoppedKind::AwaitingAnswer)
+    } else {
+        Some(StoppedKind::Complete)
+    }
 }
 ```
 
-**Rules**, evaluated per assistant turn that has just produced a `stop_reason` of `end_turn | max_tokens | stop_sequence`:
+**Coordinated change in `App::awaiting_permission()`:** the existing permission-prompt detector iterates `pending_tool_uses` for entries older than 3 seconds. To prevent AskUserQuestion / ExitPlanMode from being misclassified as permission prompts (they live in the same map), the detector now skips entries with those tool names.
 
-1. Scan the turn's content blocks for `tool_use` entries with `name == "AskUserQuestion"` or `name == "ExitPlanMode"`.
-2. For each such tool_use, check the existing pending-tool tracker in `events.rs` (already used for permission detection). If no matching `tool_result` exists in subsequent messages, classify as `AwaitingAnswer` with the matching reason and return.
-3. Otherwise, take the *last* text content block of the turn. Strip trailing whitespace and trailing markdown noise (`*`, `_`, `` ` ``, closing code fences). Locate the final sentence boundary by splitting on `.!?` followed by whitespace or end-of-string. If the final sentence's last non-whitespace character is `?`, classify as `AwaitingAnswer { TrailingQuestionMark }`.
-4. Otherwise, classify as `Complete`.
+**Effective priority** in `classify_activity_with_events`:
 
-**Edge cases covered by the rules:**
+1. `Awaiting` — permission-eligible pending tool ≥3s (excludes question tools)
+2. `AwaitingAnswer` — from `derive_stopped_kind`: question tool pending OR end-of-turn with trailing `?`
+3. `Complete` — from `derive_stopped_kind`: end-of-turn with no question signal
+4. `Stalled` — JSONL quiet >60s mid-tool-chain
+5. PTY recency states
 
-- *Multi-turn:* only the most recent stop_reason-bearing turn is classified. Earlier resolved AskUserQuestion calls don't matter.
-- *Code blocks:* the trailing-`?` check inspects the final sentence of the last *text* block, not code blocks, so trailing code like `assert(x == 1);` cannot trigger a false question.
-- *Resolved question tools:* if a `tool_result` arrived, the agent will have continued — the next stop_reason-bearing turn becomes the candidate for classification.
-- *Stop reason `tool_use`:* this is the permission-flow path, routed to existing `Awaiting`, not touched.
-- *Empty text block + tool_use only:* the tool path resolves it; the text fallback never runs.
-- *Trailing markdown noise:* e.g., ``Want me to refactor `foo`?* `` ends with `*` literally; the strip step removes `*` before the final-char check, so the `?` is detected.
+**Edge cases covered:**
+
+- *Mid-turn AskUserQuestion:* `stop_reason` is `tool_use`, so `is_awaiting_user()` returns false — but the question-tool short-circuit fires first → `AwaitingAnswer`. ✓
+- *Resolved question tools:* once a `tool_result` arrives, the tool_use is removed from `pending_tool_uses`. The next stop_reason-bearing turn becomes the candidate (`is_awaiting_user()` gate).
+- *End-of-turn complete:* `pending_tool_uses` empty, `is_awaiting_user()` true, text doesn't end with `?` → `Complete`. ✓
+- *End-of-turn question (text-based fallback):* same as above but text ends with `?` → `AwaitingAnswer`. ✓
+- *Code blocks:* `last_assistant_text` captures the last *text* content block, not code blocks. Trailing code never trips the heuristic.
+- *Trailing markdown noise:* e.g., ``Want me to refactor `foo`?* `` ends with `*` literally; the trim_end_matches step strips `*` `_` `` ` `` before checking the final char.
+- *Stop reason `tool_use` for non-question tools:* routes to `Awaiting` (permission flow). Unchanged.
 
 ## Bell patterns
 
@@ -126,19 +150,18 @@ Each count is styled to match its row glyph color.
 
 ## Configuration
 
-New settings, added wherever wsx reads config today (near `notifications_enabled` at `app.rs:842`):
+Settings live in the existing `store.get_setting(key)` table (sqlite-backed key/value store), read by `bell_pattern_for` near the existing `notifications_enabled` reader. Per-state bell pattern overrides:
 
-```toml
-[notifications]
-enabled = true                    # existing
-question_bell = "double"          # "single" | "double" | "off"
-complete_bell = "single"          # "single" | "double" | "off"
-permission_bell = "single"        # "single" | "double" | "off"
-stalled_bell = "triple"           # "single" | "double" | "triple" | "off"
-glyph_style = "auto"              # "nerd" | "ascii" | "auto"
-```
+| Key | Default | Accepts |
+|---|---|---|
+| `notification_bell_question` | `double` | `off` \| `single` \| `double` \| `triple` |
+| `notification_bell_complete` | `single` | `off` \| `single` \| `double` \| `triple` |
+| `notification_bell_permission` | `single` | `off` \| `single` \| `double` \| `triple` |
+| `notification_bell_stalled` | `triple` | `off` \| `single` \| `double` \| `triple` |
 
-All have defaults that preserve current behavior. No config migration needed.
+The existing `notifications` setting (default on) still gates whether any bell fires. Unset keys use the defaults above; no config migration needed.
+
+Nerd-font / ASCII glyph selection reuses the existing `nerd_fonts_enabled(&store)` helper; no new setting was added for `glyph_style`.
 
 ## Backward compatibility
 

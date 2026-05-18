@@ -11,6 +11,7 @@ pub mod names;
 pub mod pinned;
 pub mod pm;
 pub mod proc;
+pub mod related;
 pub mod pty;
 pub mod remote;
 pub mod repo;

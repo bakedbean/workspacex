@@ -497,12 +497,34 @@ fn workspace_main_row(
     let git_status = status.map(|s| format_status(&s, nerd)).unwrap_or_default();
     let age = format_age_compact(age_ms);
 
-    let attn = if needs_attention { "!" } else { " " };
+    let attn = if needs_attention {
+        match (awaiting_tool.is_some(), stopped_kind, stalled, nerd) {
+            // Permission prompt — single character, both nerd + ascii.
+            (true, _, _, _) => "!",
+            // Question — nerd-font question circle vs ascii fallback.
+            (false, Some(crate::app::StoppedKind::AwaitingAnswer), _, true) => "\u{f128}",
+            (false, Some(crate::app::StoppedKind::AwaitingAnswer), _, false) => "?",
+            // Complete — nerd-font check circle vs ascii fallback.
+            (false, Some(crate::app::StoppedKind::Complete), _, true) => "\u{f058}",
+            (false, Some(crate::app::StoppedKind::Complete), _, false) => "\u{2713}",
+            // Stalled — keep `!`.
+            (false, None, true, _) => "!",
+            // Defensive default — needs_attention is true but no specific cause;
+            // fall back to `!` so attention is always visible.
+            (false, None, false, _) => "!",
+        }
+    } else {
+        " "
+    };
+    let attn_style = match (awaiting_tool.is_some(), stopped_kind) {
+        (false, Some(crate::app::StoppedKind::Complete)) => theme.ok_style(),
+        _ => theme.warn_style(),
+    };
 
     // Left side: indent + attn + glyph + name + gutter + branch + gutter + git
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push(Span::raw("  ".to_string()));
-    spans.push(Span::styled(attn.to_string(), theme.warn_style()));
+    spans.push(Span::styled(attn.to_string(), attn_style));
     spans.push(Span::raw(format!(" {dot} ")));
     if workspace.yolo {
         // YOLO workspaces auto-approve every tool use; warn-style the name

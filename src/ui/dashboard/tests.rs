@@ -298,6 +298,80 @@ fn renders_event_subline_when_event_present() {
 }
 
 #[test]
+fn renders_question_glyph_for_awaiting_answer() {
+    let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+    let r = repo(1, "demo");
+    let w = workspace(1, 1, "alpha", "alpha");
+    let items = vec![
+        Item::Header { repo: &r },
+        Item::Workspace {
+            repo: &r,
+            workspace: &w,
+            session_running: true,
+            seconds_since_activity: Some(0),
+            has_prior_session: false,
+            status: None,
+            latest_event: None,
+            needs_attention: true,
+            lifecycle: None,
+            awaiting_tool: None,
+            stopped_kind: Some(crate::app::StoppedKind::AwaitingAnswer),
+            stalled: false,
+            proc_count: 0,
+        },
+    ];
+    let mut state = DashboardState::default();
+    term.draw(|f| {
+        render(
+            f,
+            f.area(),
+            &items,
+            None,
+            false, // ASCII (nerd_fonts = false)
+            &t(),
+            &mut state,
+        )
+    })
+    .unwrap();
+    let text = dump(&term, 120, 8);
+    assert!(text.contains("?"), "expected '?' attention marker: {text}");
+    assert!(text.contains("question"), "expected 'question' activity label: {text}");
+}
+
+#[test]
+fn renders_check_glyph_for_complete() {
+    let mut term = Terminal::new(TestBackend::new(120, 8)).unwrap();
+    let r = repo(1, "demo");
+    let w = workspace(1, 1, "alpha", "alpha");
+    let items = vec![
+        Item::Header { repo: &r },
+        Item::Workspace {
+            repo: &r,
+            workspace: &w,
+            session_running: true,
+            seconds_since_activity: Some(0),
+            has_prior_session: false,
+            status: None,
+            latest_event: None,
+            needs_attention: true,
+            lifecycle: None,
+            awaiting_tool: None,
+            stopped_kind: Some(crate::app::StoppedKind::Complete),
+            stalled: false,
+            proc_count: 0,
+        },
+    ];
+    let mut state = DashboardState::default();
+    term.draw(|f| {
+        render(f, f.area(), &items, None, false, &t(), &mut state)
+    })
+    .unwrap();
+    let text = dump(&term, 120, 8);
+    assert!(text.contains("\u{2713}"), "expected '✓' attention marker: {text}");
+    assert!(text.contains("complete"), "expected 'complete' activity label: {text}");
+}
+
+#[test]
 fn selection_skips_event_subline() {
     // When a workspace has a sub-line, the second workspace's main row
     // should still get the correct selection highlight index — i.e.

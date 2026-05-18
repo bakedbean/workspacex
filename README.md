@@ -80,7 +80,7 @@ wsx repo set-related-repos <name> <value-or-@file>
 wsx repo edit-related-repos <name>
 ```
 
-Per-repo list of other wsx-registered repos that workspaces in this repo should reference. Comma-separated names (e.g. `frontend,marketing`). At spawn time wsx looks each name up in the repo registry and passes `--add-dir <source-path>` to claude. Unknown names are silently skipped (logged via `RUST_LOG=wsx=info`).
+Per-repo list of other wsx-registered repos that workspaces in this repo should reference. Comma-separated names (e.g. `frontend,marketing`). At spawn time wsx looks each name up in the repo registry and passes `--add-dir <source-path>` to claude. Unknown names are silently skipped (logged at `warn` level — visible with `RUST_LOG=wsx=warn` or any less-specific filter).
 
 ### Global settings
 

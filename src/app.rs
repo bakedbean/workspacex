@@ -1742,12 +1742,14 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = Some(Modal::RepoSettings { repo_id, selected });
             }
             KeyCode::Enter => {
-                let field = RepoSettingField::ALL[selected.min(5)];
+                let field = RepoSettingField::ALL
+                    [selected.min(RepoSettingField::ALL.len().saturating_sub(1))];
                 app.pending_edit = Some(PendingEdit { repo_id, field });
                 app.modal = None;
             }
             KeyCode::Char('d') => {
-                let field = RepoSettingField::ALL[selected.min(5)];
+                let field = RepoSettingField::ALL
+                    [selected.min(RepoSettingField::ALL.len().saturating_sub(1))];
                 let _ = apply_repo_setting(app, repo_id, field, "");
                 let _ = app.refresh();
                 app.modal = Some(Modal::RepoSettings { repo_id, selected });

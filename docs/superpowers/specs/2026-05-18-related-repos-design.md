@@ -71,12 +71,10 @@ The fragment is concatenated with the existing custom_instructions string (with 
 
 ### Spawn-time plumbing
 
-- **`build_claude_command`** (in `src/pty/session.rs`) gains a 4th parameter: `related: &[(String, PathBuf)]`.
-  - For each path: `cmd.arg("--add-dir"); cmd.arg(path);`
-  - When `related` is non-empty AND `build_read_only_prompt(related)` returns Some, that fragment is folded into the `--append-system-prompt` string (combined with custom_instructions if present, separated by `\n\n`).
-- **`SessionManager::spawn`** gains a `related_dirs: Vec<(String, PathBuf)>` argument, passed through to `build_claude_command`.
-- **`build_spawn_info` in `src/app.rs`** already gathers per-workspace setup info — extended to also resolve the workspace's repo's `related_repos` against `app.repos` via `related::resolve`. The resulting `Vec<(String, PathBuf)>` flows through the existing spawn call chain.
-- **PM session spawn**: PM has no "owning repo" so it gets no related repos. PM lookup is left unchanged.
+- **`SpawnMode`** (in `src/pty/session.rs`) gains an `additional_dirs: Vec<PathBuf>` field on every variant (`Continue`, `Fresh`, `ProjectManager`). Rationale: matches how `custom_instructions` and `yolo` are already carried — keeps related spawn-time configuration in one place rather than threading new function parameters through every spawn caller.
+- **`build_claude_command`** destructures `additional_dirs` from the mode and emits `cmd.arg("--add-dir"); cmd.arg(path);` per entry, placed before the existing `--continue` / `--append-system-prompt` args. The function signature itself is unchanged.
+- **`build_spawn_info` in `src/app.rs`** owns the resolution + folding work: it calls `related::resolve` against `app.repos`, filters self-references, populates `SpawnMode.additional_dirs`, and folds the read-only prompt fragment from `build_read_only_prompt` into `custom_instructions` (which `build_claude_command` then combines with the rename prompt and passes via `--append-system-prompt`).
+- **PM session spawn**: `SpawnMode::ProjectManager.additional_dirs` is always empty. PM has no owning repo, so no related repos resolve.
 
 ### CLI surface
 

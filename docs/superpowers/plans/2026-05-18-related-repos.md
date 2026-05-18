@@ -16,11 +16,11 @@
 
 **Files:**
 - Create: `src/related.rs`
-- Modify: `src/lib.rs` (add `pub mod related;` between `pub mod proc;` and `pub mod pty;` to maintain alphabetical order)
+- Modify: `src/lib.rs` (add `pub mod related;` between `pub mod pty;` and `pub mod remote;` to maintain alphabetical order (pty < related < remote))
 
 - [ ] **Step 1: Add the module to `src/lib.rs`**
 
-Open `src/lib.rs` and insert `pub mod related;` between `pub mod proc;` and `pub mod pty;` to maintain alphabetical order.
+Open `src/lib.rs` and insert `pub mod related;` between `pub mod pty;` and `pub mod remote;` to maintain alphabetical order (pty < related < remote).
 
 - [ ] **Step 2: Write failing tests in `src/related.rs`**
 

@@ -4,6 +4,7 @@ use crate::pty::session::Session;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
+use ratatui::style::Modifier;
 use ratatui::widgets::Paragraph;
 use std::sync::Arc;
 
@@ -42,7 +43,7 @@ pub fn render_panes(
     footer_area: Rect,
     footer_label: &str,
     multi_pane_footer: bool,
-    attention_line: Option<&str>,
+    attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
     theme: &Theme,
 ) -> Vec<Rect> {
@@ -52,14 +53,14 @@ pub fn render_panes(
         render_one_pane(f, pane, show_titles, theme);
     }
 
-    if let Some(text) = attention_line {
-        let line = format!(" ⚠ {text}");
-        f.render_widget(Paragraph::new(line).style(theme.warn_style()), status_area);
+    if let Some(line) = attention_line {
+        let mut spans = vec![Span::raw(" ".to_string())];
+        spans.extend(line.spans);
+        f.render_widget(Paragraph::new(Line::from(spans)), status_area);
     }
 
-    let footer_text = footer_text(footer_label, multi_pane_footer);
     f.render_widget(
-        Paragraph::new(footer_text).style(theme.dim_style()),
+        Paragraph::new(footer_line(footer_label, multi_pane_footer, theme)),
         footer_area,
     );
 
@@ -82,14 +83,33 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
     };
 
     if let Some(area) = title_area {
-        let marker = if pane.focused { '●' } else { '○' };
-        let body = format!(" {marker} {} ", pane.label);
-        let style = if pane.focused {
-            theme.selected_style()
+        // V5-style: ▎ gutter in accent color when focused, idle when not;
+        // workspace name in bold. Focused row gets the selection bg fill
+        // so the focus indicator is unmistakable even at a glance.
+        let gutter_style = if pane.focused {
+            Style::default().fg(theme.waiting)
         } else {
-            theme.dim_style()
+            Style::default().fg(theme.idle)
         };
-        f.render_widget(Paragraph::new(body).style(style), area);
+        let name_style = if pane.focused {
+            theme
+                .selected_style()
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(theme.dim)
+                .add_modifier(Modifier::BOLD)
+        };
+        let row_bg = if pane.focused {
+            Style::default().bg(theme.selected_bg)
+        } else {
+            Style::default()
+        };
+        let spans = vec![
+            Span::styled("▎".to_string(), gutter_style),
+            Span::styled(format!(" {} ", pane.label), name_style),
+        ];
+        f.render_widget(Paragraph::new(Line::from(spans)).style(row_bg), area);
     }
 
     let offset = pane
@@ -138,31 +158,69 @@ pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
     let _ = session.resize(pane_rect.width, pane_rect.height.saturating_sub(title));
 }
 
-fn footer_text(label: &str, multi_pane: bool) -> String {
-    if multi_pane {
-        format!(
-            " {label}   [Ctrl-x] d: close pane, arrows: focus, u: updates, e: edit, t: term, v: diff, k: procs, x: send-Ctrl-x "
-        )
+/// V5-styled footer: workspace label in `header_style`, then the `^x`
+/// leader, then per-keybind chips (`<key>` in dim+bold, ` <label>` in
+/// `path` color), separated by 2 spaces. Matches the dashboard footer's
+/// chip pattern.
+fn footer_line(label: &str, multi_pane: bool, theme: &Theme) -> Line<'static> {
+    let keys: &[(&str, &str)] = if multi_pane {
+        &[
+            ("d", "close-pane"),
+            ("←→", "focus"),
+            ("u", "updates"),
+            ("e", "edit"),
+            ("t", "term"),
+            ("v", "diff"),
+            ("k", "procs"),
+            ("x", "send-^x"),
+        ]
     } else {
-        format!(
-            " {label}   [Ctrl-x] d: detach, u: updates, e: edit, t: term, v: diff, k: procs, x: send-Ctrl-x "
-        )
+        &[
+            ("d", "detach"),
+            ("u", "updates"),
+            ("e", "edit"),
+            ("t", "term"),
+            ("v", "diff"),
+            ("k", "procs"),
+            ("x", "send-^x"),
+        ]
+    };
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 2 + 3);
+    spans.push(Span::raw(" ".to_string()));
+    spans.push(Span::styled(label.to_string(), theme.header_style()));
+    spans.push(Span::raw("   ".to_string()));
+    spans.push(Span::styled(
+        "^x".to_string(),
+        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
+    ));
+    for (key, lbl) in keys {
+        spans.push(Span::raw("  ".to_string()));
+        spans.push(Span::styled(
+            (*key).to_string(),
+            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {lbl}"),
+            Style::default().fg(theme.path),
+        ));
     }
+    Line::from(spans)
 }
 
 /// Compute the clickable Rect for each chip that fits within `area`.
 /// Returns one Rect per chip rendered left-to-right; chips that don't fit
-/// are dropped from the end. The full chip text is `[N] <label>` joined by
-/// 3-space gaps. Labels are individually truncated to 12 columns first.
+/// are dropped from the end. The chip text is `<N> <label>` joined by
+/// 2-space gaps (V5 footer convention). Labels are individually
+/// truncated to 12 columns first.
 pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     let mut rects = Vec::new();
     let mut x = area.x;
     let max_x = area.x.saturating_add(area.width);
-    const GAP: u16 = 3;
+    const GAP: u16 = 2;
     for (i, cmd) in pinned.iter().enumerate().take(9) {
         let label = truncate_label(&cmd.label, 12);
-        // Chip text: "[N] label"  (4 chars for "[N] " plus label chars)
-        let chip_chars = 4 + label.chars().count() as u16;
+        // Chip text: "N label"  (2 chars for "N " plus label chars)
+        let chip_chars = 2 + label.chars().count() as u16;
         if i > 0 {
             x = x.saturating_add(GAP);
         }
@@ -187,14 +245,16 @@ fn render_chip_row(
     theme: &Theme,
 ) -> Vec<Rect> {
     let rects = layout_chip_row(area, pinned);
+    let key_style = Style::default().fg(theme.dim).add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(theme.path);
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 3);
     for (i, (_rect, cmd)) in rects.iter().zip(pinned.iter()).enumerate() {
         if i > 0 {
-            spans.push(Span::raw("   "));
+            spans.push(Span::raw("  ".to_string()));
         }
         let label = truncate_label(&cmd.label, 12);
-        spans.push(Span::styled(format!("[{}]", i + 1), theme.dim_style()));
-        spans.push(Span::raw(format!(" {label}")));
+        spans.push(Span::styled(format!("{}", i + 1), key_style));
+        spans.push(Span::styled(format!(" {label}"), label_style));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
     rects

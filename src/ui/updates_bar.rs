@@ -8,6 +8,9 @@
 
 use crate::events::WorkspaceEvents;
 use crate::store::WorkspaceId;
+use crate::ui::dashboard::status::Status;
+use crate::ui::theme::Theme;
+use ratatui::text::{Line, Span};
 
 /// Activity classification mirrors `app::ActivityState`. Kept here as a
 /// re-export-friendly enum so updates_bar doesn't depend on app.rs.
@@ -70,6 +73,84 @@ pub fn glyph_for_activity(a: ActivityState) -> char {
         // needs_attention) but be safe.
         _ => '⚠',
     }
+}
+
+/// Map the legacy `ActivityState` (used by the alert/bell pipeline) into
+/// the V5 dashboard `Status` vocabulary so the attention line can pick
+/// per-status colors that match the dashboard.
+fn status_for_activity(a: ActivityState) -> Status {
+    match a {
+        ActivityState::AwaitingAnswer => Status::Question,
+        ActivityState::Stalled => Status::Stalled,
+        ActivityState::Awaiting => Status::Question,
+        ActivityState::Complete => Status::Complete,
+        ActivityState::Active => Status::Thinking,
+        ActivityState::Waiting => Status::Waiting,
+        ActivityState::Idle | ActivityState::Off => Status::Idle,
+    }
+}
+
+/// V5-styled variant of `format_attention_line`. Produces a `Line` whose
+/// per-entry glyph is colored by the workspace's V5 `Status`, repo/name
+/// in `path`, age in `dim`, separators in `dim`.
+pub fn format_attention_line_styled(
+    entries: &[AttentionEntry],
+    now_ms: i64,
+    max_width: usize,
+    theme: &Theme,
+) -> Option<Line<'static>> {
+    if entries.is_empty() {
+        return None;
+    }
+    // Compute the visual width of one entry: "<glyph> <repo>/<name> (<age>)".
+    let widths: Vec<usize> = entries
+        .iter()
+        .map(|e| {
+            let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
+            1 + 1 + e.repo_name.chars().count() + 1 + e.name.chars().count()
+                + 2 + age.chars().count() + 1
+        })
+        .collect();
+    let sep_w = 3; // " │ "
+    let mut included = 0usize;
+    let mut total = 0usize;
+    for (i, w) in widths.iter().enumerate() {
+        let s = if i == 0 { 0 } else { sep_w };
+        if total + s + w > max_width {
+            break;
+        }
+        total += s + w;
+        included += 1;
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    // Always render at least one entry; if the first doesn't fit we emit
+    // it as-is and rely on ratatui's clipping.
+    if included == 0 {
+        included = 1;
+    }
+    for (i, e) in entries.iter().take(included).enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" │ ".to_string(), theme.dim_style()));
+        }
+        let status = status_for_activity(e.activity);
+        let glyph = status.glyph().to_string();
+        spans.push(Span::styled(glyph, theme.status_style(status)));
+        spans.push(Span::raw(" ".to_string()));
+        spans.push(Span::styled(
+            format!("{}/{}", e.repo_name, e.name),
+            ratatui::style::Style::default().fg(theme.path),
+        ));
+        let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
+        spans.push(Span::styled(format!(" ({age})"), theme.dim_style()));
+    }
+    let remaining = entries.len().saturating_sub(included);
+    if remaining > 0 {
+        spans.push(Span::styled(
+            format!(" … +{remaining} more"),
+            theme.dim_style(),
+        ));
+    }
+    Some(Line::from(spans))
 }
 
 /// Collect every workspace whose `needs_attention` flag is set, excluding
@@ -408,5 +489,49 @@ mod tests {
         assert_eq!(format_age(3_599_000), "59m");
         assert_eq!(format_age(3_600_000), "1h");
         assert_eq!(format_age(-500), "0s"); // negative delta clamps
+    }
+
+    #[test]
+    fn styled_line_colors_each_entry_by_status() {
+        let theme = Theme::wsx();
+        let entries = vec![
+            AttentionEntry {
+                workspace_id: WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "q".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::AwaitingAnswer,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(2),
+                repo_name: "b".into(),
+                name: "s".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::Stalled,
+            },
+        ];
+        let line =
+            format_attention_line_styled(&entries, 10_000, 200, &theme).expect("line");
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("? a/q"), "first entry glyph + name: {text:?}");
+        assert!(text.contains("! b/s"), "second entry glyph + name: {text:?}");
+        // First glyph span carries the Question color.
+        let q_glyph = &line.spans[0];
+        assert_eq!(q_glyph.content.as_ref(), "?");
+        assert_eq!(q_glyph.style.fg, Some(theme.question));
+        // After "? ", "a/q", " (1s)", " │ ", the next non-sep glyph is "!".
+        // Search for it explicitly.
+        let stalled = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "!")
+            .expect("stalled glyph present");
+        assert_eq!(stalled.style.fg, Some(theme.stalled));
+    }
+
+    #[test]
+    fn styled_line_returns_none_when_empty() {
+        let theme = Theme::wsx();
+        assert!(format_attention_line_styled(&[], 0, 80, &theme).is_none());
     }
 }

@@ -10,6 +10,8 @@ pub mod sparkline;
 pub mod spinner;
 pub mod status;
 
+#[cfg(test)] pub(crate) mod fixture;
+
 // Column widths for the workspace row. Names and branches are truncated
 // or right-padded so the columns align vertically across rows.
 const NAME_WIDTH: usize = 32;

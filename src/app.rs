@@ -1316,6 +1316,31 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         app.focus = crate::ui::PaneFocus::ProjectManager;
         return Ok(());
     }
+    // Filter input mode: while a filter buffer is active, intercept
+    // printable chars, Backspace, and Esc so they edit the buffer
+    // rather than triggering single-key shortcuts like 'n' / 'q' / '/'.
+    // Navigation keys (arrows, Enter, etc.) still flow through.
+    if app.dashboard.filter.is_some() {
+        match k.code {
+            KeyCode::Esc => {
+                app.dashboard.filter = None;
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                if let Some(buf) = app.dashboard.filter.as_mut() {
+                    buf.pop();
+                }
+                return Ok(());
+            }
+            KeyCode::Char(c) if !c.is_control() => {
+                if let Some(buf) = app.dashboard.filter.as_mut() {
+                    buf.push(c);
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) => app.quit = true,
         (KeyCode::Up, _) => {
@@ -1484,6 +1509,67 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 });
             }
         }
+        (KeyCode::Char('g'), _) => {
+            use crate::ui::dashboard::layout::GroupMode;
+            app.dashboard.group_mode = match app.dashboard.group_mode {
+                GroupMode::Repo => GroupMode::Attention,
+                GroupMode::Attention => GroupMode::Repo,
+            };
+        }
+        (KeyCode::Char('z'), _) => {
+            // Toggle fold for the currently-selected repo (or, if a workspace
+            // is selected, the repo that contains it).
+            let target_rid = match app.selected_target() {
+                Some(SelectionTarget::Workspace(wid)) => app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == wid)
+                    .map(|(rid, _)| *rid),
+                Some(SelectionTarget::Repo(rid)) => Some(rid),
+                None => None,
+            };
+            if let Some(rid) = target_rid {
+                let id = rid.0 as u64;
+                let counts = current_repo_counts(app, rid);
+                let currently_expanded = match app.dashboard.folded.get(&id).copied() {
+                    Some(explicit) => !explicit,
+                    None => !crate::ui::dashboard::sort::default_fold(counts),
+                };
+                // Store `true` = folded (i.e. !expanded).
+                app.dashboard.folded.insert(id, currently_expanded);
+            }
+        }
+        (KeyCode::Char('r'), _) => {
+            // Reply shortcut on a Question workspace: attach to it so the
+            // user lands in claude's prompt. A richer dedicated reply
+            // prompt is a follow-up.
+            // TODO: wire a dedicated reply prompt once attach is extracted.
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let is_question = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| {
+                        matches!(
+                            app.classify_status(w),
+                            crate::ui::dashboard::status::Status::Question
+                        )
+                    })
+                    .unwrap_or(false);
+                if is_question {
+                    app.workspace_needs_attention.remove(&id);
+                    if let Some((id, path, mode, repo_path)) = build_spawn_info(app, id) {
+                        maybe_mirror_mcp(app, &repo_path, &path);
+                        let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+                        let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
+                        app.view = View::Attached(AttachedState::single(id));
+                    }
+                }
+            }
+        }
+        (KeyCode::Char('/'), _) => {
+            app.dashboard.filter = Some(String::new());
+        }
         (KeyCode::Char('p'), _) if pm_enabled(&app.store) => {
             if app.pm_visible {
                 // Hide pane; session stays alive.
@@ -1527,6 +1613,21 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         _ => {}
     }
     Ok(())
+}
+
+/// Aggregate the current `StatusCounts` for one repo by classifying each
+/// of its live workspaces. Used by the `z` (fold) keybinding so we can
+/// look up the same default-fold state the renderer would compute.
+fn current_repo_counts(
+    app: &App,
+    rid: crate::store::RepoId,
+) -> crate::ui::dashboard::sort::StatusCounts {
+    let iter = app
+        .workspaces
+        .iter()
+        .filter(|(r, _)| *r == rid)
+        .map(|(_, w)| app.classify_status(w));
+    crate::ui::dashboard::sort::StatusCounts::from_iter(iter)
 }
 
 /// Immediately re-run `proc::scan` and re-bucket. Used after a kill
@@ -2255,7 +2356,13 @@ pub async fn branch_drift_poll(app: SharedApp) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         interval.tick().await;
-        let snapshot: Vec<(WorkspaceId, std::path::PathBuf, String, String)> = {
+        let snapshot: Vec<(
+            WorkspaceId,
+            std::path::PathBuf,
+            String,
+            String,
+            Option<String>,
+        )> = {
             let g = app.lock().await;
             g.workspaces
                 .iter()
@@ -2263,12 +2370,18 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     let repo = g.repos.iter().find(|r| r.id == w.repo_id)?;
                     let prefix =
                         crate::repo::resolve_branch_prefix(repo, &g.store).unwrap_or_default();
-                    Some((w.id, w.worktree_path.clone(), w.branch.clone(), prefix))
+                    Some((
+                        w.id,
+                        w.worktree_path.clone(),
+                        w.branch.clone(),
+                        prefix,
+                        repo.base_branch.clone(),
+                    ))
                 })
                 .collect()
         };
 
-        for (id, path, db_branch, prefix) in snapshot {
+        for (id, path, db_branch, prefix, base_branch) in snapshot {
             if !path.exists() {
                 continue;
             }
@@ -2298,6 +2411,14 @@ pub async fn branch_drift_poll(app: SharedApp) {
             if let Ok(status) = crate::git::workspace_status(&path).await {
                 let mut g = app.lock().await;
                 g.workspace_status.insert(id, status);
+            }
+
+            // 2b) Diff stats vs. base branch (for dashboard +N/-M column).
+            if let Some(base) = base_branch.as_deref() {
+                if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
+                    let mut g = app.lock().await;
+                    g.workspace_diff.insert(id, diff);
+                }
             }
 
             // 3) PR lifecycle — throttled to once per 30s per workspace.

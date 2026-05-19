@@ -99,7 +99,7 @@ pub fn render(
 
     let items = match state.group_mode {
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
-        GroupMode::Attention => render_by_attention(inputs, tick, width, theme),
+        GroupMode::Attention => render_by_attention(inputs, state, tick, width, theme),
     };
     let list = List::new(items).highlight_style(theme.selected_style());
     f.render_stateful_widget(list, chunks[3], &mut state.list_state);
@@ -115,6 +115,20 @@ pub fn render(
     );
 }
 
+/// Case-insensitive substring match against the workspace name, branch,
+/// owning repo name, and the last assistant message (when present).
+fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
+    let needle = filter.to_lowercase();
+    w.row.name.to_lowercase().contains(&needle)
+        || w.row.branch.to_lowercase().contains(&needle)
+        || w.repo.name.to_lowercase().contains(&needle)
+        || w.row
+            .last_message
+            .as_deref()
+            .map(|m| m.to_lowercase().contains(&needle))
+            .unwrap_or(false)
+}
+
 fn render_by_repo<'a>(
     inputs: &DashboardInputs<'a>,
     state: &mut DashboardState,
@@ -122,6 +136,7 @@ fn render_by_repo<'a>(
     width: usize,
     theme: &Theme,
 ) -> Vec<ratatui::widgets::ListItem<'static>> {
+    let filter = state.filter.as_deref().filter(|f| !f.is_empty());
     let mut views: Vec<RepoView<'a>> = inputs
         .repos
         .iter()
@@ -130,6 +145,7 @@ fn render_by_repo<'a>(
                 .workspaces
                 .iter()
                 .filter(|w| w.repo.id == r.id)
+                .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
                 .map(|w| w.row.clone())
                 .collect();
             workspaces.sort_by(|a, b| b.status.priority().cmp(&a.status.priority()));
@@ -157,13 +173,16 @@ fn render_by_repo<'a>(
 
 fn render_by_attention<'a>(
     inputs: &DashboardInputs<'a>,
+    state: &DashboardState,
     tick: u32,
     width: usize,
     theme: &Theme,
 ) -> Vec<ratatui::widgets::ListItem<'static>> {
+    let filter = state.filter.as_deref().filter(|f| !f.is_empty());
     let mut rows: Vec<FlatRow> = inputs
         .workspaces
         .iter()
+        .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
         .map(|w| FlatRow {
             repo_name: w.repo.name.clone(),
             row: w.row.clone(),

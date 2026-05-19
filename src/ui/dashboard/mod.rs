@@ -5,6 +5,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
+pub mod sort;
 pub mod sparkline;
 pub mod spinner;
 pub mod status;

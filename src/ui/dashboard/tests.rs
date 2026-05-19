@@ -160,3 +160,53 @@ fn render_sets_list_state_to_selected_workspace_index() {
         "list_state should have a selected index when selection is set"
     );
 }
+
+#[test]
+fn visible_targets_by_repo_matches_render_order() {
+    use crate::app::SelectionTarget;
+    let fixtures = fixture::repos();
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
+    // Map workspace name → workspace_id so we can assert on names.
+    let id_for: std::collections::HashMap<String, crate::store::WorkspaceId> = workspaces
+        .iter()
+        .map(|w| (w.row.name.clone(), w.workspace_id))
+        .collect();
+    let activity: Vec<u32> = vec![1; 24];
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+    };
+    let state = DashboardState {
+        group_mode: GroupMode::Repo,
+        ..Default::default()
+    };
+    let targets = visible_targets(&inputs, &state);
+    // Repos with question + stalled + waiting are expanded by default;
+    // 'wsx' has the highest noise score and should come first. Its
+    // workspaces should appear in status-priority order
+    // (theme-tokens=Stalled first, then repo-overview=Question,
+    // list-virtualization=Waiting, tech-stack-question=Complete).
+    let wsx_repo_id = inputs.repos.iter().find(|r| r.name == "wsx").unwrap().id;
+    let wsx_header_pos = targets
+        .iter()
+        .position(|t| matches!(t, SelectionTarget::Repo(id) if *id == wsx_repo_id))
+        .expect("wsx header present");
+    // Expect: header, then 4 workspaces in priority order.
+    assert_eq!(
+        targets[wsx_header_pos + 1],
+        SelectionTarget::Workspace(id_for["theme-tokens"]),
+        "stalled first"
+    );
+    assert_eq!(
+        targets[wsx_header_pos + 2],
+        SelectionTarget::Workspace(id_for["repo-overview"]),
+        "question second"
+    );
+}

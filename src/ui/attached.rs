@@ -54,9 +54,7 @@ pub fn render_panes(
     }
 
     if let Some(line) = attention_line {
-        let mut spans = vec![Span::raw(" ".to_string())];
-        spans.extend(line.spans);
-        f.render_widget(Paragraph::new(Line::from(spans)), status_area);
+        f.render_widget(Paragraph::new(line), status_area);
     }
 
     f.render_widget(
@@ -186,7 +184,6 @@ fn footer_line(label: &str, multi_pane: bool, theme: &Theme) -> Line<'static> {
         ]
     };
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 2 + 3);
-    spans.push(Span::raw(" ".to_string()));
     spans.push(Span::styled(label.to_string(), theme.header_style()));
     spans.push(Span::raw("   ".to_string()));
     spans.push(Span::styled(

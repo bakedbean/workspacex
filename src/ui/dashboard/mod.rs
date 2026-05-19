@@ -50,6 +50,10 @@ pub struct DashboardState {
     pub folded: HashMap<u64, bool>,
     pub filter: Option<String>,
     pub selection: Option<SelectionTarget>,
+    /// Index into `App::selectable`. Owned here so that nav handlers in
+    /// `app.rs` can mutate it without touching ratatui internals; the
+    /// renderer uses `selection` (resolved `SelectionTarget`) for display.
+    pub selected: usize,
 }
 
 impl Default for GroupMode {

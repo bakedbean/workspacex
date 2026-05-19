@@ -229,6 +229,16 @@ pub struct App {
     /// worktree). Refreshed every ~10s by branch_drift_poll.
     pub workspace_processes:
         std::collections::HashMap<crate::store::WorkspaceId, Vec<crate::proc::ProcInfo>>,
+    /// Monotonic counter incremented every animation tick. Drives
+    /// dashboard spinner phase + any other tick-driven UI animation.
+    pub tick: u32,
+    /// Cached `git diff --shortstat` output per workspace (added/deleted).
+    /// Populated lazily by the workspace-status poller.
+    pub workspace_diff: std::collections::HashMap<crate::store::WorkspaceId, crate::git::DiffStats>,
+    /// Rolling 24-hour history of `(hour_epoch_secs, max_live_count)` for
+    /// the dashboard footer sparkline. Hydrated from `store.recent_activity_buckets`
+    /// at startup; updated each tick. Newest bucket at the back.
+    pub activity_history: std::collections::VecDeque<(u64, u32)>,
     /// Epoch-ms of last completed `proc::scan` — throttle source.
     pub last_proc_scan_ms: i64,
     /// Set by the repo-settings modal when the user presses Enter on a
@@ -282,6 +292,9 @@ impl App {
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
             workspace_processes: std::collections::HashMap::new(),
+            tick: 0,
+            workspace_diff: std::collections::HashMap::new(),
+            activity_history: std::collections::VecDeque::new(),
             last_proc_scan_ms: 0,
             pending_edit: None,
             theme,
@@ -298,6 +311,10 @@ impl App {
         let _ = app
             .store
             .sweep_stale_pending(std::time::Duration::from_secs(300));
+        // Load up to 24 hours of bucketed activity for the sparkline.
+        if let Ok(buckets) = app.store.recent_activity_buckets(24) {
+            app.activity_history.extend(buckets);
+        }
         app.refresh()?;
         Ok(app)
     }
@@ -360,6 +377,55 @@ impl App {
             }
         }
         oldest.map(|(n, ts)| (n.to_string(), ts))
+    }
+
+    /// Classify a workspace into the V5 dashboard `Status` vocabulary.
+    /// Combines session liveness, JSONL stopped/stalled signals, and
+    /// pending tool_use into one canonical state used by the renderer.
+    pub fn classify_status(
+        &self,
+        ws: &crate::store::Workspace,
+    ) -> crate::ui::dashboard::status::Status {
+        let session = self.sessions.get(ws.id);
+        let running = session.as_ref().is_some_and(|s| {
+            matches!(
+                *s.status.read().unwrap(),
+                crate::pty::session::SessionStatus::Running { .. }
+            )
+        });
+        let secs = session.as_ref().map(|s| {
+            let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+            if last == 0 {
+                return 0;
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            now.saturating_sub(last) / 1000
+        });
+        let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let stopped_kind = self
+            .workspace_events
+            .get(&ws.id)
+            .and_then(derive_stopped_kind);
+        let stalled = self
+            .workspace_events
+            .get(&ws.id)
+            .is_some_and(|e| e.is_stalled(now_ms, 60_000));
+        let awaiting = self.awaiting_permission(ws.id).is_some();
+        crate::ui::dashboard::status::Status::classify(
+            awaiting,
+            stopped_kind,
+            stalled,
+            secs,
+            running,
+            has_prior,
+        )
     }
 }
 
@@ -497,7 +563,43 @@ pub async fn run<B: Backend + std::io::Write>(
         }
 
         tokio::select! {
-            _ = tick.tick() => {}
+            _ = tick.tick() => {
+                let mut g = app.lock().await;
+                g.tick = g.tick.wrapping_add(1);
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let now_hour = now_secs - (now_secs % 3600);
+                let live = g
+                    .workspaces
+                    .iter()
+                    .filter(|(_rid, ws)| {
+                        let s = g.classify_status(ws);
+                        matches!(s,
+                            crate::ui::dashboard::status::Status::Thinking
+                            | crate::ui::dashboard::status::Status::Waiting)
+                    })
+                    .count() as u32;
+                match g.activity_history.back().copied() {
+                    Some((h, prev_max)) if h == now_hour => {
+                        if live > prev_max {
+                            g.activity_history.pop_back();
+                            g.activity_history.push_back((h, live));
+                        }
+                    }
+                    Some(_) | None => {
+                        if let Some((h, m)) = g.activity_history.back().copied() {
+                            let _ = g.store.set_activity_bucket(h, m);
+                        }
+                        g.activity_history.push_back((now_hour, live));
+                        while g.activity_history.len() > 24 {
+                            g.activity_history.pop_front();
+                        }
+                        let _ = g.store.prune_activity_buckets_before(now_hour.saturating_sub(24 * 3600));
+                    }
+                }
+            }
             maybe_evt = events.next() => {
                 let Some(Ok(evt)) = maybe_evt else { break; };
                 let mut g = app.lock().await;
@@ -530,22 +632,17 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 (area, None)
             };
             let notifications_on = notifications_enabled(&app.store);
-            let mut items: Vec<dashboard::Item> = Vec::new();
+            let nerd_fonts = nerd_fonts_enabled(&app.store);
+
+            // Build per-workspace inputs in V5 shape.
+            let mut workspaces: Vec<dashboard::WorkspaceItem<'_>> = Vec::new();
             for repo in &app.repos {
-                items.push(dashboard::Item::Header { repo });
-                let mut count = 0usize;
                 for (rid, ws) in &app.workspaces {
                     if *rid != repo.id {
                         continue;
                     }
-                    count += 1;
+                    let status = app.classify_status(ws);
                     let session = app.sessions.get(ws.id);
-                    let running = session.as_ref().is_some_and(|s| {
-                        matches!(
-                            *s.status.read().unwrap(),
-                            crate::pty::session::SessionStatus::Running { .. }
-                        )
-                    });
                     let secs = session.as_ref().map(|s| {
                         let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
                         if last == 0 {
@@ -557,48 +654,37 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .unwrap_or(0);
                         now.saturating_sub(last) / 1000
                     });
-                    let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
-                    let needs_attention = app.workspace_needs_attention.contains(&ws.id);
-                    let awaiting = app.awaiting_permission(ws.id);
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
-                        .unwrap_or(0);
-                    let stopped_kind = app
+                    let latest = app
                         .workspace_events
                         .get(&ws.id)
-                        .and_then(derive_stopped_kind);
-                    let stalled = app
-                        .workspace_events
-                        .get(&ws.id)
-                        .is_some_and(|e| e.is_stalled(now_ms, 60_000));
-                    items.push(dashboard::Item::Workspace {
-                        repo,
-                        workspace: ws,
-                        session_running: running,
-                        seconds_since_activity: secs,
-                        has_prior_session: has_prior,
-                        status: app.workspace_status.get(&ws.id).copied(),
-                        latest_event: app
-                            .workspace_events
-                            .get(&ws.id)
-                            .and_then(|e| e.latest.clone()),
-                        needs_attention,
-                        stopped_kind,
-                        stalled,
-                        lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
-                        awaiting_tool: awaiting,
-                        proc_count: app
+                        .and_then(|e| e.latest.clone());
+                    let setup_failed = ws.setup_status == crate::store::SetupStatus::Failed;
+                    let row = crate::ui::dashboard::row::RowInputs {
+                        status,
+                        name: ws.name.clone(),
+                        branch: ws.branch.clone(),
+                        procs: app
                             .workspace_processes
                             .get(&ws.id)
-                            .map(|v| v.len())
+                            .map(|v| v.len() as u32)
                             .unwrap_or(0),
+                        diff: app.workspace_diff.get(&ws.id).copied(),
+                        last_message: latest.map(|ev| ev.display),
+                        ago_secs: secs,
+                        selected: matches!(app.selected_target(),
+                            Some(SelectionTarget::Workspace(id)) if id == ws.id),
+                        yolo: ws.yolo,
+                        setup_failed,
+                        lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
+                        nerd_fonts,
+                    };
+                    workspaces.push(dashboard::WorkspaceItem {
+                        repo,
+                        workspace_id: ws.id,
+                        status,
+                        row,
                     });
                 }
-                if count == 0 {
-                    items.push(dashboard::Item::EmptyHint);
-                }
-                items.push(dashboard::Item::Spacer);
             }
 
             // Commit the new activity states. Fires the bell on:
@@ -618,6 +704,12 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // the bell (see `alert_decision`) so the visual marker can
             // surface alertable state without making noise. Does NOT
             // re-fire while an alertable state persists across polls.
+            //
+            // Keeps the legacy `ActivityState` vocabulary (via
+            // `classify_activity_with_events`) for the bell pipeline —
+            // the V5 `Status` enum is for display only and would lose the
+            // `Active`/`Off`/`Awaiting` distinctions `alert_decision`
+            // depends on.
             for (_rid, ws) in &app.workspaces {
                 let session = app.sessions.get(ws.id);
                 let running = session.as_ref().is_some_and(|s| {
@@ -652,12 +744,6 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .is_some_and(|e| e.is_stalled(now_ms, 60_000));
                 let activity =
                     classify_activity_with_events(secs, running, awaiting, stopped_kind, stalled);
-                // Until the tail loop has scanned this workspace's JSONL
-                // at least once the classifier can't see stop_reason, so
-                // `activity` is provisional (typically Active). Recording
-                // it would let the bell loop perceive the first post-scan
-                // classification as a transition and ring on cold start.
-                // See `workspace_events_scanned`.
                 if app.workspace_events_scanned.contains(&ws.id) {
                     let prev = app.workspace_activity.get(&ws.id).copied();
                     let is_cold_start = app.started_at.elapsed() < COLD_START_WINDOW;
@@ -673,16 +759,20 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 }
             }
 
-            let selected = app.selected_target();
-            let nerd_fonts = nerd_fonts_enabled(&app.store);
+            let activity: Vec<u32> = app.activity_history.iter().map(|(_h, m)| *m).collect();
+            let inputs = dashboard::DashboardInputs {
+                repos: app.repos.iter().collect(),
+                workspaces,
+                activity: &activity,
+            };
+            app.dashboard.selection = app.selected_target();
             dashboard::render(
                 f,
                 dashboard_area,
-                &items,
-                selected,
-                nerd_fonts,
-                &app.theme,
+                &inputs,
                 &mut app.dashboard,
+                app.tick,
+                &app.theme,
             );
             if let Some(pm_area) = pm_area {
                 if let Some(session) = app.pm.as_ref() {

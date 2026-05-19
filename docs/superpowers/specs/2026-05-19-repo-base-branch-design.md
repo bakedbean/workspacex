@@ -42,7 +42,7 @@ git::create_worktree(&repo.path, &branch, base, &worktree_path).await?;
 `git::create_worktree` (in `src/git.rs:284`) gains an `Option<&str>` `base` parameter:
 
 - `None` → `git worktree add -b <branch> <path>` (current behavior).
-- `Some(b)` → `git worktree add -b <branch> <b> <path>`.
+- `Some(b)` → `git worktree add -b <branch> <path> <b>` (git's syntax: `<path>` then `<commit-ish>`).
 
 If git rejects the base (typo, missing ref, etc.), the existing failure path applies: the inserted workspace row is set to `Failed`, the error propagates.
 

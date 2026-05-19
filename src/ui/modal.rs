@@ -427,7 +427,7 @@ pub fn render_repo_settings(
     theme: &Theme,
 ) {
     let w = area.width.clamp(40, 90);
-    let h = area.height.clamp(8, 16);
+    let h = area.height.clamp(11, 18);
     let rect = centered(area, w, h);
     f.render_widget(Clear, rect);
 

@@ -5,6 +5,8 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
+pub mod status;
+
 // Column widths for the workspace row. Names and branches are truncated
 // or right-padded so the columns align vertically across rows.
 const NAME_WIDTH: usize = 32;

@@ -14,6 +14,7 @@ pub mod proc;
 pub mod pty;
 pub mod related;
 pub mod remote_control;
+pub mod remotes;
 pub mod repo;
 pub mod setup;
 pub mod store;

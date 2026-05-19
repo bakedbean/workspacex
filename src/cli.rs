@@ -544,12 +544,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let command = crate::remotes::lookup(&store, &name)?.ok_or_else(|| {
                 let available = crate::remotes::list(&store)
                     .ok()
-                    .map(|v| {
-                        v.into_iter()
-                            .map(|r| r.name)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
+                    .map(|v| v.into_iter().map(|r| r.name).collect::<Vec<_>>().join(", "))
                     .unwrap_or_default();
                 if available.is_empty() {
                     Error::UserInput(format!(
@@ -557,9 +552,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                          (add one with: wsx config edit remotes)"
                     ))
                 } else {
-                    Error::UserInput(format!(
-                        "no remote named '{name}'. available: {available}"
-                    ))
+                    Error::UserInput(format!("no remote named '{name}'. available: {available}"))
                 }
             })?;
             use std::os::unix::process::CommandExt;

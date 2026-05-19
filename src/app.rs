@@ -3331,7 +3331,13 @@ mod pm_state_tests {
         };
         let s = app
             .sessions
-            .spawn_pm(&cwd, 80, 24, mode, crate::remote_control::RemoteOpts::disabled())
+            .spawn_pm(
+                &cwd,
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            )
             .unwrap();
         app.pm = Some(s);
         app.view = crate::ui::View::AttachedPm;
@@ -3384,7 +3390,13 @@ mod pm_state_tests {
         };
         let s = app
             .sessions
-            .spawn_pm(&cwd, 80, 24, mode, crate::remote_control::RemoteOpts::disabled())
+            .spawn_pm(
+                &cwd,
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            )
             .unwrap();
         app.pm = Some(s);
         unsafe {

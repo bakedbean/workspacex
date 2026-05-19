@@ -177,9 +177,7 @@ mod tests {
     #[test]
     fn lookup_last_write_wins_for_duplicate_names() {
         let store = Store::open_in_memory().unwrap();
-        store
-            .set_setting("remotes", "h=first\nh=second\n")
-            .unwrap();
+        store.set_setting("remotes", "h=first\nh=second\n").unwrap();
         assert_eq!(lookup(&store, "h").unwrap().as_deref(), Some("second"));
     }
 }

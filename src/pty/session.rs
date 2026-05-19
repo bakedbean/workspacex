@@ -1144,7 +1144,13 @@ mod tests {
             resume: false,
         };
         let s = mgr
-            .spawn_pm(&cwd, 80, 24, mode, crate::remote_control::RemoteOpts::disabled())
+            .spawn_pm(
+                &cwd,
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            )
             .unwrap();
         assert!(mgr.pm().is_some());
         // Second spawn while running is a no-op (returns existing).
@@ -1155,7 +1161,13 @@ mod tests {
             resume: false,
         };
         let s2 = mgr
-            .spawn_pm(&cwd, 80, 24, mode2, crate::remote_control::RemoteOpts::disabled())
+            .spawn_pm(
+                &cwd,
+                80,
+                24,
+                mode2,
+                crate::remote_control::RemoteOpts::disabled(),
+            )
             .unwrap();
         assert!(Arc::ptr_eq(&s, &s2));
         // kill_all also kills PM.

@@ -61,6 +61,10 @@ pub enum CliAction {
     ConfigEdit {
         key: String,
     },
+    RemoteList,
+    RemoteRun {
+        name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -104,6 +108,7 @@ fn known_setting_key(k: &str) -> bool {
             | "remote_control"
             | "remote_control_sandbox"
             | "pinned_commands"
+            | "remotes"
     )
 }
 
@@ -283,6 +288,10 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
             other => Err(Error::UserInput(format!(
                 "unknown config action: {other:?}"
             ))),
+        },
+        Some("remote") => match it.next() {
+            None => Ok(CliAction::RemoteList),
+            Some(name) => Ok(CliAction::RemoteRun { name }),
         },
         Some(other) => Err(Error::UserInput(format!("unknown command: {other}"))),
     }
@@ -521,6 +530,46 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 println!("set {key} ({} chars)", new_value.len());
             }
         }
+        CliAction::RemoteList => {
+            let remotes = crate::remotes::list(&store)?;
+            if remotes.is_empty() {
+                println!("no remotes configured. add one with: wsx config edit remotes");
+                return Ok(());
+            }
+            for r in remotes {
+                println!("{}", r.name);
+            }
+        }
+        CliAction::RemoteRun { name } => {
+            let command = crate::remotes::lookup(&store, &name)?.ok_or_else(|| {
+                let available = crate::remotes::list(&store)
+                    .ok()
+                    .map(|v| {
+                        v.into_iter()
+                            .map(|r| r.name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                if available.is_empty() {
+                    Error::UserInput(format!(
+                        "no remote named '{name}'. no remotes configured \
+                         (add one with: wsx config edit remotes)"
+                    ))
+                } else {
+                    Error::UserInput(format!(
+                        "no remote named '{name}'. available: {available}"
+                    ))
+                }
+            })?;
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .exec();
+            // exec only returns on failure.
+            return Err(Error::UserInput(format!("exec sh: {err}")));
+        }
     }
     Ok(())
 }
@@ -758,5 +807,26 @@ mod tests {
             CliAction::RepoEditRelatedRepos { name } => assert_eq!(name, "backend"),
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_remote_list_no_args() {
+        match parse(&["remote"]).unwrap() {
+            CliAction::RemoteList => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_remote_run_with_name() {
+        match parse(&["remote", "ebenmini"]).unwrap() {
+            CliAction::RemoteRun { name } => assert_eq!(name, "ebenmini"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_remotes_setting_key() {
+        assert!(known_setting_key("remotes"));
     }
 }

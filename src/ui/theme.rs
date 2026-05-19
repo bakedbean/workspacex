@@ -184,7 +184,7 @@ impl Theme {
     /// Look up a theme by name. Unknown names fall back to the default.
     pub fn by_name(name: &str) -> Self {
         match name {
-            "ansi" => Self::ansi(),
+            "ansi" | "default" => Self::ansi(),
             "wsx" => Self::wsx(),
             "dracula" => Self::dracula(),
             "jellybeans" => Self::jellybeans(),

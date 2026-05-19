@@ -62,11 +62,9 @@ pub fn render_panes(
         footer_area,
     );
 
-    if !pinned.is_empty() {
-        render_chip_row(f, chip_area, pinned, theme)
-    } else {
-        Vec::new()
-    }
+    // Chips + inline rule filler. Always renders so the rule shows even
+    // when there are no pinned commands.
+    render_chip_row(f, chip_area, pinned, theme)
 }
 
 fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: &Theme) {
@@ -128,20 +126,22 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
 }
 
 /// Carve the attached view's full `area` into pane / chip / status /
-/// footer sub-areas. Empty-height rects are returned for absent rows so
-/// the caller can pass them straight through to `render_panes`.
+/// footer sub-areas. The chip row is always 1 row tall — it carries
+/// either pinned-command chips followed by a `─` rule filler, or just
+/// the rule when no chips are configured. The rule mirrors the V5
+/// dashboard's repo-header rule, separating the Claude Code area from
+/// the wsx chrome below.
 pub fn layout_chrome(
     area: Rect,
     attention_present: bool,
-    pinned_present: bool,
+    _pinned_present: bool,
 ) -> (Rect, Rect, Rect, Rect) {
-    let chip_h = if pinned_present { 1 } else { 0 };
     let status_h = if attention_present { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
-            Constraint::Length(chip_h),
+            Constraint::Length(1), // chip row (chips + rule filler)
             Constraint::Length(status_h),
             Constraint::Length(1),
         ])
@@ -244,14 +244,34 @@ fn render_chip_row(
     let rects = layout_chip_row(area, pinned);
     let key_style = Style::default().fg(theme.dim).add_modifier(Modifier::BOLD);
     let label_style = Style::default().fg(theme.path);
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 3);
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 3 + 2);
+    let mut used: usize = 0;
     for (i, (_rect, cmd)) in rects.iter().zip(pinned.iter()).enumerate() {
         if i > 0 {
             spans.push(Span::raw("  ".to_string()));
+            used += 2;
         }
         let label = truncate_label(&cmd.label, 12);
-        spans.push(Span::styled(format!("{}", i + 1), key_style));
-        spans.push(Span::styled(format!(" {label}"), label_style));
+        let chip_text = format!("{}", i + 1);
+        spans.push(Span::styled(chip_text, key_style));
+        used += 1;
+        let label_with_space = format!(" {label}");
+        used += label_with_space.chars().count();
+        spans.push(Span::styled(label_with_space, label_style));
+    }
+    // Inline rule filler matching the V5 dashboard repo-header style:
+    // 2 spaces (or 0 when there are no chips), then `─` runs to the
+    // right edge of the row.
+    let width = area.width as usize;
+    if width > used {
+        let gap = if used == 0 { 0 } else { 2 };
+        let rule_len = width.saturating_sub(used + gap);
+        if gap > 0 && rule_len > 0 {
+            spans.push(Span::raw(" ".repeat(gap)));
+        }
+        if rule_len > 0 {
+            spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
+        }
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
     rects

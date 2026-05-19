@@ -185,7 +185,7 @@ pub async fn open_pm(
         additional_dirs: vec![],
         resume,
     };
-    let remote = crate::remote::RemoteOpts::from_store(store);
+    let remote = crate::remote_control::RemoteOpts::from_store(store);
     mgr.spawn_pm(pm_dir, 80, 24, mode, remote)?;
     Ok(())
 }

@@ -1245,7 +1245,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.workspace_needs_attention.remove(&id);
                 if let Some((id, path, mode, repo_path)) = build_spawn_info(app, id) {
                     maybe_mirror_mcp(app, &repo_path, &path);
-                    let remote = crate::remote::RemoteOpts::from_store(&app.store);
+                    let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                     let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
                     app.view = View::Attached(AttachedState::single(id));
                 }
@@ -1964,7 +1964,7 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                         app.workspace_needs_attention.remove(&ws_id);
                         if let Some((id, path, mode, repo_path)) = build_spawn_info(app, ws_id) {
                             maybe_mirror_mcp(app, &repo_path, &path);
-                            let remote = crate::remote::RemoteOpts::from_store(&app.store);
+                            let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
                             app.view = View::Attached(AttachedState::single(id));
                         }
@@ -1985,7 +1985,7 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                         app.workspace_needs_attention.remove(&ws_id);
                         if let Some((id, path, mode, repo_path)) = build_spawn_info(app, ws_id) {
                             maybe_mirror_mcp(app, &repo_path, &path);
-                            let remote = crate::remote::RemoteOpts::from_store(&app.store);
+                            let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
                             match &mut app.view {
                                 View::Attached(state) => {
@@ -2833,7 +2833,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote::RemoteOpts::disabled(),
+                crate::remote_control::RemoteOpts::disabled(),
             )
             .unwrap();
         let second_mode = crate::pty::session::SpawnMode::Fresh {
@@ -2849,7 +2849,7 @@ mod pm_state_tests {
                 80,
                 24,
                 second_mode,
-                crate::remote::RemoteOpts::disabled(),
+                crate::remote_control::RemoteOpts::disabled(),
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(first_id));
@@ -2941,7 +2941,7 @@ mod pm_state_tests {
                     80,
                     24,
                     mode,
-                    crate::remote::RemoteOpts::disabled(),
+                    crate::remote_control::RemoteOpts::disabled(),
                 )
                 .unwrap();
         }
@@ -3036,7 +3036,7 @@ mod pm_state_tests {
                     80,
                     24,
                     mode,
-                    crate::remote::RemoteOpts::disabled(),
+                    crate::remote_control::RemoteOpts::disabled(),
                 )
                 .unwrap();
         }
@@ -3212,7 +3212,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote::RemoteOpts::disabled(),
+                crate::remote_control::RemoteOpts::disabled(),
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
@@ -3284,7 +3284,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote::RemoteOpts::disabled(),
+                crate::remote_control::RemoteOpts::disabled(),
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
@@ -3331,7 +3331,7 @@ mod pm_state_tests {
         };
         let s = app
             .sessions
-            .spawn_pm(&cwd, 80, 24, mode, crate::remote::RemoteOpts::disabled())
+            .spawn_pm(&cwd, 80, 24, mode, crate::remote_control::RemoteOpts::disabled())
             .unwrap();
         app.pm = Some(s);
         app.view = crate::ui::View::AttachedPm;
@@ -3384,7 +3384,7 @@ mod pm_state_tests {
         };
         let s = app
             .sessions
-            .spawn_pm(&cwd, 80, 24, mode, crate::remote::RemoteOpts::disabled())
+            .spawn_pm(&cwd, 80, 24, mode, crate::remote_control::RemoteOpts::disabled())
             .unwrap();
         app.pm = Some(s);
         unsafe {
@@ -3424,7 +3424,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote::RemoteOpts::disabled(),
+                crate::remote_control::RemoteOpts::disabled(),
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(ws_id));

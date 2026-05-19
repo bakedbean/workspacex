@@ -243,7 +243,7 @@ pub enum SpawnMode {
 pub fn build_claude_command(
     cwd: &Path,
     mode: &SpawnMode,
-    remote: crate::remote::RemoteOpts,
+    remote: crate::remote_control::RemoteOpts,
 ) -> CommandBuilder {
     let bin = std::env::var("WSX_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
     let mut cmd = CommandBuilder::new(bin);
@@ -380,7 +380,7 @@ pub fn spawn_session(
     cols: u16,
     rows: u16,
     mode: SpawnMode,
-    remote: crate::remote::RemoteOpts,
+    remote: crate::remote_control::RemoteOpts,
 ) -> Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -497,7 +497,7 @@ impl SessionManager {
         cols: u16,
         rows: u16,
         mode: SpawnMode,
-        remote: crate::remote::RemoteOpts,
+        remote: crate::remote_control::RemoteOpts,
     ) -> Result<Arc<Session>> {
         if let Some(s) = self.sessions.get(&id) {
             if matches!(*s.status.read().unwrap(), SessionStatus::Running { .. }) {
@@ -520,7 +520,7 @@ impl SessionManager {
         cols: u16,
         rows: u16,
         mode: SpawnMode,
-        remote: crate::remote::RemoteOpts,
+        remote: crate::remote_control::RemoteOpts,
     ) -> Result<Arc<Session>> {
         if let Some(existing) = &self.pm {
             if matches!(
@@ -582,7 +582,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote::RemoteOpts::disabled(),
+            crate::remote_control::RemoteOpts::disabled(),
         )
         .unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
@@ -611,7 +611,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote::RemoteOpts::disabled(),
+            crate::remote_control::RemoteOpts::disabled(),
         );
         assert!(result.is_err());
         unsafe {
@@ -643,7 +643,7 @@ mod tests {
                     additional_dirs: vec![],
                     yolo: false,
                 },
-                crate::remote::RemoteOpts::disabled(),
+                crate::remote_control::RemoteOpts::disabled(),
             )
             .unwrap();
         // sh -i would run forever; we just check the session was Running.
@@ -684,7 +684,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote::RemoteOpts::disabled(),
+            crate::remote_control::RemoteOpts::disabled(),
         )
         .unwrap();
 
@@ -719,7 +719,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -753,7 +753,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
         let idx = argv
@@ -777,7 +777,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -796,7 +796,7 @@ mod tests {
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             argv.iter()
@@ -813,7 +813,7 @@ mod tests {
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
         assert!(
@@ -832,7 +832,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -922,7 +922,7 @@ mod tests {
             additional_dirs: vec![],
             resume: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--dangerously-skip-permissions"), "{dbg}");
         assert!(!dbg.contains("--allowedTools"), "{dbg}");
@@ -946,7 +946,7 @@ mod tests {
             additional_dirs: vec![],
             resume: true,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--continue"), "{dbg}");
         unsafe {
@@ -963,7 +963,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let opts = crate::remote::RemoteOpts {
+        let opts = crate::remote_control::RemoteOpts {
             enabled: true,
             sandbox: false,
         };
@@ -989,7 +989,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let opts = crate::remote::RemoteOpts {
+        let opts = crate::remote_control::RemoteOpts {
             enabled: true,
             sandbox: true,
         };
@@ -1011,7 +1011,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -1031,7 +1031,7 @@ mod tests {
             additional_dirs: vec![],
             resume: false,
         };
-        let opts = crate::remote::RemoteOpts {
+        let opts = crate::remote_control::RemoteOpts {
             enabled: true,
             sandbox: false,
         };
@@ -1056,7 +1056,7 @@ mod tests {
             ],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let args: Vec<String> = cmd
             .get_argv()
             .iter()
@@ -1087,7 +1087,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let args: Vec<String> = cmd
             .get_argv()
             .iter()
@@ -1112,7 +1112,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote::RemoteOpts::disabled(),
+            crate::remote_control::RemoteOpts::disabled(),
         )
         .unwrap();
         // Prime cat with some output so activity_ms is populated, then let it settle.
@@ -1144,7 +1144,7 @@ mod tests {
             resume: false,
         };
         let s = mgr
-            .spawn_pm(&cwd, 80, 24, mode, crate::remote::RemoteOpts::disabled())
+            .spawn_pm(&cwd, 80, 24, mode, crate::remote_control::RemoteOpts::disabled())
             .unwrap();
         assert!(mgr.pm().is_some());
         // Second spawn while running is a no-op (returns existing).
@@ -1155,7 +1155,7 @@ mod tests {
             resume: false,
         };
         let s2 = mgr
-            .spawn_pm(&cwd, 80, 24, mode2, crate::remote::RemoteOpts::disabled())
+            .spawn_pm(&cwd, 80, 24, mode2, crate::remote_control::RemoteOpts::disabled())
             .unwrap();
         assert!(Arc::ptr_eq(&s, &s2));
         // kill_all also kills PM.
@@ -1189,7 +1189,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote::RemoteOpts::disabled(),
+            crate::remote_control::RemoteOpts::disabled(),
         )
         .unwrap();
         // Do NOT send any input — cat stays silent, activity_ms never gets set.
@@ -1221,7 +1221,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote::RemoteOpts::disabled(),
+            crate::remote_control::RemoteOpts::disabled(),
         )
         .expect("spawn_session for scrollback test");
         unsafe {

@@ -53,7 +53,14 @@ mod tests {
     use super::*;
 
     fn counts(q: u32, s: u32, w: u32, t: u32, c: u32, i: u32) -> StatusCounts {
-        StatusCounts { question: q, stalled: s, waiting: w, thinking: t, complete: c, idle: i }
+        StatusCounts {
+            question: q,
+            stalled: s,
+            waiting: w,
+            thinking: t,
+            complete: c,
+            idle: i,
+        }
     }
 
     #[test]
@@ -99,7 +106,10 @@ mod tests {
     #[test]
     fn status_counts_from_iter() {
         let c = StatusCounts::from_iter([
-            Status::Question, Status::Stalled, Status::Stalled, Status::Idle,
+            Status::Question,
+            Status::Stalled,
+            Status::Stalled,
+            Status::Idle,
         ]);
         assert_eq!(c.question, 1);
         assert_eq!(c.stalled, 2);

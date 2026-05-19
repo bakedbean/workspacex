@@ -1042,9 +1042,7 @@ fn notifications_enabled(store: &crate::store::Store) -> bool {
 /// clamped to safe min/max. Unset or unparseable values fall back to the
 /// V5 defaults (24 / 28).
 fn read_column_widths(store: &crate::store::Store) -> crate::ui::dashboard::row::ColumnWidths {
-    use crate::ui::dashboard::row::{
-        ColumnWidths, DEFAULT_BRANCH_WIDTH, DEFAULT_NAME_WIDTH,
-    };
+    use crate::ui::dashboard::row::{ColumnWidths, DEFAULT_BRANCH_WIDTH, DEFAULT_NAME_WIDTH};
     let name = store
         .get_setting("dashboard_name_width")
         .ok()

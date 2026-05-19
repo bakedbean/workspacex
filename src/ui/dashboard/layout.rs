@@ -25,7 +25,10 @@ pub fn top_chrome(
     spans.push(Span::styled("wsx", theme.header_style()));
     spans.push(Span::styled(" · dashboard".to_string(), theme.dim_style()));
     spans.push(Span::raw(" ".repeat(6)));
-    spans.push(Span::styled("group: ".to_string(), Style::default().fg(theme.path)));
+    spans.push(Span::styled(
+        "group: ".to_string(),
+        Style::default().fg(theme.path),
+    ));
     spans.push(tab_span("repo", group == GroupMode::Repo, theme));
     spans.push(Span::raw(" ".to_string()));
     spans.push(tab_span("attention", group == GroupMode::Attention, theme));
@@ -70,9 +73,7 @@ pub fn status_strip(counts: StatusCounts, theme: &Theme) -> Line<'static> {
         let value_style = if zero {
             theme.dim_style()
         } else {
-            theme
-                .status_style(*status)
-                .add_modifier(Modifier::BOLD)
+            theme.status_style(*status).add_modifier(Modifier::BOLD)
         };
         let label_style = if zero {
             theme.dim_style()
@@ -94,17 +95,30 @@ pub fn footer(
 ) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let keys = [
-        ("↑↓", "nav"), ("↵", "open"), ("z", "fold"), ("n", "new"),
-        ("e", "edit"), ("t", "term"), ("v", "diff"), ("r", "reply"),
-        ("g", "group"), ("/", "filter"), ("q", "quit"),
+        ("↑↓", "nav"),
+        ("↵", "open"),
+        ("z", "fold"),
+        ("n", "new"),
+        ("e", "edit"),
+        ("t", "term"),
+        ("v", "diff"),
+        ("r", "reply"),
+        ("g", "group"),
+        ("/", "filter"),
+        ("q", "quit"),
     ];
     for (i, (key, label)) in keys.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  ".to_string()));
         }
-        spans.push(Span::styled((*key).to_string(),
-            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD)));
-        spans.push(Span::styled(format!(" {label}"), Style::default().fg(theme.path)));
+        spans.push(Span::styled(
+            (*key).to_string(),
+            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {label}"),
+            Style::default().fg(theme.path),
+        ));
     }
 
     let spark = sparkline::render(activity_samples, 24);
@@ -140,7 +154,12 @@ mod tests {
     fn status_strip_includes_all_six_cells_with_zero_counts() {
         let theme = Theme::wsx();
         let counts = StatusCounts {
-            question: 2, stalled: 1, waiting: 2, thinking: 2, complete: 3, idle: 4,
+            question: 2,
+            stalled: 1,
+            waiting: 2,
+            thinking: 2,
+            complete: 3,
+            idle: 4,
         };
         let line = status_strip(counts, &theme);
         let t = text(&line);

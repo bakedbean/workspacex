@@ -277,7 +277,10 @@ pub(super) mod tests {
     fn parse_shortstat_both() {
         assert_eq!(
             parse_shortstat(" 5 files changed, 32 insertions(+), 12 deletions(-)\n"),
-            Some(DiffStats { added: 32, removed: 12 })
+            Some(DiffStats {
+                added: 32,
+                removed: 12
+            })
         );
     }
 
@@ -285,7 +288,10 @@ pub(super) mod tests {
     fn parse_shortstat_only_insertions() {
         assert_eq!(
             parse_shortstat(" 1 file changed, 18 insertions(+)\n"),
-            Some(DiffStats { added: 18, removed: 0 })
+            Some(DiffStats {
+                added: 18,
+                removed: 0
+            })
         );
     }
 
@@ -293,14 +299,29 @@ pub(super) mod tests {
     fn parse_shortstat_only_deletions() {
         assert_eq!(
             parse_shortstat(" 2 files changed, 4 deletions(-)\n"),
-            Some(DiffStats { added: 0, removed: 4 })
+            Some(DiffStats {
+                added: 0,
+                removed: 4
+            })
         );
     }
 
     #[test]
     fn parse_shortstat_empty_returns_zero() {
-        assert_eq!(parse_shortstat(""), Some(DiffStats { added: 0, removed: 0 }));
-        assert_eq!(parse_shortstat("\n"), Some(DiffStats { added: 0, removed: 0 }));
+        assert_eq!(
+            parse_shortstat(""),
+            Some(DiffStats {
+                added: 0,
+                removed: 0
+            })
+        );
+        assert_eq!(
+            parse_shortstat("\n"),
+            Some(DiffStats {
+                added: 0,
+                removed: 0
+            })
+        );
     }
 
     #[test]
@@ -431,7 +452,10 @@ pub struct DiffStats {
 pub fn parse_shortstat(s: &str) -> Option<DiffStats> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
-        return Some(DiffStats { added: 0, removed: 0 });
+        return Some(DiffStats {
+            added: 0,
+            removed: 0,
+        });
     }
     let mut added: u32 = 0;
     let mut removed: u32 = 0;
@@ -466,10 +490,7 @@ pub fn parse_shortstat(s: &str) -> Option<DiffStats> {
 
 /// Compute line-count diff stats for a worktree against `base`.
 /// Returns `None` on any git failure (missing base ref, etc.).
-pub async fn workspace_diff_stats(
-    worktree: &std::path::Path,
-    base: &str,
-) -> Option<DiffStats> {
+pub async fn workspace_diff_stats(worktree: &std::path::Path, base: &str) -> Option<DiffStats> {
     let out = tokio::process::Command::new("git")
         .arg("-C")
         .arg(worktree)

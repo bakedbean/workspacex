@@ -43,7 +43,7 @@ mod tests {
     #[test]
     fn long_input_keeps_tail() {
         // 10 samples, render last 3.
-        let out = render(&[0,0,0,0,0,0,0,1,2,3], 3);
+        let out = render(&[0, 0, 0, 0, 0, 0, 0, 1, 2, 3], 3);
         assert_eq!(out.chars().count(), 3);
         // last 3 are 1,2,3 with max=3 → ⌊7/3⌋=2 (▃), ⌊14/3⌋=4 (▅), 7 (█)
         let chars: Vec<char> = out.chars().collect();

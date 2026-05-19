@@ -88,13 +88,9 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
             Style::default().fg(theme.idle)
         };
         let name_style = if pane.focused {
-            theme
-                .selected_style()
-                .add_modifier(Modifier::BOLD)
+            theme.selected_style().add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
-                .fg(theme.dim)
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD)
         };
         let row_bg = if pane.focused {
             Style::default().bg(theme.selected_bg)

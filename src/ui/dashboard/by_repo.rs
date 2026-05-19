@@ -3,7 +3,7 @@
 //! workspace rows underneath when expanded.
 
 use crate::ui::dashboard::row::{self, RowInputs};
-use crate::ui::dashboard::sort::{noise_score, StatusCounts};
+use crate::ui::dashboard::sort::{StatusCounts, noise_score};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::style::Modifier;
@@ -123,13 +123,19 @@ mod tests {
     use crate::ui::dashboard::fixture;
 
     fn make_view<'a>(r: &'a fixture::FixtureRepo, id: u64, expanded: bool) -> RepoView<'a> {
-        let mut workspaces: Vec<RowInputs> = r.workspaces.iter().enumerate().map(|(i, w)| {
-            RowInputs {
+        let mut workspaces: Vec<RowInputs> = r
+            .workspaces
+            .iter()
+            .enumerate()
+            .map(|(i, w)| RowInputs {
                 status: w.status,
                 name: w.name.clone(),
                 branch: w.branch.clone(),
                 procs: w.procs,
-                diff: Some(crate::git::DiffStats { added: w.diff_added, removed: w.diff_removed }),
+                diff: Some(crate::git::DiffStats {
+                    added: w.diff_added,
+                    removed: w.diff_removed,
+                }),
                 last_message: w.last_message.clone(),
                 ago_secs: w.ago_secs,
                 selected: i == 0,
@@ -138,8 +144,8 @@ mod tests {
                 lifecycle: None,
                 nerd_fonts: false,
                 workspace_id: crate::store::WorkspaceId(i as i64),
-            }
-        }).collect();
+            })
+            .collect();
         workspaces.sort_by(|a, b| b.status.priority().cmp(&a.status.priority()));
         let counts = StatusCounts::from_iter(workspaces.iter().map(|w| w.status));
         RepoView {
@@ -181,7 +187,10 @@ mod tests {
         let view = make_view(frontend, 2, false);
         let line = header_line(&view, 120, &theme);
         let t = header_text(&line);
-        assert!(t.starts_with("  frontend"), "no fold glyph for empty: {t:?}");
+        assert!(
+            t.starts_with("  frontend"),
+            "no fold glyph for empty: {t:?}"
+        );
         assert!(t.contains("no workspaces"));
     }
 

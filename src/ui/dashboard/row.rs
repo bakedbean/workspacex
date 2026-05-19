@@ -92,7 +92,10 @@ pub fn render(
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     // 1: gutter
-    spans.push(Span::styled("▎".to_string(), theme.status_style(inputs.status)));
+    spans.push(Span::styled(
+        "▎".to_string(),
+        theme.status_style(inputs.status),
+    ));
 
     // 2: elbow
     spans.push(Span::styled("├  ".to_string(), theme.dim_style()));
@@ -108,7 +111,10 @@ pub fn render(
     while display_width(&glyph_padded) < GLYPH_WIDTH {
         glyph_padded.push(' ');
     }
-    spans.push(Span::styled(glyph_padded, theme.status_style(inputs.status)));
+    spans.push(Span::styled(
+        glyph_padded,
+        theme.status_style(inputs.status),
+    ));
 
     // 4: name (with setup-failed badge and YOLO/selected styling)
     let name_target = if inputs.setup_failed {
@@ -135,7 +141,8 @@ pub fn render(
         format!("⎇ {}", inputs.branch)
     };
     let branch_padded = truncate_pad(&branch_text, branch_width);
-    let branch_style = lifecycle_style(inputs.lifecycle, theme).unwrap_or_else(|| theme.dim_style());
+    let branch_style =
+        lifecycle_style(inputs.lifecycle, theme).unwrap_or_else(|| theme.dim_style());
     spans.push(Span::styled(branch_padded, branch_style));
 
     // 6: procs
@@ -161,8 +168,13 @@ pub fn render(
     spans.push(Span::styled(diff_padded, theme.dim_style()));
 
     // 8: message (flex)
-    let left_consumed = GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH
-        + name_width + branch_width + PROCS_WIDTH + DIFF_WIDTH;
+    let left_consumed = GUTTER_WIDTH
+        + ELBOW_WIDTH
+        + GLYPH_WIDTH
+        + name_width
+        + branch_width
+        + PROCS_WIDTH
+        + DIFF_WIDTH;
     let right_consumed = AGE_WIDTH;
     let message_width = total_width
         .saturating_sub(left_consumed + right_consumed)
@@ -170,7 +182,10 @@ pub fn render(
     if let Some(msg) = inputs.last_message.as_deref() {
         let prefix = "└ ";
         let body = truncate(msg, message_width.saturating_sub(prefix.chars().count()));
-        spans.push(Span::styled(prefix.to_string(), theme.status_style(inputs.status)));
+        spans.push(Span::styled(
+            prefix.to_string(),
+            theme.status_style(inputs.status),
+        ));
         let body_padded = right_pad(&body, message_width.saturating_sub(prefix.chars().count()));
         spans.push(Span::styled(body_padded, theme.dim_style()));
     } else {
@@ -221,7 +236,9 @@ fn truncate(s: &str, target: usize) -> String {
 
 fn right_pad(s: &str, target: usize) -> String {
     let len = s.chars().count();
-    if len >= target { s.to_string() } else {
+    if len >= target {
+        s.to_string()
+    } else {
         let mut out = s.to_string();
         out.push_str(&" ".repeat(target - len));
         out
@@ -230,7 +247,9 @@ fn right_pad(s: &str, target: usize) -> String {
 
 fn left_pad(s: &str, target: usize) -> String {
     let len = s.chars().count();
-    if len >= target { s.to_string() } else {
+    if len >= target {
+        s.to_string()
+    } else {
         let mut out = " ".repeat(target - len);
         out.push_str(s);
         out
@@ -261,7 +280,10 @@ mod tests {
             name: "repo-overview".into(),
             branch: "bakedbean/repo-overview".into(),
             procs: 2,
-            diff: Some(DiffStats { added: 12, removed: 3 }),
+            diff: Some(DiffStats {
+                added: 12,
+                removed: 3,
+            }),
             last_message: Some("I have enough to give you a grounded tour.".into()),
             ago_secs: Some(29),
             selected: false,
@@ -285,7 +307,10 @@ mod tests {
         assert!(text.starts_with("▎"), "gutter first: {text:?}");
         assert!(text.contains("? "), "static glyph for non-live status");
         assert!(text.contains("repo-overview"), "name present");
-        assert!(text.contains("⎇ bakedbean/repo-overview"), "branch with glyph");
+        assert!(
+            text.contains("⎇ bakedbean/repo-overview"),
+            "branch with glyph"
+        );
         assert!(text.contains("● 2p"), "procs cell");
         assert!(text.contains("+12 −3"), "diff cell");
         assert!(text.contains("└ I have enough"), "message prefix");
@@ -352,7 +377,10 @@ mod tests {
         inputs.nerd_fonts = true;
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
-        assert!(text.contains("\u{e0a0}"), "nerd font branch glyph: {text:?}");
+        assert!(
+            text.contains("\u{e0a0}"),
+            "nerd font branch glyph: {text:?}"
+        );
     }
 
     #[test]
@@ -385,9 +413,13 @@ mod tests {
         // earlier OR the diff cell content stays the same.
         // The simplest invariant: the branch substring fits more
         // characters in the wide case.
-        assert!(wide_text.contains("very-long-branch-name-that-take"),
-            "wide branch shows more of the name: {wide_text:?}");
-        assert!(!narrow_text.contains("very-long-branch-name-that-take"),
-            "narrow branch truncates: {narrow_text:?}");
+        assert!(
+            wide_text.contains("very-long-branch-name-that-take"),
+            "wide branch shows more of the name: {wide_text:?}"
+        );
+        assert!(
+            !narrow_text.contains("very-long-branch-name-that-take"),
+            "narrow branch truncates: {narrow_text:?}"
+        );
     }
 }

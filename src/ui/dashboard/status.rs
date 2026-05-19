@@ -144,7 +144,14 @@ mod tests {
     #[test]
     fn awaiting_answer_maps_to_question() {
         assert_eq!(
-            Status::classify(false, Some(StoppedKind::AwaitingAnswer), false, s(1), true, true),
+            Status::classify(
+                false,
+                Some(StoppedKind::AwaitingAnswer),
+                false,
+                s(1),
+                true,
+                true
+            ),
             Status::Question
         );
     }

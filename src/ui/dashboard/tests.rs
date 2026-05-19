@@ -43,7 +43,10 @@ fn build_inputs<'a>(
                     name: w.name.clone(),
                     branch: w.branch.clone(),
                     procs: w.procs,
-                    diff: Some(crate::git::DiffStats { added: w.diff_added, removed: w.diff_removed }),
+                    diff: Some(crate::git::DiffStats {
+                        added: w.diff_added,
+                        removed: w.diff_removed,
+                    }),
                     last_message: w.last_message.clone(),
                     ago_secs: w.ago_secs,
                     selected: false,
@@ -74,11 +77,15 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
     };
-    let mut state = DashboardState { group_mode: group, ..Default::default() };
+    let mut state = DashboardState {
+        group_mode: group,
+        ..Default::default()
+    };
     let theme = Theme::wsx();
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme)).unwrap();
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+        .unwrap();
     let buf = term.backend().buffer().clone();
     (0..buf.area.height)
         .map(|y| {
@@ -96,7 +103,10 @@ fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
     assert!(joined.contains("wsx · dashboard"), "{joined}");
     assert!(joined.contains("? 2 question"), "status strip: {joined}");
     assert!(joined.contains("▾ wsx"), "wsx repo header: {joined}");
-    assert!(joined.contains("theme-tokens"), "stalled workspace row: {joined}");
+    assert!(
+        joined.contains("theme-tokens"),
+        "stalled workspace row: {joined}"
+    );
     assert!(joined.contains("24h "), "footer sparkline label");
 }
 
@@ -108,8 +118,10 @@ fn by_attention_render_emits_section_headers() {
     assert!(joined.contains("● WORKING"), "{joined}");
     assert!(joined.contains("✓ RECENT"), "{joined}");
     assert!(joined.contains("  QUIET REPOS"), "{joined}");
-    assert!(joined.contains("wsx/theme-tokens") || joined.contains("wsx/repo-overview"),
-        "flat row repo/name format");
+    assert!(
+        joined.contains("wsx/theme-tokens") || joined.contains("wsx/repo-overview"),
+        "flat row repo/name format"
+    );
 }
 
 #[test]
@@ -141,7 +153,8 @@ fn render_sets_list_state_to_selected_workspace_index() {
     let theme = Theme::wsx();
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme)).unwrap();
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+        .unwrap();
     assert!(
         state.list_state.selected().is_some(),
         "list_state should have a selected index when selection is set"

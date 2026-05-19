@@ -3,7 +3,8 @@
 
 pub mod by_attention;
 pub mod by_repo;
-#[cfg(test)] pub(crate) mod fixture;
+#[cfg(test)]
+pub(crate) mod fixture;
 pub mod layout;
 pub mod row;
 pub mod sort;
@@ -17,7 +18,7 @@ use crate::ui::dashboard::by_attention::{AttentionData, FlatRow, QuietRepo};
 use crate::ui::dashboard::by_repo::RepoView;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::row::RowInputs;
-use crate::ui::dashboard::sort::{default_fold, StatusCounts};
+use crate::ui::dashboard::sort::{StatusCounts, default_fold};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -58,7 +59,9 @@ pub struct DashboardState {
 }
 
 impl Default for GroupMode {
-    fn default() -> Self { GroupMode::Repo }
+    fn default() -> Self {
+        GroupMode::Repo
+    }
 }
 
 pub fn render(
@@ -227,8 +230,8 @@ fn render_by_attention<'a>(
             .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
             .collect();
         let count = repo_rows.len();
-        let all_idle = !repo_rows.is_empty()
-            && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
+        let all_idle =
+            !repo_rows.is_empty() && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
         let repo_matches_filter = filter
             .map(|f| r.name.to_lowercase().contains(&f.to_lowercase()))
             .unwrap_or(true);
@@ -245,16 +248,35 @@ fn render_by_attention<'a>(
         }
     }
     let data = AttentionData {
-        needs_attention: rows.iter().filter(|r| matches!(r.row.status,
-            Status::Question | Status::Stalled | Status::Waiting)).cloned().collect(),
-        working: rows.iter().filter(|r| matches!(r.row.status, Status::Thinking)).cloned().collect(),
-        recent: rows.iter().filter(|r| matches!(r.row.status, Status::Complete)).cloned().collect(),
-        idle: rows.iter().filter(|r| matches!(r.row.status, Status::Idle))
+        needs_attention: rows
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.row.status,
+                    Status::Question | Status::Stalled | Status::Waiting
+                )
+            })
+            .cloned()
+            .collect(),
+        working: rows
+            .iter()
+            .filter(|r| matches!(r.row.status, Status::Thinking))
+            .cloned()
+            .collect(),
+        recent: rows
+            .iter()
+            .filter(|r| matches!(r.row.status, Status::Complete))
+            .cloned()
+            .collect(),
+        idle: rows
+            .iter()
+            .filter(|r| matches!(r.row.status, Status::Idle))
             .filter(|r| {
                 // Idle rows from quiet repos already appear under QUIET REPOS.
                 !quiet.iter().any(|q| q.name == r.repo_name)
             })
-            .cloned().collect(),
+            .cloned()
+            .collect(),
         quiet_repos: quiet,
     };
 

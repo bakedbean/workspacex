@@ -70,12 +70,18 @@ fn section_header(
     let count_span = Span::styled(count_str.clone(), theme.dim_style());
     let used = label.chars().count() + count_str.chars().count() + meta_str.chars().count();
     let rule = width.saturating_sub(used + 3).max(1);
-    let mut spans = vec![label_span, count_span, Span::raw(" ".to_string()),
+    let mut spans = vec![
+        label_span,
+        count_span,
+        Span::raw(" ".to_string()),
         Span::styled("─".repeat(rule), theme.dim_style()),
         Span::raw(" ".to_string()),
     ];
     if !meta_str.is_empty() {
-        spans.push(Span::styled(meta_str.to_string(), Style::default().fg(theme.path)));
+        spans.push(Span::styled(
+            meta_str.to_string(),
+            Style::default().fg(theme.path),
+        ));
     }
     Line::from(spans)
 }
@@ -85,10 +91,17 @@ fn quiet_line(q: &QuietRepo, width: usize, theme: &Theme) -> Line<'static> {
     spans.push(Span::styled("▎".to_string(), theme.dim_style()));
     spans.push(Span::raw("  ·  ".to_string()));
     let mut name_padded = q.name.clone();
-    while name_padded.chars().count() < 18 { name_padded.push(' '); }
-    spans.push(Span::styled(name_padded, Style::default().fg(theme.dim).add_modifier(Modifier::BOLD)));
+    while name_padded.chars().count() < 18 {
+        name_padded.push(' ');
+    }
+    spans.push(Span::styled(
+        name_padded,
+        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
+    ));
     let mut path_padded = q.path.clone();
-    while path_padded.chars().count() < 36 { path_padded.push(' '); }
+    while path_padded.chars().count() < 36 {
+        path_padded.push(' ');
+    }
     spans.push(Span::styled(path_padded, theme.dim_style()));
     let suffix = if q.workspace_count == 0 {
         "no workspaces · press n to create".to_string()
@@ -197,8 +210,8 @@ pub fn render_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::dashboard::fixture;
     use crate::git::DiffStats;
+    use crate::ui::dashboard::fixture;
 
     fn make_rows() -> Vec<FlatRow> {
         let repos = fixture::repos();
@@ -212,7 +225,10 @@ mod tests {
                         name: w.name.clone(),
                         branch: w.branch.clone(),
                         procs: w.procs,
-                        diff: Some(DiffStats { added: w.diff_added, removed: w.diff_removed }),
+                        diff: Some(DiffStats {
+                            added: w.diff_added,
+                            removed: w.diff_removed,
+                        }),
                         last_message: w.last_message.clone(),
                         ago_secs: w.ago_secs,
                         selected: false,
@@ -232,7 +248,12 @@ mod tests {
         let repos = fixture::repos();
         repos
             .iter()
-            .filter(|r| r.workspaces.is_empty() || r.workspaces.iter().all(|w| matches!(w.status, Status::Idle)))
+            .filter(|r| {
+                r.workspaces.is_empty()
+                    || r.workspaces
+                        .iter()
+                        .all(|w| matches!(w.status, Status::Idle))
+            })
             .map(|r| QuietRepo {
                 name: r.name.clone(),
                 path: r.path.clone(),
@@ -302,7 +323,10 @@ mod tests {
                 name: "repo-overview".into(),
                 branch: "bakedbean/repo-overview".into(),
                 procs: 2,
-                diff: Some(DiffStats { added: 12, removed: 3 }),
+                diff: Some(DiffStats {
+                    added: 12,
+                    removed: 3,
+                }),
                 last_message: Some("hi".into()),
                 ago_secs: Some(29),
                 selected: false,

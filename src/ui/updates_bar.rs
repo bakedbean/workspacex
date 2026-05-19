@@ -107,8 +107,13 @@ pub fn format_attention_line_styled(
         .iter()
         .map(|e| {
             let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
-            1 + 1 + e.repo_name.chars().count() + 1 + e.name.chars().count()
-                + 2 + age.chars().count() + 1
+            1 + 1
+                + e.repo_name.chars().count()
+                + 1
+                + e.name.chars().count()
+                + 2
+                + age.chars().count()
+                + 1
         })
         .collect();
     let sep_w = 3; // " │ "
@@ -510,11 +515,13 @@ mod tests {
                 activity: ActivityState::Stalled,
             },
         ];
-        let line =
-            format_attention_line_styled(&entries, 10_000, 200, &theme).expect("line");
+        let line = format_attention_line_styled(&entries, 10_000, 200, &theme).expect("line");
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("? a/q"), "first entry glyph + name: {text:?}");
-        assert!(text.contains("! b/s"), "second entry glyph + name: {text:?}");
+        assert!(
+            text.contains("! b/s"),
+            "second entry glyph + name: {text:?}"
+        );
         // First glyph span carries the Question color.
         let q_glyph = &line.spans[0];
         assert_eq!(q_glyph.content.as_ref(), "?");

@@ -25,11 +25,11 @@ pub struct Theme {
     pub merged: Color,
     /// 6-state status palette per the V5 design tokens.
     pub question: Color,
-    pub stalled:  Color,
-    pub waiting:  Color,
+    pub stalled: Color,
+    pub waiting: Color,
     pub thinking: Color,
     pub complete: Color,
-    pub idle:     Color,
+    pub idle: Color,
 }
 
 impl Theme {
@@ -73,11 +73,11 @@ impl Theme {
             attention: Color::Rgb(0xb7, 0x8c, 0xd0),
             merged: Color::Rgb(0xb7, 0x8c, 0xd0),
             question: Color::Rgb(0xe4, 0xba, 0x6c),
-            stalled:  Color::Rgb(0xd3, 0x62, 0x58),
-            waiting:  Color::Rgb(0x6e, 0xa7, 0xd8),
+            stalled: Color::Rgb(0xd3, 0x62, 0x58),
+            waiting: Color::Rgb(0x6e, 0xa7, 0xd8),
             thinking: Color::Rgb(0xb7, 0x8c, 0xd0),
             complete: Color::Rgb(0x67, 0xc0, 0x89),
-            idle:     Color::Rgb(0x7a, 0x7e, 0x85),
+            idle: Color::Rgb(0x7a, 0x7e, 0x85),
         }
     }
 
@@ -105,11 +105,11 @@ impl Theme {
             attention: pink,
             merged: purple,
             question: yellow,
-            stalled:  red,
-            waiting:  cyan,
+            stalled: red,
+            waiting: cyan,
             thinking: purple,
             complete: green,
-            idle:     comment,
+            idle: comment,
         }
     }
 
@@ -139,11 +139,11 @@ impl Theme {
             attention: purple,
             merged: purple,
             question: orange,
-            stalled:  red,
-            waiting:  blue,
+            stalled: red,
+            waiting: blue,
             thinking: purple,
             complete: green,
-            idle:     gray,
+            idle: gray,
         }
     }
 
@@ -173,11 +173,11 @@ impl Theme {
             attention: aurora_orange,
             merged: aurora_purple,
             question: aurora_yellow,
-            stalled:  aurora_red,
-            waiting:  frost1,
+            stalled: aurora_red,
+            waiting: frost1,
             thinking: aurora_purple,
             complete: aurora_green,
-            idle:     polar3,
+            idle: polar3,
         }
     }
 

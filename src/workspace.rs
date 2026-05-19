@@ -35,6 +35,16 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     };
     let worktree_path = worktree_base.join(&repo.name).join(&name);
 
+    let base = repo
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    // Fetch before inserting the workspace row so a fetch failure
+    // (network down, bad remote ref) doesn't leave an orphan Pending row.
+    git::fetch_for_base(&repo.path, base).await?;
+
     let id = store.insert_workspace(&NewWorkspace {
         repo_id: repo.id,
         name: &name,
@@ -43,7 +53,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         yolo,
     })?;
 
-    if let Err(e) = git::create_worktree(&repo.path, &branch, None, &worktree_path).await {
+    if let Err(e) = git::create_worktree(&repo.path, &branch, base, &worktree_path).await {
         store.set_workspace_state(id, WorkspaceState::Failed)?;
         return Err(e);
     }
@@ -482,5 +492,61 @@ mod tests {
         .await
         .unwrap();
         assert!(marker.exists(), "archive script did not run");
+    }
+
+    #[tokio::test]
+    async fn create_branches_off_configured_base() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        // Add a second commit on main so HEAD advances.
+        let r = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(repo_dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        std::fs::write(repo_dir.path().join("b.txt"), "v1").unwrap();
+        r(&["add", "b.txt"]);
+        r(&["commit", "-q", "-m", "add b"]);
+        let prev_out = std::process::Command::new("git")
+            .current_dir(repo_dir.path())
+            .args(["rev-parse", "HEAD~1"])
+            .output()
+            .unwrap();
+        let prev_sha = String::from_utf8_lossy(&prev_out.stdout).trim().to_string();
+        r(&["branch", "staging", &prev_sha]);
+
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        store
+            .set_repo_base_branch(id, Some("staging"))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let wt_root = TempDir::new().unwrap();
+
+        let created = create(&store, &repo, Some("from-staging"), wt_root.path(), false, |_| {})
+            .await
+            .unwrap();
+
+        let head = std::process::Command::new("git")
+            .current_dir(&created.workspace.worktree_path)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let wt_head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        assert_eq!(
+            wt_head, prev_sha,
+            "workspace should be at staging's commit, not main HEAD"
+        );
     }
 }

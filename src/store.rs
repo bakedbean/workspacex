@@ -178,6 +178,10 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 7", [])?;
         }
+        if v < 8 {
+            self.conn.execute_batch(SCHEMA_V8_ACTIVITY_BUCKETS)?;
+            self.conn.execute("PRAGMA user_version = 8", [])?;
+        }
         Ok(())
     }
 
@@ -315,6 +319,41 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    pub fn set_activity_bucket(&self, hour_epoch: u64, max_live: u32) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO activity_buckets (hour_epoch, max_live) VALUES (?1, ?2)
+             ON CONFLICT(hour_epoch) DO UPDATE SET max_live = excluded.max_live",
+            rusqlite::params![hour_epoch as i64, max_live as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Return up to `limit` most-recent buckets in ascending hour order.
+    pub fn recent_activity_buckets(&self, limit: usize) -> Result<Vec<(u64, u32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT hour_epoch, max_live FROM activity_buckets
+             ORDER BY hour_epoch DESC LIMIT ?1",
+        )?;
+        let mut rows: Vec<(u64, u32)> = stmt
+            .query_map(rusqlite::params![limit as i64], |r| {
+                let h: i64 = r.get(0)?;
+                let m: i64 = r.get(1)?;
+                Ok((h as u64, m as u32))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        rows.reverse();
+        Ok(rows)
+    }
+
+    /// Delete buckets with hour_epoch strictly less than `cutoff`.
+    pub fn prune_activity_buckets_before(&self, cutoff: u64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM activity_buckets WHERE hour_epoch < ?1",
+            rusqlite::params![cutoff as i64],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_workspace(&self, w: &NewWorkspace) -> Result<WorkspaceId> {
         let now = now_ms();
         self.conn.execute(
@@ -424,6 +463,13 @@ const SCHEMA_V2_SETTINGS: &str = "
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+";
+
+const SCHEMA_V8_ACTIVITY_BUCKETS: &str = "
+CREATE TABLE IF NOT EXISTS activity_buckets (
+    hour_epoch INTEGER PRIMARY KEY,
+    max_live   INTEGER NOT NULL
 );
 ";
 
@@ -583,6 +629,28 @@ mod tests {
         store.set_repo_base_branch(id, None).unwrap();
         let repos = store.repos().unwrap();
         assert_eq!(repos[0].base_branch, None);
+    }
+
+    #[test]
+    fn activity_bucket_round_trip_and_prune() {
+        let store = Store::open_in_memory().unwrap();
+        store.set_activity_bucket(100, 3).unwrap();
+        store.set_activity_bucket(200, 5).unwrap();
+        store.set_activity_bucket(300, 1).unwrap();
+
+        // recent_activity_buckets returns in ascending hour order.
+        let all = store.recent_activity_buckets(50).unwrap();
+        assert_eq!(all, vec![(100, 3), (200, 5), (300, 1)]);
+
+        // Update an existing bucket — upsert semantics.
+        store.set_activity_bucket(200, 9).unwrap();
+        let updated = store.recent_activity_buckets(50).unwrap();
+        assert_eq!(updated, vec![(100, 3), (200, 9), (300, 1)]);
+
+        // Prune drops anything older than the cutoff (exclusive).
+        store.prune_activity_buckets_before(200).unwrap();
+        let after_prune = store.recent_activity_buckets(50).unwrap();
+        assert_eq!(after_prune, vec![(200, 9), (300, 1)]);
     }
 
     #[test]

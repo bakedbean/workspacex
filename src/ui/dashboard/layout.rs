@@ -102,8 +102,9 @@ pub fn footer(
         ("e", "edit"),
         ("t", "term"),
         ("v", "diff"),
+        ("g", "lazygit"),
         ("r", "reply"),
-        ("g", "group"),
+        ("G", "group"),
         ("/", "filter"),
         ("q", "quit"),
     ];
@@ -188,7 +189,8 @@ mod tests {
         let line = footer(&samples, "v0.5.0", 200, &theme);
         let t = text(&line);
         assert!(t.contains("↑↓ nav"));
-        assert!(t.contains("g group"));
+        assert!(t.contains("g lazygit"));
+        assert!(t.contains("G group"));
         assert!(t.contains("q quit"));
         assert!(t.contains("24h "));
         assert!(t.contains("v0.5.0"));

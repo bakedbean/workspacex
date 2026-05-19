@@ -165,6 +165,7 @@ fn footer_line(label: &str, multi_pane: bool, theme: &Theme) -> Line<'static> {
             ("e", "edit"),
             ("t", "term"),
             ("v", "diff"),
+            ("g", "lazygit"),
             ("k", "procs"),
             ("x", "send-^x"),
         ]
@@ -175,6 +176,7 @@ fn footer_line(label: &str, multi_pane: bool, theme: &Theme) -> Line<'static> {
             ("e", "edit"),
             ("t", "term"),
             ("v", "diff"),
+            ("g", "lazygit"),
             ("k", "procs"),
             ("x", "send-^x"),
         ]

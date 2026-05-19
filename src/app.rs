@@ -1493,6 +1493,24 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             // 'v' on a Repo header is intentionally a no-op.
         }
+        (KeyCode::Char('g'), _) => {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let info = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = info {
+                    let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
+                    if let Err(e) = crate::external::open_in_lazygit(&path, cmd.as_deref()) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            // 'g' on a Repo header is intentionally a no-op.
+        }
         (KeyCode::Char('k'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
                 app.modal = Some(Modal::ProcessList {
@@ -1548,7 +1566,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 });
             }
         }
-        (KeyCode::Char('g'), _) => {
+        (KeyCode::Char('G'), _) => {
             use crate::ui::dashboard::layout::GroupMode;
             app.dashboard.group_mode = match app.dashboard.group_mode {
                 GroupMode::Repo => GroupMode::Attention,
@@ -1904,6 +1922,22 @@ async fn handle_key_attached(
                     let cmd = app.store.get_setting("diff_cmd").ok().flatten();
                     let base = crate::git::resolve_base_branch(&path).await;
                     if let Err(e) = crate::external::open_diff(&path, &base, cmd.as_deref()) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+                return Ok(());
+            }
+            KeyCode::Char('g') => {
+                let path = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = path {
+                    let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
+                    if let Err(e) = crate::external::open_in_lazygit(&path, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });

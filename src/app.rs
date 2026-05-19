@@ -761,10 +761,12 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
 
             let activity: Vec<u32> = app.activity_history.iter().map(|(_h, m)| *m).collect();
+            let column_widths = read_column_widths(&app.store);
             let inputs = dashboard::DashboardInputs {
                 repos: app.repos.iter().collect(),
                 workspaces,
                 activity: &activity,
+                column_widths,
             };
             app.dashboard.selection = app.selected_target();
             dashboard::render(
@@ -1034,6 +1036,28 @@ fn notifications_enabled(store: &crate::store::Store) -> bool {
         Some("off") | Some("false") | Some("0") | Some("no") => false,
         _ => true, // default ON
     }
+}
+
+/// Resolve the dashboard's user-tunable column widths from settings,
+/// clamped to safe min/max. Unset or unparseable values fall back to the
+/// V5 defaults (24 / 28).
+fn read_column_widths(store: &crate::store::Store) -> crate::ui::dashboard::row::ColumnWidths {
+    use crate::ui::dashboard::row::{
+        ColumnWidths, DEFAULT_BRANCH_WIDTH, DEFAULT_NAME_WIDTH,
+    };
+    let name = store
+        .get_setting("dashboard_name_width")
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_NAME_WIDTH);
+    let branch = store
+        .get_setting("dashboard_branch_width")
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_BRANCH_WIDTH);
+    ColumnWidths::clamped(name, branch)
 }
 
 /// Bell patterns: how many `\x07` bytes to emit, with spacing.

@@ -21,14 +21,45 @@ use crate::ui::theme::Theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const NAME_WIDTH: usize = 24;
-const BRANCH_WIDTH: usize = 28;
+pub const DEFAULT_NAME_WIDTH: usize = 24;
+pub const DEFAULT_BRANCH_WIDTH: usize = 28;
+pub const MIN_NAME_WIDTH: usize = 10;
+pub const MIN_BRANCH_WIDTH: usize = 10;
+pub const MAX_NAME_WIDTH: usize = 60;
+pub const MAX_BRANCH_WIDTH: usize = 80;
 const PROCS_WIDTH: usize = 6;
 const DIFF_WIDTH: usize = 12;
 const AGE_WIDTH: usize = 10;
 const GUTTER_WIDTH: usize = 1;
 const ELBOW_WIDTH: usize = 3;
 const GLYPH_WIDTH: usize = 2;
+
+/// User-resizable column widths. Values are clamped to safe ranges by
+/// `ColumnWidths::clamped` (called from the config read path) so the
+/// renderer never has to defend itself against pathological inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnWidths {
+    pub name: usize,
+    pub branch: usize,
+}
+
+impl ColumnWidths {
+    pub fn clamped(name: usize, branch: usize) -> Self {
+        Self {
+            name: name.clamp(MIN_NAME_WIDTH, MAX_NAME_WIDTH),
+            branch: branch.clamp(MIN_BRANCH_WIDTH, MAX_BRANCH_WIDTH),
+        }
+    }
+}
+
+impl Default for ColumnWidths {
+    fn default() -> Self {
+        Self {
+            name: DEFAULT_NAME_WIDTH,
+            branch: DEFAULT_BRANCH_WIDTH,
+        }
+    }
+}
 
 /// Inputs the renderer needs about one workspace, gathered by the caller
 /// from `app.rs` state.
@@ -51,10 +82,13 @@ pub struct RowInputs {
 
 pub fn render(
     inputs: &RowInputs,
+    widths: ColumnWidths,
     tick: u32,
     theme: &Theme,
     total_width: usize,
 ) -> Line<'static> {
+    let name_width = widths.name;
+    let branch_width = widths.branch;
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     // 1: gutter
@@ -77,7 +111,11 @@ pub fn render(
     spans.push(Span::styled(glyph_padded, theme.status_style(inputs.status)));
 
     // 4: name (with setup-failed badge and YOLO/selected styling)
-    let name_target = if inputs.setup_failed { NAME_WIDTH - 3 } else { NAME_WIDTH };
+    let name_target = if inputs.setup_failed {
+        name_width.saturating_sub(3).max(1)
+    } else {
+        name_width
+    };
     let name_padded = truncate_pad(&inputs.name, name_target);
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
     if inputs.selected {
@@ -96,7 +134,7 @@ pub fn render(
     } else {
         format!("⎇ {}", inputs.branch)
     };
-    let branch_padded = truncate_pad(&branch_text, BRANCH_WIDTH);
+    let branch_padded = truncate_pad(&branch_text, branch_width);
     let branch_style = lifecycle_style(inputs.lifecycle, theme).unwrap_or_else(|| theme.dim_style());
     spans.push(Span::styled(branch_padded, branch_style));
 
@@ -124,7 +162,7 @@ pub fn render(
 
     // 8: message (flex)
     let left_consumed = GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH
-        + NAME_WIDTH + BRANCH_WIDTH + PROCS_WIDTH + DIFF_WIDTH;
+        + name_width + branch_width + PROCS_WIDTH + DIFF_WIDTH;
     let right_consumed = AGE_WIDTH;
     let message_width = total_width
         .saturating_sub(left_consumed + right_consumed)
@@ -242,7 +280,7 @@ mod tests {
     #[test]
     fn renders_design_columns_in_order() {
         let theme = Theme::wsx();
-        let line = render(&base(), 0, &theme, 120);
+        let line = render(&base(), ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.starts_with("▎"), "gutter first: {text:?}");
         assert!(text.contains("? "), "static glyph for non-live status");
@@ -259,10 +297,10 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.status = Status::Thinking;
-        let line = render(&inputs, 0, &theme, 120);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("⠋"), "spinner frame at tick 0: {text:?}");
-        let line2 = render(&inputs, 8, &theme, 120);
+        let line2 = render(&inputs, ColumnWidths::default(), 8, &theme, 120);
         let text2 = line_text(&line2);
         assert!(text2.contains("⠙"), "spinner advances by tick 8: {text2:?}");
     }
@@ -272,7 +310,7 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.last_message = None;
-        let line = render(&inputs, 0, &theme, 120);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("—"), "em-dash for missing message: {text:?}");
     }
@@ -282,7 +320,7 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.procs = 0;
-        let line = render(&inputs, 0, &theme, 120);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("  ·"), "faint dot for zero procs: {text:?}");
     }
@@ -292,7 +330,7 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.diff = None;
-        let line = render(&inputs, 0, &theme, 120);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(!text.contains("+0 −0"), "no diff cell when None: {text:?}");
     }
@@ -302,7 +340,7 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.setup_failed = true;
-        let line = render(&inputs, 0, &theme, 120);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("⚙!"), "setup badge present: {text:?}");
     }
@@ -312,8 +350,44 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.nerd_fonts = true;
-        let line = render(&inputs, 0, &theme, 120);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("\u{e0a0}"), "nerd font branch glyph: {text:?}");
+    }
+
+    #[test]
+    fn column_widths_clamp_outside_range() {
+        let tight = ColumnWidths::clamped(2, 2);
+        assert_eq!(tight.name, MIN_NAME_WIDTH);
+        assert_eq!(tight.branch, MIN_BRANCH_WIDTH);
+        let huge = ColumnWidths::clamped(1000, 1000);
+        assert_eq!(huge.name, MAX_NAME_WIDTH);
+        assert_eq!(huge.branch, MAX_BRANCH_WIDTH);
+        let mid = ColumnWidths::clamped(30, 40);
+        assert_eq!(mid.name, 30);
+        assert_eq!(mid.branch, 40);
+    }
+
+    #[test]
+    fn wider_branch_pushes_other_columns_right() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.branch = "very-long-branch-name-that-takes-space".into();
+        let narrow = render(&inputs, ColumnWidths::clamped(24, 16), 0, &theme, 160);
+        let wide = render(&inputs, ColumnWidths::clamped(24, 50), 0, &theme, 160);
+        // Both end with "29s ago" (right-aligned at total_width).
+        let narrow_text = line_text(&narrow);
+        let wide_text = line_text(&wide);
+        assert!(narrow_text.trim_end().ends_with("29s ago"));
+        assert!(wide_text.trim_end().ends_with("29s ago"));
+        // The wider branch eats more space, so the message column is
+        // narrower in the wide case → the message ends with `…`
+        // earlier OR the diff cell content stays the same.
+        // The simplest invariant: the branch substring fits more
+        // characters in the wide case.
+        assert!(wide_text.contains("very-long-branch-name-that-take"),
+            "wide branch shows more of the name: {wide_text:?}");
+        assert!(!narrow_text.contains("very-long-branch-name-that-take"),
+            "narrow branch truncates: {narrow_text:?}");
     }
 }

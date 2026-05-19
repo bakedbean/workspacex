@@ -103,17 +103,24 @@ fn quiet_line(q: &QuietRepo, width: usize, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-fn flat_row_line(fr: &FlatRow, tick: u32, theme: &Theme, width: usize) -> Line<'static> {
+fn flat_row_line(
+    fr: &FlatRow,
+    widths: row::ColumnWidths,
+    tick: u32,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
     // Reuse the same composer but rewrite the name field to "<repo>/<name>"
-    // so we keep alignment math centralized. The composer's 24ch name
-    // column truncates; we leave that as-is for v1.
+    // so we keep alignment math centralized. The composer's name column
+    // truncates; we leave that as-is for v1.
     let mut adjusted = fr.row.clone();
     adjusted.name = format!("{}/{}", fr.repo_name, fr.row.name);
-    row::render(&adjusted, tick, theme, width)
+    row::render(&adjusted, widths, tick, theme, width)
 }
 
 pub fn render_list(
     data: &AttentionData,
+    widths: row::ColumnWidths,
     tick: u32,
     width: usize,
     theme: &Theme,
@@ -129,7 +136,7 @@ pub fn render_list(
             theme,
         )));
         for r in &data.needs_attention {
-            items.push(ListItem::new(flat_row_line(r, tick, theme, width)));
+            items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
         }
     }
     if !data.working.is_empty() {
@@ -142,7 +149,7 @@ pub fn render_list(
             theme,
         )));
         for r in &data.working {
-            items.push(ListItem::new(flat_row_line(r, tick, theme, width)));
+            items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
         }
     }
     if !data.recent.is_empty() {
@@ -155,7 +162,7 @@ pub fn render_list(
             theme,
         )));
         for r in &data.recent {
-            items.push(ListItem::new(flat_row_line(r, tick, theme, width)));
+            items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
         }
     }
     if !data.idle.is_empty() {
@@ -168,7 +175,7 @@ pub fn render_list(
             theme,
         )));
         for r in &data.idle {
-            items.push(ListItem::new(flat_row_line(r, tick, theme, width)));
+            items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
         }
     }
     if !data.quiet_repos.is_empty() {
@@ -270,7 +277,7 @@ mod tests {
         let rows = make_rows();
         let quiet = make_quiet();
         let data = partition(rows, quiet);
-        let items = render_list(&data, 0, 120, &theme);
+        let items = render_list(&data, row::ColumnWidths::default(), 0, 120, &theme);
         // Headers + content per section. Fixture totals (cross-check
         // against fixture::repos()):
         //   needs: stalled(theme-tokens) + question(repo-overview, driver-map-v2)
@@ -306,7 +313,7 @@ mod tests {
                 workspace_id: crate::store::WorkspaceId(0),
             },
         };
-        let line = flat_row_line(&row, 0, &theme, 120);
+        let line = flat_row_line(&row, row::ColumnWidths::default(), 0, &theme, 120);
         let t: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(t.contains("wsx/repo-overview"));
     }

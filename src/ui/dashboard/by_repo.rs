@@ -98,6 +98,7 @@ pub fn header_line(view: &RepoView<'_>, width: usize, theme: &Theme) -> Line<'st
 /// Emit the full sequence of `ListItem`s for the by-repo view.
 pub fn render_list(
     repos: &[RepoView<'_>],
+    widths: row::ColumnWidths,
     tick: u32,
     width: usize,
     theme: &Theme,
@@ -109,7 +110,7 @@ pub fn render_list(
             continue;
         }
         for w in &view.workspaces {
-            items.push(ListItem::new(row::render(w, tick, theme, width)));
+            items.push(ListItem::new(row::render(w, widths, tick, theme, width)));
         }
         items.push(ListItem::new(""));
     }
@@ -190,7 +191,7 @@ mod tests {
         let repos = fixture::repos();
         let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
         let view = make_view(wsx, 1, false);
-        let items = render_list(&[view], 0, 120, &theme);
+        let items = render_list(&[view], row::ColumnWidths::default(), 0, 120, &theme);
         assert_eq!(items.len(), 1, "only the header for a collapsed repo");
     }
 
@@ -200,7 +201,7 @@ mod tests {
         let repos = fixture::repos();
         let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
         let view = make_view(wsx, 1, true);
-        let items = render_list(&[view], 0, 120, &theme);
+        let items = render_list(&[view], row::ColumnWidths::default(), 0, 120, &theme);
         // 1 header + 4 workspaces + 1 spacer
         assert_eq!(items.len(), 6);
     }

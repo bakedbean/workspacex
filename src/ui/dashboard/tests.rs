@@ -68,7 +68,12 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
         .collect();
     let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
     let activity: Vec<u32> = (0..24).collect();
-    let inputs = DashboardInputs { repos: repo_refs, workspaces, activity: &activity };
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+    };
     let mut state = DashboardState { group_mode: group, ..Default::default() };
     let theme = Theme::wsx();
     let backend = TestBackend::new(160, 40);
@@ -122,7 +127,12 @@ fn render_sets_list_state_to_selected_workspace_index() {
         .map(|w| crate::app::SelectionTarget::Workspace(w.workspace_id))
         .unwrap();
     let activity: Vec<u32> = vec![1; 24];
-    let inputs = DashboardInputs { repos: repo_refs, workspaces, activity: &activity };
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+    };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
         selection: Some(target),

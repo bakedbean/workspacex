@@ -40,6 +40,7 @@ pub struct DashboardInputs<'a> {
     pub repos: Vec<&'a Repo>,
     pub workspaces: Vec<WorkspaceItem<'a>>,
     pub activity: &'a [u32],
+    pub column_widths: row::ColumnWidths,
 }
 
 #[derive(Debug, Default)]
@@ -196,7 +197,7 @@ fn render_by_repo<'a>(
     }
     state.list_state.select(selected_idx);
 
-    by_repo::render_list(&views, tick, width, theme)
+    by_repo::render_list(&views, inputs.column_widths, tick, width, theme)
 }
 
 fn render_by_attention<'a>(
@@ -285,7 +286,7 @@ fn render_by_attention<'a>(
     }
     state.list_state.select(selected_idx);
 
-    by_attention::render_list(&data, tick, width, theme)
+    by_attention::render_list(&data, inputs.column_widths, tick, width, theme)
 }
 
 #[cfg(test)]

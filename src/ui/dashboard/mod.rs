@@ -195,11 +195,18 @@ fn render_by_attention<'a>(
             .workspaces
             .iter()
             .filter(|w| w.repo.id == r.id)
+            .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
             .collect();
         let count = repo_rows.len();
         let all_idle = !repo_rows.is_empty()
             && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
-        if count == 0 || all_idle {
+        let repo_matches_filter = filter
+            .map(|f| r.name.to_lowercase().contains(&f.to_lowercase()))
+            .unwrap_or(true);
+        // Empty repos only show in QUIET REPOS when no filter is active
+        // OR when the filter matches the repo name itself.
+        let include_empty = count == 0 && (filter.is_none() || repo_matches_filter);
+        if include_empty || all_idle {
             quiet.push(QuietRepo {
                 name: r.name.clone(),
                 path: r.path.to_string_lossy().into_owned(),

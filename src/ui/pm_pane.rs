@@ -26,11 +26,20 @@ pub fn render(
     let title_area = chunks[0];
     let term_area = chunks[1];
 
-    let title = match focus {
-        PaneFocus::ProjectManager => "── Project Manager [Tab/Esc back] ──",
-        PaneFocus::Dashboard => "── Project Manager [Tab to focus · r refresh] ──",
+    let label = match focus {
+        PaneFocus::ProjectManager => "Project Manager [Tab/Esc back]",
+        PaneFocus::Dashboard => "Project Manager [Tab to focus · r refresh]",
     };
-    f.render_widget(Paragraph::new(title).style(theme.dim_style()), title_area);
+    let width = title_area.width as usize;
+    let used = label.chars().count();
+    let gap = 2;
+    let rule_len = width.saturating_sub(used + gap);
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(label.to_string(), theme.dim_style())];
+    if rule_len > 0 {
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), title_area);
 
     match session {
         Some(s) => {

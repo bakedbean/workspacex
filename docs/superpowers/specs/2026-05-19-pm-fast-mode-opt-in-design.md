@@ -22,7 +22,7 @@ command. Two facts shape the design:
 
 So the safe mechanism is to pass `--settings '{"fastMode":true}'` to claude on
 every PM spawn when the wsx-side opt-in is on. Single chokepoint:
-`build_claude_command` in `src/pty/session.rs:243`, which is where the
+`build_claude_command` in `src/pty/session.rs`, which is where the
 existing PM-only flags (`--dangerously-skip-permissions`, the PM system
 prompt) are already emitted.
 
@@ -146,7 +146,7 @@ One bullet under the existing setting list:
 
 > `pm_fast_mode` (default off) — when on, the Project Manager session
 > launches with Claude Code's fast mode enabled. PM is a status-summary
-> session, so fast output is usually the right tradeoff. `wsx setting set
+> session, so fast output is usually the right tradeoff. `wsx config set
 > pm_fast_mode on`.
 
 ## Risks

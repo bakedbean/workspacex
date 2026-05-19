@@ -491,5 +491,5 @@ After all tasks land, do an end-to-end smoke check:
 - [ ] **Tests:** `cargo test -p wsx --lib` — expect all green.
 - [ ] **Clippy:** `cargo clippy --all-targets -- -D warnings` — expect no new warnings.
 - [ ] **Formatting:** `cargo fmt --check` — expect clean.
-- [ ] **Manual:** in a scratch wsx install: `wsx setting set pm_fast_mode on`, then open the PM pane with `p`. Confirm the PM PTY session indicates fast mode is on (Claude shows this in its prompt area). Then `wsx setting set pm_fast_mode off`, restart wsx, reopen PM, and confirm fast mode is off.
+- [ ] **Manual:** in a scratch wsx install: `wsx config set pm_fast_mode on`, then open the PM pane with `p`. Confirm the PM PTY session indicates fast mode is on (Claude shows this in its prompt area). Then `wsx config set pm_fast_mode off`, restart wsx, reopen PM, and confirm fast mode is off.
 - [ ] **Manual (continue path):** with `pm_fast_mode on`, exit wsx and reopen — PM resumes via `--continue` and fast mode should remain on.

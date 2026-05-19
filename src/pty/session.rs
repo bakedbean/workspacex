@@ -970,9 +970,6 @@ mod tests {
 
     #[test]
     fn project_manager_mode_emits_settings_when_fast_mode() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
@@ -992,16 +989,10 @@ mod tests {
             .expect("expected JSON value after --settings")
             .to_string_lossy();
         assert_eq!(value, r#"{"fastMode":true}"#);
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[test]
     fn project_manager_mode_omits_settings_when_fast_mode_false() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
@@ -1016,9 +1007,6 @@ mod tests {
             !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
             "expected no --settings flag when fast_mode is false, argv: {argv:?}"
         );
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[test]

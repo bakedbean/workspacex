@@ -281,6 +281,47 @@ pub struct WorktreeInfo {
     pub head: Option<String>,
 }
 
+/// List configured remote names for `repo`. Returns an empty Vec if
+/// `git remote` fails (e.g. no remotes configured).
+pub async fn remote_names(repo: &Path) -> Vec<String> {
+    let out = match run(repo, &["remote"]).await {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    out.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Fetch the named branch from a remote IF `base` looks like a
+/// remote-tracking ref. Heuristic: split on the first `/`; if the
+/// prefix matches a configured remote name, run `git fetch <remote>
+/// <branch>`. Otherwise no-op. `None`, empty values, and values with
+/// no `/` are also no-ops.
+///
+/// Errors from the fetch itself propagate to the caller so workspace
+/// creation can fail fast on bad refs or network issues.
+pub async fn fetch_for_base(repo: &Path, base: Option<&str>) -> Result<()> {
+    let Some(value) = base else { return Ok(()) };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    let Some((prefix, rest)) = value.split_once('/') else {
+        return Ok(());
+    };
+    if rest.is_empty() {
+        return Ok(());
+    }
+    let remotes = remote_names(repo).await;
+    if !remotes.iter().any(|r| r == prefix) {
+        return Ok(());
+    }
+    run(repo, &["fetch", prefix, rest]).await?;
+    Ok(())
+}
+
 pub async fn create_worktree(
     repo: &Path,
     branch: &str,
@@ -420,5 +461,90 @@ mod worktree_tests {
             wt_head, prev_sha,
             "new worktree should be at staging's commit, not main HEAD"
         );
+    }
+
+    /// Test helper: clone `src` as a bare remote and add it as `origin`
+    /// in a fresh local repo. Returns (local_repo, _remote_dir_guard).
+    async fn local_with_origin() -> (TempDir, TempDir) {
+        let remote = init_repo();
+        // Make the remote bare so it can be pushed to / fetched from.
+        let bare = TempDir::new().unwrap();
+        std::process::Command::new("git")
+            .args(["clone", "--bare", "--quiet"])
+            .arg(remote.path())
+            .arg(bare.path())
+            .status()
+            .unwrap();
+
+        let local = init_repo();
+        let bare_url = format!("file://{}", bare.path().display());
+        std::process::Command::new("git")
+            .current_dir(local.path())
+            .args(["remote", "add", "origin", &bare_url])
+            .status()
+            .unwrap();
+        // Push a new branch on the remote that doesn't exist locally.
+        std::process::Command::new("git")
+            .current_dir(remote.path())
+            .args(["checkout", "-q", "-b", "feature-x"])
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .current_dir(remote.path())
+            .args(["commit", "--allow-empty", "-q", "-m", "x"])
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .current_dir(remote.path())
+            .args(["push", "--quiet", &bare_url, "feature-x"])
+            .status()
+            .unwrap();
+
+        // Keep both alive by returning both TempDirs to the caller.
+        (local, bare)
+    }
+
+    #[tokio::test]
+    async fn fetch_for_base_no_op_when_unset() {
+        let repo = init_repo();
+        fetch_for_base(repo.path(), None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_for_base_no_op_when_no_slash() {
+        let repo = init_repo();
+        fetch_for_base(repo.path(), Some("main")).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_for_base_no_op_when_prefix_does_not_match_remote() {
+        let repo = init_repo();
+        // No remote named "feature" — base "feature/foo" is a local branch.
+        fetch_for_base(repo.path(), Some("feature/foo"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_for_base_fetches_when_prefix_matches_remote() {
+        let (local, _bare) = local_with_origin().await;
+        // Sanity: before fetch, origin/feature-x doesn't exist locally.
+        let pre = std::process::Command::new("git")
+            .current_dir(local.path())
+            .args(["rev-parse", "--verify", "refs/remotes/origin/feature-x"])
+            .output()
+            .unwrap();
+        assert!(!pre.status.success(), "ref should not exist pre-fetch");
+
+        fetch_for_base(local.path(), Some("origin/feature-x"))
+            .await
+            .unwrap();
+
+        let post = std::process::Command::new("git")
+            .current_dir(local.path())
+            .args(["rev-parse", "--verify", "refs/remotes/origin/feature-x"])
+            .output()
+            .unwrap();
+        assert!(post.status.success(), "ref should exist after fetch");
     }
 }

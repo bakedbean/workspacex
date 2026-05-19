@@ -18,6 +18,10 @@ pub enum CliAction {
         name: String,
         prefix: String,
     },
+    RepoSetBaseBranch {
+        name: String,
+        value: String,
+    },
     RepoSetInstructions {
         name: String,
         source: ValueSource,
@@ -163,6 +167,15 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                     .next()
                     .ok_or_else(|| Error::UserInput("repo set-prefix <name> <prefix>".into()))?;
                 Ok(CliAction::RepoSetPrefix { name, prefix })
+            }
+            Some("set-base-branch") => {
+                let name = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-base-branch <name> <ref-or-empty>".into())
+                })?;
+                let value = it.next().ok_or_else(|| {
+                    Error::UserInput("repo set-base-branch <name> <ref-or-empty>".into())
+                })?;
+                Ok(CliAction::RepoSetBaseBranch { name, value })
             }
             Some("set-instructions") => {
                 let name = it.next().ok_or_else(|| {
@@ -334,6 +347,21 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 println!("cleared branch prefix for {name} (using global default)");
             } else {
                 println!("set branch prefix for {name} to {prefix}");
+            }
+        }
+        CliAction::RepoSetBaseBranch { name, value } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                store.set_repo_base_branch(r.id, None)?;
+                println!("cleared base branch for {name} (using current HEAD)");
+            } else {
+                store.set_repo_base_branch(r.id, Some(trimmed))?;
+                println!("set base branch for {name} to {trimmed}");
             }
         }
         CliAction::RepoSetInstructions { name, source } => {
@@ -821,5 +849,27 @@ mod tests {
     #[test]
     fn accepts_remotes_setting_key() {
         assert!(known_setting_key("remotes"));
+    }
+
+    #[test]
+    fn parses_repo_set_base_branch_literal() {
+        match parse(&["repo", "set-base-branch", "demo", "origin/main"]).unwrap() {
+            CliAction::RepoSetBaseBranch { name, value } => {
+                assert_eq!(name, "demo");
+                assert_eq!(value, "origin/main");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_repo_set_base_branch_empty_value() {
+        match parse(&["repo", "set-base-branch", "demo", ""]).unwrap() {
+            CliAction::RepoSetBaseBranch { name, value } => {
+                assert_eq!(name, "demo");
+                assert_eq!(value, "");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

@@ -281,9 +281,18 @@ pub struct WorktreeInfo {
     pub head: Option<String>,
 }
 
-pub async fn create_worktree(repo: &Path, branch: &str, path: &Path) -> Result<()> {
+pub async fn create_worktree(
+    repo: &Path,
+    branch: &str,
+    base: Option<&str>,
+    path: &Path,
+) -> Result<()> {
     let path_s = path.to_string_lossy();
-    run(repo, &["worktree", "add", "-b", branch, &path_s]).await?;
+    let mut args: Vec<&str> = vec!["worktree", "add", "-b", branch, &path_s];
+    if let Some(b) = base {
+        args.push(b);
+    }
+    run(repo, &args).await?;
     Ok(())
 }
 
@@ -345,7 +354,9 @@ mod worktree_tests {
         let repo = init_repo();
         let wt_root = TempDir::new().unwrap();
         let wt = wt_root.path().join("feature");
-        create_worktree(repo.path(), "feature", &wt).await.unwrap();
+        create_worktree(repo.path(), "feature", None, &wt)
+            .await
+            .unwrap();
         let listed = list_worktrees(repo.path()).await.unwrap();
         assert!(
             listed
@@ -359,9 +370,55 @@ mod worktree_tests {
         let repo = init_repo();
         let wt_root = TempDir::new().unwrap();
         let wt = wt_root.path().join("scratch");
-        create_worktree(repo.path(), "scratch", &wt).await.unwrap();
+        create_worktree(repo.path(), "scratch", None, &wt)
+            .await
+            .unwrap();
         remove_worktree(repo.path(), &wt).await.unwrap();
         let listed = list_worktrees(repo.path()).await.unwrap();
         assert!(!listed.iter().any(|w| w.path == wt));
+    }
+
+    #[tokio::test]
+    async fn create_worktree_with_explicit_base() {
+        let repo = init_repo();
+        // Add a second commit on main so HEAD advances.
+        std::fs::write(repo.path().join("a.txt"), "v1").unwrap();
+        let r = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(repo.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        r(&["add", "a.txt"]);
+        r(&["commit", "-q", "-m", "add a"]);
+        // Capture the previous commit (init) and create `staging` pointing at it.
+        let prev = std::process::Command::new("git")
+            .current_dir(repo.path())
+            .args(["rev-parse", "HEAD~1"])
+            .output()
+            .unwrap();
+        let prev_sha = String::from_utf8_lossy(&prev.stdout).trim().to_string();
+        r(&["branch", "staging", &prev_sha]);
+
+        let wt_root = TempDir::new().unwrap();
+        let wt = wt_root.path().join("from-staging");
+        create_worktree(repo.path(), "feature", Some("staging"), &wt)
+            .await
+            .unwrap();
+
+        let head = std::process::Command::new("git")
+            .current_dir(&wt)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let wt_head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+        assert_eq!(
+            wt_head, prev_sha,
+            "new worktree should be at staging's commit, not main HEAD"
+        );
     }
 }

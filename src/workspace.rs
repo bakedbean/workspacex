@@ -43,7 +43,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         yolo,
     })?;
 
-    if let Err(e) = git::create_worktree(&repo.path, &branch, &worktree_path).await {
+    if let Err(e) = git::create_worktree(&repo.path, &branch, None, &worktree_path).await {
         store.set_workspace_state(id, WorkspaceState::Failed)?;
         return Err(e);
     }
@@ -410,7 +410,7 @@ mod tests {
             .unwrap();
         let base = TempDir::new().unwrap();
         let wt = base.path().join("orphan");
-        git::create_worktree(&repo.path, "orphan", &wt)
+        git::create_worktree(&repo.path, "orphan", None, &wt)
             .await
             .unwrap();
         let found = discover_untracked(&repo, &store).await.unwrap();

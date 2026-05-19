@@ -95,7 +95,7 @@ pub fn footer(
     let mut spans: Vec<Span<'static>> = Vec::new();
     let keys = [
         ("↑↓", "nav"), ("↵", "open"), ("z", "fold"), ("n", "new"),
-        ("e", "edit"), ("t", "tmux"), ("v", "diff"), ("r", "reply"),
+        ("e", "edit"), ("t", "term"), ("v", "diff"), ("r", "reply"),
         ("g", "group"), ("/", "filter"), ("q", "quit"),
     ];
     for (i, (key, label)) in keys.iter().enumerate() {

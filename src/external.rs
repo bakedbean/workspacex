@@ -16,6 +16,12 @@ pub fn open_in_terminal(worktree: &Path, configured: Option<&str>) -> Result<()>
     spawn_with_cwd(&cmd, worktree)
 }
 
+/// Resolve and launch lazygit (or configured equivalent) with cwd=`worktree`.
+pub fn open_in_lazygit(worktree: &Path, configured: Option<&str>) -> Result<()> {
+    let cmd = resolve_lazygit_cmd(configured)?;
+    spawn_with_cwd(&cmd, worktree)
+}
+
 /// Resolve and launch the user's difftool on `worktree`, diffing against `base`.
 /// The command template can reference `{path}` and `{base}`. If neither
 /// appears, `{path}` is appended (same convention as the editor).
@@ -111,6 +117,20 @@ fn resolve_terminal_cmd(configured: Option<&str>) -> Result<String> {
     }
     Err(Error::UserInput(
         "no terminal configured; set `wsx config set terminal_cmd <cmd>` or $TERMINAL".into(),
+    ))
+}
+
+fn resolve_lazygit_cmd(configured: Option<&str>) -> Result<String> {
+    if let Some(c) = configured {
+        if !c.trim().is_empty() {
+            return Ok(c.to_string());
+        }
+    }
+    Err(Error::UserInput(
+        "no lazygit command configured; set `wsx config set lazygit_cmd <cmd>` \
+         (e.g. `wezterm start -- lazygit`) — wsx's own TUI owns the terminal, \
+         so lazygit needs a wrapper that opens its own window"
+            .into(),
     ))
 }
 
@@ -374,6 +394,26 @@ mod tests {
             }
         }
         assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn lazygit_errors_when_unconfigured() {
+        assert!(resolve_lazygit_cmd(None).is_err());
+    }
+
+    #[test]
+    fn lazygit_uses_configured_first() {
+        assert_eq!(
+            resolve_lazygit_cmd(Some("wezterm start -- lazygit")).unwrap(),
+            "wezterm start -- lazygit"
+        );
+    }
+
+    #[test]
+    fn open_in_lazygit_spawns_configured_cmd() {
+        let dir = std::env::temp_dir();
+        let r = open_in_lazygit(&dir, Some("/bin/true"));
+        assert!(r.is_ok(), "open_in_lazygit failed: {r:?}");
     }
 
     #[test]

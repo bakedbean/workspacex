@@ -104,6 +104,7 @@ fn known_setting_key(k: &str) -> bool {
             | "editor_cmd"
             | "terminal_cmd"
             | "diff_cmd"
+            | "lazygit_cmd"
             | "notifications"
             | "theme"
             | "pm_enabled"
@@ -672,6 +673,11 @@ mod tests {
     #[test]
     fn accepts_diff_cmd() {
         assert!(known_setting_key("diff_cmd"));
+    }
+
+    #[test]
+    fn accepts_lazygit_cmd() {
+        assert!(known_setting_key("lazygit_cmd"));
     }
 
     #[test]

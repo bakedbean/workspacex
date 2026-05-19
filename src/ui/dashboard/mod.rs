@@ -105,7 +105,7 @@ pub fn render(
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
         GroupMode::Attention => render_by_attention(inputs, state, tick, width, theme),
     };
-    let list = List::new(items).highlight_style(theme.selected_style());
+    let list = List::new(items).highlight_style(theme.selected_bg_style());
     f.render_stateful_widget(list, chunks[3], &mut state.list_state);
 
     f.render_widget(

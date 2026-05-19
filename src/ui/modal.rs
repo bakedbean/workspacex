@@ -573,7 +573,7 @@ mod workspace_row_tests {
 
     #[test]
     fn workspace_row_uses_question_glyph_for_awaiting_answer() {
-        let theme = Theme::default_theme();
+        let theme = Theme::ansi();
         let w = fixture_workspace("alpha");
         let line = workspace_row(
             &w,
@@ -595,7 +595,7 @@ mod workspace_row_tests {
 
     #[test]
     fn workspace_row_uses_check_glyph_for_complete() {
-        let theme = Theme::default_theme();
+        let theme = Theme::ansi();
         let w = fixture_workspace("alpha");
         let line = workspace_row(
             &w,
@@ -617,7 +617,7 @@ mod workspace_row_tests {
 
     #[test]
     fn workspace_row_shows_permission_tool_in_status_text() {
-        let theme = Theme::default_theme();
+        let theme = Theme::ansi();
         let w = fixture_workspace("alpha");
         let awaiting = ("Bash".to_string(), 5_000i64);
         let line = workspace_row(

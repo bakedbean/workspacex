@@ -113,6 +113,8 @@ fn known_setting_key(k: &str) -> bool {
             | "remote_control_sandbox"
             | "pinned_commands"
             | "remotes"
+            | "dashboard_name_width"
+            | "dashboard_branch_width"
     )
 }
 

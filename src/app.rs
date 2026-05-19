@@ -211,6 +211,10 @@ pub struct App {
         std::collections::HashMap<crate::store::WorkspaceId, crate::forge::BranchLifecycle>,
     /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
     pub pr_last_poll_ms: std::collections::HashMap<crate::store::WorkspaceId, i64>,
+    /// Last epoch-ms we attempted a `git diff --shortstat` per workspace
+    /// (throttle key). 10s minimum interval keeps the dashboard
+    /// `+N −N` cell fresh without re-running diff on every 2s tick.
+    pub diff_last_poll_ms: std::collections::HashMap<crate::store::WorkspaceId, i64>,
     pub workspace_events:
         std::collections::HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
     /// Per-workspace tracking for attention-alert state.
@@ -229,6 +233,16 @@ pub struct App {
     /// worktree). Refreshed every ~10s by branch_drift_poll.
     pub workspace_processes:
         std::collections::HashMap<crate::store::WorkspaceId, Vec<crate::proc::ProcInfo>>,
+    /// Monotonic counter incremented every animation tick. Drives
+    /// dashboard spinner phase + any other tick-driven UI animation.
+    pub tick: u32,
+    /// Cached `git diff --shortstat` output per workspace (added/deleted).
+    /// Populated lazily by the workspace-status poller.
+    pub workspace_diff: std::collections::HashMap<crate::store::WorkspaceId, crate::git::DiffStats>,
+    /// Rolling 24-hour history of `(hour_epoch_secs, max_live_count)` for
+    /// the dashboard footer sparkline. Hydrated from `store.recent_activity_buckets`
+    /// at startup; updated each tick. Newest bucket at the back.
+    pub activity_history: std::collections::VecDeque<(u64, u32)>,
     /// Epoch-ms of last completed `proc::scan` — throttle source.
     pub last_proc_scan_ms: i64,
     /// Set by the repo-settings modal when the user presses Enter on a
@@ -277,11 +291,15 @@ impl App {
             workspace_status: std::collections::HashMap::new(),
             pr_lifecycle: std::collections::HashMap::new(),
             pr_last_poll_ms: std::collections::HashMap::new(),
+            diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
             workspace_processes: std::collections::HashMap::new(),
+            tick: 0,
+            workspace_diff: std::collections::HashMap::new(),
+            activity_history: std::collections::VecDeque::new(),
             last_proc_scan_ms: 0,
             pending_edit: None,
             theme,
@@ -298,6 +316,10 @@ impl App {
         let _ = app
             .store
             .sweep_stale_pending(std::time::Duration::from_secs(300));
+        // Load up to 24 hours of bucketed activity for the sparkline.
+        if let Ok(buckets) = app.store.recent_activity_buckets(24) {
+            app.activity_history.extend(buckets);
+        }
         app.refresh()?;
         Ok(app)
     }
@@ -360,6 +382,62 @@ impl App {
             }
         }
         oldest.map(|(n, ts)| (n.to_string(), ts))
+    }
+
+    /// Classify a workspace into the V5 dashboard `Status` vocabulary.
+    /// Combines session liveness, JSONL stopped/stalled signals, and
+    /// pending tool_use into one canonical state used by the renderer.
+    pub fn classify_status(
+        &self,
+        ws: &crate::store::Workspace,
+    ) -> crate::ui::dashboard::status::Status {
+        let session = self.sessions.get(ws.id);
+        let running = session.as_ref().is_some_and(|s| {
+            matches!(
+                *s.status.read().unwrap(),
+                crate::pty::session::SessionStatus::Running { .. }
+            )
+        });
+        let secs = session.as_ref().map(|s| {
+            let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+            if last == 0 {
+                return 0;
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            now.saturating_sub(last) / 1000
+        });
+        // `has_prior_session` does filesystem I/O (canonicalize +
+        // read_dir); skip it when we already have a live session, since
+        // the classifier only looks at it in the no-session branch.
+        let has_prior = if running {
+            false
+        } else {
+            crate::pty::session::has_prior_session(&ws.worktree_path)
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let stopped_kind = self
+            .workspace_events
+            .get(&ws.id)
+            .and_then(derive_stopped_kind);
+        let stalled = self
+            .workspace_events
+            .get(&ws.id)
+            .is_some_and(|e| e.is_stalled(now_ms, 60_000));
+        let awaiting = self.awaiting_permission(ws.id).is_some();
+        crate::ui::dashboard::status::Status::classify(
+            awaiting,
+            stopped_kind,
+            stalled,
+            secs,
+            running,
+            has_prior,
+        )
     }
 }
 
@@ -497,7 +575,43 @@ pub async fn run<B: Backend + std::io::Write>(
         }
 
         tokio::select! {
-            _ = tick.tick() => {}
+            _ = tick.tick() => {
+                let mut g = app.lock().await;
+                g.tick = g.tick.wrapping_add(1);
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let now_hour = now_secs - (now_secs % 3600);
+                let live = g
+                    .workspaces
+                    .iter()
+                    .filter(|(_rid, ws)| {
+                        let s = g.classify_status(ws);
+                        matches!(s,
+                            crate::ui::dashboard::status::Status::Thinking
+                            | crate::ui::dashboard::status::Status::Waiting)
+                    })
+                    .count() as u32;
+                match g.activity_history.back().copied() {
+                    Some((h, prev_max)) if h == now_hour => {
+                        if live > prev_max {
+                            g.activity_history.pop_back();
+                            g.activity_history.push_back((h, live));
+                        }
+                    }
+                    Some(_) | None => {
+                        if let Some((h, m)) = g.activity_history.back().copied() {
+                            let _ = g.store.set_activity_bucket(h, m);
+                        }
+                        g.activity_history.push_back((now_hour, live));
+                        while g.activity_history.len() > 24 {
+                            g.activity_history.pop_front();
+                        }
+                        let _ = g.store.prune_activity_buckets_before(now_hour.saturating_sub(24 * 3600));
+                    }
+                }
+            }
             maybe_evt = events.next() => {
                 let Some(Ok(evt)) = maybe_evt else { break; };
                 let mut g = app.lock().await;
@@ -530,22 +644,17 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 (area, None)
             };
             let notifications_on = notifications_enabled(&app.store);
-            let mut items: Vec<dashboard::Item> = Vec::new();
+            let nerd_fonts = nerd_fonts_enabled(&app.store);
+
+            // Build per-workspace inputs in V5 shape.
+            let mut workspaces: Vec<dashboard::WorkspaceItem<'_>> = Vec::new();
             for repo in &app.repos {
-                items.push(dashboard::Item::Header { repo });
-                let mut count = 0usize;
                 for (rid, ws) in &app.workspaces {
                     if *rid != repo.id {
                         continue;
                     }
-                    count += 1;
+                    let status = app.classify_status(ws);
                     let session = app.sessions.get(ws.id);
-                    let running = session.as_ref().is_some_and(|s| {
-                        matches!(
-                            *s.status.read().unwrap(),
-                            crate::pty::session::SessionStatus::Running { .. }
-                        )
-                    });
                     let secs = session.as_ref().map(|s| {
                         let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
                         if last == 0 {
@@ -557,48 +666,38 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .unwrap_or(0);
                         now.saturating_sub(last) / 1000
                     });
-                    let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
-                    let needs_attention = app.workspace_needs_attention.contains(&ws.id);
-                    let awaiting = app.awaiting_permission(ws.id);
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
-                        .unwrap_or(0);
-                    let stopped_kind = app
+                    let latest = app
                         .workspace_events
                         .get(&ws.id)
-                        .and_then(derive_stopped_kind);
-                    let stalled = app
-                        .workspace_events
-                        .get(&ws.id)
-                        .is_some_and(|e| e.is_stalled(now_ms, 60_000));
-                    items.push(dashboard::Item::Workspace {
-                        repo,
-                        workspace: ws,
-                        session_running: running,
-                        seconds_since_activity: secs,
-                        has_prior_session: has_prior,
-                        status: app.workspace_status.get(&ws.id).copied(),
-                        latest_event: app
-                            .workspace_events
-                            .get(&ws.id)
-                            .and_then(|e| e.latest.clone()),
-                        needs_attention,
-                        stopped_kind,
-                        stalled,
-                        lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
-                        awaiting_tool: awaiting,
-                        proc_count: app
+                        .and_then(|e| e.latest.clone());
+                    let setup_failed = ws.setup_status == crate::store::SetupStatus::Failed;
+                    let row = crate::ui::dashboard::row::RowInputs {
+                        status,
+                        name: ws.name.clone(),
+                        branch: ws.branch.clone(),
+                        procs: app
                             .workspace_processes
                             .get(&ws.id)
-                            .map(|v| v.len())
+                            .map(|v| v.len() as u32)
                             .unwrap_or(0),
+                        diff: app.workspace_diff.get(&ws.id).copied(),
+                        last_message: latest.map(|ev| ev.display),
+                        ago_secs: secs,
+                        selected: matches!(app.selected_target(),
+                            Some(SelectionTarget::Workspace(id)) if id == ws.id),
+                        yolo: ws.yolo,
+                        setup_failed,
+                        lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
+                        nerd_fonts,
+                        workspace_id: ws.id,
+                    };
+                    workspaces.push(dashboard::WorkspaceItem {
+                        repo,
+                        workspace_id: ws.id,
+                        status,
+                        row,
                     });
                 }
-                if count == 0 {
-                    items.push(dashboard::Item::EmptyHint);
-                }
-                items.push(dashboard::Item::Spacer);
             }
 
             // Commit the new activity states. Fires the bell on:
@@ -618,6 +717,12 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // the bell (see `alert_decision`) so the visual marker can
             // surface alertable state without making noise. Does NOT
             // re-fire while an alertable state persists across polls.
+            //
+            // Keeps the legacy `ActivityState` vocabulary (via
+            // `classify_activity_with_events`) for the bell pipeline —
+            // the V5 `Status` enum is for display only and would lose the
+            // `Active`/`Off`/`Awaiting` distinctions `alert_decision`
+            // depends on.
             for (_rid, ws) in &app.workspaces {
                 let session = app.sessions.get(ws.id);
                 let running = session.as_ref().is_some_and(|s| {
@@ -652,12 +757,6 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .is_some_and(|e| e.is_stalled(now_ms, 60_000));
                 let activity =
                     classify_activity_with_events(secs, running, awaiting, stopped_kind, stalled);
-                // Until the tail loop has scanned this workspace's JSONL
-                // at least once the classifier can't see stop_reason, so
-                // `activity` is provisional (typically Active). Recording
-                // it would let the bell loop perceive the first post-scan
-                // classification as a transition and ring on cold start.
-                // See `workspace_events_scanned`.
                 if app.workspace_events_scanned.contains(&ws.id) {
                     let prev = app.workspace_activity.get(&ws.id).copied();
                     let is_cold_start = app.started_at.elapsed() < COLD_START_WINDOW;
@@ -673,16 +772,22 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 }
             }
 
-            let selected = app.selected_target();
-            let nerd_fonts = nerd_fonts_enabled(&app.store);
+            let activity: Vec<u32> = app.activity_history.iter().map(|(_h, m)| *m).collect();
+            let column_widths = read_column_widths(&app.store);
+            let inputs = dashboard::DashboardInputs {
+                repos: app.repos.iter().collect(),
+                workspaces,
+                activity: &activity,
+                column_widths,
+            };
+            app.dashboard.selection = app.selected_target();
             dashboard::render(
                 f,
                 dashboard_area,
-                &items,
-                selected,
-                nerd_fonts,
-                &app.theme,
+                &inputs,
                 &mut app.dashboard,
+                app.tick,
+                &app.theme,
             );
             if let Some(pm_area) = pm_area {
                 if let Some(session) = app.pm.as_ref() {
@@ -794,7 +899,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 footer_area,
                 &focused_label,
                 multi_pane,
-                line.as_deref(),
+                line,
                 &pinned,
                 &app.theme,
             );
@@ -831,7 +936,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     footer_area,
                     "project-manager",
                     false,
-                    line.as_deref(),
+                    line,
                     pinned,
                     &app.theme,
                 );
@@ -943,6 +1048,26 @@ fn notifications_enabled(store: &crate::store::Store) -> bool {
         Some("off") | Some("false") | Some("0") | Some("no") => false,
         _ => true, // default ON
     }
+}
+
+/// Resolve the dashboard's user-tunable column widths from settings,
+/// clamped to safe min/max. Unset or unparseable values fall back to the
+/// V5 defaults (24 / 28).
+fn read_column_widths(store: &crate::store::Store) -> crate::ui::dashboard::row::ColumnWidths {
+    use crate::ui::dashboard::row::{ColumnWidths, DEFAULT_BRANCH_WIDTH, DEFAULT_NAME_WIDTH};
+    let name = store
+        .get_setting("dashboard_name_width")
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_NAME_WIDTH);
+    let branch = store
+        .get_setting("dashboard_branch_width")
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_BRANCH_WIDTH);
+    ColumnWidths::clamped(name, branch)
 }
 
 /// Bell patterns: how many `\x07` bytes to emit, with spacing.
@@ -1226,6 +1351,35 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         app.focus = crate::ui::PaneFocus::ProjectManager;
         return Ok(());
     }
+    // Filter input mode: while a filter buffer is active, intercept
+    // printable chars, Backspace, and Esc so they edit the buffer
+    // rather than triggering single-key shortcuts like 'n' / 'q' / '/'.
+    // Navigation keys (arrows, Enter, etc.) still flow through.
+    if app.dashboard.filter.is_some() {
+        match k.code {
+            KeyCode::Esc => {
+                app.dashboard.filter = None;
+                return Ok(());
+            }
+            KeyCode::Backspace => {
+                if let Some(buf) = app.dashboard.filter.as_mut() {
+                    buf.pop();
+                }
+                return Ok(());
+            }
+            KeyCode::Char(c)
+                if !c.is_control()
+                    && !k.modifiers.contains(KeyModifiers::CONTROL)
+                    && !k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(buf) = app.dashboard.filter.as_mut() {
+                    buf.push(c);
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) => app.quit = true,
         (KeyCode::Up, _) => {
@@ -1394,6 +1548,67 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 });
             }
         }
+        (KeyCode::Char('g'), _) => {
+            use crate::ui::dashboard::layout::GroupMode;
+            app.dashboard.group_mode = match app.dashboard.group_mode {
+                GroupMode::Repo => GroupMode::Attention,
+                GroupMode::Attention => GroupMode::Repo,
+            };
+        }
+        (KeyCode::Char('z'), _) => {
+            // Toggle fold for the currently-selected repo (or, if a workspace
+            // is selected, the repo that contains it).
+            let target_rid = match app.selected_target() {
+                Some(SelectionTarget::Workspace(wid)) => app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == wid)
+                    .map(|(rid, _)| *rid),
+                Some(SelectionTarget::Repo(rid)) => Some(rid),
+                None => None,
+            };
+            if let Some(rid) = target_rid {
+                let id = rid.0 as u64;
+                let counts = current_repo_counts(app, rid);
+                let currently_expanded = match app.dashboard.folded.get(&id).copied() {
+                    Some(explicit) => !explicit,
+                    None => !crate::ui::dashboard::sort::default_fold(counts),
+                };
+                // Store `true` = folded (i.e. !expanded).
+                app.dashboard.folded.insert(id, currently_expanded);
+            }
+        }
+        (KeyCode::Char('r'), _) => {
+            // Reply shortcut on a Question workspace: attach to it so the
+            // user lands in claude's prompt. A richer dedicated reply
+            // prompt is a follow-up.
+            // TODO: wire a dedicated reply prompt once attach is extracted.
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let is_question = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| {
+                        matches!(
+                            app.classify_status(w),
+                            crate::ui::dashboard::status::Status::Question
+                        )
+                    })
+                    .unwrap_or(false);
+                if is_question {
+                    app.workspace_needs_attention.remove(&id);
+                    if let Some((id, path, mode, repo_path)) = build_spawn_info(app, id) {
+                        maybe_mirror_mcp(app, &repo_path, &path);
+                        let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+                        let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
+                        app.view = View::Attached(AttachedState::single(id));
+                    }
+                }
+            }
+        }
+        (KeyCode::Char('/'), _) => {
+            app.dashboard.filter = Some(String::new());
+        }
         (KeyCode::Char('p'), _) if pm_enabled(&app.store) => {
             if app.pm_visible {
                 // Hide pane; session stays alive.
@@ -1437,6 +1652,21 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         _ => {}
     }
     Ok(())
+}
+
+/// Aggregate the current `StatusCounts` for one repo by classifying each
+/// of its live workspaces. Used by the `z` (fold) keybinding so we can
+/// look up the same default-fold state the renderer would compute.
+fn current_repo_counts(
+    app: &App,
+    rid: crate::store::RepoId,
+) -> crate::ui::dashboard::sort::StatusCounts {
+    let iter = app
+        .workspaces
+        .iter()
+        .filter(|(r, _)| *r == rid)
+        .map(|(_, w)| app.classify_status(w));
+    crate::ui::dashboard::sort::StatusCounts::from_iter(iter)
 }
 
 /// Immediately re-run `proc::scan` and re-bucket. Used after a kill
@@ -2108,7 +2338,7 @@ fn compute_attention_line(
     app: &App,
     attached_id: Option<crate::store::WorkspaceId>,
     max_width: usize,
-) -> Option<String> {
+) -> Option<ratatui::text::Line<'static>> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -2141,7 +2371,7 @@ fn compute_attention_line(
         })
         .collect();
     let entries = crate::ui::updates_bar::collect_attention(&candidates, attached_id, now_ms);
-    crate::ui::updates_bar::format_attention_line(&entries, now_ms, max_width)
+    crate::ui::updates_bar::format_attention_line_styled(&entries, now_ms, max_width, &app.theme)
 }
 
 fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {
@@ -2165,7 +2395,13 @@ pub async fn branch_drift_poll(app: SharedApp) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         interval.tick().await;
-        let snapshot: Vec<(WorkspaceId, std::path::PathBuf, String, String)> = {
+        let snapshot: Vec<(
+            WorkspaceId,
+            std::path::PathBuf,
+            String,
+            String,
+            Option<String>,
+        )> = {
             let g = app.lock().await;
             g.workspaces
                 .iter()
@@ -2173,12 +2409,18 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     let repo = g.repos.iter().find(|r| r.id == w.repo_id)?;
                     let prefix =
                         crate::repo::resolve_branch_prefix(repo, &g.store).unwrap_or_default();
-                    Some((w.id, w.worktree_path.clone(), w.branch.clone(), prefix))
+                    Some((
+                        w.id,
+                        w.worktree_path.clone(),
+                        w.branch.clone(),
+                        prefix,
+                        repo.base_branch.clone(),
+                    ))
                 })
                 .collect()
         };
 
-        for (id, path, db_branch, prefix) in snapshot {
+        for (id, path, db_branch, prefix, base_branch) in snapshot {
             if !path.exists() {
                 continue;
             }
@@ -2201,6 +2443,11 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     // makes the next tick poll immediately.
                     g.pr_lifecycle.remove(&id);
                     g.pr_last_poll_ms.remove(&id);
+                    // New branch → different ancestry from `base_branch`,
+                    // so the cached diff and its throttle stamp are
+                    // stale. Drop them to force a fresh poll.
+                    g.workspace_diff.remove(&id);
+                    g.diff_last_poll_ms.remove(&id);
                 }
             }
 
@@ -2208,6 +2455,35 @@ pub async fn branch_drift_poll(app: SharedApp) {
             if let Ok(status) = crate::git::workspace_status(&path).await {
                 let mut g = app.lock().await;
                 g.workspace_status.insert(id, status);
+            }
+
+            // 2b) Diff stats vs. base branch (for dashboard +N/-M column).
+            //     Throttled to once per 10s per workspace: running
+            //     `git diff --shortstat <base>...HEAD` on every 2s tick
+            //     is wasteful on large repos and the column doesn't need
+            //     sub-10s freshness.
+            if let Some(base) = base_branch.as_deref() {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                let should_poll = {
+                    let g = app.lock().await;
+                    g.diff_last_poll_ms
+                        .get(&id)
+                        .map(|t| now_ms.saturating_sub(*t) >= 10_000)
+                        .unwrap_or(true)
+                };
+                if should_poll {
+                    {
+                        let mut g = app.lock().await;
+                        g.diff_last_poll_ms.insert(id, now_ms);
+                    }
+                    if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
+                        let mut g = app.lock().await;
+                        g.workspace_diff.insert(id, diff);
+                    }
+                }
             }
 
             // 3) PR lifecycle — throttled to once per 30s per workspace.

@@ -272,6 +272,62 @@ pub(super) mod tests {
         assert_eq!(s.modified, 1);
         assert_eq!(s.ahead, 0);
     }
+
+    #[test]
+    fn parse_shortstat_both() {
+        assert_eq!(
+            parse_shortstat(" 5 files changed, 32 insertions(+), 12 deletions(-)\n"),
+            Some(DiffStats {
+                added: 32,
+                removed: 12
+            })
+        );
+    }
+
+    #[test]
+    fn parse_shortstat_only_insertions() {
+        assert_eq!(
+            parse_shortstat(" 1 file changed, 18 insertions(+)\n"),
+            Some(DiffStats {
+                added: 18,
+                removed: 0
+            })
+        );
+    }
+
+    #[test]
+    fn parse_shortstat_only_deletions() {
+        assert_eq!(
+            parse_shortstat(" 2 files changed, 4 deletions(-)\n"),
+            Some(DiffStats {
+                added: 0,
+                removed: 4
+            })
+        );
+    }
+
+    #[test]
+    fn parse_shortstat_empty_returns_zero() {
+        assert_eq!(
+            parse_shortstat(""),
+            Some(DiffStats {
+                added: 0,
+                removed: 0
+            })
+        );
+        assert_eq!(
+            parse_shortstat("\n"),
+            Some(DiffStats {
+                added: 0,
+                removed: 0
+            })
+        );
+    }
+
+    #[test]
+    fn parse_shortstat_malformed_returns_none() {
+        assert_eq!(parse_shortstat("garbage line"), None);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +438,73 @@ pub async fn branch_delete(repo: &Path, branch: &str, force: bool) -> Result<()>
 pub async fn rename_branch(repo: &Path, old: &str, new: &str) -> Result<()> {
     run(repo, &["branch", "-m", old, new]).await?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiffStats {
+    pub added: u32,
+    pub removed: u32,
+}
+
+/// Parse the trailing line of `git diff --shortstat`.
+/// Accepts both `N insertions(+)` and `N deletions(-)` in either order
+/// or alone. Returns `None` on a non-empty line that doesn't match.
+pub fn parse_shortstat(s: &str) -> Option<DiffStats> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Some(DiffStats {
+            added: 0,
+            removed: 0,
+        });
+    }
+    let mut added: u32 = 0;
+    let mut removed: u32 = 0;
+    let mut saw_known_marker = false;
+    for part in trimmed.split(',') {
+        let part = part.trim();
+        if let Some(n) = part
+            .strip_suffix(" insertion(+)")
+            .or_else(|| part.strip_suffix(" insertions(+)"))
+        {
+            added = n.parse().ok()?;
+            saw_known_marker = true;
+        } else if let Some(n) = part
+            .strip_suffix(" deletion(-)")
+            .or_else(|| part.strip_suffix(" deletions(-)"))
+        {
+            removed = n.parse().ok()?;
+            saw_known_marker = true;
+        } else if part.ends_with(" file changed") || part.ends_with(" files changed") {
+            // Acceptable file-count prefix; ignore.
+        } else {
+            // Unknown segment — bail.
+            return None;
+        }
+    }
+    if saw_known_marker || trimmed.contains("file") {
+        Some(DiffStats { added, removed })
+    } else {
+        None
+    }
+}
+
+/// Compute line-count diff stats for a worktree against `base`.
+/// Returns `None` on any git failure (missing base ref, etc.).
+pub async fn workspace_diff_stats(worktree: &std::path::Path, base: &str) -> Option<DiffStats> {
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .arg("diff")
+        .arg("--shortstat")
+        .arg(format!("{base}...HEAD"))
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    parse_shortstat(&stdout)
 }
 
 #[cfg(test)]

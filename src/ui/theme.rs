@@ -23,24 +23,61 @@ pub struct Theme {
     pub attention: Color,
     /// Merged-PR indicator on workspace rows.
     pub merged: Color,
+    /// 6-state status palette per the V5 design tokens.
+    pub question: Color,
+    pub stalled: Color,
+    pub waiting: Color,
+    pub thinking: Color,
+    pub complete: Color,
+    pub idle: Color,
 }
 
 impl Theme {
-    /// Default theme using ANSI-named colors so the user's terminal palette
-    /// is respected. Matches the original wsx look.
-    pub fn default_theme() -> Self {
+    /// ANSI-named palette so the user's terminal theme is respected.
+    /// Was named `default_theme` pre-V5; the new default is `wsx`.
+    pub fn ansi() -> Self {
         Self {
             header_fg: Color::Cyan,
             header_bg: Some(Color::Reset),
             selected_fg: Color::White,
             selected_bg: Color::DarkGray,
             dim: Color::DarkGray,
-            path: Color::Indexed(67), // 256-color SteelBlue3 — muted blue
+            path: Color::Indexed(67),
             ok: Color::Green,
             warn: Color::Yellow,
             err: Color::Red,
             attention: Color::Magenta,
             merged: Color::Magenta,
+            question: Color::Yellow,
+            stalled: Color::Red,
+            waiting: Color::Blue,
+            thinking: Color::Magenta,
+            complete: Color::Green,
+            idle: Color::DarkGray,
+        }
+    }
+
+    /// V5 design tokens — oklch values from `tui.css` converted to sRGB.
+    /// This is the new default theme.
+    pub fn wsx() -> Self {
+        Self {
+            header_fg: Color::Rgb(0xeb, 0xeb, 0xeb),
+            header_bg: None,
+            selected_fg: Color::Rgb(0xff, 0xff, 0xff),
+            selected_bg: Color::Rgb(0x24, 0x30, 0x43),
+            dim: Color::Rgb(0xb5, 0xb5, 0xb5),
+            path: Color::Rgb(0x6b, 0x6e, 0x75),
+            ok: Color::Rgb(0x67, 0xc0, 0x89),
+            warn: Color::Rgb(0xe4, 0xba, 0x6c),
+            err: Color::Rgb(0xd3, 0x62, 0x58),
+            attention: Color::Rgb(0xb7, 0x8c, 0xd0),
+            merged: Color::Rgb(0xb7, 0x8c, 0xd0),
+            question: Color::Rgb(0xe4, 0xba, 0x6c),
+            stalled: Color::Rgb(0xd3, 0x62, 0x58),
+            waiting: Color::Rgb(0x6e, 0xa7, 0xd8),
+            thinking: Color::Rgb(0xb7, 0x8c, 0xd0),
+            complete: Color::Rgb(0x67, 0xc0, 0x89),
+            idle: Color::Rgb(0x7a, 0x7e, 0x85),
         }
     }
 
@@ -55,7 +92,6 @@ impl Theme {
         let comment = Color::Rgb(0x62, 0x72, 0xa4);
         let current_line = Color::Rgb(0x44, 0x47, 0x5a);
         let foreground = Color::Rgb(0xf8, 0xf8, 0xf2);
-        let _ = cyan; // reserved for later use
         Self {
             header_fg: purple,
             header_bg: None,
@@ -68,6 +104,12 @@ impl Theme {
             err: red,
             attention: pink,
             merged: purple,
+            question: yellow,
+            stalled: red,
+            waiting: cyan,
+            thinking: purple,
+            complete: green,
+            idle: comment,
         }
     }
 
@@ -96,6 +138,12 @@ impl Theme {
             err: red,
             attention: purple,
             merged: purple,
+            question: orange,
+            stalled: red,
+            waiting: blue,
+            thinking: purple,
+            complete: green,
+            idle: gray,
         }
     }
 
@@ -124,16 +172,24 @@ impl Theme {
             err: aurora_red,
             attention: aurora_orange,
             merged: aurora_purple,
+            question: aurora_yellow,
+            stalled: aurora_red,
+            waiting: frost1,
+            thinking: aurora_purple,
+            complete: aurora_green,
+            idle: polar3,
         }
     }
 
     /// Look up a theme by name. Unknown names fall back to the default.
     pub fn by_name(name: &str) -> Self {
         match name {
+            "ansi" | "default" => Self::ansi(),
+            "wsx" => Self::wsx(),
             "dracula" => Self::dracula(),
             "jellybeans" => Self::jellybeans(),
             "nord" => Self::nord(),
-            _ => Self::default_theme(),
+            _ => Self::wsx(),
         }
     }
 
@@ -170,22 +226,35 @@ impl Theme {
     pub fn merged_style(&self) -> Style {
         Style::default().fg(self.merged)
     }
+
+    pub fn status_style(&self, s: crate::ui::dashboard::status::Status) -> Style {
+        use crate::ui::dashboard::status::Status::*;
+        let fg = match s {
+            Question => self.question,
+            Stalled => self.stalled,
+            Waiting => self.waiting,
+            Thinking => self.thinking,
+            Complete => self.complete,
+            Idle => self.idle,
+        };
+        Style::default().fg(fg)
+    }
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::default_theme()
+        Self::wsx()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::dashboard::status::Status;
 
     #[test]
     fn by_name_resolves_known_themes() {
-        // Use a discriminating field. Default and Dracula differ on `header_fg`.
-        assert_eq!(Theme::by_name("default").header_fg, Color::Cyan);
+        assert_eq!(Theme::by_name("ansi").header_fg, Color::Cyan);
         assert!(matches!(
             Theme::by_name("dracula").header_fg,
             Color::Rgb(0xbd, 0x93, 0xf9)
@@ -202,7 +271,51 @@ mod tests {
 
     #[test]
     fn unknown_theme_falls_back_to_default() {
-        assert_eq!(Theme::by_name("bogus").header_fg, Color::Cyan);
-        assert_eq!(Theme::by_name("").header_fg, Color::Cyan);
+        assert!(matches!(
+            Theme::by_name("bogus").header_fg,
+            Color::Rgb(0xeb, 0xeb, 0xeb)
+        ));
+        assert!(matches!(
+            Theme::by_name("").header_fg,
+            Color::Rgb(0xeb, 0xeb, 0xeb)
+        ));
+    }
+
+    #[test]
+    fn wsx_is_the_default_theme() {
+        let t = Theme::default();
+        assert_eq!(t.question, Color::Rgb(0xe4, 0xba, 0x6c));
+        assert_eq!(t.stalled, Color::Rgb(0xd3, 0x62, 0x58));
+        assert_eq!(t.waiting, Color::Rgb(0x6e, 0xa7, 0xd8));
+        assert_eq!(t.thinking, Color::Rgb(0xb7, 0x8c, 0xd0));
+        assert_eq!(t.complete, Color::Rgb(0x67, 0xc0, 0x89));
+        assert_eq!(t.idle, Color::Rgb(0x7a, 0x7e, 0x85));
+    }
+
+    #[test]
+    fn ansi_theme_uses_named_colors() {
+        let t = Theme::ansi();
+        assert_eq!(t.question, Color::Yellow);
+        assert_eq!(t.stalled, Color::Red);
+        assert_eq!(t.waiting, Color::Blue);
+        assert_eq!(t.thinking, Color::Magenta);
+        assert_eq!(t.complete, Color::Green);
+        assert_eq!(t.idle, Color::DarkGray);
+    }
+
+    #[test]
+    fn status_style_maps_each_state() {
+        let t = Theme::default();
+        assert_eq!(t.status_style(Status::Question).fg, Some(t.question));
+        assert_eq!(t.status_style(Status::Stalled).fg, Some(t.stalled));
+        assert_eq!(t.status_style(Status::Waiting).fg, Some(t.waiting));
+        assert_eq!(t.status_style(Status::Thinking).fg, Some(t.thinking));
+        assert_eq!(t.status_style(Status::Complete).fg, Some(t.complete));
+        assert_eq!(t.status_style(Status::Idle).fg, Some(t.idle));
+    }
+
+    #[test]
+    fn by_name_resolves_wsx() {
+        assert_eq!(Theme::by_name("wsx").question, Color::Rgb(0xe4, 0xba, 0x6c));
     }
 }

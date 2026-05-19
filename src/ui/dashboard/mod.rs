@@ -119,6 +119,138 @@ pub fn render(
     );
 }
 
+/// Return the sequence of selectable targets in *visible order*, matching
+/// what `render()` produces. The caller (`app.rs::draw`) writes this
+/// into `App::selectable` so arrow-key navigation walks the same order
+/// the user sees on screen instead of the raw `app.workspaces` order
+/// (which the V5 renderer reshuffles by noise score / status priority /
+/// fold state / filter).
+///
+/// By-repo: emits `Repo(id)` for each visible header followed by
+/// `Workspace(id)` for each visible workspace inside expanded repos.
+///
+/// By-attention: emits `Workspace(id)` for each row across the four
+/// active sections (NEEDS ATTENTION / WORKING / RECENT / IDLE) in the
+/// order `partition` produces. QUIET REPOS entries are skipped — they
+/// have no per-repo selection model in v1.
+pub fn visible_targets(
+    inputs: &DashboardInputs<'_>,
+    state: &DashboardState,
+) -> Vec<SelectionTarget> {
+    let filter = state.filter.as_deref().filter(|f| !f.is_empty());
+    let mut out: Vec<SelectionTarget> = Vec::new();
+    match state.group_mode {
+        GroupMode::Repo => {
+            // Mirror render_by_repo's ordering: per-repo filter + sort,
+            // then noise-score ordering across repos.
+            #[derive(Clone)]
+            struct Pending {
+                repo_id: crate::store::RepoId,
+                counts: StatusCounts,
+                workspace_ids: Vec<crate::store::WorkspaceId>,
+            }
+            let mut pending: Vec<Pending> = inputs
+                .repos
+                .iter()
+                .map(|r| {
+                    let mut rows: Vec<(Status, crate::store::WorkspaceId)> = inputs
+                        .workspaces
+                        .iter()
+                        .filter(|w| w.repo.id == r.id)
+                        .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+                        .map(|w| (w.status, w.workspace_id))
+                        .collect();
+                    rows.sort_by(|a, b| b.0.priority().cmp(&a.0.priority()));
+                    let counts = StatusCounts::from_iter(rows.iter().map(|(s, _)| *s));
+                    Pending {
+                        repo_id: r.id,
+                        counts,
+                        workspace_ids: rows.into_iter().map(|(_, id)| id).collect(),
+                    }
+                })
+                .collect();
+            // Same empty-tail + noise-desc ordering as `by_repo::order_repos`.
+            pending.sort_by(|a, b| {
+                let a_empty = a.counts.total() == 0;
+                let b_empty = b.counts.total() == 0;
+                match (a_empty, b_empty) {
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ => crate::ui::dashboard::sort::noise_score(b.counts)
+                        .cmp(&crate::ui::dashboard::sort::noise_score(a.counts)),
+                }
+            });
+            for p in &pending {
+                out.push(SelectionTarget::Repo(p.repo_id));
+                let expanded = match state.folded.get(&(p.repo_id.0 as u64)).copied() {
+                    Some(explicit) => !explicit,
+                    None => !default_fold(p.counts),
+                };
+                if expanded {
+                    for wid in &p.workspace_ids {
+                        out.push(SelectionTarget::Workspace(*wid));
+                    }
+                }
+            }
+        }
+        GroupMode::Attention => {
+            // Mirror render_by_attention: filter, drop idle rows that
+            // appear under QUIET REPOS, then partition (which applies
+            // the per-section ordering).
+            let rows: Vec<FlatRow> = inputs
+                .workspaces
+                .iter()
+                .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+                .map(|w| FlatRow {
+                    repo_name: w.repo.name.clone(),
+                    row: w.row.clone(),
+                })
+                .collect();
+            // Build the same quiet-repo set the renderer uses so we drop
+            // the right idle rows.
+            let mut quiet_names: std::collections::HashSet<String> = Default::default();
+            for r in &inputs.repos {
+                let repo_rows: Vec<&WorkspaceItem<'_>> = inputs
+                    .workspaces
+                    .iter()
+                    .filter(|w| w.repo.id == r.id)
+                    .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+                    .collect();
+                let count = repo_rows.len();
+                let all_idle = !repo_rows.is_empty()
+                    && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
+                let repo_matches_filter = filter
+                    .map(|f| r.name.to_lowercase().contains(&f.to_lowercase()))
+                    .unwrap_or(true);
+                let include_empty = count == 0 && (filter.is_none() || repo_matches_filter);
+                if include_empty || all_idle {
+                    quiet_names.insert(r.name.clone());
+                }
+            }
+            let rows: Vec<FlatRow> = rows
+                .into_iter()
+                .filter(|r| {
+                    !matches!(r.row.status, Status::Idle) || !quiet_names.contains(&r.repo_name)
+                })
+                .collect();
+            // We don't need the quiet_repos for selection (skipped),
+            // but partition wants the type; pass an empty Vec.
+            let data = by_attention::partition(rows, Vec::new());
+            for section in [
+                &data.needs_attention,
+                &data.working,
+                &data.recent,
+                &data.idle,
+            ] {
+                for r in section {
+                    out.push(SelectionTarget::Workspace(r.row.workspace_id));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Case-insensitive substring match against the workspace name, branch,
 /// owning repo name, and the last assistant message (when present).
 fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {

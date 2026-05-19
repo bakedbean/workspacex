@@ -523,9 +523,7 @@ mod tests {
         let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
-        store
-            .set_repo_base_branch(id, Some("staging"))
-            .unwrap();
+        store.set_repo_base_branch(id, Some("staging")).unwrap();
         let repo = store
             .repos()
             .unwrap()
@@ -534,9 +532,16 @@ mod tests {
             .unwrap();
         let wt_root = TempDir::new().unwrap();
 
-        let created = create(&store, &repo, Some("from-staging"), wt_root.path(), false, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("from-staging"),
+            wt_root.path(),
+            false,
+            |_| {},
+        )
+        .await
+        .unwrap();
 
         let head = std::process::Command::new("git")
             .current_dir(&created.workspace.worktree_path)

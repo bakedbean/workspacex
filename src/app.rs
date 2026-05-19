@@ -37,6 +37,7 @@ pub enum SelectionTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoSettingField {
     BranchPrefix,
+    BaseBranch,
     CustomInstructions,
     SetupScript,
     ArchiveScript,
@@ -45,8 +46,9 @@ pub enum RepoSettingField {
 }
 
 impl RepoSettingField {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::BranchPrefix,
+        Self::BaseBranch,
         Self::CustomInstructions,
         Self::SetupScript,
         Self::ArchiveScript,
@@ -57,6 +59,7 @@ impl RepoSettingField {
     pub fn label(self) -> &'static str {
         match self {
             Self::BranchPrefix => "branch_prefix",
+            Self::BaseBranch => "base_branch",
             Self::CustomInstructions => "custom_instructions",
             Self::SetupScript => "setup_script",
             Self::ArchiveScript => "archive_script",
@@ -414,6 +417,7 @@ where
         };
         match edit.field {
             RepoSettingField::BranchPrefix => (repo.branch_prefix.clone(), "txt"),
+            RepoSettingField::BaseBranch => (repo.base_branch.clone().unwrap_or_default(), "txt"),
             RepoSettingField::CustomInstructions => {
                 (repo.custom_instructions.clone().unwrap_or_default(), "md")
             }
@@ -1491,6 +1495,7 @@ fn apply_repo_setting(
     };
     match field {
         RepoSettingField::BranchPrefix => app.store.set_repo_branch_prefix(repo_id, trimmed),
+        RepoSettingField::BaseBranch => app.store.set_repo_base_branch(repo_id, opt),
         RepoSettingField::CustomInstructions => {
             app.store.set_repo_custom_instructions(repo_id, opt)
         }

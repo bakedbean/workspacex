@@ -576,9 +576,7 @@ mod tests {
         let repos = store.repos().unwrap();
         assert_eq!(repos[0].base_branch, None);
 
-        store
-            .set_repo_base_branch(id, Some("origin/main"))
-            .unwrap();
+        store.set_repo_base_branch(id, Some("origin/main")).unwrap();
         let repos = store.repos().unwrap();
         assert_eq!(repos[0].base_branch.as_deref(), Some("origin/main"));
 

@@ -4,6 +4,9 @@
 //!
 //! See `docs/superpowers/specs/2026-05-18-named-remotes-design.md`.
 
+use crate::error::Result;
+use crate::store::Store;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Remote {
     pub name: String,
@@ -29,9 +32,30 @@ pub fn parse(text: &str) -> Vec<Remote> {
         .collect()
 }
 
+/// Returns all configured remotes, alphabetized by name.
+pub fn list(store: &Store) -> Result<Vec<Remote>> {
+    let raw = store.get_setting("remotes")?.unwrap_or_default();
+    let mut out = parse(&raw);
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Returns the command for `name`, or `None` if no remote with that
+/// name is configured. When the blob contains duplicate names, the
+/// last one wins (matches the order of the underlying blob).
+pub fn lookup(store: &Store, name: &str) -> Result<Option<String>> {
+    let raw = store.get_setting("remotes")?.unwrap_or_default();
+    Ok(parse(&raw)
+        .into_iter()
+        .rev()
+        .find(|r| r.name == name)
+        .map(|r| r.command))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::Store;
 
     #[test]
     fn parse_labeled_line() {
@@ -106,5 +130,56 @@ mod tests {
             out[0].command,
             r#"ssh -4 -t ebenmini.local "zsh -lc 'tmux attach'""#
         );
+    }
+
+    #[test]
+    fn list_returns_empty_when_unset() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(list(&store).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_returns_alphabetized() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("remotes", "zebra=ssh z\napple=ssh a\nmango=ssh m\n")
+            .unwrap();
+        let out = list(&store).unwrap();
+        let names: Vec<_> = out.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["apple", "mango", "zebra"]);
+    }
+
+    #[test]
+    fn lookup_returns_command_for_known_name() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("remotes", "gpu=ssh gpu-box -t 'tmux attach'\n")
+            .unwrap();
+        assert_eq!(
+            lookup(&store, "gpu").unwrap().as_deref(),
+            Some("ssh gpu-box -t 'tmux attach'")
+        );
+    }
+
+    #[test]
+    fn lookup_returns_none_for_unknown_name() {
+        let store = Store::open_in_memory().unwrap();
+        store.set_setting("remotes", "gpu=ssh gpu-box\n").unwrap();
+        assert!(lookup(&store, "nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn lookup_returns_none_when_unset() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(lookup(&store, "anything").unwrap().is_none());
+    }
+
+    #[test]
+    fn lookup_last_write_wins_for_duplicate_names() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("remotes", "h=first\nh=second\n")
+            .unwrap();
+        assert_eq!(lookup(&store, "h").unwrap().as_deref(), Some("second"));
     }
 }

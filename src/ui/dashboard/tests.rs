@@ -51,6 +51,7 @@ fn build_inputs<'a>(
                     setup_failed: false,
                     lifecycle: None,
                     nerd_fonts: false,
+                    workspace_id: id,
                 },
             });
         }
@@ -104,4 +105,35 @@ fn by_attention_render_emits_section_headers() {
     assert!(joined.contains("  QUIET REPOS"), "{joined}");
     assert!(joined.contains("wsx/theme-tokens") || joined.contains("wsx/repo-overview"),
         "flat row repo/name format");
+}
+
+#[test]
+fn render_sets_list_state_to_selected_workspace_index() {
+    let fixtures = fixture::repos();
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
+    let target = workspaces
+        .iter()
+        .find(|w| w.row.name == "theme-tokens")
+        .map(|w| crate::app::SelectionTarget::Workspace(w.workspace_id))
+        .unwrap();
+    let activity: Vec<u32> = vec![1; 24];
+    let inputs = DashboardInputs { repos: repo_refs, workspaces, activity: &activity };
+    let mut state = DashboardState {
+        group_mode: GroupMode::Repo,
+        selection: Some(target),
+        ..Default::default()
+    };
+    let theme = Theme::wsx();
+    let backend = TestBackend::new(160, 40);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme)).unwrap();
+    assert!(
+        state.list_state.selected().is_some(),
+        "list_state should have a selected index when selection is set"
+    );
 }

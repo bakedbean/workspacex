@@ -136,6 +136,7 @@ mod tests {
                 setup_failed: false,
                 lifecycle: None,
                 nerd_fonts: false,
+                workspace_id: crate::store::WorkspaceId(i as i64),
             }
         }).collect();
         workspaces.sort_by(|a, b| b.status.priority().cmp(&a.status.priority()));

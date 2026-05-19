@@ -166,14 +166,42 @@ fn render_by_repo<'a>(
         })
         .collect();
     by_repo::order_repos(&mut views);
-    let items = by_repo::render_list(&views, tick, width, theme);
-    let _ = state.selection;
-    items
+
+    // Walk the same item sequence that render_list will emit to determine
+    // which flat list index corresponds to the current selection.
+    let mut selected_idx: Option<usize> = None;
+    let mut flat_idx: usize = 0;
+    let selection = state.selection;
+    for view in &views {
+        // Header item
+        if let Some(SelectionTarget::Repo(rid)) = selection {
+            if view.id == rid.0 as u64 {
+                selected_idx = Some(flat_idx);
+            }
+        }
+        flat_idx += 1;
+        if !view.expanded {
+            continue;
+        }
+        for w in &view.workspaces {
+            if let Some(SelectionTarget::Workspace(wid)) = selection {
+                if w.workspace_id == wid {
+                    selected_idx = Some(flat_idx);
+                }
+            }
+            flat_idx += 1;
+        }
+        // Spacer item
+        flat_idx += 1;
+    }
+    state.list_state.select(selected_idx);
+
+    by_repo::render_list(&views, tick, width, theme)
 }
 
 fn render_by_attention<'a>(
     inputs: &DashboardInputs<'a>,
-    state: &DashboardState,
+    state: &mut DashboardState,
     tick: u32,
     width: usize,
     theme: &Theme,
@@ -228,6 +256,35 @@ fn render_by_attention<'a>(
             .cloned().collect(),
         quiet_repos: quiet,
     };
+
+    // Walk the same item sequence that render_list will emit to determine
+    // which flat list index corresponds to the current selection.
+    // Quiet repos have no selection model in v1 — skip them.
+    let mut selected_idx: Option<usize> = None;
+    let mut flat_idx: usize = 0;
+    let selection = state.selection;
+    let sections: [&[FlatRow]; 4] = [
+        &data.needs_attention,
+        &data.working,
+        &data.recent,
+        &data.idle,
+    ];
+    for section in &sections {
+        if !section.is_empty() {
+            // Section header
+            flat_idx += 1;
+            for row in *section {
+                if let Some(SelectionTarget::Workspace(wid)) = selection {
+                    if row.row.workspace_id == wid {
+                        selected_idx = Some(flat_idx);
+                    }
+                }
+                flat_idx += 1;
+            }
+        }
+    }
+    state.list_state.select(selected_idx);
+
     by_attention::render_list(&data, tick, width, theme)
 }
 

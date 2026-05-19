@@ -677,6 +677,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         setup_failed,
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         nerd_fonts,
+                        workspace_id: ws.id,
                     };
                     workspaces.push(dashboard::WorkspaceItem {
                         repo,
@@ -1332,7 +1333,11 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 }
                 return Ok(());
             }
-            KeyCode::Char(c) if !c.is_control() => {
+            KeyCode::Char(c)
+                if !c.is_control()
+                    && !k.modifiers.contains(KeyModifiers::CONTROL)
+                    && !k.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 if let Some(buf) = app.dashboard.filter.as_mut() {
                     buf.push(c);
                 }

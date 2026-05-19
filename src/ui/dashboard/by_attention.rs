@@ -197,7 +197,7 @@ mod tests {
         let repos = fixture::repos();
         let mut out = Vec::new();
         for r in &repos {
-            for w in &r.workspaces {
+            for (i, w) in r.workspaces.iter().enumerate() {
                 out.push(FlatRow {
                     repo_name: r.name.clone(),
                     row: RowInputs {
@@ -213,6 +213,7 @@ mod tests {
                         setup_failed: false,
                         lifecycle: None,
                         nerd_fonts: false,
+                        workspace_id: crate::store::WorkspaceId(i as i64),
                     },
                 });
             }
@@ -302,6 +303,7 @@ mod tests {
                 setup_failed: false,
                 lifecycle: None,
                 nerd_fonts: false,
+                workspace_id: crate::store::WorkspaceId(0),
             },
         };
         let line = flat_row_line(&row, 0, &theme, 120);

@@ -205,6 +205,12 @@ impl Theme {
     pub fn selected_style(&self) -> Style {
         Style::default().fg(self.selected_fg).bg(self.selected_bg)
     }
+    /// Selection tint that leaves per-span foregrounds intact — only the
+    /// row background changes. Used by the dashboard list so status,
+    /// lifecycle, and dim colors remain readable on the selected row.
+    pub fn selected_bg_style(&self) -> Style {
+        Style::default().bg(self.selected_bg)
+    }
     pub fn dim_style(&self) -> Style {
         Style::default().fg(self.dim)
     }

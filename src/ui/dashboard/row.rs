@@ -116,7 +116,7 @@ pub fn render(
         theme.status_style(inputs.status),
     ));
 
-    // 4: name (with setup-failed badge and YOLO/selected styling)
+    // 4: name (with setup-failed badge and YOLO styling)
     let name_target = if inputs.setup_failed {
         name_width.saturating_sub(3).max(1)
     } else {
@@ -124,9 +124,7 @@ pub fn render(
     };
     let name_padded = truncate_pad(&inputs.name, name_target);
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
-    if inputs.selected {
-        name_style = name_style.fg(theme.waiting);
-    } else if inputs.yolo {
+    if inputs.yolo {
         name_style = name_style.fg(theme.warn);
     }
     spans.push(Span::styled(name_padded, name_style));

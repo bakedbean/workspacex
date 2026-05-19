@@ -221,13 +221,16 @@ pub enum SpawnMode {
     /// Spawn the project-manager session. Embeds the PM system prompt and
     /// a read-only tool allowlist. When `resume` is true, also passes
     /// `--continue` to pick up PM's prior conversation. Always uses
-    /// `--dangerously-skip-permissions`.
+    /// `--dangerously-skip-permissions`. When `fast_mode` is true, also
+    /// passes `--settings '{"fastMode":true}'` to enable Claude Code's
+    /// fast mode for this session.
     ProjectManager {
         workspaces_json_path: std::path::PathBuf,
         custom_instructions: Option<String>,
         // PM has no owning repo, so always empty. Kept for uniformity.
         additional_dirs: Vec<std::path::PathBuf>,
         resume: bool,
+        fast_mode: bool,
     },
 }
 
@@ -303,6 +306,7 @@ pub fn build_claude_command(
                 custom_instructions,
                 additional_dirs,
                 resume,
+                fast_mode: _, // emitted below, after the match
             } => (
                 Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
                 None,
@@ -334,6 +338,14 @@ pub fn build_claude_command(
         if remote.sandbox {
             cmd.arg("--sandbox");
         }
+    }
+
+    if let SpawnMode::ProjectManager {
+        fast_mode: true, ..
+    } = mode
+    {
+        cmd.arg("--settings");
+        cmd.arg(r#"{"fastMode":true}"#);
     }
 
     let combined = match (rename_prompt, custom) {
@@ -921,6 +933,7 @@ mod tests {
             custom_instructions: None,
             additional_dirs: vec![],
             resume: false,
+            fast_mode: false,
         };
         let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
@@ -945,6 +958,7 @@ mod tests {
             custom_instructions: None,
             additional_dirs: vec![],
             resume: true,
+            fast_mode: false,
         };
         let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
@@ -952,6 +966,80 @@ mod tests {
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
+    }
+
+    #[test]
+    fn project_manager_mode_emits_settings_when_fast_mode() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
+            custom_instructions: None,
+            additional_dirs: vec![],
+            resume: false,
+            fast_mode: true,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--settings"))
+            .expect("expected --settings flag when fast_mode is true");
+        let value = argv
+            .get(idx + 1)
+            .expect("expected JSON value after --settings")
+            .to_string_lossy();
+        assert_eq!(value, r#"{"fastMode":true}"#);
+    }
+
+    #[test]
+    fn project_manager_mode_omits_settings_when_fast_mode_false() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
+            custom_instructions: None,
+            additional_dirs: vec![],
+            resume: false,
+            fast_mode: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        assert!(
+            !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
+            "expected no --settings flag when fast_mode is false, argv: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn fresh_mode_never_emits_settings_for_fast_mode() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        assert!(
+            !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
+            "Fresh mode should never emit --settings, argv: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn continue_mode_never_emits_settings_for_fast_mode() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Continue {
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        assert!(
+            !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
+            "Continue mode should never emit --settings, argv: {argv:?}"
+        );
     }
 
     #[test]
@@ -1030,6 +1118,7 @@ mod tests {
             custom_instructions: None,
             additional_dirs: vec![],
             resume: false,
+            fast_mode: false,
         };
         let opts = crate::remote_control::RemoteOpts {
             enabled: true,
@@ -1142,6 +1231,7 @@ mod tests {
             custom_instructions: None,
             additional_dirs: vec![],
             resume: false,
+            fast_mode: false,
         };
         let s = mgr
             .spawn_pm(
@@ -1159,6 +1249,7 @@ mod tests {
             custom_instructions: None,
             additional_dirs: vec![],
             resume: false,
+            fast_mode: false,
         };
         let s2 = mgr
             .spawn_pm(

@@ -109,6 +109,7 @@ fn known_setting_key(k: &str) -> bool {
             | "theme"
             | "pm_enabled"
             | "pm_custom_instructions"
+            | "pm_fast_mode"
             | "mcp_mirror"
             | "remote_control"
             | "remote_control_sandbox"
@@ -668,6 +669,11 @@ mod tests {
     fn accepts_pm_enabled_and_pm_custom_instructions() {
         assert!(known_setting_key("pm_enabled"));
         assert!(known_setting_key("pm_custom_instructions"));
+    }
+
+    #[test]
+    fn accepts_pm_fast_mode() {
+        assert!(known_setting_key("pm_fast_mode"));
     }
 
     #[test]

@@ -116,7 +116,7 @@ pub fn render(
         theme.status_style(inputs.status),
     ));
 
-    // 4: name (with setup-failed badge and YOLO/selected styling)
+    // 4: name (with setup-failed badge and YOLO styling)
     let name_target = if inputs.setup_failed {
         name_width.saturating_sub(3).max(1)
     } else {

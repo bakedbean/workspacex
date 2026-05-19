@@ -1039,6 +1039,22 @@ mod tests {
     }
 
     #[test]
+    fn continue_mode_never_emits_settings_for_fast_mode() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Continue {
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        assert!(
+            !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
+            "Continue mode should never emit --settings, argv: {argv:?}"
+        );
+    }
+
+    #[test]
     fn build_claude_command_appends_remote_control_when_enabled() {
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::Fresh {

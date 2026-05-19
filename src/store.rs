@@ -36,6 +36,7 @@ pub struct Repo {
     pub archive_script: Option<String>,
     pub pinned_commands: Option<String>,
     pub related_repos: Option<String>,
+    pub base_branch: Option<String>,
     pub created_at: i64,
 }
 
@@ -165,6 +166,18 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 6", [])?;
         }
+        if v < 7 {
+            let has_col: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'base_branch'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_col == 0 {
+                self.conn
+                    .execute("ALTER TABLE repos ADD COLUMN base_branch TEXT", [])?;
+            }
+            self.conn.execute("PRAGMA user_version = 7", [])?;
+        }
         Ok(())
     }
 
@@ -189,7 +202,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, path, branch_prefix, custom_instructions, \
                     setup_script, archive_script, pinned_commands, \
-                    related_repos, created_at \
+                    related_repos, base_branch, created_at \
              FROM repos ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -203,7 +216,8 @@ impl Store {
                 archive_script: r.get(6)?,
                 pinned_commands: r.get(7)?,
                 related_repos: r.get(8)?,
-                created_at: r.get(9)?,
+                base_branch: r.get(9)?,
+                created_at: r.get(10)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -256,6 +270,14 @@ impl Store {
     pub fn set_repo_related_repos(&self, id: RepoId, value: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE repos SET related_repos = ?1 WHERE id = ?2",
+            rusqlite::params![value, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_repo_base_branch(&self, id: RepoId, value: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET base_branch = ?1 WHERE id = ?2",
             rusqlite::params![value, id.0],
         )?;
         Ok(())
@@ -545,6 +567,24 @@ mod tests {
         store.set_repo_custom_instructions(id, None).unwrap();
         let repos = store.repos().unwrap();
         assert_eq!(repos[0].custom_instructions, None);
+    }
+
+    #[test]
+    fn repo_base_branch_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/r"), "demo", "").unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(repos[0].base_branch, None);
+
+        store
+            .set_repo_base_branch(id, Some("origin/main"))
+            .unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(repos[0].base_branch.as_deref(), Some("origin/main"));
+
+        store.set_repo_base_branch(id, None).unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(repos[0].base_branch, None);
     }
 
     #[test]

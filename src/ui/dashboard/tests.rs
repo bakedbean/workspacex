@@ -15,6 +15,7 @@ fn repo(id: i64, name: &str) -> Repo {
         archive_script: None,
         pinned_commands: None,
         related_repos: None,
+        base_branch: None,
         created_at: 0,
     }
 }

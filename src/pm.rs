@@ -157,6 +157,15 @@ pub fn pm_system_prompt(custom: Option<&str>) -> String {
     }
 }
 
+/// Defaults OFF. On-values: `true` / `on` / `1` / `yes`. Anything else is
+/// off. PM-only: workspace sessions never look at this setting.
+pub fn pm_fast_mode_enabled(store: &crate::store::Store) -> bool {
+    matches!(
+        store.get_setting("pm_fast_mode").ok().flatten().as_deref(),
+        Some("true" | "on" | "1" | "yes")
+    )
+}
+
 /// The initial user message wsx sends to PM after a Fresh spawn.
 pub const PM_AUTO_SUMMARY_MESSAGE: &str =
     "Give me a status summary of all active workspaces per your instructions.";
@@ -604,5 +613,29 @@ mod tests {
             screen.contains("Refresh"),
             "expected refresh echo from cat. screen: {screen:?}"
         );
+    }
+
+    #[test]
+    fn pm_fast_mode_defaults_false_when_unset() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(!pm_fast_mode_enabled(&store));
+    }
+
+    #[test]
+    fn pm_fast_mode_true_for_on_values() {
+        let store = Store::open_in_memory().unwrap();
+        for v in ["true", "on", "1", "yes"] {
+            store.set_setting("pm_fast_mode", v).unwrap();
+            assert!(pm_fast_mode_enabled(&store), "expected enabled for {v:?}");
+        }
+    }
+
+    #[test]
+    fn pm_fast_mode_false_for_off_or_garbage_values() {
+        let store = Store::open_in_memory().unwrap();
+        for v in ["false", "off", "0", "no", "", "maybe", "FAST"] {
+            store.set_setting("pm_fast_mode", v).unwrap();
+            assert!(!pm_fast_mode_enabled(&store), "expected disabled for {v:?}");
+        }
     }
 }

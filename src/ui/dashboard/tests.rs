@@ -35,7 +35,7 @@ fn workspace(id: i64, repo_id: i64, name: &str, branch: &str) -> Workspace {
 }
 
 fn t() -> Theme {
-    Theme::default_theme()
+    Theme::ansi()
 }
 
 fn dump(term: &Terminal<TestBackend>, w: u16, h: u16) -> String {
@@ -1072,7 +1072,7 @@ fn workspace_row_branch_truncated_with_ellipsis() {
 #[test]
 fn activity_word_uses_warn_color_for_question_and_awaiting() {
     // Direct unit test of the style mapping.
-    let theme = Theme::default_theme();
+    let theme = Theme::ansi();
     let style_question = activity_style("question", &theme);
     let style_awaiting = activity_style("awaiting", &theme);
     assert_eq!(style_question.fg, Some(theme.warn));
@@ -1081,28 +1081,28 @@ fn activity_word_uses_warn_color_for_question_and_awaiting() {
 
 #[test]
 fn activity_word_uses_ok_color_for_complete() {
-    let theme = Theme::default_theme();
+    let theme = Theme::ansi();
     let style = activity_style("complete", &theme);
     assert_eq!(style.fg, Some(theme.ok));
 }
 
 #[test]
 fn activity_word_uses_ok_color_for_active() {
-    let theme = Theme::default_theme();
+    let theme = Theme::ansi();
     let style = activity_style("active", &theme);
     assert_eq!(style.fg, Some(theme.ok));
 }
 
 #[test]
 fn activity_word_uses_dim_for_off_and_resumable() {
-    let theme = Theme::default_theme();
+    let theme = Theme::ansi();
     assert_eq!(activity_style("off", &theme).fg, Some(theme.dim));
     assert_eq!(activity_style("resumable", &theme).fg, Some(theme.dim));
 }
 
 #[test]
 fn activity_word_uses_default_for_idle() {
-    let theme = Theme::default_theme();
+    let theme = Theme::ansi();
     assert_eq!(activity_style("idle", &theme).fg, None);
 }
 

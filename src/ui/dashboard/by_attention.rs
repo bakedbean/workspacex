@@ -46,7 +46,19 @@ pub fn partition(rows: Vec<FlatRow>, quiet_repos: Vec<QuietRepo>) -> AttentionDa
             Status::Idle => idle.push(r),
         }
     }
-    needs.sort_by(|a, b| b.row.status.priority().cmp(&a.row.status.priority()));
+    // Within NEEDS ATTENTION: priority desc, then most-recent first
+    // (small `ago_secs` first; `None` treated as oldest).
+    needs.sort_by(|a, b| {
+        b.row
+            .status
+            .priority()
+            .cmp(&a.row.status.priority())
+            .then_with(|| ago_key(a.row.ago_secs).cmp(&ago_key(b.row.ago_secs)))
+    });
+    // WORKING / RECENT / IDLE: most-recent first by `ago_secs`.
+    for section in [&mut working, &mut recent, &mut idle] {
+        section.sort_by(|a, b| ago_key(a.row.ago_secs).cmp(&ago_key(b.row.ago_secs)));
+    }
     AttentionData {
         needs_attention: needs,
         working,
@@ -54,6 +66,13 @@ pub fn partition(rows: Vec<FlatRow>, quiet_repos: Vec<QuietRepo>) -> AttentionDa
         idle,
         quiet_repos,
     }
+}
+
+/// Sort key for "most recent first". Smaller `ago_secs` ⇒ more recent
+/// ⇒ sorts earlier. `None` (no last-activity timestamp) is treated as
+/// oldest so it falls to the bottom of its section.
+fn ago_key(ago_secs: Option<u64>) -> u64 {
+    ago_secs.unwrap_or(u64::MAX)
 }
 
 fn section_header(
@@ -90,19 +109,11 @@ fn quiet_line(q: &QuietRepo, width: usize, theme: &Theme) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push(Span::styled("▎".to_string(), theme.dim_style()));
     spans.push(Span::raw("  ·  ".to_string()));
-    let mut name_padded = q.name.clone();
-    while name_padded.chars().count() < 18 {
-        name_padded.push(' ');
-    }
     spans.push(Span::styled(
-        name_padded,
+        truncate_pad(&q.name, 18),
         Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
     ));
-    let mut path_padded = q.path.clone();
-    while path_padded.chars().count() < 36 {
-        path_padded.push(' ');
-    }
-    spans.push(Span::styled(path_padded, theme.dim_style()));
+    spans.push(Span::styled(truncate_pad(&q.path, 36), theme.dim_style()));
     let suffix = if q.workspace_count == 0 {
         "no workspaces · press n to create".to_string()
     } else {
@@ -114,6 +125,23 @@ fn quiet_line(q: &QuietRepo, width: usize, theme: &Theme) -> Line<'static> {
         spans.push(Span::raw(" ".repeat(width - used)));
     }
     Line::from(spans)
+}
+
+/// Truncate `s` to fit `target` chars (replacing the last char with `…`
+/// when over) and right-pad with spaces when under.
+fn truncate_pad(s: &str, target: usize) -> String {
+    let len = s.chars().count();
+    if len > target && target > 0 {
+        let mut out: String = s.chars().take(target - 1).collect();
+        out.push('…');
+        out
+    } else if len < target {
+        let mut out = s.to_string();
+        out.push_str(&" ".repeat(target - len));
+        out
+    } else {
+        s.to_string()
+    }
 }
 
 fn flat_row_line(
@@ -273,6 +301,63 @@ mod tests {
         // The next is question-statuses, then waiting.
         let next = &data.needs_attention[1].row.status;
         assert_eq!(*next, Status::Question);
+    }
+
+    #[test]
+    fn partition_sorts_working_recent_idle_by_recency() {
+        // RECENT contains brave-cedar (8m), tech-stack-question (34s),
+        // and rate-limit (1h). Most-recent-first should yield 34s, 8m, 1h.
+        let rows = make_rows();
+        let quiet = make_quiet();
+        let data = partition(rows, quiet);
+        let recent_names: Vec<&str> = data.recent.iter().map(|r| r.row.name.as_str()).collect();
+        assert_eq!(
+            recent_names,
+            vec!["tech-stack-question", "brave-cedar", "rate-limit"],
+        );
+        // WORKING: recipe-importer (11s) is newer than quiet-fennel (4s)?
+        // No — quiet-fennel @ 4s is more recent than recipe-importer @ 11s.
+        let working_names: Vec<&str> = data.working.iter().map(|r| r.row.name.as_str()).collect();
+        assert_eq!(working_names, vec!["quiet-fennel", "recipe-importer"]);
+    }
+
+    #[test]
+    fn partition_breaks_priority_ties_with_recency() {
+        // Two QUESTION rows: repo-overview (29s) and driver-map-v2 (3m).
+        // Same priority → 29s should come first.
+        let rows = make_rows();
+        let quiet = make_quiet();
+        let data = partition(rows, quiet);
+        let question_names: Vec<&str> = data
+            .needs_attention
+            .iter()
+            .filter(|r| r.row.status == Status::Question)
+            .map(|r| r.row.name.as_str())
+            .collect();
+        assert_eq!(question_names, vec!["repo-overview", "driver-map-v2"]);
+    }
+
+    #[test]
+    fn quiet_line_truncates_long_repo_name_and_path() {
+        let theme = Theme::wsx();
+        let q = QuietRepo {
+            name: "this-is-a-really-long-repo-name-that-exceeds-the-column".into(),
+            path: "/home/eben/way/too/deep/a/path/for/the/quiet/repos/row".into(),
+            workspace_count: 0,
+            all_idle: false,
+        };
+        let line = quiet_line(&q, 120, &theme);
+        // Name column is 18 chars, path is 36 chars. Both must end in `…`
+        // when over.
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("this-is-a-really-…"),
+            "name truncated: {text:?}"
+        );
+        assert!(
+            text.contains("/home/eben/way/too/deep/a/path/for/…"),
+            "path truncated: {text:?}",
+        );
     }
 
     #[test]

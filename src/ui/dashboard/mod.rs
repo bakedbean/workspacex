@@ -14,7 +14,7 @@ pub mod status;
 
 use crate::app::SelectionTarget;
 use crate::store::Repo;
-use crate::ui::dashboard::by_attention::{AttentionData, FlatRow, QuietRepo};
+use crate::ui::dashboard::by_attention::{FlatRow, QuietRepo};
 use crate::ui::dashboard::by_repo::RepoView;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::row::RowInputs;
@@ -162,7 +162,7 @@ fn render_by_repo<'a>(
             RepoView {
                 id: repo_id_u64,
                 name: &r.name,
-                path: r.path.to_str().unwrap_or(""),
+                path: r.path.to_string_lossy().into_owned(),
                 counts,
                 expanded,
                 workspaces,
@@ -211,7 +211,7 @@ fn render_by_attention<'a>(
     theme: &Theme,
 ) -> Vec<ratatui::widgets::ListItem<'static>> {
     let filter = state.filter.as_deref().filter(|f| !f.is_empty());
-    let mut rows: Vec<FlatRow> = inputs
+    let rows: Vec<FlatRow> = inputs
         .workspaces
         .iter()
         .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
@@ -220,7 +220,6 @@ fn render_by_attention<'a>(
             row: w.row.clone(),
         })
         .collect();
-    rows.sort_by(|a, b| b.row.status.priority().cmp(&a.row.status.priority()));
     let mut quiet: Vec<QuietRepo> = Vec::new();
     for r in &inputs.repos {
         let repo_rows: Vec<&WorkspaceItem<'_>> = inputs
@@ -247,38 +246,21 @@ fn render_by_attention<'a>(
             });
         }
     }
-    let data = AttentionData {
-        needs_attention: rows
-            .iter()
-            .filter(|r| {
-                matches!(
-                    r.row.status,
-                    Status::Question | Status::Stalled | Status::Waiting
-                )
-            })
-            .cloned()
-            .collect(),
-        working: rows
-            .iter()
-            .filter(|r| matches!(r.row.status, Status::Thinking))
-            .cloned()
-            .collect(),
-        recent: rows
-            .iter()
-            .filter(|r| matches!(r.row.status, Status::Complete))
-            .cloned()
-            .collect(),
-        idle: rows
-            .iter()
-            .filter(|r| matches!(r.row.status, Status::Idle))
-            .filter(|r| {
-                // Idle rows from quiet repos already appear under QUIET REPOS.
-                !quiet.iter().any(|q| q.name == r.repo_name)
-            })
-            .cloned()
-            .collect(),
-        quiet_repos: quiet,
-    };
+    // Drop idle rows that already appear under QUIET REPOS, so they
+    // don't double-render across IDLE and QUIET REPOS sections.
+    let quiet_repo_names: std::collections::HashSet<&str> =
+        quiet.iter().map(|q| q.name.as_str()).collect();
+    let rows: Vec<FlatRow> = rows
+        .into_iter()
+        .filter(|r| {
+            !matches!(r.row.status, Status::Idle)
+                || !quiet_repo_names.contains(r.repo_name.as_str())
+        })
+        .collect();
+    // `partition` distributes rows into sections AND applies the
+    // per-section ordering rules (priority-then-recency for NEEDS,
+    // recency-only for WORKING / RECENT / IDLE).
+    let data = by_attention::partition(rows, quiet);
 
     // Walk the same item sequence that render_list will emit to determine
     // which flat list index corresponds to the current selection.

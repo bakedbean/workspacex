@@ -211,6 +211,10 @@ pub struct App {
         std::collections::HashMap<crate::store::WorkspaceId, crate::forge::BranchLifecycle>,
     /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
     pub pr_last_poll_ms: std::collections::HashMap<crate::store::WorkspaceId, i64>,
+    /// Last epoch-ms we attempted a `git diff --shortstat` per workspace
+    /// (throttle key). 10s minimum interval keeps the dashboard
+    /// `+N −N` cell fresh without re-running diff on every 2s tick.
+    pub diff_last_poll_ms: std::collections::HashMap<crate::store::WorkspaceId, i64>,
     pub workspace_events:
         std::collections::HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
     /// Per-workspace tracking for attention-alert state.
@@ -287,6 +291,7 @@ impl App {
             workspace_status: std::collections::HashMap::new(),
             pr_lifecycle: std::collections::HashMap::new(),
             pr_last_poll_ms: std::collections::HashMap::new(),
+            diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
@@ -404,7 +409,14 @@ impl App {
                 .unwrap_or(0);
             now.saturating_sub(last) / 1000
         });
-        let has_prior = crate::pty::session::has_prior_session(&ws.worktree_path);
+        // `has_prior_session` does filesystem I/O (canonicalize +
+        // read_dir); skip it when we already have a live session, since
+        // the classifier only looks at it in the no-session branch.
+        let has_prior = if running {
+            false
+        } else {
+            crate::pty::session::has_prior_session(&ws.worktree_path)
+        };
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -2431,6 +2443,11 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     // makes the next tick poll immediately.
                     g.pr_lifecycle.remove(&id);
                     g.pr_last_poll_ms.remove(&id);
+                    // New branch → different ancestry from `base_branch`,
+                    // so the cached diff and its throttle stamp are
+                    // stale. Drop them to force a fresh poll.
+                    g.workspace_diff.remove(&id);
+                    g.diff_last_poll_ms.remove(&id);
                 }
             }
 
@@ -2441,10 +2458,31 @@ pub async fn branch_drift_poll(app: SharedApp) {
             }
 
             // 2b) Diff stats vs. base branch (for dashboard +N/-M column).
+            //     Throttled to once per 10s per workspace: running
+            //     `git diff --shortstat <base>...HEAD` on every 2s tick
+            //     is wasteful on large repos and the column doesn't need
+            //     sub-10s freshness.
             if let Some(base) = base_branch.as_deref() {
-                if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
-                    let mut g = app.lock().await;
-                    g.workspace_diff.insert(id, diff);
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                let should_poll = {
+                    let g = app.lock().await;
+                    g.diff_last_poll_ms
+                        .get(&id)
+                        .map(|t| now_ms.saturating_sub(*t) >= 10_000)
+                        .unwrap_or(true)
+                };
+                if should_poll {
+                    {
+                        let mut g = app.lock().await;
+                        g.diff_last_poll_ms.insert(id, now_ms);
+                    }
+                    if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
+                        let mut g = app.lock().await;
+                        g.workspace_diff.insert(id, diff);
+                    }
                 }
             }
 

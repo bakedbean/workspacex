@@ -14,7 +14,10 @@ use ratatui::widgets::ListItem;
 pub struct RepoView<'a> {
     pub id: u64,
     pub name: &'a str,
-    pub path: &'a str,
+    /// Lossy-converted display path — `RepoView` owns the string so
+    /// non-UTF8 path bytes survive the conversion (with U+FFFD
+    /// substitution) instead of being dropped to an empty string.
+    pub path: String,
     pub counts: StatusCounts,
     pub expanded: bool,
     /// Already sorted by Status priority (Stalled first).
@@ -151,7 +154,7 @@ mod tests {
         RepoView {
             id,
             name: r.name.as_str(),
-            path: r.path.as_str(),
+            path: r.path.clone(),
             counts,
             expanded,
             workspaces,

@@ -158,12 +158,23 @@ pub fn render(
     spans.push(Span::styled(procs_padded, procs_style));
 
     // 7: diff
-    let diff_text = match inputs.diff {
-        Some(d) if d.added > 0 || d.removed > 0 => format!("+{} −{}", d.added, d.removed),
-        _ => String::new(),
-    };
-    let diff_padded = truncate_pad(&diff_text, DIFF_WIDTH);
-    spans.push(Span::styled(diff_padded, theme.dim_style()));
+    match inputs.diff {
+        Some(d) if d.added > 0 || d.removed > 0 => {
+            let added_text = format!("+{}", d.added);
+            let removed_text = format!("−{}", d.removed);
+            let content_width = added_text.chars().count() + 1 + removed_text.chars().count();
+            let pad = DIFF_WIDTH.saturating_sub(content_width);
+            spans.push(Span::styled(added_text, theme.ok_style()));
+            spans.push(Span::styled(" ".to_string(), theme.dim_style()));
+            spans.push(Span::styled(removed_text, theme.err_style()));
+            if pad > 0 {
+                spans.push(Span::styled(" ".repeat(pad), theme.dim_style()));
+            }
+        }
+        _ => {
+            spans.push(Span::styled(" ".repeat(DIFF_WIDTH), theme.dim_style()));
+        }
+    }
 
     // 8: message (flex)
     let left_consumed = GUTTER_WIDTH
@@ -346,6 +357,24 @@ mod tests {
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("  ·"), "faint dot for zero procs: {text:?}");
+    }
+
+    #[test]
+    fn diff_cell_colors_additions_green_and_deletions_red() {
+        let theme = Theme::wsx();
+        let line = render(&base(), ColumnWidths::default(), 0, &theme, 120);
+        let added_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "+12")
+            .expect("added span present");
+        let removed_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "−3")
+            .expect("removed span present");
+        assert_eq!(added_span.style.fg, Some(theme.ok));
+        assert_eq!(removed_span.style.fg, Some(theme.err));
     }
 
     #[test]

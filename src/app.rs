@@ -633,7 +633,7 @@ pub async fn run<B: Backend + std::io::Write>(
             maybe_evt = events.next() => {
                 let Some(Ok(evt)) = maybe_evt else { break; };
                 let mut g = app.lock().await;
-                handle_event(&mut g, evt).await?;
+                handle_event(&mut g, &app, evt).await?;
             }
         }
     }
@@ -1228,20 +1228,20 @@ fn fire_bell(state: ActivityState, store: &crate::store::Store) {
     });
 }
 
-async fn handle_event(app: &mut App, evt: CtEvent) -> Result<()> {
+async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent) -> Result<()> {
     match evt {
-        CtEvent::Key(k) if k.kind == KeyEventKind::Press => dispatch_key(app, k).await?,
+        CtEvent::Key(k) if k.kind == KeyEventKind::Press => dispatch_key(app, shared, k).await?,
         CtEvent::Mouse(m) => handle_mouse(app, m).await,
-        CtEvent::Paste(content) => handle_paste(app, content).await?,
+        CtEvent::Paste(content) => handle_paste(app, shared, content).await?,
         CtEvent::Resize(_, _) => {}
         _ => {}
     }
     Ok(())
 }
 
-async fn dispatch_key(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+async fn dispatch_key(app: &mut App, shared: &SharedApp, k: crossterm::event::KeyEvent) -> Result<()> {
     if app.modal.is_some() {
-        handle_key_modal(app, k).await?;
+        handle_key_modal(app, shared, k).await?;
     } else {
         match &app.view {
             View::Dashboard => handle_key_dashboard(app, k).await?,
@@ -1286,7 +1286,7 @@ fn paste_char_to_key(c: char) -> crossterm::event::KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
-async fn handle_paste(app: &mut App, content: String) -> Result<()> {
+async fn handle_paste(app: &mut App, shared: &SharedApp, content: String) -> Result<()> {
     // PTY path: forward the whole paste as one bracketed sequence to
     // whichever session is currently driving the foreground (attached
     // workspace, full-screen PM, or the embedded PM pane when focused
@@ -1308,7 +1308,7 @@ async fn handle_paste(app: &mut App, content: String) -> Result<()> {
     // modal handlers see paste-with-newlines as multiple Enter presses
     // rather than literal '\n' Chars.
     for c in content.chars() {
-        dispatch_key(app, paste_char_to_key(c)).await?;
+        dispatch_key(app, shared, paste_char_to_key(c)).await?;
     }
     Ok(())
 }
@@ -2178,7 +2178,7 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
     Ok(())
 }
 
-async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+async fn handle_key_modal(app: &mut App, shared: &SharedApp, k: crossterm::event::KeyEvent) -> Result<()> {
     let modal = app.modal.clone().unwrap();
     match modal {
         Modal::NewWorkspace {
@@ -2190,10 +2190,6 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 app.modal = None;
             }
             KeyCode::Enter => {
-                // Live-log streaming during create is intentionally deferred. The
-                // borrow checker would force a channel-based dance to mutate
-                // `app.modal` while `app.store` is borrowed inside `workspace::create`.
-                // v1: show a static "running..." modal, swap it for the result.
                 let name = if name_buffer.trim().is_empty() {
                     None
                 } else {
@@ -2201,30 +2197,24 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 };
                 let repo = app.repos.iter().find(|r| r.id == repo_id).unwrap().clone();
                 let base = app.worktree_base.clone();
+                let cancel = tokio_util::sync::CancellationToken::new();
+                let create_gen = app.alloc_create_gen();
                 app.modal = Some(Modal::SetupRunning {
-                    cancel: tokio_util::sync::CancellationToken::new(),
+                    cancel: cancel.clone(),
                 });
-                let result = crate::workspace::create(
-                    &app.store,
-                    &repo,
-                    name.as_deref(),
-                    &base,
-                    yolo,
-                    tokio_util::sync::CancellationToken::new(),
-                    |_| {},
-                )
-                .await;
-                match result {
-                    Ok(_) => {
-                        app.modal = None;
-                        app.refresh()?;
-                    }
-                    Err(e) => {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
-                }
+                let shared_clone = shared.clone();
+                tokio::spawn(async move {
+                    let result = crate::workspace::create_with_app(
+                        shared_clone.clone(),
+                        repo,
+                        name,
+                        base,
+                        yolo,
+                        cancel,
+                    )
+                    .await;
+                    reconcile_create_result(shared_clone, create_gen, result).await;
+                });
             }
             KeyCode::Backspace => {
                 name_buffer.pop();
@@ -2522,6 +2512,45 @@ fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState
         ActivityState::Stalled => U::Stalled,
         ActivityState::Waiting => U::Waiting,
         ActivityState::Off => U::Off,
+    }
+}
+
+/// Reconcile the outcome of a spawned `workspace::create_with_app` task.
+/// Locks the app briefly; if the modal is still `SetupRunning` AND the
+/// generation matches ours, applies the outcome (close modal on success,
+/// switch to `Modal::Error` on failure). Otherwise — user dismissed or
+/// started a new create — leaves the modal alone but still calls
+/// `refresh()` so the dashboard reflects any state we wrote to the store.
+async fn reconcile_create_result(
+    app: SharedApp,
+    my_gen: u64,
+    result: Result<crate::workspace::CreatedWorkspace>,
+) {
+    let mut g = app.lock().await;
+    let is_mine = g.pending_create_gen == Some(my_gen);
+    if is_mine {
+        g.pending_create_gen = None;
+    }
+    match result {
+        Ok(_) => {
+            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::SetupRunning { .. })) {
+                g.modal = None;
+            }
+            let _ = g.refresh();
+        }
+        Err(crate::error::Error::Cancelled) => {
+            // User cancelled — modal already cleared by Esc handler. Refresh
+            // so the dashboard reflects setup_status=Cancelled.
+            let _ = g.refresh();
+        }
+        Err(e) => {
+            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::SetupRunning { .. })) {
+                g.modal = Some(crate::ui::modal::Modal::Error {
+                    message: e.to_string(),
+                });
+            }
+            let _ = g.refresh();
+        }
     }
 }
 
@@ -3076,8 +3105,10 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
         handle_key_modal(
             &mut app,
+            &shared,
             KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE),
         )
         .await
@@ -3112,8 +3143,10 @@ mod pm_state_tests {
         }
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
         handle_key_modal(
             &mut app,
+            &shared,
             KeyEvent::new(crossterm::event::KeyCode::Down, KeyModifiers::NONE),
         )
         .await
@@ -3127,6 +3160,7 @@ mod pm_state_tests {
         // Down again clamps at the last index.
         handle_key_modal(
             &mut app,
+            &shared,
             KeyEvent::new(crossterm::event::KeyCode::Down, KeyModifiers::NONE),
         )
         .await
@@ -3140,6 +3174,7 @@ mod pm_state_tests {
         // Up returns to 0.
         handle_key_modal(
             &mut app,
+            &shared,
             KeyEvent::new(crossterm::event::KeyCode::Up, KeyModifiers::NONE),
         )
         .await
@@ -3178,8 +3213,10 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.workspace_needs_attention.insert(ws_id);
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
         handle_key_modal(
             &mut app,
+            &shared,
             KeyEvent::new(crossterm::event::KeyCode::Enter, KeyModifiers::NONE),
         )
         .await
@@ -3288,8 +3325,10 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: target_idx,
         });
+        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
         handle_key_modal(
             &mut app,
+            &shared,
             KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
         )
         .await
@@ -3493,8 +3532,10 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
         handle_key_modal(
             &mut app,
+            &shared,
             KeyEvent::new(crossterm::event::KeyCode::Char('q'), KeyModifiers::NONE),
         )
         .await
@@ -4287,8 +4328,9 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let _ws_id = spawn_attached_workspace(&mut app);
+        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
 
-        handle_event(&mut app, CtEvent::Paste("hello paste".into()))
+        handle_event(&mut app, &shared, CtEvent::Paste("hello paste".into()))
             .await
             .unwrap();
 
@@ -4314,8 +4356,9 @@ mod pm_state_tests {
         // routes keystrokes to the PM session.
         app.pm_visible = true;
         app.focus = crate::ui::PaneFocus::ProjectManager;
+        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
 
-        handle_event(&mut app, CtEvent::Paste("hello pm".into()))
+        handle_event(&mut app, &shared, CtEvent::Paste("hello pm".into()))
             .await
             .unwrap();
 
@@ -4640,6 +4683,77 @@ mod pm_state_tests {
             "Tab to PM should clear the armed leader"
         );
         assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+    }
+
+    fn init_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let r = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        r(&["init", "-q", "-b", "main"]);
+        r(&["config", "user.email", "t@e"]);
+        r(&["config", "user.name", "t"]);
+        r(&["commit", "--allow-empty", "-q", "-m", "init"]);
+        dir
+    }
+
+    #[tokio::test]
+    async fn enter_in_new_workspace_modal_transitions_to_setup_running_and_spawns_task() {
+        use crate::ui::modal::Modal;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::NewWorkspace {
+                repo_id,
+                name_buffer: "alpha".to_string(),
+                yolo: false,
+            });
+        }
+        // Send Enter.
+        let evt = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::empty(),
+        );
+        {
+            let mut g = app.lock().await;
+            handle_event(
+                &mut g,
+                &app,
+                CtEvent::Key(evt),
+            )
+            .await
+            .unwrap();
+            // Immediately after Enter, modal should be SetupRunning.
+            assert!(
+                matches!(g.modal, Some(Modal::SetupRunning { .. })),
+                "modal should transition to SetupRunning immediately; got {:?}",
+                g.modal
+            );
+            assert!(g.pending_create_gen.is_some());
+        }
+        // Yield so the spawned task gets a chance to complete.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Eventually, modal should be None and a workspace should exist.
+        let g = app.lock().await;
+        assert!(g.modal.is_none(), "modal should clear after create succeeds; got {:?}", g.modal);
+        assert!(g.pending_create_gen.is_none());
+        assert_eq!(g.workspaces.len(), 1);
+        let _ = repo_id; // suppress unused warning if not referenced above
     }
 }
 

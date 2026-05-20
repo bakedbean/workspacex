@@ -77,11 +77,11 @@ function with phase-aware cleanup logic. YAGNI.
 
 | File | Change |
 |---|---|
-| `Cargo.toml` | Add `tokio-util = { version = "0.7", features = ["rt"] }`. |
+| `Cargo.toml` | Add `tokio-util = { version = "0.7", default-features = false }`. `CancellationToken` lives in the unconditional `sync` module, so no features are required. |
 | `src/error.rs` | Add `Error::Cancelled` variant. |
 | `src/store/...` | Add `SetupStatus::Cancelled` variant. Persisted as a new string discriminant. |
 | `src/setup.rs` | `run_setup` gains `cancel: CancellationToken` parameter. Existing `tokio::select!` loop grows a third arm that returns `Err(Error::Cancelled)` on `cancel.cancelled()`. `kill_on_drop(true)` (already set at `src/setup.rs:72`) reaps the child. |
-| `src/workspace.rs` | `create` gains `cancel: CancellationToken` parameter. Token checked between phases (before fetch, before `insert_workspace`, before `git::create_worktree`, before `run_setup`). On cancel mid-flight, the workspace's `setup_status` is set to `Cancelled` if a row exists; function returns `Err(Cancelled)`. |
+| `src/workspace.rs` | `create` gains `cancel: CancellationToken` parameter (the CLI path). A new `create_with_app` function provides the TUI path — same phase ordering but interleaves brief `app.lock().await` cycles between async git/setup work. Token checked between phases (before fetch, before `insert_workspace`, before `git::create_worktree`, before `run_setup`). On cancel mid-flight, the workspace's `setup_status` is set to `Cancelled` if a row exists; function returns `Err(Cancelled)`. |
 | `src/ui/modal.rs` | `Modal::SetupRunning` variant gains `cancel: CancellationToken` field. Renderer shows the existing braille spinner driven by `app.tick` next to a status line, plus a `(Esc to cancel)` hint. |
 | `src/app.rs` | `App` gains `next_create_gen: u64` and `pending_create_gen: Option<u64>`. `handle_key_modal` for `NewWorkspace::Enter` allocates a generation, transitions to `SetupRunning`, and spawns the create task. `handle_key_modal` for `SetupRunning::Esc` calls `cancel.cancel()`, sets `app.modal = None`, clears `pending_create_gen`. The spawned task, on completion, locks the app, checks the generation, reconciles. |
 
@@ -91,7 +91,7 @@ function with phase-aware cleanup logic. YAGNI.
 2. Clone `store`, `repo`, `base`, `name`, `yolo`, and `cancel.clone()` into
    the spawn closure.
 3. Set `app.modal = Some(Modal::SetupRunning { cancel: cancel.clone() })`.
-4. `tokio::spawn(async move { let result = workspace::create(..., cancel).await; reconcile(app, my_token, result).await })`.
+4. `tokio::spawn(async move { let result = workspace::create_with_app(app, ..., cancel).await; reconcile(app, my_token, result).await })`.
 5. Return from the key handler. The lock is released. The main loop's
    `select!` continues; the tick fires; the next draw renders `SetupRunning`
    with an animated spinner.

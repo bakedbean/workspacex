@@ -61,6 +61,11 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         yolo,
     })?;
 
+    if cancel.is_cancelled() {
+        store.set_workspace_state(id, WorkspaceState::Failed)?;
+        return Err(Error::Cancelled);
+    }
+
     if let Err(e) = git::create_worktree(&repo.path, &branch, base, &worktree_path).await {
         store.set_workspace_state(id, WorkspaceState::Failed)?;
         return Err(e);
@@ -167,6 +172,12 @@ pub async fn create_with_app(
             yolo,
         })?
     };
+
+    if cancel.is_cancelled() {
+        let g = app.lock().await;
+        g.store.set_workspace_state(id, WorkspaceState::Failed)?;
+        return Err(Error::Cancelled);
+    }
 
     // --- Phase 4 (unlocked, async): create worktree. ---
     let worktree_result =

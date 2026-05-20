@@ -196,6 +196,12 @@ pub struct App {
     pub sessions: SessionManager,
     pub view: View,
     pub modal: Option<Modal>,
+    /// Monotonic counter handed out to in-flight workspace creation tasks.
+    pub next_create_gen: u64,
+    /// Generation id of the currently in-flight workspace creation, if any.
+    /// Used by the reconcile step to detect stale completions (user cancelled,
+    /// new create started, etc.).
+    pub pending_create_gen: Option<u64>,
     pub dashboard: DashboardState,
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::store::RepoId, Workspace)>,
@@ -309,6 +315,8 @@ impl App {
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
             pm_auto_summary_sent: false,
+            next_create_gen: 0,
+            pending_create_gen: None,
             chip_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
@@ -348,6 +356,14 @@ impl App {
             self.dashboard.selected = self.selectable.len() - 1;
         }
         Ok(())
+    }
+
+    /// Allocate a fresh generation id for a new workspace-creation task.
+    pub fn alloc_create_gen(&mut self) -> u64 {
+        let g = self.next_create_gen;
+        self.next_create_gen = self.next_create_gen.wrapping_add(1);
+        self.pending_create_gen = Some(g);
+        g
     }
 
     pub fn selected_target(&self) -> Option<SelectionTarget> {

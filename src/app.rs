@@ -1054,7 +1054,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     );
                 }
             }
-            other => modal::render(f, area, other, &app.theme),
+            other => modal::render(f, area, other, app.tick, &app.theme),
         }
     }
 }
@@ -2186,7 +2186,7 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                 let repo = app.repos.iter().find(|r| r.id == repo_id).unwrap().clone();
                 let base = app.worktree_base.clone();
                 app.modal = Some(Modal::SetupRunning {
-                    log: vec!["running setup...".into()],
+                    cancel: tokio_util::sync::CancellationToken::new(),
                 });
                 let result = crate::workspace::create(
                     &app.store,

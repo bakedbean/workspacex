@@ -19,7 +19,9 @@ Per row, top-to-bottom in the row's spans:
 | Workspace name       | `app.pr_lifecycle.get(ws.id)` (`BranchLifecycle`)         | `theme.lifecycle_style(lifecycle)` + bold  |
 | Status text + age    | same `status`                                             | `theme.status_style(status)`               |
 
-`lifecycle_style` mapping (identical to today's `dashboard/row.rs:213`):
+`lifecycle_style` mapping (lives on `Theme` after this PR — see
+`src/ui/theme.rs::Theme::lifecycle_style`; was a free function in
+`src/ui/dashboard/row.rs` before the refactor):
 
 | Lifecycle         | Style              |
 |-------------------|--------------------|

@@ -277,12 +277,11 @@ pub fn render_updates_panel(
     let scroll_y =
         scroll_offset_for_selected(selected_visual_line, lines.len(), body_area.height as usize);
 
-    f.render_widget(
-        Paragraph::new(lines)
-            .scroll((scroll_y, 0))
-            .style(theme.dim_style()),
-        body_area,
-    );
+    // No widget-level style: per-span styles drive the row colors, and
+    // every dim element (empty-repo hint, "(no repos)") already self-styles.
+    // A widget-level dim would leak into spans with fg=None — notably the
+    // workspace name when lifecycle is unknown.
+    f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
         Paragraph::new(
             "[\u{2191}/\u{2193}] move   [enter] switch   [v] vsplit   [s] hsplit   [esc] close",
@@ -393,10 +392,12 @@ fn workspace_row<'a>(
     };
     // Lifecycle wins on the name even when the workspace is failed — a
     // failed workspace can still have a merged PR. Bold so the name
-    // still reads as a name.
+    // still reads as a name. When there's no lifecycle hue, explicitly
+    // reset fg so the surrounding Block's dim style can't leak through
+    // ratatui's style inheritance and dim the workspace name.
     let name_style = theme
         .lifecycle_style(lifecycle)
-        .unwrap_or_default()
+        .unwrap_or_else(|| Style::default().fg(ratatui::style::Color::Reset))
         .add_modifier(Modifier::BOLD);
 
     let name_padded = format!("{:<20}", w.name);
@@ -778,25 +779,54 @@ mod workspace_row_tests {
         );
     }
 
-    /// For each canonical Status, the glyph and status-text spans should be
-    /// painted with theme.status_style(status).fg. Mirrors the dashboard's
-    /// gutter/glyph coloring so a glance at the modal matches a glance at the
-    /// dashboard.
+    /// For each of the six canonical Status variants, the glyph and status-
+    /// text spans should be painted with theme.status_style(status).fg.
+    /// Mirrors the dashboard's gutter/glyph coloring so a glance at the modal
+    /// matches a glance at the dashboard.
     #[test]
     fn workspace_row_paints_glyph_and_text_with_status_color() {
         let theme = Theme::ansi();
         let w = fixture_workspace("alpha");
-        let cases = [
-            (Status::Question, ActivityState::AwaitingAnswer, "question"),
-            (Status::Complete, ActivityState::Complete, "complete"),
-            (Status::Stalled, ActivityState::Stalled, "stalled"),
+        // (status, activity option, needs_attention, label substring to find)
+        let cases: [(Status, Option<ActivityState>, bool, &str); 6] = [
+            (
+                Status::Question,
+                Some(ActivityState::AwaitingAnswer),
+                true,
+                "question",
+            ),
+            (
+                Status::Complete,
+                Some(ActivityState::Complete),
+                true,
+                "complete",
+            ),
+            (
+                Status::Stalled,
+                Some(ActivityState::Stalled),
+                true,
+                "stalled",
+            ),
+            (
+                Status::Waiting,
+                Some(ActivityState::Waiting),
+                true,
+                "waiting",
+            ),
+            (
+                Status::Thinking,
+                Some(ActivityState::Active),
+                false,
+                "active",
+            ),
+            (Status::Idle, None, false, "no session"),
         ];
-        for (status, activity, label) in cases {
+        for (status, activity, needs_attention, label) in cases {
             let line = workspace_row(
                 &w,
                 None,
-                Some(activity),
-                true,
+                activity,
+                needs_attention,
                 None,
                 false,
                 status,
@@ -852,14 +882,18 @@ mod workspace_row_tests {
         use crate::forge::BranchLifecycle::*;
         let theme = Theme::ansi();
         let w = fixture_workspace("alpha");
+        // Lifecycles without a hue (NoPr, PrDraft, None) fall back to
+        // Color::Reset so the surrounding Block's dim style can't leak
+        // through ratatui's style inheritance and dim the name.
+        let reset = Some(ratatui::style::Color::Reset);
         let cases = [
             (Some(PrOpen), Some(theme.ok)),
             (Some(PrConflicted), Some(theme.warn)),
             (Some(PrMerged), Some(theme.merged)),
             (Some(PrClosed), Some(theme.err)),
-            (Some(NoPr), None),
-            (Some(PrDraft), None),
-            (None, None),
+            (Some(NoPr), reset),
+            (Some(PrDraft), reset),
+            (None, reset),
         ];
         for (lifecycle, expected_fg) in cases {
             let line = workspace_row(

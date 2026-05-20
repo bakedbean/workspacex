@@ -2282,7 +2282,16 @@ async fn handle_key_modal(app: &mut App, shared: &SharedApp, k: crossterm::event
             }
             _ => {}
         },
-        Modal::Error { .. } | Modal::SetupRunning { .. } => {
+        Modal::SetupRunning { cancel } => match k.code {
+            KeyCode::Esc => {
+                cancel.cancel();
+                app.modal = None;
+                app.pending_create_gen = None;
+            }
+            // Enter (and any other key) is intentionally ignored during creation.
+            _ => {}
+        },
+        Modal::Error { .. } => {
             if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
                 app.modal = None;
             }
@@ -4754,6 +4763,146 @@ mod pm_state_tests {
         assert!(g.pending_create_gen.is_none());
         assert_eq!(g.workspaces.len(), 1);
         let _ = repo_id; // suppress unused warning if not referenced above
+    }
+
+    #[tokio::test]
+    async fn esc_in_setup_running_cancels_and_closes_modal() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store.set_repo_setup_script(repo_id, Some("sleep 5")).unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        // Open the modal and press Enter.
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::NewWorkspace {
+                repo_id,
+                name_buffer: "alpha".to_string(),
+                yolo: false,
+            });
+            let enter = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+            assert!(matches!(g.modal, Some(Modal::SetupRunning { .. })));
+        }
+        // Brief yield so the spawned task gets to start the setup script.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Press Esc.
+        {
+            let mut g = app.lock().await;
+            let esc = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
+            assert!(g.modal.is_none(), "modal should close immediately on Esc");
+            assert!(g.pending_create_gen.is_none());
+        }
+        // Wait for the spawned task to wind down.
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        let g = app.lock().await;
+        assert_eq!(g.workspaces.len(), 1);
+        assert_eq!(
+            g.workspaces[0].1.setup_status,
+            crate::store::SetupStatus::Cancelled
+        );
+        // Modal should still be None — the late reconcile must not pop an error.
+        assert!(g.modal.is_none());
+    }
+
+    #[tokio::test]
+    async fn enter_during_setup_running_is_a_noop() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store.set_repo_setup_script(repo_id, Some("sleep 1")).unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::NewWorkspace {
+                repo_id,
+                name_buffer: "alpha".to_string(),
+                yolo: false,
+            });
+            let enter = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+            // Press Enter again — should not spawn a second create.
+            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+        }
+        // Wait for the (single) setup to finish.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let g = app.lock().await;
+        assert_eq!(
+            g.workspaces.len(),
+            1,
+            "exactly one workspace should be created"
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_create_after_esc_does_not_show_error_modal() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        // No setup script — create is very fast.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::NewWorkspace {
+                repo_id,
+                name_buffer: "alpha".to_string(),
+                yolo: false,
+            });
+            let enter = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+            // Immediately Esc — race against the spawned create completing.
+            let esc = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let g = app.lock().await;
+        // Regardless of which side won the race, modal must not be Error.
+        assert!(
+            !matches!(g.modal, Some(Modal::Error { .. })),
+            "Esc race should never produce an error modal, got {:?}",
+            g.modal
+        );
     }
 }
 

@@ -215,6 +215,7 @@ pub fn render_updates_panel(
         order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
 
     let mut lines: Vec<Line> = Vec::new();
+    let mut selected_visual_line: Option<usize> = None;
     for repo in repos {
         lines.push(Line::from(Span::styled(
             repo.name.clone(),
@@ -237,6 +238,9 @@ pub fn render_updates_panel(
         } else {
             for w in ws_sorted {
                 let is_selected = pos_of.get(&w.id).copied() == Some(selected);
+                if is_selected {
+                    selected_visual_line = Some(lines.len());
+                }
                 lines.push(workspace_row(
                     w,
                     events.get(&w.id),
@@ -258,7 +262,21 @@ pub fn render_updates_panel(
         )));
     }
 
-    f.render_widget(Paragraph::new(lines).style(theme.dim_style()), body_area);
+    // Stateless scroll: keep the selected workspace centered in the viewport
+    // when the rendered lines overflow the body area. Clamped so we never
+    // scroll past the last line.
+    let scroll_y = scroll_offset_for_selected(
+        selected_visual_line,
+        lines.len(),
+        body_area.height as usize,
+    );
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll_y, 0))
+            .style(theme.dim_style()),
+        body_area,
+    );
     f.render_widget(
         Paragraph::new(
             "[\u{2191}/\u{2193}] move   [enter] switch   [v] vsplit   [s] hsplit   [esc] close",
@@ -266,6 +284,27 @@ pub fn render_updates_panel(
         .style(theme.dim_style()),
         footer_area,
     );
+}
+
+/// Compute the vertical scroll offset for the updates panel so the selected
+/// row stays visible. Stateless — called fresh each render. Strategy:
+/// center the selected line in the viewport, then clamp to the valid scroll
+/// range so we never scroll past the end. Returns 0 when content fits or
+/// when there is no selection.
+fn scroll_offset_for_selected(
+    selected_visual_line: Option<usize>,
+    total_lines: usize,
+    viewport_height: usize,
+) -> u16 {
+    let Some(s) = selected_visual_line else {
+        return 0;
+    };
+    if viewport_height == 0 || total_lines <= viewport_height {
+        return 0;
+    }
+    let centered = s.saturating_sub(viewport_height / 2);
+    let max_scroll = total_lines.saturating_sub(viewport_height);
+    centered.min(max_scroll).min(u16::MAX as usize) as u16
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -518,6 +557,58 @@ fn preview_value(s: &str, max: usize) -> String {
         let mut out: String = trimmed.chars().take(max.saturating_sub(1)).collect();
         out.push('\u{2026}');
         out
+    }
+}
+
+#[cfg(test)]
+mod scroll_offset_tests {
+    use super::*;
+
+    #[test]
+    fn no_selection_yields_zero_offset() {
+        assert_eq!(scroll_offset_for_selected(None, 100, 20), 0);
+    }
+
+    #[test]
+    fn content_fits_in_viewport_yields_zero_offset() {
+        // 10 lines, viewport 20, selected at line 5 — no scroll needed.
+        assert_eq!(scroll_offset_for_selected(Some(5), 10, 20), 0);
+    }
+
+    #[test]
+    fn zero_height_viewport_yields_zero_offset() {
+        assert_eq!(scroll_offset_for_selected(Some(50), 100, 0), 0);
+    }
+
+    #[test]
+    fn selection_in_first_half_does_not_scroll() {
+        // Selected at line 4, viewport 20, total 100: centering would put
+        // selected at top half, so offset stays 0.
+        assert_eq!(scroll_offset_for_selected(Some(4), 100, 20), 0);
+    }
+
+    #[test]
+    fn selection_centers_in_viewport_when_overflowing() {
+        // Selected at line 50, viewport 20, total 100.
+        // centered = 50 - 10 = 40. max_scroll = 80. result = 40.
+        // Selected appears at viewport row 50 - 40 = 10 (middle).
+        assert_eq!(scroll_offset_for_selected(Some(50), 100, 20), 40);
+    }
+
+    #[test]
+    fn selection_near_end_clamps_to_max_scroll() {
+        // Selected at last line (99), viewport 20, total 100.
+        // centered = 99 - 10 = 89. max_scroll = 80. clamped to 80.
+        // Selected appears at viewport row 99 - 80 = 19 (last row).
+        assert_eq!(scroll_offset_for_selected(Some(99), 100, 20), 80);
+    }
+
+    #[test]
+    fn last_line_selected_in_short_overflow() {
+        // total = 22, viewport = 20 — barely overflows by 2.
+        // Selected at line 21 (last). centered = 21 - 10 = 11.
+        // max_scroll = 2. clamped to 2. selected appears at row 19.
+        assert_eq!(scroll_offset_for_selected(Some(21), 22, 20), 2);
     }
 }
 

@@ -69,6 +69,29 @@ pub enum CliAction {
     RemoteRun {
         name: String,
     },
+    WorkspaceCreate {
+        repo: String,
+        name: Option<String>,
+        yolo: bool,
+    },
+    WorkspaceList {
+        repo: Option<String>,
+    },
+    WorkspacePath {
+        repo: String,
+        name: String,
+    },
+    WorkspaceRename {
+        repo: String,
+        name: String,
+        new_name: String,
+    },
+    WorkspaceArchive {
+        repo: String,
+        name: String,
+        keep_worktree: bool,
+        force_delete_branch: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -309,6 +332,93 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         Some("remote") => match it.next() {
             None => Ok(CliAction::RemoteList),
             Some(name) => Ok(CliAction::RemoteRun { name }),
+        },
+        Some("workspace") => match it.next().as_deref() {
+            Some("create") => {
+                let repo = it.next().ok_or_else(|| {
+                    Error::UserInput("workspace create <repo> [--name <slug>] [--yolo]".into())
+                })?;
+                let mut name: Option<String> = None;
+                let mut yolo = false;
+                while let Some(arg) = it.next() {
+                    match arg.as_str() {
+                        "--name" => {
+                            name =
+                                Some(it.next().ok_or_else(|| {
+                                    Error::UserInput("--name needs value".into())
+                                })?);
+                        }
+                        "--yolo" => yolo = true,
+                        other => {
+                            return Err(Error::UserInput(format!("unknown arg: {other}")));
+                        }
+                    }
+                }
+                Ok(CliAction::WorkspaceCreate { repo, name, yolo })
+            }
+            Some("list") => {
+                let repo = it.next();
+                Ok(CliAction::WorkspaceList { repo })
+            }
+            Some("path") => {
+                let repo = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("workspace path <repo> <name>".into()))?;
+                let name = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("workspace path <repo> <name>".into()))?;
+                Ok(CliAction::WorkspacePath { repo, name })
+            }
+            Some("rename") => {
+                let repo = it.next().ok_or_else(|| {
+                    Error::UserInput("workspace rename <repo> <name> <new-name>".into())
+                })?;
+                let name = it.next().ok_or_else(|| {
+                    Error::UserInput("workspace rename <repo> <name> <new-name>".into())
+                })?;
+                let new_name = it.next().ok_or_else(|| {
+                    Error::UserInput("workspace rename <repo> <name> <new-name>".into())
+                })?;
+                Ok(CliAction::WorkspaceRename {
+                    repo,
+                    name,
+                    new_name,
+                })
+            }
+            Some("archive") => {
+                let repo = it.next().ok_or_else(|| {
+                    Error::UserInput(
+                        "workspace archive <repo> <name> [--keep-worktree] [--force-delete-branch]"
+                            .into(),
+                    )
+                })?;
+                let name = it.next().ok_or_else(|| {
+                    Error::UserInput(
+                        "workspace archive <repo> <name> [--keep-worktree] [--force-delete-branch]"
+                            .into(),
+                    )
+                })?;
+                let mut keep_worktree = false;
+                let mut force_delete_branch = false;
+                for arg in it.by_ref() {
+                    match arg.as_str() {
+                        "--keep-worktree" => keep_worktree = true,
+                        "--force-delete-branch" => force_delete_branch = true,
+                        other => {
+                            return Err(Error::UserInput(format!("unknown arg: {other}")));
+                        }
+                    }
+                }
+                Ok(CliAction::WorkspaceArchive {
+                    repo,
+                    name,
+                    keep_worktree,
+                    force_delete_branch,
+                })
+            }
+            other => Err(Error::UserInput(format!(
+                "unknown workspace action: {other:?}"
+            ))),
         },
         Some(other) => Err(Error::UserInput(format!("unknown command: {other}"))),
     }
@@ -595,8 +705,98 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             // exec only returns on failure.
             return Err(Error::UserInput(format!("exec sh: {err}")));
         }
+        CliAction::WorkspaceCreate { repo, name, yolo } => {
+            let r = lookup_repo(&store, &repo)?;
+            let worktree_base = dirs.app_dir().join("worktrees");
+            std::fs::create_dir_all(&worktree_base)?;
+            let created =
+                crate::workspace::create(&store, &r, name.as_deref(), &worktree_base, yolo, |_| {})
+                    .await?;
+            println!(
+                "created workspace {}/{} at {}",
+                r.name,
+                created.workspace.name,
+                created.workspace.worktree_path.display()
+            );
+            if let crate::setup::SetupResult::Failed { exit_code } = created.setup_result {
+                println!("warning: setup script exited with code {exit_code}");
+            }
+        }
+        CliAction::WorkspaceList { repo } => {
+            let filtered = match repo {
+                Some(name) => vec![lookup_repo(&store, &name)?],
+                None => crate::repo::list(&store)?,
+            };
+            for r in filtered {
+                for w in store.workspaces(r.id)? {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        r.name,
+                        w.name,
+                        w.branch,
+                        w.worktree_path.display()
+                    );
+                }
+            }
+        }
+        CliAction::WorkspacePath { repo, name } => {
+            let r = lookup_repo(&store, &repo)?;
+            let w = lookup_workspace(&store, &r, &name)?;
+            println!("{}", w.worktree_path.display());
+        }
+        CliAction::WorkspaceRename {
+            repo,
+            name,
+            new_name,
+        } => {
+            let r = lookup_repo(&store, &repo)?;
+            let w = lookup_workspace(&store, &r, &name)?;
+            if new_name == name {
+                println!("workspace {}/{} unchanged", r.name, name);
+            } else {
+                crate::workspace::rename(&store, &r, &w, &new_name).await?;
+                println!(
+                    "renamed workspace {}/{} to {}/{}",
+                    r.name, name, r.name, new_name
+                );
+            }
+        }
+        CliAction::WorkspaceArchive {
+            repo,
+            name,
+            keep_worktree,
+            force_delete_branch,
+        } => {
+            let r = lookup_repo(&store, &repo)?;
+            let w = lookup_workspace(&store, &r, &name)?;
+            let opts = crate::workspace::ArchiveOpts {
+                keep_worktree,
+                force_branch_delete: force_delete_branch,
+            };
+            crate::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
+            println!("archived workspace {}/{}", r.name, name);
+        }
     }
     Ok(())
+}
+
+fn lookup_repo(store: &crate::store::Store, name: &str) -> Result<crate::store::Repo> {
+    crate::repo::list(store)?
+        .into_iter()
+        .find(|r| r.name == name)
+        .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))
+}
+
+fn lookup_workspace(
+    store: &crate::store::Store,
+    repo: &crate::store::Repo,
+    name: &str,
+) -> Result<crate::store::Workspace> {
+    store
+        .workspaces(repo.id)?
+        .into_iter()
+        .find(|w| w.name == name)
+        .ok_or_else(|| Error::UserInput(format!("no workspace named {name} in repo {}", repo.name)))
 }
 
 fn open_in_editor(key: &str, initial: &str) -> Result<String> {
@@ -874,6 +1074,134 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_workspace_create_minimal() {
+        match parse(&["workspace", "create", "backend"]).unwrap() {
+            CliAction::WorkspaceCreate { repo, name, yolo } => {
+                assert_eq!(repo, "backend");
+                assert!(name.is_none());
+                assert!(!yolo);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_create_with_name_and_yolo() {
+        match parse(&[
+            "workspace",
+            "create",
+            "backend",
+            "--name",
+            "add-widgets",
+            "--yolo",
+        ])
+        .unwrap()
+        {
+            CliAction::WorkspaceCreate { repo, name, yolo } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name.as_deref(), Some("add-widgets"));
+                assert!(yolo);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_create_rejects_unknown_arg() {
+        assert!(parse(&["workspace", "create", "backend", "--bogus"]).is_err());
+    }
+
+    #[test]
+    fn parses_workspace_list_no_filter() {
+        match parse(&["workspace", "list"]).unwrap() {
+            CliAction::WorkspaceList { repo } => assert!(repo.is_none()),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_list_with_repo_filter() {
+        match parse(&["workspace", "list", "backend"]).unwrap() {
+            CliAction::WorkspaceList { repo } => assert_eq!(repo.as_deref(), Some("backend")),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_path() {
+        match parse(&["workspace", "path", "backend", "add-widgets"]).unwrap() {
+            CliAction::WorkspacePath { repo, name } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name, "add-widgets");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_rename() {
+        match parse(&["workspace", "rename", "backend", "old-slug", "new-slug"]).unwrap() {
+            CliAction::WorkspaceRename {
+                repo,
+                name,
+                new_name,
+            } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name, "old-slug");
+                assert_eq!(new_name, "new-slug");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_archive_minimal() {
+        match parse(&["workspace", "archive", "backend", "add-widgets"]).unwrap() {
+            CliAction::WorkspaceArchive {
+                repo,
+                name,
+                keep_worktree,
+                force_delete_branch,
+            } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name, "add-widgets");
+                assert!(!keep_worktree);
+                assert!(!force_delete_branch);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_archive_with_flags() {
+        match parse(&[
+            "workspace",
+            "archive",
+            "backend",
+            "add-widgets",
+            "--keep-worktree",
+            "--force-delete-branch",
+        ])
+        .unwrap()
+        {
+            CliAction::WorkspaceArchive {
+                keep_worktree,
+                force_delete_branch,
+                ..
+            } => {
+                assert!(keep_worktree);
+                assert!(force_delete_branch);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_rejects_unknown_subcommand() {
+        assert!(parse(&["workspace", "bogus"]).is_err());
     }
 
     #[test]

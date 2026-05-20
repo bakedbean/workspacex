@@ -114,7 +114,8 @@ pub fn render(
             env!("CARGO_PKG_VERSION"),
             chunks[4].width as usize,
             theme,
-        )),
+        ))
+        .style(theme.footer_bar_style()),
         chunks[4],
     );
 }

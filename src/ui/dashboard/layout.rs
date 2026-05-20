@@ -108,18 +108,19 @@ pub fn footer(
         ("/", "filter"),
         ("q", "quit"),
     ];
+    let key_style = Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft);
+    let label_style = Style::default().fg(theme.path).bg(theme.bg_soft);
+    let pad_style = theme.chip_bg_style();
     for (i, (key, label)) in keys.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  ".to_string()));
         }
-        spans.push(Span::styled(
-            (*key).to_string(),
-            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            format!(" {label}"),
-            Style::default().fg(theme.path),
-        ));
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        spans.push(Span::styled((*key).to_string(), key_style));
+        spans.push(Span::styled(format!(" {label} "), label_style));
     }
 
     let spark = sparkline::render(activity_samples, 24);
@@ -194,5 +195,27 @@ mod tests {
         assert!(t.contains("q quit"));
         assert!(t.contains("24h "));
         assert!(t.contains("v0.5.0"));
+    }
+
+    #[test]
+    fn footer_key_chips_carry_chip_background() {
+        // V5 footer chips must paint bg_soft behind every keybind so the
+        // chip lifts off the surrounding bar bg. A regression here would
+        // flatten the footer back to a plain text strip.
+        let theme = Theme::wsx();
+        let line = footer(&[1, 2, 3], "v0.5.0", 200, &theme);
+        let chip_bg = ratatui::style::Color::Rgb(0x18, 0x1f, 0x29);
+        let key_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "↑↓")
+            .expect("expected ↑↓ key span");
+        assert_eq!(key_span.style.bg, Some(chip_bg));
+        let label_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == " nav ")
+            .expect("expected ` nav ` label span (with chip padding)");
+        assert_eq!(label_span.style.bg, Some(chip_bg));
     }
 }

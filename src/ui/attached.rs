@@ -54,11 +54,15 @@ pub fn render_panes(
     }
 
     if let Some(line) = attention_line {
-        f.render_widget(Paragraph::new(line), status_area);
+        f.render_widget(
+            Paragraph::new(line).style(theme.footer_bar_style()),
+            status_area,
+        );
     }
 
     f.render_widget(
-        Paragraph::new(footer_line(footer_label, multi_pane_footer, theme)),
+        Paragraph::new(footer_line(footer_label, multi_pane_footer, theme))
+            .style(theme.footer_bar_style()),
         footer_area,
     );
 
@@ -181,32 +185,34 @@ fn footer_line(label: &str, multi_pane: bool, theme: &Theme) -> Line<'static> {
             ("x", "send-^x"),
         ]
     };
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 2 + 3);
+    let key_style = Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft);
+    let label_style = Style::default().fg(theme.path).bg(theme.bg_soft);
+    let pad_style = theme.chip_bg_style();
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 4 + 4);
     spans.push(Span::styled(label.to_string(), theme.header_style()));
     spans.push(Span::raw("   ".to_string()));
-    spans.push(Span::styled(
-        "^x".to_string(),
-        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
-    ));
+    // ^x leader rendered as a standalone chip (no label tail).
+    spans.push(Span::styled(" ".to_string(), pad_style));
+    spans.push(Span::styled("^x".to_string(), key_style));
+    spans.push(Span::styled(" ".to_string(), pad_style));
     for (key, lbl) in keys {
         spans.push(Span::raw("  ".to_string()));
-        spans.push(Span::styled(
-            (*key).to_string(),
-            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            format!(" {lbl}"),
-            Style::default().fg(theme.path),
-        ));
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        spans.push(Span::styled((*key).to_string(), key_style));
+        spans.push(Span::styled(format!(" {lbl} "), label_style));
     }
     Line::from(spans)
 }
 
 /// Compute the clickable Rect for each chip that fits within `area`.
 /// Returns one Rect per chip rendered left-to-right; chips that don't fit
-/// are dropped from the end. The chip text is `<N> <label>` joined by
-/// 2-space gaps (V5 footer convention). Labels are individually
-/// truncated to 12 columns first.
+/// are dropped from the end. The chip text is ` <N> <label> ` (V5 button
+/// treatment: 1ch padding on each side of the `N <label>` core) joined
+/// by 2-space gaps. Labels are individually truncated to 12 columns first.
 pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     let mut rects = Vec::new();
     let mut x = area.x;
@@ -214,8 +220,8 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     const GAP: u16 = 2;
     for (i, cmd) in pinned.iter().enumerate().take(9) {
         let label = truncate_label(&cmd.label, 12);
-        // Chip text: "N label"  (2 chars for "N " plus label chars)
-        let chip_chars = 2 + label.chars().count() as u16;
+        // Chip text: " N label "  (leading pad + N + " " + label + trailing pad)
+        let chip_chars = 4 + label.chars().count() as u16;
         if i > 0 {
             x = x.saturating_add(GAP);
         }
@@ -240,9 +246,13 @@ fn render_chip_row(
     theme: &Theme,
 ) -> Vec<Rect> {
     let rects = layout_chip_row(area, pinned);
-    let key_style = Style::default().fg(theme.dim).add_modifier(Modifier::BOLD);
-    let label_style = Style::default().fg(theme.path);
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 3 + 2);
+    let key_style = Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft);
+    let label_style = Style::default().fg(theme.path).bg(theme.bg_soft);
+    let pad_style = theme.chip_bg_style();
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 4 + 2);
     let mut used: usize = 0;
     for (i, (_rect, cmd)) in rects.iter().zip(pinned.iter()).enumerate() {
         if i > 0 {
@@ -251,11 +261,13 @@ fn render_chip_row(
         }
         let label = truncate_label(&cmd.label, 12);
         let chip_text = format!("{}", i + 1);
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        used += 1;
         spans.push(Span::styled(chip_text, key_style));
         used += 1;
-        let label_with_space = format!(" {label}");
-        used += label_with_space.chars().count();
-        spans.push(Span::styled(label_with_space, label_style));
+        let label_with_pad = format!(" {label} ");
+        used += label_with_pad.chars().count();
+        spans.push(Span::styled(label_with_pad, label_style));
     }
     // Inline rule filler matching the V5 dashboard repo-header style:
     // 2 spaces (or 0 when there are no chips), then `─` runs to the
@@ -271,7 +283,10 @@ fn render_chip_row(
             spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
         }
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(theme.footer_bar_style()),
+        area,
+    );
     rects
 }
 
@@ -319,5 +334,52 @@ mod tests {
     fn chip_row_empty_list_returns_no_rects() {
         let area = ratatui::layout::Rect::new(0, 0, 80, 1);
         assert!(layout_chip_row(area, &[]).is_empty());
+    }
+
+    #[test]
+    fn footer_line_chord_chips_carry_chip_background() {
+        // The attached footer renders ^x plus each chord as a chip with a
+        // bg_soft fill — same V5 treatment as the dashboard footer. If
+        // these spans lose their bg the footer collapses back to plain
+        // text and the chip language is gone.
+        let theme = crate::ui::theme::Theme::wsx();
+        let line = footer_line("ws", false, &theme);
+        let chip_bg = ratatui::style::Color::Rgb(0x18, 0x1f, 0x29);
+        let leader = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "^x")
+            .expect("expected ^x leader span");
+        assert_eq!(leader.style.bg, Some(chip_bg));
+        let chord_key = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "d")
+            .expect("expected `d` chord-key span");
+        assert_eq!(chord_key.style.bg, Some(chip_bg));
+        let chord_label = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == " detach ")
+            .expect("expected ` detach ` chord-label span (with chip padding)");
+        assert_eq!(chord_label.style.bg, Some(chip_bg));
+    }
+
+    #[test]
+    fn layout_chip_row_uses_padded_chip_width() {
+        // Each pinned chip renders as ` N label ` (number + space + label
+        // with 1ch padding each side). The clickable rect must match the
+        // rendered width so mouse hit-testing lands on the chip's visual
+        // bounds, padding included.
+        let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+        let pinned = cmds(&[("pr", "/pr"), ("feedback", "/fb")]);
+        let rects = layout_chip_row(area, &pinned);
+        assert_eq!(rects.len(), 2);
+        // " 1 pr " = 6 cells
+        assert_eq!(rects[0].width, 6);
+        // " 2 feedback " = 12 cells
+        assert_eq!(rects[1].width, 12);
+        // 2-cell gap between chips
+        assert_eq!(rects[1].x, rects[0].x + rects[0].width + 2);
     }
 }

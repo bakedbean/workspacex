@@ -13,6 +13,14 @@ pub struct Theme {
     /// Repo header's path/count tail — distinct muted tone so the path
     /// doesn't blur into the workspace sub-lines (which use `dim`).
     pub path: Color,
+    /// Footer bar background — the chrome strip that holds key-chip rows
+    /// in both the dashboard and attached views. One step elevated from
+    /// the main pane background.
+    pub bg_alt: Color,
+    /// Per-chip background — the button-like fill behind each key chord
+    /// in the footer. One step elevated from `bg_alt` so chips "lift" off
+    /// the bar.
+    pub bg_soft: Color,
     /// Success/positive states (reserved for future per-span styling).
     pub ok: Color,
     /// Warning/in-progress states (reserved).
@@ -43,6 +51,8 @@ impl Theme {
             selected_bg: Color::DarkGray,
             dim: Color::DarkGray,
             path: Color::Indexed(67),
+            bg_alt: Color::Indexed(235),
+            bg_soft: Color::Indexed(237),
             ok: Color::Green,
             warn: Color::Yellow,
             err: Color::Red,
@@ -67,6 +77,8 @@ impl Theme {
             selected_bg: Color::Rgb(0x24, 0x30, 0x43),
             dim: Color::Rgb(0xb5, 0xb5, 0xb5),
             path: Color::Rgb(0x6b, 0x6e, 0x75),
+            bg_alt: Color::Rgb(0x13, 0x18, 0x20),
+            bg_soft: Color::Rgb(0x18, 0x1f, 0x29),
             ok: Color::Rgb(0x67, 0xc0, 0x89),
             warn: Color::Rgb(0xe4, 0xba, 0x6c),
             err: Color::Rgb(0xd3, 0x62, 0x58),
@@ -99,6 +111,8 @@ impl Theme {
             selected_bg: current_line,
             dim: comment,
             path: Color::Rgb(0x82, 0x90, 0xb4), // softer blue-grey
+            bg_alt: Color::Rgb(0x21, 0x22, 0x2e),
+            bg_soft: Color::Rgb(0x35, 0x37, 0x47),
             ok: green,
             warn: yellow,
             err: red,
@@ -133,6 +147,8 @@ impl Theme {
             selected_bg: cursor_line,
             dim: gray,
             path: Color::Rgb(0xb8, 0xa0, 0x78), // warmer tan, clearer separation from gray
+            bg_alt: Color::Rgb(0x1c, 0x1c, 0x1c),
+            bg_soft: Color::Rgb(0x26, 0x26, 0x26),
             ok: green,
             warn: orange,
             err: red,
@@ -167,6 +183,8 @@ impl Theme {
             selected_bg: polar1,
             dim: polar3,
             path: Color::Rgb(0x81, 0xa1, 0xc1), // Nord frost3
+            bg_alt: Color::Rgb(0x29, 0x2e, 0x39),
+            bg_soft: Color::Rgb(0x34, 0x3a, 0x47),
             ok: aurora_green,
             warn: aurora_yellow,
             err: aurora_red,
@@ -213,6 +231,18 @@ impl Theme {
     }
     pub fn dim_style(&self) -> Style {
         Style::default().fg(self.dim)
+    }
+    /// Background fill for the footer chrome bar — sits behind chip rows
+    /// in the dashboard footer and the attached view's three-row footer
+    /// (chips / attention / key chords).
+    pub fn footer_bar_style(&self) -> Style {
+        Style::default().bg(self.bg_alt)
+    }
+    /// Per-chip background fill for key/chord chips inside the footer bar.
+    /// Pair with the chip's own fg style (dim+bold for keys, path for
+    /// labels) to get the V5 "button" look.
+    pub fn chip_bg_style(&self) -> Style {
+        Style::default().bg(self.bg_soft)
     }
     pub fn path_style(&self) -> Style {
         Style::default().fg(self.path)

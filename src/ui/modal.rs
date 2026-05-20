@@ -1,7 +1,10 @@
+use crate::forge::BranchLifecycle;
 use crate::store::RepoId;
+use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
+use ratatui::style::Modifier;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::{HashMap, HashSet};
 
@@ -185,6 +188,8 @@ pub fn render_updates_panel(
     activity: &HashMap<crate::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
     needs_attention: &HashSet<crate::store::WorkspaceId>,
     awaiting: &HashMap<crate::store::WorkspaceId, (String, i64)>,
+    statuses: &HashMap<crate::store::WorkspaceId, Status>,
+    lifecycles: &HashMap<crate::store::WorkspaceId, BranchLifecycle>,
     selected: usize,
     now_ms: i64,
     theme: &Theme,
@@ -241,6 +246,8 @@ pub fn render_updates_panel(
                 if is_selected {
                     selected_visual_line = Some(lines.len());
                 }
+                let status = statuses.get(&w.id).copied().unwrap_or(Status::Idle);
+                let lifecycle = lifecycles.get(&w.id).copied();
                 lines.push(workspace_row(
                     w,
                     events.get(&w.id),
@@ -248,6 +255,8 @@ pub fn render_updates_panel(
                     needs_attention.contains(&w.id),
                     awaiting.get(&w.id),
                     is_selected,
+                    status,
+                    lifecycle,
                     now_ms,
                     theme,
                 ));
@@ -265,18 +274,14 @@ pub fn render_updates_panel(
     // Stateless scroll: keep the selected workspace centered in the viewport
     // when the rendered lines overflow the body area. Clamped so we never
     // scroll past the last line.
-    let scroll_y = scroll_offset_for_selected(
-        selected_visual_line,
-        lines.len(),
-        body_area.height as usize,
-    );
+    let scroll_y =
+        scroll_offset_for_selected(selected_visual_line, lines.len(), body_area.height as usize);
 
-    f.render_widget(
-        Paragraph::new(lines)
-            .scroll((scroll_y, 0))
-            .style(theme.dim_style()),
-        body_area,
-    );
+    // No widget-level style: per-span styles drive the row colors, and
+    // every dim element (empty-repo hint, "(no repos)") already self-styles.
+    // A widget-level dim would leak into spans with fg=None — notably the
+    // workspace name when lifecycle is unknown.
+    f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
         Paragraph::new(
             "[\u{2191}/\u{2193}] move   [enter] switch   [v] vsplit   [s] hsplit   [esc] close",
@@ -315,11 +320,14 @@ fn workspace_row<'a>(
     needs_attention: bool,
     awaiting: Option<&'a (String, i64)>,
     is_selected: bool,
+    status: Status,
+    lifecycle: Option<BranchLifecycle>,
     now_ms: i64,
     theme: &Theme,
 ) -> Line<'a> {
     use crate::ui::updates_bar::{ActivityState, format_age, glyph_for_activity};
-    let glyph = if w.state == crate::store::WorkspaceState::Failed {
+    let failed = w.state == crate::store::WorkspaceState::Failed;
+    let glyph = if failed {
         '✕'
     } else if needs_attention {
         activity.map(glyph_for_activity).unwrap_or('⚠')
@@ -362,7 +370,7 @@ fn workspace_row<'a>(
             .unwrap_or_else(|| "active".to_string());
         let ts = events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms));
         (text, ts)
-    } else if w.state == crate::store::WorkspaceState::Failed {
+    } else if failed {
         ("failed".to_string(), None)
     } else if events.and_then(|e| e.latest.as_ref()).is_some() {
         ("resumable".to_string(), None)
@@ -374,12 +382,39 @@ fn workspace_row<'a>(
         Some(a) => format!(" ({a})"),
         None => String::new(),
     };
-    let body = format!("  {glyph} {:<20} {}{}", w.name, status_text, suffix);
-    if is_selected {
-        Line::from(Span::styled(body, theme.selected_style()))
+
+    // Failed overrides the canonical status hue with `err` — a failed
+    // workspace is the same urgency signal regardless of its prior status.
+    let status_fg = if failed {
+        theme.err_style()
     } else {
-        Line::from(body)
+        theme.status_style(status)
+    };
+    // Lifecycle wins on the name even when the workspace is failed — a
+    // failed workspace can still have a merged PR. Bold so the name
+    // still reads as a name. When there's no lifecycle hue, explicitly
+    // reset fg so the surrounding Block's dim style can't leak through
+    // ratatui's style inheritance and dim the workspace name.
+    let name_style = theme
+        .lifecycle_style(lifecycle)
+        .unwrap_or_else(|| Style::default().fg(ratatui::style::Color::Reset))
+        .add_modifier(Modifier::BOLD);
+
+    let name_padded = format!("{:<20}", w.name);
+    let spans = vec![
+        Span::raw("  "),
+        Span::styled(format!("{glyph} "), status_fg),
+        Span::styled(name_padded, name_style),
+        Span::styled(format!(" {status_text}{suffix}"), status_fg),
+    ];
+
+    let mut line = Line::from(spans);
+    if is_selected {
+        // bg-only so per-span fg colors survive; matches the dashboard's
+        // List::highlight_style(theme.selected_bg_style()).
+        line = line.style(theme.selected_bg_style());
     }
+    line
 }
 
 /// Render the floating process-list modal. Reads live App state via
@@ -662,6 +697,15 @@ mod workspace_row_tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
+    /// Find the first span whose content contains `needle`. Tests use this
+    /// to locate the glyph, name, or status-text span by a known substring.
+    fn span_containing<'a>(line: &'a Line<'_>, needle: &str) -> &'a Span<'a> {
+        line.spans
+            .iter()
+            .find(|s| s.content.as_ref().contains(needle))
+            .unwrap_or_else(|| panic!("no span containing {needle:?}"))
+    }
+
     #[test]
     fn workspace_row_uses_question_glyph_for_awaiting_answer() {
         let theme = Theme::ansi();
@@ -673,6 +717,8 @@ mod workspace_row_tests {
             true,
             None,
             false,
+            Status::Question,
+            None,
             10_000,
             &theme,
         );
@@ -695,6 +741,8 @@ mod workspace_row_tests {
             true,
             None,
             false,
+            Status::Complete,
+            None,
             10_000,
             &theme,
         );
@@ -718,6 +766,8 @@ mod workspace_row_tests {
             true,
             Some(&awaiting),
             false,
+            Status::Question,
+            None,
             10_000,
             &theme,
         );
@@ -727,5 +777,177 @@ mod workspace_row_tests {
             body.contains("awaiting permission: Bash"),
             "expected permission tool name in status text: {body}"
         );
+    }
+
+    /// For each of the six canonical Status variants, the glyph and status-
+    /// text spans should be painted with theme.status_style(status).fg.
+    /// Mirrors the dashboard's gutter/glyph coloring so a glance at the modal
+    /// matches a glance at the dashboard.
+    #[test]
+    fn workspace_row_paints_glyph_and_text_with_status_color() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        // (status, activity option, needs_attention, label substring to find)
+        let cases: [(Status, Option<ActivityState>, bool, &str); 6] = [
+            (
+                Status::Question,
+                Some(ActivityState::AwaitingAnswer),
+                true,
+                "question",
+            ),
+            (
+                Status::Complete,
+                Some(ActivityState::Complete),
+                true,
+                "complete",
+            ),
+            (
+                Status::Stalled,
+                Some(ActivityState::Stalled),
+                true,
+                "stalled",
+            ),
+            (
+                Status::Waiting,
+                Some(ActivityState::Waiting),
+                true,
+                "waiting",
+            ),
+            (
+                Status::Thinking,
+                Some(ActivityState::Active),
+                false,
+                "active",
+            ),
+            (Status::Idle, None, false, "no session"),
+        ];
+        for (status, activity, needs_attention, label) in cases {
+            let line = workspace_row(
+                &w,
+                None,
+                activity,
+                needs_attention,
+                None,
+                false,
+                status,
+                None,
+                10_000,
+                &theme,
+            );
+            let glyph_span = &line.spans[1];
+            let text_span = span_containing(&line, label);
+            let expected = theme.status_style(status).fg;
+            assert_eq!(
+                glyph_span.style.fg, expected,
+                "glyph fg for {status:?} should match status_style"
+            );
+            assert_eq!(
+                text_span.style.fg, expected,
+                "status text fg for {status:?} should match status_style"
+            );
+        }
+    }
+
+    /// Failed workspaces ignore the canonical status hue and paint glyph +
+    /// text with err — failure is the same urgency signal regardless of what
+    /// the classifier said before the failure.
+    #[test]
+    fn workspace_row_failed_overrides_status_with_err() {
+        let theme = Theme::ansi();
+        let mut w = fixture_workspace("alpha");
+        w.state = WorkspaceState::Failed;
+        let line = workspace_row(
+            &w,
+            None,
+            None,
+            false,
+            None,
+            false,
+            Status::Idle, // classifier might say anything; failed wins
+            None,
+            10_000,
+            &theme,
+        );
+        let glyph_span = &line.spans[1];
+        let text_span = span_containing(&line, "failed");
+        assert_eq!(glyph_span.style.fg, Some(theme.err));
+        assert_eq!(text_span.style.fg, Some(theme.err));
+    }
+
+    /// Lifecycle drives the workspace name's foreground color. Mirrors the
+    /// dashboard branch column so the modal and dashboard tell the same story
+    /// about PR state.
+    #[test]
+    fn workspace_row_paints_name_with_lifecycle_color() {
+        use crate::forge::BranchLifecycle::*;
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        // Lifecycles without a hue (NoPr, PrDraft, None) fall back to
+        // Color::Reset so the surrounding Block's dim style can't leak
+        // through ratatui's style inheritance and dim the name.
+        let reset = Some(ratatui::style::Color::Reset);
+        let cases = [
+            (Some(PrOpen), Some(theme.ok)),
+            (Some(PrConflicted), Some(theme.warn)),
+            (Some(PrMerged), Some(theme.merged)),
+            (Some(PrClosed), Some(theme.err)),
+            (Some(NoPr), reset),
+            (Some(PrDraft), reset),
+            (None, reset),
+        ];
+        for (lifecycle, expected_fg) in cases {
+            let line = workspace_row(
+                &w,
+                None,
+                None,
+                false,
+                None,
+                false,
+                Status::Idle,
+                lifecycle,
+                10_000,
+                &theme,
+            );
+            let name_span = span_containing(&line, "alpha");
+            assert_eq!(
+                name_span.style.fg, expected_fg,
+                "name fg for lifecycle {lifecycle:?}"
+            );
+            assert!(
+                name_span.style.add_modifier.contains(Modifier::BOLD),
+                "name should be bold for lifecycle {lifecycle:?}"
+            );
+        }
+    }
+
+    /// Selection should only set the row's background — per-span foregrounds
+    /// (status hue, lifecycle hue) must survive so the user can still tell at
+    /// a glance which workspace is in what state on the selected row.
+    #[test]
+    fn workspace_row_selection_keeps_span_foregrounds() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::Complete),
+            true,
+            None,
+            true, // selected
+            Status::Complete,
+            Some(crate::forge::BranchLifecycle::PrOpen),
+            10_000,
+            &theme,
+        );
+        // Line-level style carries only the selected bg, not a foreground.
+        assert_eq!(line.style.bg, Some(theme.selected_bg));
+        assert_eq!(line.style.fg, None);
+        // Per-span foregrounds still match status / lifecycle.
+        let glyph_span = &line.spans[1];
+        let name_span = span_containing(&line, "alpha");
+        let text_span = span_containing(&line, "complete");
+        assert_eq!(glyph_span.style.fg, Some(theme.complete));
+        assert_eq!(name_span.style.fg, Some(theme.ok));
+        assert_eq!(text_span.style.fg, Some(theme.complete));
     }
 }

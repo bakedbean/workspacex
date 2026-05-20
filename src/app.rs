@@ -996,6 +996,14 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .iter()
                     .map(|(k, v)| (*k, translate_activity(*v)))
                     .collect();
+                let statuses: std::collections::HashMap<
+                    crate::store::WorkspaceId,
+                    crate::ui::dashboard::status::Status,
+                > = app
+                    .workspaces
+                    .iter()
+                    .map(|(_, w)| (w.id, app.classify_status(w)))
+                    .collect();
                 crate::ui::modal::render_updates_panel(
                     f,
                     area,
@@ -1005,6 +1013,8 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &activity_translated,
                     &app.workspace_needs_attention,
                     &awaiting,
+                    &statuses,
+                    &app.pr_lifecycle,
                     *selected,
                     now_ms,
                     &app.theme,
@@ -3556,7 +3566,11 @@ mod pm_state_tests {
             &activity_translated,
             &app.workspace_needs_attention,
         );
-        assert!(order.len() >= 40, "expected ≥40 workspaces, got {}", order.len());
+        assert!(
+            order.len() >= 40,
+            "expected ≥40 workspaces, got {}",
+            order.len()
+        );
         let last_selected = order.len() - 1;
         let last_ws_id = order[last_selected];
         let last_ws_name = app

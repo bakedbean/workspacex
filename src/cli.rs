@@ -723,10 +723,9 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::WorkspaceList { repo } => {
-            let repos = crate::repo::list(&store)?;
-            let filtered: Vec<_> = match repo {
-                Some(name) => repos.into_iter().filter(|r| r.name == name).collect(),
-                None => repos,
+            let filtered = match repo {
+                Some(name) => vec![lookup_repo(&store, &name)?],
+                None => crate::repo::list(&store)?,
             };
             for r in filtered {
                 for w in store.workspaces(r.id)? {
@@ -752,11 +751,15 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         } => {
             let r = lookup_repo(&store, &repo)?;
             let w = lookup_workspace(&store, &r, &name)?;
-            crate::workspace::rename(&store, &r, &w, &new_name).await?;
-            println!(
-                "renamed workspace {}/{} to {}/{}",
-                r.name, name, r.name, new_name
-            );
+            if new_name == name {
+                println!("workspace {}/{} unchanged", r.name, name);
+            } else {
+                crate::workspace::rename(&store, &r, &w, &new_name).await?;
+                println!(
+                    "renamed workspace {}/{} to {}/{}",
+                    r.name, name, r.name, new_name
+                );
+            }
         }
         CliAction::WorkspaceArchive {
             repo,

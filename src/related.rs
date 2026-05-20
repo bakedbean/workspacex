@@ -64,7 +64,7 @@ pub fn build_read_only_prompt(resolved: &[(String, PathBuf)]) -> Option<String> 
          decisions via commits or PR bodies, not by assuming the other \
          session remembers.\n\n\
          Other useful commands: `wsx workspace list [<repo>]`, \
-         `wsx workspace rename <repo> <slug> <new-slug>`, \
+         `wsx workspace rename <repo> <old-slug> <new-slug>`, \
          `wsx workspace archive <repo> <slug>`.\n\n\
          Read, grep, and quote freely from these read-only paths. Just \
          don't write to them.\n"

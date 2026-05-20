@@ -1239,7 +1239,11 @@ async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent) -> Result
     Ok(())
 }
 
-async fn dispatch_key(app: &mut App, shared: &SharedApp, k: crossterm::event::KeyEvent) -> Result<()> {
+async fn dispatch_key(
+    app: &mut App,
+    shared: &SharedApp,
+    k: crossterm::event::KeyEvent,
+) -> Result<()> {
     if app.modal.is_some() {
         handle_key_modal(app, shared, k).await?;
     } else {
@@ -2178,7 +2182,11 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
     Ok(())
 }
 
-async fn handle_key_modal(app: &mut App, shared: &SharedApp, k: crossterm::event::KeyEvent) -> Result<()> {
+async fn handle_key_modal(
+    app: &mut App,
+    shared: &SharedApp,
+    k: crossterm::event::KeyEvent,
+) -> Result<()> {
     let modal = app.modal.clone().unwrap();
     match modal {
         Modal::NewWorkspace {
@@ -3114,7 +3122,13 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
-        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
         handle_key_modal(
             &mut app,
             &shared,
@@ -3152,7 +3166,13 @@ mod pm_state_tests {
         }
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
-        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
         handle_key_modal(
             &mut app,
             &shared,
@@ -3222,7 +3242,13 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.workspace_needs_attention.insert(ws_id);
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
-        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
         handle_key_modal(
             &mut app,
             &shared,
@@ -3334,7 +3360,13 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: target_idx,
         });
-        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
         handle_key_modal(
             &mut app,
             &shared,
@@ -3541,7 +3573,13 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
-        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
         handle_key_modal(
             &mut app,
             &shared,
@@ -4337,7 +4375,13 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let _ws_id = spawn_attached_workspace(&mut app);
-        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
 
         handle_event(&mut app, &shared, CtEvent::Paste("hello paste".into()))
             .await
@@ -4365,7 +4409,13 @@ mod pm_state_tests {
         // routes keystrokes to the PM session.
         app.pm_visible = true;
         app.focus = crate::ui::PaneFocus::ProjectManager;
-        let shared = Arc::new(Mutex::new(App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap()));
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
 
         handle_event(&mut app, &shared, CtEvent::Paste("hello pm".into()))
             .await
@@ -4740,13 +4790,7 @@ mod pm_state_tests {
         );
         {
             let mut g = app.lock().await;
-            handle_event(
-                &mut g,
-                &app,
-                CtEvent::Key(evt),
-            )
-            .await
-            .unwrap();
+            handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
             // Immediately after Enter, modal should be SetupRunning.
             assert!(
                 matches!(g.modal, Some(Modal::SetupRunning { .. })),
@@ -4759,7 +4803,11 @@ mod pm_state_tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         // Eventually, modal should be None and a workspace should exist.
         let g = app.lock().await;
-        assert!(g.modal.is_none(), "modal should clear after create succeeds; got {:?}", g.modal);
+        assert!(
+            g.modal.is_none(),
+            "modal should clear after create succeeds; got {:?}",
+            g.modal
+        );
         assert!(g.pending_create_gen.is_none());
         assert_eq!(g.workspaces.len(), 1);
         let _ = repo_id; // suppress unused warning if not referenced above
@@ -4775,7 +4823,9 @@ mod pm_state_tests {
         let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
-        store.set_repo_setup_script(repo_id, Some("sleep 5")).unwrap();
+        store
+            .set_repo_setup_script(repo_id, Some("sleep 5"))
+            .unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         let app = Arc::new(Mutex::new(
             App::new(store, tmp.path().to_path_buf()).unwrap(),
@@ -4792,7 +4842,9 @@ mod pm_state_tests {
                 crossterm::event::KeyCode::Enter,
                 crossterm::event::KeyModifiers::empty(),
             );
-            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
             assert!(matches!(g.modal, Some(Modal::SetupRunning { .. })));
         }
         // Brief yield so the spawned task gets to start the setup script.
@@ -4830,7 +4882,9 @@ mod pm_state_tests {
         let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
-        store.set_repo_setup_script(repo_id, Some("sleep 1")).unwrap();
+        store
+            .set_repo_setup_script(repo_id, Some("sleep 1"))
+            .unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         let app = Arc::new(Mutex::new(
             App::new(store, tmp.path().to_path_buf()).unwrap(),
@@ -4846,10 +4900,16 @@ mod pm_state_tests {
                 crossterm::event::KeyCode::Enter,
                 crossterm::event::KeyModifiers::empty(),
             );
-            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
             // Press Enter again — should not spawn a second create.
-            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
-            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
         }
         // Wait for the (single) setup to finish.
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
@@ -4887,7 +4947,9 @@ mod pm_state_tests {
                 crossterm::event::KeyCode::Enter,
                 crossterm::event::KeyModifiers::empty(),
             );
-            handle_event(&mut g, &app, CtEvent::Key(enter)).await.unwrap();
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
             // Immediately Esc — race against the spawned create completing.
             let esc = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Esc,

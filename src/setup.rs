@@ -154,9 +154,15 @@ mod tests {
     async fn none_script_is_skipped() {
         let repo = TempDir::new().unwrap();
         let wt = TempDir::new().unwrap();
-        let r = run_setup(None, repo.path(), wt.path(), tokio_util::sync::CancellationToken::new(), |_| {})
-            .await
-            .unwrap();
+        let r = run_setup(
+            None,
+            repo.path(),
+            wt.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert!(matches!(r, SetupResult::Skipped));
     }
 
@@ -164,13 +170,25 @@ mod tests {
     async fn empty_and_whitespace_scripts_are_skipped() {
         let repo = TempDir::new().unwrap();
         let wt = TempDir::new().unwrap();
-        let r = run_setup(Some(""), repo.path(), wt.path(), tokio_util::sync::CancellationToken::new(), |_| {})
-            .await
-            .unwrap();
+        let r = run_setup(
+            Some(""),
+            repo.path(),
+            wt.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert!(matches!(r, SetupResult::Skipped));
-        let r = run_setup(Some("   \n\t"), repo.path(), wt.path(), tokio_util::sync::CancellationToken::new(), |_| {})
-            .await
-            .unwrap();
+        let r = run_setup(
+            Some("   \n\t"),
+            repo.path(),
+            wt.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert!(matches!(r, SetupResult::Skipped));
     }
 
@@ -209,9 +227,15 @@ mod tests {
     async fn setup_reports_nonzero_exit() {
         let repo = TempDir::new().unwrap();
         let wt = TempDir::new().unwrap();
-        let r = run_setup(Some("exit 7"), repo.path(), wt.path(), tokio_util::sync::CancellationToken::new(), |_| {})
-            .await
-            .unwrap();
+        let r = run_setup(
+            Some("exit 7"),
+            repo.path(),
+            wt.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         match r {
             SetupResult::Failed { exit_code } => assert_eq!(exit_code, 7),
             other => panic!("expected Failed, got {other:?}"),
@@ -273,16 +297,28 @@ mod tests {
     async fn run_archive_executes_the_provided_script() {
         let repo = TempDir::new().unwrap();
         let wt = TempDir::new().unwrap();
-        let r = run_archive(Some("exit 3"), repo.path(), wt.path(), tokio_util::sync::CancellationToken::new(), |_| {})
-            .await
-            .unwrap();
+        let r = run_archive(
+            Some("exit 3"),
+            repo.path(),
+            wt.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         match r {
             SetupResult::Failed { exit_code } => assert_eq!(exit_code, 3),
             other => panic!("expected Failed, got {other:?}"),
         }
-        let r = run_archive(None, repo.path(), wt.path(), tokio_util::sync::CancellationToken::new(), |_| {})
-            .await
-            .unwrap();
+        let r = run_archive(
+            None,
+            repo.path(),
+            wt.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert!(matches!(r, SetupResult::Skipped));
     }
 
@@ -297,14 +333,7 @@ mod tests {
             cancel_clone.cancel();
         });
         let start = std::time::Instant::now();
-        let result = run_setup(
-            Some("sleep 10"),
-            tmp.path(),
-            tmp.path(),
-            cancel,
-            |_| {},
-        )
-        .await;
+        let result = run_setup(Some("sleep 10"), tmp.path(), tmp.path(), cancel, |_| {}).await;
         let elapsed = start.elapsed();
         assert!(
             matches!(result, Err(Error::Cancelled)),
@@ -321,14 +350,7 @@ mod tests {
         use tokio_util::sync::CancellationToken;
         let tmp = TempDir::new().unwrap();
         let cancel = CancellationToken::new();
-        let result = run_setup(
-            Some("true"),
-            tmp.path(),
-            tmp.path(),
-            cancel.clone(),
-            |_| {},
-        )
-        .await;
+        let result = run_setup(Some("true"), tmp.path(), tmp.path(), cancel.clone(), |_| {}).await;
         // Cancel arrives long after run_setup has returned.
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         cancel.cancel();

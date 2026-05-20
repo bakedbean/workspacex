@@ -169,7 +169,8 @@ pub async fn create_with_app(
     };
 
     // --- Phase 4 (unlocked, async): create worktree. ---
-    let worktree_result = crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await;
+    let worktree_result =
+        crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await;
     if let Err(e) = worktree_result {
         let g = app.lock().await;
         g.store.set_workspace_state(id, WorkspaceState::Failed)?;
@@ -718,8 +719,16 @@ mod tests {
         let base = TempDir::new().unwrap();
         let cancel = CancellationToken::new();
         cancel.cancel();
-        let result =
-            create(&store, &repo, Some("alpha"), base.path(), false, cancel, |_| {}).await;
+        let result = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            cancel,
+            |_| {},
+        )
+        .await;
         assert!(matches!(result, Err(Error::Cancelled)), "got {result:?}");
         let rows = store.workspaces(id).unwrap();
         assert!(
@@ -737,9 +746,7 @@ mod tests {
             .await
             .unwrap();
         // Configure a slow setup script via the store.
-        store
-            .set_repo_setup_script(id, Some("sleep 10"))
-            .unwrap();
+        store.set_repo_setup_script(id, Some("sleep 10")).unwrap();
         let repo = store
             .repos()
             .unwrap()
@@ -753,14 +760,25 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             cancel_clone.cancel();
         });
-        let result =
-            create(&store, &repo, Some("alpha"), base.path(), false, cancel, |_| {}).await;
+        let result = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            cancel,
+            |_| {},
+        )
+        .await;
         assert!(matches!(result, Err(Error::Cancelled)), "got {result:?}");
         let rows = store.workspaces(id).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].setup_status, SetupStatus::Cancelled);
         assert_eq!(rows[0].state, WorkspaceState::Ready);
-        assert!(rows[0].worktree_path.exists(), "worktree should remain on disk");
+        assert!(
+            rows[0].worktree_path.exists(),
+            "worktree should remain on disk"
+        );
     }
 
     #[tokio::test]

@@ -89,9 +89,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         ),
         Modal::SetupRunning { .. } => {
             let frame = crate::ui::dashboard::spinner::frame(tick);
-            let body = format!(
-                "  {frame} Creating workspace…\n\n  [esc] cancel",
-            );
+            let body = format!("  {frame} Creating workspace…\n\n  [esc] cancel",);
             ("new workspace", body)
         }
         Modal::Error { message } => ("error", message.clone()),

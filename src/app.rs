@@ -3501,6 +3501,96 @@ mod pm_state_tests {
         );
     }
 
+    #[test]
+    fn updates_panel_render_scrolls_to_keep_selected_visible() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let store = Store::open_in_memory().unwrap();
+        // 5 repos × 8 workspaces = 40 ws rows + 5 headers + 5 blank
+        // separators = 50 visual lines. The panel clamps height to ≤25,
+        // so without scrolling the last workspaces are invisible.
+        for r in 0..5 {
+            let repo_path = format!("/tmp/scroll-test/r{r}");
+            let repo_name = format!("repo-{r}");
+            let repo_id = store
+                .add_repo(std::path::Path::new(&repo_path), &repo_name, "")
+                .unwrap();
+            for w in 0..8 {
+                let ws_name = format!("ws-{r}-{w}");
+                let branch = format!("{repo_name}/{ws_name}");
+                let worktree = format!("/tmp/scroll-test/{ws_name}");
+                let ws_id = store
+                    .insert_workspace(&NewWorkspace {
+                        repo_id,
+                        name: &ws_name,
+                        branch: &branch,
+                        worktree_path: std::path::Path::new(&worktree),
+                        yolo: false,
+                    })
+                    .unwrap();
+                store
+                    .set_workspace_state(ws_id, WorkspaceState::Ready)
+                    .unwrap();
+            }
+        }
+
+        let mut app = App::new(store, PathBuf::from("/tmp/scroll-test")).unwrap();
+
+        // Build the same order the renderer uses, so we can select the
+        // very last workspace — the one that would be clipped without
+        // scroll support.
+        let activity_translated: std::collections::HashMap<
+            crate::store::WorkspaceId,
+            crate::ui::updates_bar::ActivityState,
+        > = app
+            .workspace_activity
+            .iter()
+            .map(|(k, v)| (*k, translate_activity(*v)))
+            .collect();
+        let order = crate::ui::modal::ordered_workspaces_for_panel(
+            &app.repos,
+            &app.workspaces,
+            &app.workspace_events,
+            &activity_translated,
+            &app.workspace_needs_attention,
+        );
+        assert!(order.len() >= 40, "expected ≥40 workspaces, got {}", order.len());
+        let last_selected = order.len() - 1;
+        let last_ws_id = order[last_selected];
+        let last_ws_name = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == last_ws_id)
+            .expect("last workspace present")
+            .1
+            .name
+            .clone();
+
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: last_selected,
+        });
+
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains(&last_ws_name),
+            "selected workspace '{last_ws_name}' should be scrolled into \
+             view but is not present in rendered modal:\n{rendered}"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn attached_view_shows_status_row_for_other_workspace_needing_attention() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};

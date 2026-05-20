@@ -233,6 +233,21 @@ impl Theme {
         Style::default().fg(self.merged)
     }
 
+    /// Map a `BranchLifecycle` to its theme color. Returns `None` for
+    /// lifecycle states that intentionally have no color (NoPr, PrDraft)
+    /// so each caller can pick its own fallback — the dashboard branch
+    /// column dims unknowns, the updates-panel name stays default-bold.
+    pub fn lifecycle_style(&self, lc: Option<crate::forge::BranchLifecycle>) -> Option<Style> {
+        use crate::forge::BranchLifecycle::*;
+        match lc {
+            Some(PrOpen) => Some(self.ok_style()),
+            Some(PrConflicted) => Some(self.warn_style()),
+            Some(PrMerged) => Some(self.merged_style()),
+            Some(PrClosed) => Some(self.err_style()),
+            _ => None,
+        }
+    }
+
     pub fn status_style(&self, s: crate::ui::dashboard::status::Status) -> Style {
         use crate::ui::dashboard::status::Status::*;
         let fg = match s {

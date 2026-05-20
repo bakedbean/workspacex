@@ -139,8 +139,9 @@ pub fn render(
         format!("⎇ {}", inputs.branch)
     };
     let branch_padded = truncate_pad(&branch_text, branch_width);
-    let branch_style =
-        lifecycle_style(inputs.lifecycle, theme).unwrap_or_else(|| theme.dim_style());
+    let branch_style = theme
+        .lifecycle_style(inputs.lifecycle)
+        .unwrap_or_else(|| theme.dim_style());
     spans.push(Span::styled(branch_padded, branch_style));
 
     // 6: procs
@@ -208,17 +209,6 @@ pub fn render(
     spans.push(Span::styled(ago_padded, theme.dim_style()));
 
     Line::from(spans)
-}
-
-fn lifecycle_style(lc: Option<BranchLifecycle>, theme: &Theme) -> Option<Style> {
-    use BranchLifecycle::*;
-    match lc {
-        Some(PrOpen) => Some(theme.ok_style()),
-        Some(PrConflicted) => Some(theme.warn_style()),
-        Some(PrMerged) => Some(theme.merged_style()),
-        Some(PrClosed) => Some(theme.err_style()),
-        _ => None,
-    }
 }
 
 fn truncate_pad(s: &str, target: usize) -> String {

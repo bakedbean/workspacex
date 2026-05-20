@@ -1659,34 +1659,6 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         (KeyCode::Char('z'), _) => {
             app.z_leader_pending = true;
         }
-        (KeyCode::Char('r'), _) => {
-            // Reply shortcut on a Question workspace: attach to it so the
-            // user lands in claude's prompt. A richer dedicated reply
-            // prompt is a follow-up.
-            // TODO: wire a dedicated reply prompt once attach is extracted.
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
-                let is_question = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| {
-                        matches!(
-                            app.classify_status(w),
-                            crate::ui::dashboard::status::Status::Question
-                        )
-                    })
-                    .unwrap_or(false);
-                if is_question {
-                    app.workspace_needs_attention.remove(&id);
-                    if let Some((id, path, mode, repo_path)) = build_spawn_info(app, id) {
-                        maybe_mirror_mcp(app, &repo_path, &path);
-                        let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-                        let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
-                        app.view = View::Attached(AttachedState::single(id));
-                    }
-                }
-            }
-        }
         (KeyCode::Char('/'), _) => {
             app.dashboard.filter = Some(String::new());
         }

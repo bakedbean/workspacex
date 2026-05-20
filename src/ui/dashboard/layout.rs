@@ -103,7 +103,6 @@ pub fn footer(
         ("t", "term"),
         ("v", "diff"),
         ("g", "lazygit"),
-        ("r", "reply"),
         ("G", "group"),
         ("/", "filter"),
         ("q", "quit"),

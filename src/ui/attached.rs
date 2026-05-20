@@ -358,19 +358,18 @@ mod tests {
         // visually merge key and label into one block.
         let theme = crate::ui::theme::Theme::wsx();
         let line = footer_line("ws", false, &theme);
-        let chip_bg = ratatui::style::Color::Rgb(0x18, 0x1f, 0x29);
         let leader = line
             .spans
             .iter()
             .find(|s| s.content.as_ref() == "^x")
             .expect("expected ^x leader span");
-        assert_eq!(leader.style.bg, Some(chip_bg));
+        assert_eq!(leader.style.bg, Some(theme.bg_soft));
         let chord_key = line
             .spans
             .iter()
             .find(|s| s.content.as_ref() == "d")
             .expect("expected `d` chord-key span");
-        assert_eq!(chord_key.style.bg, Some(chip_bg));
+        assert_eq!(chord_key.style.bg, Some(theme.bg_soft));
         let chord_label = line
             .spans
             .iter()

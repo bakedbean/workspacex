@@ -139,14 +139,12 @@ fn footer_row_paints_both_bar_bg_and_chip_bg() {
         .unwrap();
     let buf = term.backend().buffer();
     let footer_y = buf.area.height - 1;
-    let bg_alt = ratatui::style::Color::Rgb(0x13, 0x18, 0x20);
-    let bg_soft = ratatui::style::Color::Rgb(0x18, 0x1f, 0x29);
     let mut saw_bar = false;
     let mut saw_chip = false;
     for x in 0..buf.area.width {
         match buf[(x, footer_y)].bg {
-            b if b == bg_alt => saw_bar = true,
-            b if b == bg_soft => saw_chip = true,
+            b if b == theme.bg_alt => saw_bar = true,
+            b if b == theme.bg_soft => saw_chip = true,
             _ => {}
         }
     }

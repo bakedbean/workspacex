@@ -211,13 +211,12 @@ mod tests {
         // the label would visually merge key and label into one block.
         let theme = Theme::wsx();
         let line = footer(&[1, 2, 3], "v0.5.0", 200, &theme);
-        let chip_bg = ratatui::style::Color::Rgb(0x18, 0x1f, 0x29);
         let key_span = line
             .spans
             .iter()
             .find(|s| s.content.as_ref() == "↑↓")
             .expect("expected ↑↓ key span");
-        assert_eq!(key_span.style.bg, Some(chip_bg));
+        assert_eq!(key_span.style.bg, Some(theme.bg_soft));
         let label_span = line
             .spans
             .iter()

@@ -43,13 +43,30 @@ pub fn build_read_only_prompt(resolved: &[(String, PathBuf)]) -> Option<String> 
         "The following directories were added via --add-dir for read-only \
          reference. They are the source paths of related wsx-managed repos:\n\
          {listing}\n\
-         You MUST NOT edit files in these directories. They may be on \
-         different branches, have unstaged changes, or belong to other \
-         active work. If you need to make changes in a related repo, tell \
-         the user to create a new wsx workspace for it (via the wsx \
-         dashboard's [n] keybind, or `wsx workspace create <repo>`) and \
-         switch to that session — then come back here when done.\n\n\
-         Read, grep, reference, and quote freely from these paths. Just \
+         You MUST NOT edit files in these directories. They sit on whatever \
+         branch the source repo's main worktree happens to be on; a write \
+         there would land outside your workspace and could clobber other \
+         active work.\n\n\
+         When a task requires changes in a related repo, drive wsx from \
+         this session to spin up a sibling workspace, then work in it:\n\n\
+         \x20 1. `wsx workspace create <repo> --name <slug>` — create a \
+         workspace in the related repo. `<slug>` is a 2-4 word kebab-case \
+         summary of the task (e.g. `add-widgets-endpoint`); wsx applies \
+         that repo's configured branch_prefix, so the resulting branch is \
+         `<prefix>/<slug>`. Do NOT pass a full branch name as the slug.\n\
+         \x20 2. `wsx workspace path <repo> <slug>` — prints the new \
+         worktree path. `cd` there to make changes, commit, and push.\n\
+         \x20 3. Each repo gets its own branch and its own PR. To \
+         coordinate \"ship together\", cross-link the PRs in each \
+         description and ask the user to merge in dependency order.\n\n\
+         Workspaces in different repos do not share Claude session state. \
+         If you split work across sessions, propagate API contracts and \
+         decisions via commits or PR bodies, not by assuming the other \
+         session remembers.\n\n\
+         Other useful commands: `wsx workspace list [<repo>]`, \
+         `wsx workspace rename <repo> <slug> <new-slug>`, \
+         `wsx workspace archive <repo> <slug>`.\n\n\
+         Read, grep, and quote freely from these read-only paths. Just \
          don't write to them.\n"
     ))
 }
@@ -164,6 +181,28 @@ mod tests {
         assert!(
             out.contains("MUST NOT edit"),
             "prompt missing read-only directive: {out}"
+        );
+    }
+
+    #[test]
+    fn build_read_only_prompt_includes_orchestration_commands() {
+        let r = vec![("frontend".to_string(), PathBuf::from("/work/frontend"))];
+        let out = build_read_only_prompt(&r).unwrap();
+        assert!(
+            out.contains("wsx workspace create"),
+            "prompt missing workspace create command: {out}"
+        );
+        assert!(
+            out.contains("wsx workspace path"),
+            "prompt missing workspace path command: {out}"
+        );
+        assert!(
+            out.contains("branch_prefix"),
+            "prompt missing branch_prefix explanation: {out}"
+        );
+        assert!(
+            out.contains("Do NOT pass a full branch name"),
+            "prompt missing slug-vs-branch warning: {out}"
         );
     }
 

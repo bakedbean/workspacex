@@ -82,6 +82,38 @@ wsx repo edit-related-repos <name>
 
 Per-repo list of other wsx-registered repos that workspaces in this repo should reference. Comma-separated names (e.g. `frontend,marketing`). At spawn time wsx looks each name up in the repo registry and passes `--add-dir <source-path>` to claude. Unknown names are silently skipped (logged at `warn` level — visible with `RUST_LOG=wsx=warn` or any less-specific filter).
 
+### Workspace management
+
+```
+wsx workspace create <repo> [--name <slug>] [--yolo]
+```
+
+Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned Claude session.
+
+```
+wsx workspace list [<repo>]
+```
+
+Lists workspaces as tab-separated `repo<TAB>slug<TAB>branch<TAB>worktree_path` rows. Pass a repo name to filter.
+
+```
+wsx workspace path <repo> <slug>
+```
+
+Prints just the worktree path. Designed for `cd "$(wsx workspace path backend my-slug)"`.
+
+```
+wsx workspace rename <repo> <old-slug> <new-slug>
+```
+
+Renames the workspace slug AND its git branch in sync with the wsx database. Using `git branch -m` directly leaves wsx's DB stale.
+
+```
+wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
+```
+
+Equivalent to the dashboard's archive action: runs the per-repo archive script, removes the worktree (unless `--keep-worktree`), deletes the branch (force if `--force-delete-branch`), and drops the workspace from the registry.
+
 ### Global settings
 
 ```
@@ -602,9 +634,9 @@ When you spawn a workspace in `backend`, wsx invokes claude with `--add-dir` poi
 To prevent claude from accidentally editing files in the source paths of related repos (which would land changes on whatever branch the source is on), wsx also appends a system-prompt instruction telling claude:
 
 - Treat those directories as read-only.
-- If changes are needed there, ask the user to create a new wsx workspace in that repo and switch to it.
+- If changes are needed there, drive `wsx workspace create <other-repo> --name <slug>` from this session, `cd` into the new worktree path (`wsx workspace path <other-repo> <slug>`), and make the changes there. Each repo gets its own branch and PR; cross-link them and merge in dependency order.
 
-This is a soft guard, not a tool-level lock — it relies on claude following the instruction. The same trust model as `custom_instructions`.
+This is a soft guard, not a tool-level lock — it relies on claude following the instruction. The same trust model as `custom_instructions`. Installing the `wsx` skill at `~/.claude/skills/wsx/SKILL.md` reinforces this with the full CLI vocabulary and slug-naming rules.
 
 Unknown names in the list (e.g. a repo you renamed or unregistered) are logged and skipped at spawn time; the spawn still proceeds with the recognized names.
 

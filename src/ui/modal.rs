@@ -265,11 +265,8 @@ pub fn render_updates_panel(
     // Stateless scroll: keep the selected workspace centered in the viewport
     // when the rendered lines overflow the body area. Clamped so we never
     // scroll past the last line.
-    let scroll_y = scroll_offset_for_selected(
-        selected_visual_line,
-        lines.len(),
-        body_area.height as usize,
-    );
+    let scroll_y =
+        scroll_offset_for_selected(selected_visual_line, lines.len(), body_area.height as usize);
 
     f.render_widget(
         Paragraph::new(lines)

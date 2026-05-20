@@ -1347,6 +1347,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     // dashboard's 'p' / 'r' shortcuts, the user presses Tab/Esc first to
     // return focus to the dashboard.
     if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) {
+        // Defensive: PM focus means the dashboard's z-leader cannot be
+        // meaningfully consumed here (keys forward to the PM PTY). Clear
+        // it so it doesn't leak across focus transitions.
+        app.z_leader_pending = false;
         match (k.code, k.modifiers) {
             (KeyCode::Tab, _) | (KeyCode::Esc, _) => {
                 app.focus = crate::ui::PaneFocus::Dashboard;
@@ -1376,6 +1380,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         && matches!(app.focus, crate::ui::PaneFocus::Dashboard)
         && k.code == KeyCode::Tab
     {
+        // Treat Tab as a "never mind" for any armed z-leader so it
+        // doesn't unexpectedly eat the next dashboard key after the
+        // user Tabs back from PM.
+        app.z_leader_pending = false;
         app.focus = crate::ui::PaneFocus::ProjectManager;
         return Ok(());
     }
@@ -1417,7 +1425,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         match (k.code, k.modifiers) {
             (KeyCode::Char('z'), _) => toggle_focused_fold(app),
             (KeyCode::Char('a'), _) => expand_all_repos(app),
-            (KeyCode::Char('M'), m) if m.contains(KeyModifiers::SHIFT) => fold_all_repos(app),
+            // Match bare `Char('M')` (no SHIFT guard) to match the
+            // codebase convention for capital-letter binds like `G` —
+            // some terminals + CapsLock report uppercase without SHIFT.
+            (KeyCode::Char('M'), _) => fold_all_repos(app),
             _ => {} // Esc, unknown key, anything else: just clear.
         }
         return Ok(());
@@ -4564,6 +4575,44 @@ mod pm_state_tests {
             app.dashboard.folded, folded_before,
             "M alone should not change fold state"
         );
+    }
+
+    #[tokio::test]
+    async fn z_m_folds_all_repos_without_shift_modifier() {
+        // Some terminals (or CapsLock) report `Char('M')` without
+        // KeyModifiers::SHIFT. The chord should still fire — matches
+        // the codebase convention for capital-letter binds like `G`.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'M', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zM");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(true),
+                "zM (no SHIFT) should fold every repo"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tab_swap_clears_armed_z_leader() {
+        // If the user arms `z` then Tabs over to PM, the leader must
+        // clear — otherwise their next key after Tabbing back would
+        // be unexpectedly eaten by the z-leader dispatcher.
+        let (mut app, _) = make_app_with_n_repos(2);
+        // Tab swap path requires PM visible.
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::Dashboard;
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        assert!(app.z_leader_pending, "z should arm the leader");
+        press_key(&mut app, KeyCode::Tab).await;
+        assert!(
+            !app.z_leader_pending,
+            "Tab to PM should clear the armed leader"
+        );
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
     }
 }
 

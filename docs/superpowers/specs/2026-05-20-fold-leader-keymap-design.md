@@ -108,7 +108,7 @@ In `src/app.rs` test module (or wherever dashboard key tests live; follow existi
 - `src/app.rs` — add `z_leader_pending` field; replace the `z` arm in the dashboard key handler; add the two `expand_all_repos` / `fold_all_repos` helpers; add the 8 tests.
 - `src/ui/dashboard/layout.rs:100` — update the footer hint label.
 
-No new files. No public API changes (`z_leader_pending` is internal to `App`; the helpers can be local module functions).
+No new source files. (This design doc and its companion plan are themselves new files in the repo, but the implementation touches only existing modules.) No public API changes (`z_leader_pending` is internal to `App`; the helpers can be local module functions).
 
 ## What's intentionally NOT included
 

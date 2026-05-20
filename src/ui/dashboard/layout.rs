@@ -108,18 +108,22 @@ pub fn footer(
         ("/", "filter"),
         ("q", "quit"),
     ];
+    let key_style = Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft);
+    let label_style = Style::default().fg(theme.path);
+    let pad_style = theme.chip_bg_style();
+    // Pill wraps only the key glyph (` key `); the label is plain text on
+    // the bar bg, with a single leading space separating it from the pill.
     for (i, (key, label)) in keys.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw("  ".to_string()));
         }
-        spans.push(Span::styled(
-            (*key).to_string(),
-            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            format!(" {label}"),
-            Style::default().fg(theme.path),
-        ));
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        spans.push(Span::styled((*key).to_string(), key_style));
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        spans.push(Span::styled(format!(" {label}"), label_style));
     }
 
     let spark = sparkline::render(activity_samples, 24);
@@ -188,11 +192,39 @@ mod tests {
         let samples = vec![1, 2, 3, 4, 5];
         let line = footer(&samples, "v0.5.0", 200, &theme);
         let t = text(&line);
-        assert!(t.contains("↑↓ nav"));
-        assert!(t.contains("g lazygit"));
-        assert!(t.contains("G group"));
-        assert!(t.contains("q quit"));
+        // After the V5 pill treatment, key and label are separated by the
+        // pill's trailing pad + the label's leading space (2 cells total).
+        assert!(t.contains("↑↓"), "key present: {t:?}");
+        assert!(t.contains(" nav"), "nav label present: {t:?}");
+        assert!(t.contains(" lazygit"));
+        assert!(t.contains(" group"));
+        assert!(t.contains(" quit"));
         assert!(t.contains("24h "));
         assert!(t.contains("v0.5.0"));
+    }
+
+    #[test]
+    fn footer_key_pill_wraps_key_only_not_label() {
+        // V5 footer chips paint bg_soft behind only the key glyph (with
+        // 1ch padding on each side). The label following the pill is plain
+        // text on the bar bg — a regression that re-extended bg_soft over
+        // the label would visually merge key and label into one block.
+        let theme = Theme::wsx();
+        let line = footer(&[1, 2, 3], "v0.5.0", 200, &theme);
+        let key_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "↑↓")
+            .expect("expected ↑↓ key span");
+        assert_eq!(key_span.style.bg, Some(theme.bg_soft));
+        let label_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == " nav")
+            .expect("expected ` nav` label span (no chip padding)");
+        assert_eq!(
+            label_span.style.bg, None,
+            "label should not carry the chip bg"
+        );
     }
 }

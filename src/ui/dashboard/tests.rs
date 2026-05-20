@@ -111,6 +111,48 @@ fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
 }
 
 #[test]
+fn footer_row_paints_both_bar_bg_and_chip_bg() {
+    // End-to-end check: after the whole render path runs, the bottom row
+    // (the footer) must contain BOTH the bar background (bg_alt fills the
+    // gaps + spark area) AND the chip background (bg_soft fills the cells
+    // behind each key chord). If either is absent the V5 chip treatment
+    // has regressed even when the unit-level span tests still pass.
+    let fixtures = fixture::repos();
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
+    let activity: Vec<u32> = (0..24).collect();
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+    };
+    let mut state = DashboardState::default();
+    let theme = Theme::wsx();
+    let backend = TestBackend::new(160, 40);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+        .unwrap();
+    let buf = term.backend().buffer();
+    let footer_y = buf.area.height - 1;
+    let mut saw_bar = false;
+    let mut saw_chip = false;
+    for x in 0..buf.area.width {
+        match buf[(x, footer_y)].bg {
+            b if b == theme.bg_alt => saw_bar = true,
+            b if b == theme.bg_soft => saw_chip = true,
+            _ => {}
+        }
+    }
+    assert!(saw_bar, "footer row should contain bg_alt bar-bg cells");
+    assert!(saw_chip, "footer row should contain bg_soft chip-bg cells");
+}
+
+#[test]
 fn by_attention_render_emits_section_headers() {
     let lines = render_to_strings(GroupMode::Attention);
     let joined = lines.join("\n");

@@ -54,11 +54,22 @@ pub fn render_panes(
     }
 
     if let Some(line) = attention_line {
-        f.render_widget(Paragraph::new(line), status_area);
+        f.render_widget(
+            Paragraph::new(line).style(theme.footer_bar_style()),
+            status_area,
+        );
     }
 
+    // Footer rect is 2 cells tall; render an empty first line so the bar
+    // bg fills it as a spacer and the keys land on the bottom cell. Gives
+    // the keys breathing room from the row above without doubling spacing
+    // throughout the chrome stack.
+    let footer_text = ratatui::text::Text::from(vec![
+        Line::from(Vec::<Span<'static>>::new()),
+        footer_line(footer_label, multi_pane_footer, theme),
+    ]);
     f.render_widget(
-        Paragraph::new(footer_line(footer_label, multi_pane_footer, theme)),
+        Paragraph::new(footer_text).style(theme.footer_bar_style()),
         footer_area,
     );
 
@@ -122,11 +133,15 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
 }
 
 /// Carve the attached view's full `area` into pane / chip / status /
-/// footer sub-areas. The chip row is always 1 row tall — it carries
-/// either pinned-command chips followed by a `─` rule filler, or just
-/// the rule when no chips are configured. The rule mirrors the V5
-/// dashboard's repo-header rule, separating the Claude Code area from
-/// the wsx chrome below.
+/// footer sub-areas. Chip and attention rows are 1 cell tall (flush with
+/// each other — the chip row's inline `─` rule already provides visual
+/// separation from above). The footer rect is 2 cells tall so its
+/// leading blank line acts as a bar-bg spacer that lifts the keys away
+/// from the rows above. Net: one cell of breathing room just above the
+/// footer keys, regardless of whether the attention line is present.
+///
+/// The chip row carries either pinned-command chips followed by a `─`
+/// rule filler, or just the rule when no chips are configured.
 pub fn layout_chrome(
     area: Rect,
     attention_present: bool,
@@ -137,9 +152,9 @@ pub fn layout_chrome(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
-            Constraint::Length(1), // chip row (chips + rule filler)
-            Constraint::Length(status_h),
-            Constraint::Length(1),
+            Constraint::Length(1),        // chip row
+            Constraint::Length(status_h), // attention row (0 when absent)
+            Constraint::Length(2),        // footer keys with 1-cell bar-bg spacer above
         ])
         .split(area);
     (chunks[0], chunks[1], chunks[2], chunks[3])
@@ -181,32 +196,35 @@ fn footer_line(label: &str, multi_pane: bool, theme: &Theme) -> Line<'static> {
             ("x", "send-^x"),
         ]
     };
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 2 + 3);
+    let key_style = Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft);
+    let label_style = Style::default().fg(theme.path);
+    let pad_style = theme.chip_bg_style();
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 5 + 4);
     spans.push(Span::styled(label.to_string(), theme.header_style()));
     spans.push(Span::raw("   ".to_string()));
-    spans.push(Span::styled(
-        "^x".to_string(),
-        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
-    ));
+    // ^x leader rendered as a standalone pill (no label tail).
+    spans.push(Span::styled(" ".to_string(), pad_style));
+    spans.push(Span::styled("^x".to_string(), key_style));
+    spans.push(Span::styled(" ".to_string(), pad_style));
     for (key, lbl) in keys {
         spans.push(Span::raw("  ".to_string()));
-        spans.push(Span::styled(
-            (*key).to_string(),
-            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            format!(" {lbl}"),
-            Style::default().fg(theme.path),
-        ));
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        spans.push(Span::styled((*key).to_string(), key_style));
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        spans.push(Span::styled(format!(" {lbl}"), label_style));
     }
     Line::from(spans)
 }
 
 /// Compute the clickable Rect for each chip that fits within `area`.
 /// Returns one Rect per chip rendered left-to-right; chips that don't fit
-/// are dropped from the end. The chip text is `<N> <label>` joined by
-/// 2-space gaps (V5 footer convention). Labels are individually
-/// truncated to 12 columns first.
+/// are dropped from the end. The chip text is ` <N> <label> ` (V5 button
+/// treatment: 1ch padding on each side of the `N <label>` core) joined
+/// by 2-space gaps. Labels are individually truncated to 12 columns first.
 pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     let mut rects = Vec::new();
     let mut x = area.x;
@@ -214,8 +232,8 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     const GAP: u16 = 2;
     for (i, cmd) in pinned.iter().enumerate().take(9) {
         let label = truncate_label(&cmd.label, 12);
-        // Chip text: "N label"  (2 chars for "N " plus label chars)
-        let chip_chars = 2 + label.chars().count() as u16;
+        // Chip text: " N label "  (leading pad + N + " " + label + trailing pad)
+        let chip_chars = 4 + label.chars().count() as u16;
         if i > 0 {
             x = x.saturating_add(GAP);
         }
@@ -240,9 +258,13 @@ fn render_chip_row(
     theme: &Theme,
 ) -> Vec<Rect> {
     let rects = layout_chip_row(area, pinned);
-    let key_style = Style::default().fg(theme.dim).add_modifier(Modifier::BOLD);
+    let key_style = Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft);
     let label_style = Style::default().fg(theme.path);
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 3 + 2);
+    let pad_style = theme.chip_bg_style();
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 5 + 2);
     let mut used: usize = 0;
     for (i, (_rect, cmd)) in rects.iter().zip(pinned.iter()).enumerate() {
         if i > 0 {
@@ -251,11 +273,15 @@ fn render_chip_row(
         }
         let label = truncate_label(&cmd.label, 12);
         let chip_text = format!("{}", i + 1);
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        used += 1;
         spans.push(Span::styled(chip_text, key_style));
         used += 1;
-        let label_with_space = format!(" {label}");
-        used += label_with_space.chars().count();
-        spans.push(Span::styled(label_with_space, label_style));
+        spans.push(Span::styled(" ".to_string(), pad_style));
+        used += 1;
+        let label_with_lead = format!(" {label}");
+        used += label_with_lead.chars().count();
+        spans.push(Span::styled(label_with_lead, label_style));
     }
     // Inline rule filler matching the V5 dashboard repo-header style:
     // 2 spaces (or 0 when there are no chips), then `─` runs to the
@@ -271,7 +297,10 @@ fn render_chip_row(
             spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
         }
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(theme.footer_bar_style()),
+        area,
+    );
     rects
 }
 
@@ -319,5 +348,90 @@ mod tests {
     fn chip_row_empty_list_returns_no_rects() {
         let area = ratatui::layout::Rect::new(0, 0, 80, 1);
         assert!(layout_chip_row(area, &[]).is_empty());
+    }
+
+    #[test]
+    fn footer_line_pill_wraps_key_only_not_label() {
+        // The attached footer's ^x leader and each chord key get a pill;
+        // the label following each chord is plain text on the bar bg. A
+        // regression that re-extended bg_soft over the label would
+        // visually merge key and label into one block.
+        let theme = crate::ui::theme::Theme::wsx();
+        let line = footer_line("ws", false, &theme);
+        let leader = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "^x")
+            .expect("expected ^x leader span");
+        assert_eq!(leader.style.bg, Some(theme.bg_soft));
+        let chord_key = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "d")
+            .expect("expected `d` chord-key span");
+        assert_eq!(chord_key.style.bg, Some(theme.bg_soft));
+        let chord_label = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == " detach")
+            .expect("expected ` detach` chord-label span (no chip padding)");
+        assert_eq!(
+            chord_label.style.bg, None,
+            "label should not carry the chip bg"
+        );
+    }
+
+    #[test]
+    fn layout_chrome_places_spacer_above_footer_keys() {
+        // The chip and attention rows sit flush with each other (the
+        // chip's `─` rule does the visual separation from above). The
+        // footer rect is 2 cells tall so its leading blank line provides
+        // a single cell of bar-bg breathing room just above the keys —
+        // independent of whether the attention row is present.
+        let area = ratatui::layout::Rect::new(0, 0, 80, 30);
+        let (pane, chip, status, footer) = layout_chrome(area, true, true);
+        assert_eq!(chip.height, 1, "chip row is 1 tall (no spacer below)");
+        assert_eq!(
+            status.height, 1,
+            "attention row is 1 tall (flush with chip)"
+        );
+        assert_eq!(
+            footer.height, 2,
+            "footer rect is 2 tall (spacer + keys row)"
+        );
+        assert_eq!(
+            pane.height + chip.height + status.height + footer.height,
+            area.height,
+            "chrome chunks should tile the full area without overlap"
+        );
+
+        let (_, chip2, status2, footer2) = layout_chrome(area, false, true);
+        assert_eq!(chip2.height, 1);
+        assert_eq!(
+            status2.height, 0,
+            "attention row collapses to 0 when absent"
+        );
+        assert_eq!(
+            footer2.height, 2,
+            "footer rect still has its leading spacer when attention absent"
+        );
+    }
+
+    #[test]
+    fn layout_chip_row_uses_padded_chip_width() {
+        // Each pinned chip renders as ` N label ` (number + space + label
+        // with 1ch padding each side). The clickable rect must match the
+        // rendered width so mouse hit-testing lands on the chip's visual
+        // bounds, padding included.
+        let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+        let pinned = cmds(&[("pr", "/pr"), ("feedback", "/fb")]);
+        let rects = layout_chip_row(area, &pinned);
+        assert_eq!(rects.len(), 2);
+        // " 1 pr " = 6 cells
+        assert_eq!(rects[0].width, 6);
+        // " 2 feedback " = 12 cells
+        assert_eq!(rects[1].width, 12);
+        // 2-cell gap between chips
+        assert_eq!(rects[1].x, rects[0].x + rects[0].width + 2);
     }
 }

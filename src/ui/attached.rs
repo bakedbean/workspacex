@@ -60,9 +60,16 @@ pub fn render_panes(
         );
     }
 
+    // Footer rect is 2 cells tall; render an empty first line so the bar
+    // bg fills it as a spacer and the keys land on the bottom cell. Gives
+    // the keys breathing room from the row above without doubling spacing
+    // throughout the chrome stack.
+    let footer_text = ratatui::text::Text::from(vec![
+        Line::from(Vec::<Span<'static>>::new()),
+        footer_line(footer_label, multi_pane_footer, theme),
+    ]);
     f.render_widget(
-        Paragraph::new(footer_line(footer_label, multi_pane_footer, theme))
-            .style(theme.footer_bar_style()),
+        Paragraph::new(footer_text).style(theme.footer_bar_style()),
         footer_area,
     );
 
@@ -126,28 +133,28 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
 }
 
 /// Carve the attached view's full `area` into pane / chip / status /
-/// footer sub-areas. The chip and status rows are each 2 cells tall —
-/// content renders on the first cell, the second cell is a bar-bg-filled
-/// spacer that lifts the three rows apart from each other. The footer
-/// keys row stays 1 cell tall since it's the last row.
+/// footer sub-areas. Chip and attention rows are 1 cell tall (flush with
+/// each other — the chip row's inline `─` rule already provides visual
+/// separation from above). The footer rect is 2 cells tall so its
+/// leading blank line acts as a bar-bg spacer that lifts the keys away
+/// from the rows above. Net: one cell of breathing room just above the
+/// footer keys, regardless of whether the attention line is present.
 ///
 /// The chip row carries either pinned-command chips followed by a `─`
-/// rule filler, or just the rule when no chips are configured. The rule
-/// mirrors the V5 dashboard's repo-header rule, separating the Claude
-/// Code area from the wsx chrome below.
+/// rule filler, or just the rule when no chips are configured.
 pub fn layout_chrome(
     area: Rect,
     attention_present: bool,
     _pinned_present: bool,
 ) -> (Rect, Rect, Rect, Rect) {
-    let status_h = if attention_present { 2 } else { 0 };
+    let status_h = if attention_present { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
-            Constraint::Length(2),        // chip row + 1-cell spacer below
-            Constraint::Length(status_h), // attention row + spacer (0 when absent)
-            Constraint::Length(1),        // footer keys
+            Constraint::Length(1),        // chip row
+            Constraint::Length(status_h), // attention row (0 when absent)
+            Constraint::Length(2),        // footer keys with 1-cell bar-bg spacer above
         ])
         .split(area);
     (chunks[0], chunks[1], chunks[2], chunks[3])
@@ -376,33 +383,38 @@ mod tests {
     }
 
     #[test]
-    fn layout_chrome_inserts_vertical_spacers() {
-        // The 3 chrome rows (chips / attention / keys) should be visibly
-        // separated by 1-cell spacers. We encode this by making chip and
-        // attention areas 2 cells tall; the Paragraph's bar-bg style fills
-        // the empty second cell as a natural spacer.
+    fn layout_chrome_places_spacer_above_footer_keys() {
+        // The chip and attention rows sit flush with each other (the
+        // chip's `─` rule does the visual separation from above). The
+        // footer rect is 2 cells tall so its leading blank line provides
+        // a single cell of bar-bg breathing room just above the keys —
+        // independent of whether the attention row is present.
         let area = ratatui::layout::Rect::new(0, 0, 80, 30);
         let (pane, chip, status, footer) = layout_chrome(area, true, true);
-        assert_eq!(chip.height, 2, "chip row should be 2 tall (row + spacer)");
+        assert_eq!(chip.height, 1, "chip row is 1 tall (no spacer below)");
         assert_eq!(
-            status.height, 2,
-            "attention row should be 2 tall (row + spacer)"
+            status.height, 1,
+            "attention row is 1 tall (flush with chip)"
         );
-        assert_eq!(footer.height, 1, "footer keys row stays 1 tall");
+        assert_eq!(
+            footer.height, 2,
+            "footer rect is 2 tall (spacer + keys row)"
+        );
         assert_eq!(
             pane.height + chip.height + status.height + footer.height,
             area.height,
             "chrome chunks should tile the full area without overlap"
         );
 
-        let (_, chip2, status2, _) = layout_chrome(area, false, true);
-        assert_eq!(
-            chip2.height, 2,
-            "chip row still has its spacer even without attention"
-        );
+        let (_, chip2, status2, footer2) = layout_chrome(area, false, true);
+        assert_eq!(chip2.height, 1);
         assert_eq!(
             status2.height, 0,
             "attention row collapses to 0 when absent"
+        );
+        assert_eq!(
+            footer2.height, 2,
+            "footer rect still has its leading spacer when attention absent"
         );
     }
 

@@ -196,9 +196,14 @@ pub fn parse_ps_comm(raw: &str) -> HashMap<i32, String> {
 
 /// Run `lsof -d cwd -F pcRn` (pid, ppid, cwd) in parallel with
 /// `ps -axo pid=,comm=` (authoritative command names), merge the
-/// results, and return the parsed process list. Returns an empty list
-/// (not an error) when either tool is missing or fails, so the rest of
-/// the dashboard keeps working.
+/// results, and return the parsed process list.
+///
+/// Failure handling is asymmetric and intentional. `lsof` provides the
+/// pid/ppid/cwd that the bucketer needs to function at all — if it's
+/// missing or fails, we return an empty list. `ps` only refines the
+/// `comm` field; if it fails, we keep lsof's `comm` (the macOS-quirky
+/// `p_comm`) so the dashboard still works with slightly degraded
+/// denylist matching.
 pub async fn scan() -> Vec<ProcInfo> {
     let lsof_fut = tokio::process::Command::new("lsof")
         .args(["-d", "cwd", "-F", "pcRn"])

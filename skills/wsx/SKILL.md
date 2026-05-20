@@ -22,7 +22,7 @@ wsx workspace list <repo>      # filter to one repo
 ## CLI surface
 
 ```
-wsx workspace create <repo> --name <slug> [--yolo]
+wsx workspace create <repo> [--name <slug>] [--yolo]
 wsx workspace path <repo> <slug>            # prints just the worktree path (script-friendly)
 wsx workspace rename <repo> <old> <new>     # renames slug AND git branch in sync
 wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]

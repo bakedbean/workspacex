@@ -7,6 +7,7 @@
 //! wsx is installed.
 
 use crate::error::{Error, Result};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The wsx skill content, embedded at compile time from `skills/wsx/SKILL.md`.
@@ -47,8 +48,30 @@ pub fn install_to(target: &Path) -> Result<InstallOutcome> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => InstallOutcome::Created,
         Err(e) => return Err(Error::Io(e)),
     };
-    std::fs::write(target, SKILL_CONTENT)?;
+    write_atomic(target, SKILL_CONTENT)?;
     Ok(outcome)
+}
+
+/// Write `content` to `path` atomically: write to a unique temp file in
+/// the same directory, fsync, then rename. Mirrors the pattern in
+/// `src/mcp.rs` so interrupted writes can't leave a half-written skill.
+fn write_atomic(path: &Path, content: &str) -> Result<()> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let pid = std::process::id();
+    let tmp = parent.join(format!(".SKILL.md.wsx-tmp.{pid}.{}", rand::random::<u32>()));
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(Error::Io(e));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

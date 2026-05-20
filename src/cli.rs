@@ -430,6 +430,28 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
 }
 
 pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
+    // Actions that don't need the wsx store run before we open it, so a
+    // pure `wsx setup install-skill` on a fresh machine doesn't create
+    // `~/.local/state/wsx/state.db` as a side effect.
+    if matches!(action, CliAction::SetupInstallSkill) {
+        let target = crate::skill::default_install_path().ok_or_else(|| {
+            Error::UserInput("could not resolve home directory for skill install".into())
+        })?;
+        let outcome = crate::skill::install_to(&target)?;
+        let path = target.display();
+        match outcome {
+            crate::skill::InstallOutcome::Created => {
+                println!("installed wsx skill to {path}");
+            }
+            crate::skill::InstallOutcome::Updated => {
+                println!("updated wsx skill at {path}");
+            }
+            crate::skill::InstallOutcome::Unchanged => {
+                println!("wsx skill already up to date at {path}");
+            }
+        }
+        return Ok(());
+    }
     let store = crate::store::Store::open(&dirs.db_path())?;
     match action {
         CliAction::Tui => unreachable!("handled in main"),
@@ -781,24 +803,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             crate::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
             println!("archived workspace {}/{}", r.name, name);
         }
-        CliAction::SetupInstallSkill => {
-            let target = crate::skill::default_install_path().ok_or_else(|| {
-                Error::UserInput("could not resolve home directory for skill install".into())
-            })?;
-            let outcome = crate::skill::install_to(&target)?;
-            let path = target.display();
-            match outcome {
-                crate::skill::InstallOutcome::Created => {
-                    println!("installed wsx skill to {path}");
-                }
-                crate::skill::InstallOutcome::Updated => {
-                    println!("updated wsx skill at {path}");
-                }
-                crate::skill::InstallOutcome::Unchanged => {
-                    println!("wsx skill already up to date at {path}");
-                }
-            }
-        }
+        CliAction::SetupInstallSkill => unreachable!("handled before store open"),
     }
     Ok(())
 }

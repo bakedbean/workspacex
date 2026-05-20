@@ -21,8 +21,13 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     name: Option<&str>,
     worktree_base: &Path,
     yolo: bool,
+    cancel: tokio_util::sync::CancellationToken,
     on_setup_line: F,
 ) -> Result<CreatedWorkspace> {
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+
     let name = match name {
         Some(s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => names::generate(),
@@ -44,6 +49,9 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     // Fetch before inserting the workspace row so a fetch failure
     // (network down, bad remote ref) doesn't leave an orphan Pending row.
     git::fetch_for_base(&repo.path, base).await?;
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
 
     let id = store.insert_workspace(&NewWorkspace {
         repo_id: repo.id,
@@ -53,19 +61,38 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         yolo,
     })?;
 
+    if cancel.is_cancelled() {
+        store.set_workspace_state(id, WorkspaceState::Failed)?;
+        return Err(Error::Cancelled);
+    }
+
     if let Err(e) = git::create_worktree(&repo.path, &branch, base, &worktree_path).await {
         store.set_workspace_state(id, WorkspaceState::Failed)?;
         return Err(e);
     }
     store.set_workspace_state(id, WorkspaceState::Ready)?;
 
+    if cancel.is_cancelled() {
+        store.set_setup_status(id, SetupStatus::Cancelled)?;
+        return Err(Error::Cancelled);
+    }
+
     let setup_result = setup::run_setup(
         repo.setup_script.as_deref(),
         &repo.path,
         &worktree_path,
+        cancel.clone(),
         on_setup_line,
     )
-    .await?;
+    .await;
+    let setup_result = match setup_result {
+        Ok(r) => r,
+        Err(Error::Cancelled) => {
+            store.set_setup_status(id, SetupStatus::Cancelled)?;
+            return Err(Error::Cancelled);
+        }
+        Err(e) => return Err(e),
+    };
     let status = match &setup_result {
         SetupResult::Ok => SetupStatus::Ok,
         SetupResult::Skipped => SetupStatus::Skipped,
@@ -78,6 +105,133 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         .into_iter()
         .find(|w| w.id == id)
         .ok_or_else(|| Error::Store(rusqlite::Error::QueryReturnedNoRows))?;
+    Ok(CreatedWorkspace {
+        workspace: ws,
+        setup_result,
+    })
+}
+
+/// TUI-friendly variant of `create` that interleaves App lock acquisition
+/// with the long-running async git/setup phases. Unlike `create`, this
+/// function never holds the App lock across `.await` boundaries on git or
+/// setup work, so the event loop can continue to tick and redraw.
+///
+/// Cancellation: same semantics as `create`. Pre-fetch and pre-insert
+/// cancellation returns `Err(Cancelled)` cleanly. Cancellation during
+/// setup marks the row `SetupStatus::Cancelled` and leaves the worktree
+/// on disk.
+pub async fn create_with_app(
+    app: crate::app::SharedApp,
+    repo: Repo,
+    name: Option<String>,
+    worktree_base: PathBuf,
+    yolo: bool,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<CreatedWorkspace> {
+    // --- Phase 1 (short, locked): compute names/paths, no I/O. ---
+    let (final_name, branch, worktree_path) = {
+        let g = app.lock().await;
+        let resolved_name = match name.as_deref() {
+            Some(s) if !s.trim().is_empty() => s.trim().to_string(),
+            _ => crate::names::generate(),
+        };
+        let prefix = crate::repo::resolve_branch_prefix(&repo, &g.store)?;
+        let branch = if prefix.is_empty() {
+            resolved_name.clone()
+        } else {
+            format!("{}/{}", prefix.trim_end_matches('/'), resolved_name)
+        };
+        let worktree_path = worktree_base.join(&repo.name).join(&resolved_name);
+        (resolved_name, branch, worktree_path)
+    };
+
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+
+    // --- Phase 2 (unlocked, async): fetch base branch. ---
+    let base = repo
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    crate::git::fetch_for_base(&repo.path, base).await?;
+
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+
+    // --- Phase 3 (short, locked): insert workspace row. ---
+    let id = {
+        let g = app.lock().await;
+        g.store.insert_workspace(&NewWorkspace {
+            repo_id: repo.id,
+            name: &final_name,
+            branch: &branch,
+            worktree_path: &worktree_path,
+            yolo,
+        })?
+    };
+
+    if cancel.is_cancelled() {
+        let g = app.lock().await;
+        g.store.set_workspace_state(id, WorkspaceState::Failed)?;
+        return Err(Error::Cancelled);
+    }
+
+    // --- Phase 4 (unlocked, async): create worktree. ---
+    let worktree_result =
+        crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await;
+    if let Err(e) = worktree_result {
+        let g = app.lock().await;
+        g.store.set_workspace_state(id, WorkspaceState::Failed)?;
+        return Err(e);
+    }
+    {
+        let g = app.lock().await;
+        g.store.set_workspace_state(id, WorkspaceState::Ready)?;
+    }
+
+    if cancel.is_cancelled() {
+        let g = app.lock().await;
+        g.store.set_setup_status(id, SetupStatus::Cancelled)?;
+        return Err(Error::Cancelled);
+    }
+
+    // --- Phase 5 (unlocked, async): run setup script. ---
+    let setup_result = setup::run_setup(
+        repo.setup_script.as_deref(),
+        &repo.path,
+        &worktree_path,
+        cancel.clone(),
+        |_| {},
+    )
+    .await;
+    let setup_result = match setup_result {
+        Ok(r) => r,
+        Err(Error::Cancelled) => {
+            let g = app.lock().await;
+            g.store.set_setup_status(id, SetupStatus::Cancelled)?;
+            return Err(Error::Cancelled);
+        }
+        Err(e) => return Err(e),
+    };
+    let status = match &setup_result {
+        SetupResult::Ok => SetupStatus::Ok,
+        SetupResult::Skipped => SetupStatus::Skipped,
+        SetupResult::Failed { .. } => SetupStatus::Failed,
+    };
+
+    // --- Phase 6 (short, locked): finalize. ---
+    let ws = {
+        let g = app.lock().await;
+        g.store.set_setup_status(id, status)?;
+        g.store
+            .workspaces(repo.id)?
+            .into_iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| Error::Store(rusqlite::Error::QueryReturnedNoRows))?
+    };
     Ok(CreatedWorkspace {
         workspace: ws,
         setup_result,
@@ -101,6 +255,7 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
         repo.archive_script.as_deref(),
         &repo.path,
         &ws.worktree_path,
+        tokio_util::sync::CancellationToken::new(),
         on_archive_line,
     )
     .await?;
@@ -240,9 +395,17 @@ mod tests {
             .unwrap();
         let base = TempDir::new().unwrap();
 
-        let created = create(&store, &repo, Some("alpha"), base.path(), false, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert_eq!(created.workspace.name, "alpha");
         assert_eq!(created.workspace.branch, "wsx/alpha");
         assert_eq!(created.workspace.state, WorkspaceState::Ready);
@@ -266,9 +429,17 @@ mod tests {
             .unwrap();
         let base = TempDir::new().unwrap();
 
-        let created = create(&store, &repo, Some("wild"), base.path(), true, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("wild"),
+            base.path(),
+            true,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert!(created.workspace.yolo);
     }
 
@@ -286,9 +457,17 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
-        let created = create(&store, &repo, None, base.path(), false, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            None,
+            base.path(),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert!(created.workspace.name.contains('-'));
     }
 
@@ -307,9 +486,17 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
-        let created = create(&store, &repo, Some("a"), base.path(), false, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("a"),
+            base.path(),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert_eq!(created.workspace.state, WorkspaceState::Ready);
         assert_eq!(created.workspace.setup_status, SetupStatus::Failed);
     }
@@ -328,9 +515,17 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
-        let created = create(&store, &repo, Some("doomed"), base.path(), false, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("doomed"),
+            base.path(),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         archive(
             &store,
             &repo,
@@ -375,9 +570,17 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
-        let created = create(&store, &repo, Some("alpha"), base.path(), false, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
 
         rename(&store, &repo, &created.workspace, "fix-bug")
             .await
@@ -445,9 +648,17 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
-        let created = create(&store, &repo, Some("a"), base.path(), false, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("a"),
+            base.path(),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         assert_eq!(created.workspace.setup_status, SetupStatus::Ok);
         assert!(
             created
@@ -476,9 +687,17 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
-        let created = create(&store, &repo, Some("doomed"), base.path(), false, |_| {})
-            .await
-            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("doomed"),
+            base.path(),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
         archive(
             &store,
             &repo,
@@ -492,6 +711,122 @@ mod tests {
         .await
         .unwrap();
         assert!(marker.exists(), "archive script did not run");
+    }
+
+    #[tokio::test]
+    async fn create_returns_cancelled_when_token_cancelled_before_start() {
+        use tokio_util::sync::CancellationToken;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let result = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            cancel,
+            |_| {},
+        )
+        .await;
+        assert!(matches!(result, Err(Error::Cancelled)), "got {result:?}");
+        let rows = store.workspaces(id).unwrap();
+        assert!(
+            rows.is_empty(),
+            "no row should be inserted when pre-cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_marks_setup_status_cancelled_when_cancelled_during_setup() {
+        use tokio_util::sync::CancellationToken;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        // Configure a slow setup script via the store.
+        store.set_repo_setup_script(id, Some("sleep 10")).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            cancel_clone.cancel();
+        });
+        let result = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            cancel,
+            |_| {},
+        )
+        .await;
+        assert!(matches!(result, Err(Error::Cancelled)), "got {result:?}");
+        let rows = store.workspaces(id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].setup_status, SetupStatus::Cancelled);
+        assert_eq!(rows[0].state, WorkspaceState::Ready);
+        assert!(
+            rows[0].worktree_path.exists(),
+            "worktree should remain on disk"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_with_app_works_end_to_end_without_holding_lock() {
+        use crate::app::App;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, base.path().to_path_buf()).unwrap(),
+        ));
+        let repo = {
+            let g = app.lock().await;
+            g.repos[0].clone()
+        };
+
+        let cancel = CancellationToken::new();
+        let created = create_with_app(
+            app.clone(),
+            repo,
+            Some("alpha".to_string()),
+            base.path().to_path_buf(),
+            false,
+            cancel,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.workspace.name, "alpha");
+        // The lock should NOT be held at this point — we can grab it.
+        let g = app.try_lock().expect("lock should be free");
+        drop(g);
     }
 
     #[tokio::test]
@@ -538,6 +873,7 @@ mod tests {
             Some("from-staging"),
             wt_root.path(),
             false,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await

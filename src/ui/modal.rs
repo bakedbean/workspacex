@@ -20,7 +20,7 @@ pub enum Modal {
         name: String,
     },
     SetupRunning {
-        log: Vec<String>,
+        cancel: tokio_util::sync::CancellationToken,
     },
     Error {
         message: String,
@@ -59,7 +59,7 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
         .split(popup)[1]
 }
 
-pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
+pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme) {
     // UpdatesPanel and ProcessList are rendered by their dedicated
     // helpers directly from `draw()` because they need live App state.
     // This function should never be called with those variants; guard
@@ -87,10 +87,10 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             "archive workspace",
             format!("archive '{name}'?\n\n[y] yes   [n]/[esc] cancel"),
         ),
-        Modal::SetupRunning { log } => {
-            let last: Vec<String> = log.iter().rev().take(8).cloned().collect();
-            let body = last.into_iter().rev().collect::<Vec<_>>().join("\n");
-            ("setup running", body)
+        Modal::SetupRunning { .. } => {
+            let frame = crate::ui::dashboard::spinner::frame(tick);
+            let body = format!("  {frame} Creating workspace…\n\n  [esc] cancel",);
+            ("new workspace", body)
         }
         Modal::Error { message } => ("error", message.clone()),
         // UpdatesPanel is handled by the early-return above; this arm is

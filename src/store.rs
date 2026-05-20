@@ -23,6 +23,7 @@ pub enum SetupStatus {
     Skipped,
     Ok,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]
@@ -502,6 +503,7 @@ fn setup_label(s: &SetupStatus) -> &'static str {
         SetupStatus::Skipped => "Skipped",
         SetupStatus::Ok => "Ok",
         SetupStatus::Failed => "Failed",
+        SetupStatus::Cancelled => "Cancelled",
     }
 }
 fn parse_setup(s: &str) -> SetupStatus {
@@ -509,6 +511,7 @@ fn parse_setup(s: &str) -> SetupStatus {
         "Ok" => SetupStatus::Ok,
         "Failed" => SetupStatus::Failed,
         "Skipped" => SetupStatus::Skipped,
+        "Cancelled" => SetupStatus::Cancelled,
         _ => SetupStatus::NotRun,
     }
 }
@@ -811,5 +814,26 @@ mod tests {
         assert_eq!(swept, 1);
         let ws = &store.workspaces(repo).unwrap()[0];
         assert_eq!(ws.state, WorkspaceState::Orphaned);
+    }
+
+    #[test]
+    fn setup_status_cancelled_roundtrips() {
+        let store = Store::open_in_memory().unwrap();
+        // Insert a repo + workspace fixture.
+        let repo_id = store
+            .add_repo(Path::new("/tmp/demo"), "demo", "wsx")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "wsx/alpha",
+                worktree_path: Path::new("/tmp/demo/alpha"),
+                yolo: false,
+            })
+            .unwrap();
+        store.set_setup_status(id, SetupStatus::Cancelled).unwrap();
+        let ws = store.workspaces(repo_id).unwrap();
+        assert_eq!(ws[0].setup_status, SetupStatus::Cancelled);
     }
 }

@@ -16,4 +16,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("invalid input: {0}")]
     UserInput(String),
+    #[error("cancelled")]
+    Cancelled,
 }

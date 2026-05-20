@@ -41,9 +41,17 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
         .find(|r| r.id == repo_id)
         .unwrap();
     let base = TempDir::new().unwrap();
-    wsx::workspace::create(&store, &repo, Some("alpha"), base.path(), false, |_| {})
-        .await
-        .unwrap();
+    wsx::workspace::create(
+        &store,
+        &repo,
+        Some("alpha"),
+        base.path(),
+        false,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await
+    .unwrap();
 
     let app = Arc::new(Mutex::new(
         wsx::app::App::new(store, base.path().to_path_buf()).unwrap(),

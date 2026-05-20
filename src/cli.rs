@@ -736,9 +736,16 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let r = lookup_repo(&store, &repo)?;
             let worktree_base = dirs.app_dir().join("worktrees");
             std::fs::create_dir_all(&worktree_base)?;
-            let created =
-                crate::workspace::create(&store, &r, name.as_deref(), &worktree_base, yolo, |_| {})
-                    .await?;
+            let created = crate::workspace::create(
+                &store,
+                &r,
+                name.as_deref(),
+                &worktree_base,
+                yolo,
+                tokio_util::sync::CancellationToken::new(),
+                |_| {},
+            )
+            .await?;
             println!(
                 "created workspace {}/{} at {}",
                 r.name,

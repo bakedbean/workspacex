@@ -2282,15 +2282,15 @@ async fn handle_key_modal(app: &mut App, shared: &SharedApp, k: crossterm::event
             }
             _ => {}
         },
-        Modal::SetupRunning { cancel } => match k.code {
-            KeyCode::Esc => {
+        Modal::SetupRunning { cancel } => {
+            // Esc cancels in-flight create; every other key (including Enter)
+            // is intentionally ignored during creation.
+            if k.code == KeyCode::Esc {
                 cancel.cancel();
                 app.modal = None;
                 app.pending_create_gen = None;
             }
-            // Enter (and any other key) is intentionally ignored during creation.
-            _ => {}
-        },
+        }
         Modal::Error { .. } => {
             if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
                 app.modal = None;

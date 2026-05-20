@@ -202,6 +202,7 @@ pub struct App {
     pub selectable: Vec<SelectionTarget>,
     pub worktree_base: PathBuf,
     pub leader_pending: bool,
+    pub z_leader_pending: bool,
     pub quit: bool,
     pub workspace_status:
         std::collections::HashMap<crate::store::WorkspaceId, crate::git::WorkspaceStatus>,
@@ -287,6 +288,7 @@ impl App {
             selectable: Vec::new(),
             worktree_base,
             leader_pending: false,
+            z_leader_pending: false,
             quit: false,
             workspace_status: std::collections::HashMap::new(),
             pr_lifecycle: std::collections::HashMap::new(),
@@ -1355,6 +1357,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     // dashboard's 'p' / 'r' shortcuts, the user presses Tab/Esc first to
     // return focus to the dashboard.
     if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) {
+        // Defensive: PM focus means the dashboard's z-leader cannot be
+        // meaningfully consumed here (keys forward to the PM PTY). Clear
+        // it so it doesn't leak across focus transitions.
+        app.z_leader_pending = false;
         match (k.code, k.modifiers) {
             (KeyCode::Tab, _) | (KeyCode::Esc, _) => {
                 app.focus = crate::ui::PaneFocus::Dashboard;
@@ -1384,6 +1390,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         && matches!(app.focus, crate::ui::PaneFocus::Dashboard)
         && k.code == KeyCode::Tab
     {
+        // Treat Tab as a "never mind" for any armed z-leader so it
+        // doesn't unexpectedly eat the next dashboard key after the
+        // user Tabs back from PM.
+        app.z_leader_pending = false;
         app.focus = crate::ui::PaneFocus::ProjectManager;
         return Ok(());
     }
@@ -1415,6 +1425,23 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             _ => {}
         }
+    }
+    // Z-leader chord. When armed by the prior `z` keypress, the next
+    // key dispatches and the leader clears unconditionally. Unknown
+    // follow-ups are eaten (no fall-through to the main key handler)
+    // so accidental `zj` etc. don't move the selection silently.
+    if app.z_leader_pending {
+        app.z_leader_pending = false;
+        match (k.code, k.modifiers) {
+            (KeyCode::Char('z'), _) => toggle_focused_fold(app),
+            (KeyCode::Char('a'), _) => expand_all_repos(app),
+            // Match bare `Char('M')` (no SHIFT guard) to match the
+            // codebase convention for capital-letter binds like `G` —
+            // some terminals + CapsLock report uppercase without SHIFT.
+            (KeyCode::Char('M'), _) => fold_all_repos(app),
+            _ => {} // Esc, unknown key, anything else: just clear.
+        }
+        return Ok(());
     }
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) => app.quit = true,
@@ -1610,27 +1637,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             };
         }
         (KeyCode::Char('z'), _) => {
-            // Toggle fold for the currently-selected repo (or, if a workspace
-            // is selected, the repo that contains it).
-            let target_rid = match app.selected_target() {
-                Some(SelectionTarget::Workspace(wid)) => app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == wid)
-                    .map(|(rid, _)| *rid),
-                Some(SelectionTarget::Repo(rid)) => Some(rid),
-                None => None,
-            };
-            if let Some(rid) = target_rid {
-                let id = rid.0 as u64;
-                let counts = current_repo_counts(app, rid);
-                let currently_expanded = match app.dashboard.folded.get(&id).copied() {
-                    Some(explicit) => !explicit,
-                    None => !crate::ui::dashboard::sort::default_fold(counts),
-                };
-                // Store `true` = folded (i.e. !expanded).
-                app.dashboard.folded.insert(id, currently_expanded);
-            }
+            app.z_leader_pending = true;
         }
         (KeyCode::Char('r'), _) => {
             // Reply shortcut on a Question workspace: attach to it so the
@@ -1721,6 +1728,49 @@ fn current_repo_counts(
         .filter(|(r, _)| *r == rid)
         .map(|(_, w)| app.classify_status(w));
     crate::ui::dashboard::sort::StatusCounts::from_iter(iter)
+}
+
+/// Toggle the fold state of the currently focused repo on the
+/// dashboard. If a workspace is focused, the repo containing it is
+/// the target. Extracted from the original single-key `z` arm so the
+/// `zz` chord branch can reuse it.
+fn toggle_focused_fold(app: &mut App) {
+    let target_rid = match app.selected_target() {
+        Some(SelectionTarget::Workspace(wid)) => app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == wid)
+            .map(|(rid, _)| *rid),
+        Some(SelectionTarget::Repo(rid)) => Some(rid),
+        None => None,
+    };
+    if let Some(rid) = target_rid {
+        let id = rid.0 as u64;
+        let counts = current_repo_counts(app, rid);
+        let currently_expanded = match app.dashboard.folded.get(&id).copied() {
+            Some(explicit) => !explicit,
+            None => !crate::ui::dashboard::sort::default_fold(counts),
+        };
+        // Store `true` = folded (i.e. !expanded).
+        app.dashboard.folded.insert(id, currently_expanded);
+    }
+}
+
+/// `za` action: expand every registered repo by inserting an explicit
+/// `false` in `dashboard.folded`. Overrides the renderer's
+/// default-fold heuristic so even default-folded repos open.
+fn expand_all_repos(app: &mut App) {
+    for r in &app.repos {
+        app.dashboard.folded.insert(r.id.0 as u64, false);
+    }
+}
+
+/// `zM` action: fold every registered repo by inserting an explicit
+/// `true` in `dashboard.folded`. Overrides the renderer's heuristic.
+fn fold_all_repos(app: &mut App) {
+    for r in &app.repos {
+        app.dashboard.folded.insert(r.id.0 as u64, true);
+    }
 }
 
 /// Immediately re-run `proc::scan` and re-bucket. Used after a kill
@@ -4383,6 +4433,196 @@ mod pm_state_tests {
             }
             other => panic!("expected Fresh mode; got {other:?}"),
         }
+    }
+
+    /// Test helper: create an App with N repos registered in the store
+    /// and loaded into app.repos. Uses a unique tmpdir per call so paths
+    /// don't collide.
+    fn make_app_with_n_repos(n: usize) -> (App, Vec<crate::store::RepoId>) {
+        let store = Store::open_in_memory().unwrap();
+        let mut ids = Vec::new();
+        for i in 0..n {
+            let path =
+                std::env::temp_dir().join(format!("wsx-fold-test-{}-{}", std::process::id(), i));
+            let id = store.add_repo(&path, &format!("repo-{i}"), "").unwrap();
+            ids.push(id);
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-fold-test")).unwrap();
+        app.refresh().unwrap();
+        (app, ids)
+    }
+
+    async fn press(app: &mut App, ch: char, mods: KeyModifiers) {
+        handle_key_dashboard(app, KeyEvent::new(KeyCode::Char(ch), mods))
+            .await
+            .unwrap();
+    }
+
+    async fn press_key(app: &mut App, code: KeyCode) {
+        handle_key_dashboard(app, KeyEvent::new(code, KeyModifiers::NONE))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn z_alone_arms_leader_without_action() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        assert!(app.z_leader_pending, "z should arm the leader");
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "z alone should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn zz_toggles_focused_repo_fold() {
+        let (mut app, ids) = make_app_with_n_repos(2);
+        app.dashboard.selected = 0;
+        let rid = ids[0];
+        let key = rid.0 as u64;
+        let before = app.dashboard.folded.get(&key).copied();
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zz");
+        let after = app.dashboard.folded.get(&key).copied();
+        assert_ne!(
+            before, after,
+            "zz should change the fold state for the focused repo"
+        );
+    }
+
+    #[tokio::test]
+    async fn za_expands_all_repos() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        // Pre-fold one repo explicitly so we can see the "expand all" override.
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'a', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after za");
+        for id in &ids {
+            let key = id.0 as u64;
+            assert_eq!(
+                app.dashboard.folded.get(&key).copied(),
+                Some(false),
+                "za should set repo {key} to expanded (false)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn z_shift_m_folds_all_repos() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        // Pre-expand one repo explicitly so we can see the "fold all" override.
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'M', KeyModifiers::SHIFT).await;
+        assert!(!app.z_leader_pending, "leader should clear after zM");
+        for id in &ids {
+            let key = id.0 as u64;
+            assert_eq!(
+                app.dashboard.folded.get(&key).copied(),
+                Some(true),
+                "zM should set repo {key} to folded (true)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn z_then_unknown_clears_leader_without_action() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let selected_before = app.dashboard.selected;
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'x', KeyModifiers::NONE).await;
+        assert!(
+            !app.z_leader_pending,
+            "leader should clear after unknown key"
+        );
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "unknown follow-up should leave fold state unchanged"
+        );
+        assert_eq!(
+            app.dashboard.selected, selected_before,
+            "unknown follow-up should be eaten, not pass through to selection"
+        );
+    }
+
+    #[tokio::test]
+    async fn z_then_esc_clears_leader() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press_key(&mut app, KeyCode::Esc).await;
+        assert!(!app.z_leader_pending, "Esc should clear the leader");
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "Esc should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_alone_is_no_op_on_dashboard() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'a', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "a alone should not arm the leader");
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "a alone should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn shift_m_alone_is_no_op_on_dashboard() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'M', KeyModifiers::SHIFT).await;
+        assert!(!app.z_leader_pending, "M alone should not arm the leader");
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "M alone should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn z_m_folds_all_repos_without_shift_modifier() {
+        // Some terminals (or CapsLock) report `Char('M')` without
+        // KeyModifiers::SHIFT. The chord should still fire — matches
+        // the codebase convention for capital-letter binds like `G`.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'M', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zM");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(true),
+                "zM (no SHIFT) should fold every repo"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tab_swap_clears_armed_z_leader() {
+        // If the user arms `z` then Tabs over to PM, the leader must
+        // clear — otherwise their next key after Tabbing back would
+        // be unexpectedly eaten by the z-leader dispatcher.
+        let (mut app, _) = make_app_with_n_repos(2);
+        // Tab swap path requires PM visible.
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::Dashboard;
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        assert!(app.z_leader_pending, "z should arm the leader");
+        press_key(&mut app, KeyCode::Tab).await;
+        assert!(
+            !app.z_leader_pending,
+            "Tab to PM should clear the armed leader"
+        );
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
     }
 }
 

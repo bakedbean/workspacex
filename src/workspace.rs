@@ -63,6 +63,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         repo.setup_script.as_deref(),
         &repo.path,
         &worktree_path,
+        tokio_util::sync::CancellationToken::new(),
         on_setup_line,
     )
     .await?;
@@ -101,6 +102,7 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
         repo.archive_script.as_deref(),
         &repo.path,
         &ws.worktree_path,
+        tokio_util::sync::CancellationToken::new(),
         on_archive_line,
     )
     .await?;

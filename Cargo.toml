@@ -17,6 +17,7 @@ crossterm = { version = "0.28", features = ["event-stream", "bracketed-paste"] }
 portable-pty = "0.9"
 vt100 = { version = "0.15.2", package = "fnug-vt100" }
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

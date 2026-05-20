@@ -2194,6 +2194,7 @@ async fn handle_key_modal(app: &mut App, k: crossterm::event::KeyEvent) -> Resul
                     name.as_deref(),
                     &base,
                     yolo,
+                    tokio_util::sync::CancellationToken::new(),
                     |_| {},
                 )
                 .await;

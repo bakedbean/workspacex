@@ -43,6 +43,7 @@ async fn branch_rename_propagates_to_store() {
         Some("placeholder"),
         base.path(),
         false,
+        tokio_util::sync::CancellationToken::new(),
         |_| {},
     )
     .await

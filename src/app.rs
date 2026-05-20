@@ -4799,8 +4799,9 @@ mod pm_state_tests {
             );
             assert!(g.pending_create_gen.is_some());
         }
-        // Yield so the spawned task gets a chance to complete.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Yield so the spawned task gets a chance to complete. 1500ms gives
+        // slow CI runners headroom over git init + fetch + worktree create.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         // Eventually, modal should be None and a workspace should exist.
         let g = app.lock().await;
         assert!(

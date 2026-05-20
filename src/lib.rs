@@ -17,6 +17,7 @@ pub mod remote_control;
 pub mod remotes;
 pub mod repo;
 pub mod setup;
+pub mod skill;
 pub mod store;
 pub mod ui;
 pub mod workspace;

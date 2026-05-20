@@ -114,6 +114,16 @@ wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
 
 Equivalent to the dashboard's archive action: runs the per-repo archive script, removes the worktree (unless `--keep-worktree`), deletes the branch (force if `--force-delete-branch`), and drops the workspace from the registry.
 
+### Claude Code skill
+
+```
+wsx setup install-skill
+```
+
+Writes the bundled wsx Claude Code skill to `~/.claude/skills/wsx/SKILL.md`. The skill teaches Claude how to drive the wsx CLI — workspace operations, slug-vs-`branch_prefix` naming, and the cross-repo orchestration flow that pairs with [Related repos](#related-repos). The file is embedded in the binary at compile time, so installing wsx on a new machine is `cargo install` then `wsx setup install-skill`.
+
+Idempotent: re-running when the installed copy already matches reports "already up to date" without writing. If the installed copy has drifted (you edited it locally, or you're upgrading wsx with skill changes), it's overwritten and reports "updated".
+
 ### Global settings
 
 ```
@@ -636,7 +646,7 @@ To prevent claude from accidentally editing files in the source paths of related
 - Treat those directories as read-only.
 - If changes are needed there, drive `wsx workspace create <other-repo> --name <slug>` from this session, `cd` into the new worktree path (`wsx workspace path <other-repo> <slug>`), and make the changes there. Each repo gets its own branch and PR; cross-link them and merge in dependency order.
 
-This is a soft guard, not a tool-level lock — it relies on claude following the instruction. The same trust model as `custom_instructions`. Installing the `wsx` skill at `~/.claude/skills/wsx/SKILL.md` reinforces this with the full CLI vocabulary and slug-naming rules.
+This is a soft guard, not a tool-level lock — it relies on claude following the instruction. The same trust model as `custom_instructions`. Installing the bundled wsx skill (`wsx setup install-skill`, see [Claude Code skill](#claude-code-skill)) reinforces this with the full CLI vocabulary and slug-naming rules.
 
 Unknown names in the list (e.g. a repo you renamed or unregistered) are logged and skipped at spawn time; the spawn still proceeds with the recognized names.
 

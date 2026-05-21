@@ -97,7 +97,6 @@ pub fn footer(
     let keys = [
         ("↑↓", "nav"),
         ("↵", "open"),
-        ("z", "fold…"),
         ("n", "new"),
         ("e", "edit"),
         ("t", "term"),

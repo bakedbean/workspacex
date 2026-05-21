@@ -204,6 +204,56 @@ fn render_sets_list_state_to_selected_workspace_index() {
 }
 
 #[test]
+fn selected_workspace_row_renders_with_thicker_gutter() {
+    // End-to-end: when a workspace is selected, the rendered buffer for
+    // that row's leading cell must be `▍` (thicker bar). Other rows keep
+    // the thin `▎` gutter. This guards against the wiring regressing
+    // independently of row::render unit tests.
+    let fixtures = fixture::repos();
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
+    let target_id = workspaces
+        .iter()
+        .find(|w| w.row.name == "theme-tokens")
+        .map(|w| w.workspace_id)
+        .unwrap();
+    let target = crate::app::SelectionTarget::Workspace(target_id);
+    let activity: Vec<u32> = vec![1; 24];
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+    };
+    let mut state = DashboardState {
+        group_mode: GroupMode::Repo,
+        selection: Some(target),
+        ..Default::default()
+    };
+    let theme = Theme::wsx();
+    let backend = TestBackend::new(160, 40);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+        .unwrap();
+    let buf = term.backend().buffer().clone();
+    let mut saw_thick = 0;
+    for y in 0..buf.area.height {
+        let first_cell = buf[(0, y)].symbol().to_string();
+        if first_cell == "▍" {
+            saw_thick += 1;
+        }
+    }
+    assert_eq!(
+        saw_thick, 1,
+        "exactly one row should render the thick selection gutter"
+    );
+}
+
+#[test]
 fn visible_targets_by_repo_matches_render_order() {
     use crate::app::SelectionTarget;
     let fixtures = fixture::repos();

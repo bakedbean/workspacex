@@ -74,7 +74,9 @@ impl Theme {
             header_fg: Color::Rgb(0xeb, 0xeb, 0xeb),
             header_bg: None,
             selected_fg: Color::Rgb(0xff, 0xff, 0xff),
-            selected_bg: Color::Rgb(0x24, 0x30, 0x43),
+            // Brighter than the original 0x243043 navy so the selection
+            // tint reads cleanly against the dark wsx background.
+            selected_bg: Color::Rgb(0x35, 0x49, 0x66),
             dim: Color::Rgb(0xb5, 0xb5, 0xb5),
             path: Color::Rgb(0x6b, 0x6e, 0x75),
             bg_alt: Color::Rgb(0x13, 0x18, 0x20),
@@ -104,11 +106,16 @@ impl Theme {
         let comment = Color::Rgb(0x62, 0x72, 0xa4);
         let current_line = Color::Rgb(0x44, 0x47, 0x5a);
         let foreground = Color::Rgb(0xf8, 0xf8, 0xf2);
+        // One luminance step above dracula's canonical `current_line`
+        // so the selection bg reads as clearly distinct from the rest
+        // of the row, while staying in the dracula purple-grey space.
+        let selection_bg = Color::Rgb(0x55, 0x59, 0x6e);
+        let _ = current_line;
         Self {
             header_fg: purple,
             header_bg: None,
             selected_fg: foreground,
-            selected_bg: current_line,
+            selected_bg: selection_bg,
             dim: comment,
             path: Color::Rgb(0x82, 0x90, 0xb4), // softer blue-grey
             bg_alt: Color::Rgb(0x21, 0x22, 0x2e),
@@ -139,12 +146,16 @@ impl Theme {
         let gray = Color::Rgb(0x88, 0x88, 0x88); // comment
         let cursor_line = Color::Rgb(0x33, 0x33, 0x33); // jellybeans CursorLine
         let fg = Color::Rgb(0xe8, 0xe8, 0xd3); // jellybeans Normal fg
-        let _ = (bg, yellow);
+        // Brighter than jellybeans's CursorLine — the canonical value
+        // matches the editor's cursor highlight, which is intentionally
+        // subtle for code reading. The dashboard wants something louder.
+        let selection_bg = Color::Rgb(0x4a, 0x4a, 0x4a);
+        let _ = (bg, yellow, cursor_line);
         Self {
             header_fg: blue,
             header_bg: None,
             selected_fg: fg,
-            selected_bg: cursor_line,
+            selected_bg: selection_bg,
             dim: gray,
             path: Color::Rgb(0xb8, 0xa0, 0x78), // warmer tan, clearer separation from gray
             bg_alt: Color::Rgb(0x1c, 0x1c, 0x1c),
@@ -166,8 +177,9 @@ impl Theme {
     pub fn nord() -> Self {
         // https://www.nordtheme.com/docs/colors-and-palettes
         let polar0 = Color::Rgb(0x2e, 0x34, 0x40); // background
-        let polar1 = Color::Rgb(0x3b, 0x42, 0x52); // selection bg
-        let polar3 = Color::Rgb(0x4c, 0x56, 0x6a); // muted
+        let polar1 = Color::Rgb(0x3b, 0x42, 0x52); // canonical selection bg
+        let polar2 = Color::Rgb(0x43, 0x4c, 0x5e); // one step above polar1, used as the louder selection bg
+        let polar3 = Color::Rgb(0x4c, 0x56, 0x6a); // muted (dim fg color)
         let snow_storm1 = Color::Rgb(0xd8, 0xde, 0xe9);
         let frost1 = Color::Rgb(0x88, 0xc0, 0xd0); // header cyan
         let aurora_red = Color::Rgb(0xbf, 0x61, 0x6a);
@@ -175,12 +187,16 @@ impl Theme {
         let aurora_yellow = Color::Rgb(0xeb, 0xcb, 0x8b);
         let aurora_green = Color::Rgb(0xa3, 0xbe, 0x8c);
         let aurora_purple = Color::Rgb(0xb4, 0x8e, 0xad);
-        let _ = polar0;
+        let _ = (polar0, polar1);
         Self {
             header_fg: frost1,
             header_bg: None,
             selected_fg: snow_storm1,
-            selected_bg: polar1,
+            // Nord's canonical selection bg is `polar1`; we lift it one
+            // step to `polar2` so the row stands out clearly without
+            // colliding with `dim` (polar3), which would make dim spans
+            // disappear inside the selected row.
+            selected_bg: polar2,
             dim: polar3,
             path: Color::Rgb(0x81, 0xa1, 0xc1), // Nord frost3
             bg_alt: Color::Rgb(0x29, 0x2e, 0x39),

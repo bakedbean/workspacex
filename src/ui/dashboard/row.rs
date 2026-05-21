@@ -91,9 +91,11 @@ pub fn render(
     let branch_width = widths.branch;
     let mut spans: Vec<Span<'static>> = Vec::new();
 
-    // 1: gutter
+    // 1: gutter — thicker bar on the selected row gives a high-contrast
+    // leading edge that doesn't rely on the row-bg tint being visible.
+    let gutter_glyph = if inputs.selected { "▍" } else { "▎" };
     spans.push(Span::styled(
-        "▎".to_string(),
+        gutter_glyph.to_string(),
         theme.status_style(inputs.status),
     ));
 
@@ -303,6 +305,32 @@ mod tests {
 
     fn line_text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn unselected_row_uses_thin_gutter_glyph() {
+        let theme = Theme::wsx();
+        let line = render(&base(), ColumnWidths::default(), 0, &theme, 120);
+        let gutter = line.spans.first().expect("gutter span present");
+        assert_eq!(gutter.content.as_ref(), "▎");
+    }
+
+    #[test]
+    fn selected_row_uses_thicker_gutter_glyph() {
+        // The selection highlight is otherwise just a bg tint, which can
+        // be subtle on dark terminals. A wider gutter glyph gives the
+        // selected row a high-contrast leading edge independent of bg.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.selected = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let gutter = line.spans.first().expect("gutter span present");
+        assert_eq!(gutter.content.as_ref(), "▍");
+        assert_eq!(
+            gutter.style.fg,
+            Some(theme.status_style(inputs.status).fg.unwrap()),
+            "gutter keeps the status color even when selected"
+        );
     }
 
     #[test]

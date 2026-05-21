@@ -59,7 +59,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 const MAX_LOG: usize = 50;
-const MAX_DISPLAY_CHARS: usize = 70;
+const MAX_DISPLAY_CHARS: usize = 512;
 
 /// Why the assistant's most recent message stopped. Mirrors the Anthropic
 /// API's `stop_reason` field. `EndTurn`, `MaxTokens`, and `StopSequence` all
@@ -734,7 +734,7 @@ mod tests {
 
     #[test]
     fn truncates_long_messages() {
-        let long = "x".repeat(200);
+        let long = "x".repeat(600);
         let line = format!(
             r#"{{"type":"user","message":{{"role":"user","content":"{long}"}},"timestamp":"2026-05-14T17:32:02.744Z"}}"#
         );

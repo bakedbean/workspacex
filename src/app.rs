@@ -353,8 +353,14 @@ impl App {
         if v == self.last_data_version {
             return false;
         }
+        // Advance the cached version only after a successful refresh, so a
+        // transient error (e.g. brief DB lock) leaves us in a state where
+        // the next tick retries instead of silently staying stale.
+        if let Err(e) = self.refresh() {
+            tracing::warn!(error = %e, "external-change refresh failed; will retry next tick");
+            return false;
+        }
         self.last_data_version = v;
-        let _ = self.refresh();
         true
     }
 

@@ -305,11 +305,13 @@ fn render_by_repo<'a>(
     by_repo::order_repos(&mut views);
 
     // Walk the same item sequence that render_list will emit to determine
-    // which flat list index corresponds to the current selection.
+    // which flat list index corresponds to the current selection. Also
+    // flip `selected: true` on the matching workspace so the row composer
+    // can paint a thicker gutter glyph for the selected row.
     let mut selected_idx: Option<usize> = None;
     let mut flat_idx: usize = 0;
     let selection = state.selection;
-    for view in &views {
+    for view in &mut views {
         // Header item
         if let Some(SelectionTarget::Repo(rid)) = selection {
             if view.id == rid.0 as u64 {
@@ -320,10 +322,11 @@ fn render_by_repo<'a>(
         if !view.expanded {
             continue;
         }
-        for w in &view.workspaces {
+        for w in &mut view.workspaces {
             if let Some(SelectionTarget::Workspace(wid)) = selection {
                 if w.workspace_id == wid {
                     selected_idx = Some(flat_idx);
+                    w.selected = true;
                 }
             }
             flat_idx += 1;
@@ -393,28 +396,29 @@ fn render_by_attention<'a>(
     // `partition` distributes rows into sections AND applies the
     // per-section ordering rules (priority-then-recency for NEEDS,
     // recency-only for WORKING / RECENT / IDLE).
-    let data = by_attention::partition(rows, quiet);
+    let mut data = by_attention::partition(rows, quiet);
 
     // Walk the same item sequence that render_list will emit to determine
-    // which flat list index corresponds to the current selection.
+    // which flat list index corresponds to the current selection, and
+    // mark the matching row so the row composer paints a thicker gutter.
     // Quiet repos have no selection model in v1 — skip them.
     let mut selected_idx: Option<usize> = None;
     let mut flat_idx: usize = 0;
     let selection = state.selection;
-    let sections: [&[FlatRow]; 4] = [
-        &data.needs_attention,
-        &data.working,
-        &data.recent,
-        &data.idle,
-    ];
-    for section in &sections {
+    for section in [
+        &mut data.needs_attention,
+        &mut data.working,
+        &mut data.recent,
+        &mut data.idle,
+    ] {
         if !section.is_empty() {
             // Section header
             flat_idx += 1;
-            for row in *section {
+            for row in section.iter_mut() {
                 if let Some(SelectionTarget::Workspace(wid)) = selection {
                     if row.row.workspace_id == wid {
                         selected_idx = Some(flat_idx);
+                        row.row.selected = true;
                     }
                 }
                 flat_idx += 1;

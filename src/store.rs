@@ -424,6 +424,17 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// SQLite's `data_version` counter — increments whenever ANOTHER
+    /// connection commits a write to this database. Our own writes through
+    /// this connection do not bump it, so polling this is a cheap way for
+    /// the TUI to detect external mutations (e.g. `wsx workspace create`
+    /// from a sibling CLI process) without thrashing on self-induced changes.
+    pub fn data_version(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA data_version", [], |r| r.get(0))?)
+    }
+
     pub fn sweep_stale_pending(&self, older_than: std::time::Duration) -> Result<usize> {
         let cutoff = now_ms() - older_than.as_millis() as i64;
         let n = self.conn.execute(
@@ -814,6 +825,30 @@ mod tests {
         assert_eq!(swept, 1);
         let ws = &store.workspaces(repo).unwrap()[0];
         assert_eq!(ws.state, WorkspaceState::Orphaned);
+    }
+
+    #[test]
+    fn data_version_increments_on_external_writes() {
+        // Two connections to the same on-disk DB. data_version on conn A must
+        // bump only after conn B commits a write — this is the signal the TUI
+        // uses to detect that a sibling `wsx` CLI process added a workspace.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("wsx.db");
+        let a = Store::open(&db).unwrap();
+        let b = Store::open(&db).unwrap();
+
+        let v0 = a.data_version().unwrap();
+        // A self-write through conn A must NOT change A's data_version, or
+        // the TUI would refresh on its own edits and we'd churn every tick.
+        a.add_repo(Path::new("/from/a"), "from-a", "").unwrap();
+        assert_eq!(a.data_version().unwrap(), v0, "self-write must not bump");
+
+        // External write through conn B must bump A's data_version.
+        b.add_repo(Path::new("/from/b"), "from-b", "").unwrap();
+        assert!(
+            a.data_version().unwrap() > v0,
+            "external write must bump data_version"
+        );
     }
 
     #[test]

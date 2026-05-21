@@ -133,11 +133,18 @@ pub fn render(
     }
 
     // 5: branch
-    let branch_text = if inputs.nerd_fonts {
-        format!("\u{e0a0} {}", inputs.branch)
+    let branch_glyph = if inputs.nerd_fonts {
+        match inputs.lifecycle {
+            Some(BranchLifecycle::PrMerged) => "\u{f419}",
+            Some(BranchLifecycle::PrClosed) => "\u{f4dc}",
+            Some(BranchLifecycle::PrDraft) => "\u{f4dd}",
+            Some(BranchLifecycle::PrOpen | BranchLifecycle::PrConflicted) => "\u{f407}",
+            _ => "\u{e0a0}",
+        }
     } else {
-        format!("⎇ {}", inputs.branch)
+        "⎇"
     };
+    let branch_text = format!("{} {}", branch_glyph, inputs.branch);
     let branch_padded = truncate_pad(&branch_text, branch_width);
     let branch_style = theme
         .lifecycle_style(inputs.lifecycle)
@@ -397,6 +404,103 @@ mod tests {
         assert!(
             text.contains("\u{e0a0}"),
             "nerd font branch glyph: {text:?}"
+        );
+    }
+
+    #[test]
+    fn merged_lifecycle_uses_merge_glyph_with_nerd_fonts() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.lifecycle = Some(BranchLifecycle::PrMerged);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("\u{f419}"), "git-merge glyph: {text:?}");
+        assert!(
+            !text.contains("\u{e0a0}"),
+            "default branch glyph absent: {text:?}"
+        );
+    }
+
+    #[test]
+    fn closed_lifecycle_uses_closed_pr_glyph_with_nerd_fonts() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.lifecycle = Some(BranchLifecycle::PrClosed);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(
+            text.contains("\u{f4dc}"),
+            "git-pull-request-closed glyph: {text:?}"
+        );
+    }
+
+    #[test]
+    fn unicode_mode_keeps_generic_glyph_for_merged() {
+        // No good Unicode equivalent to a git-merge icon — color carries
+        // the lifecycle signal in plain-Unicode mode.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = false;
+        inputs.lifecycle = Some(BranchLifecycle::PrMerged);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("⎇ "), "generic glyph retained: {text:?}");
+    }
+
+    #[test]
+    fn open_lifecycle_uses_pr_glyph_with_nerd_fonts() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(
+            text.contains("\u{f407}"),
+            "git-pull-request glyph: {text:?}"
+        );
+    }
+
+    #[test]
+    fn draft_lifecycle_uses_draft_pr_glyph_with_nerd_fonts() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.lifecycle = Some(BranchLifecycle::PrDraft);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(
+            text.contains("\u{f4dd}"),
+            "git-pull-request-draft glyph: {text:?}"
+        );
+    }
+
+    #[test]
+    fn conflicted_lifecycle_reuses_open_pr_glyph() {
+        // No dedicated octicon for a conflicted PR; the yellow warn color
+        // already differentiates it from a clean open PR.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.lifecycle = Some(BranchLifecycle::PrConflicted);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("\u{f407}"), "open PR glyph reused: {text:?}");
+    }
+
+    #[test]
+    fn no_pr_lifecycle_keeps_default_branch_glyph() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.lifecycle = Some(BranchLifecycle::NoPr);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(
+            text.contains("\u{e0a0}"),
+            "default glyph for no PR: {text:?}"
         );
     }
 

@@ -168,19 +168,23 @@ Value sources:
 
 | Key | Action |
 |---|---|
-| `Up` / `Down` | Move selection through repo headers and workspaces |
-| `enter` on a workspace | Attach to its claude session (spawns or resumes) |
-| `enter` on a repo header | Open the New Workspace modal targeting that repo |
+| `Up` / `Down` (or `k` / `j`) | Move selection through repo headers and workspaces |
+| `h` / `l` | Fold / unfold the focused repo (idempotent; use `zz` to toggle) |
+| `enter` (or `i`) on a workspace | Attach to its claude session (spawns or resumes) |
+| `enter` (or `i`) on a repo header | Open the New Workspace modal targeting that repo |
 | `n` | New workspace in the selected row's repo |
 | `e` | Open the selected workspace in your editor (no-op on repo header) |
 | `t` | Open the selected workspace in a terminal (no-op on repo header) |
 | `v` | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |
-| `k` | Show processes running under the selected workspace's worktree (no-op on repo header) |
+| `K` | Show processes running under the selected workspace's worktree (no-op on repo header) |
 | `s` | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected) |
 | `d` | Archive the selected workspace (no-op on repo header) |
 | `q` | Quit (kills all running sessions) |
 | `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
 | `Tab` | Swap focus between dashboard and the PM pane (when visible) |
+| `z z` | Toggle fold on the focused repo |
+| `z a` | Expand all repos (override default-fold heuristic) |
+| `z M` | Fold all repos |
 | `r` (when PM focused) | Refresh `workspaces.json` and ask PM to re-summarize |
 | `Ctrl-O` (when PM focused) | Expand PM to full screen (use `Ctrl-x d` to detach back) |
 
@@ -472,6 +476,7 @@ workspaces in the background. Two affordances surface that:
 
   | Key | Action |
   |---|---|
+  | `Up` / `Down` (or `k` / `j`) | Move selection within the panel. |
   | `Enter` | Switch the current pane to the selected workspace (replaces it). |
   | `v` | Open the selected workspace in a vertical split (panes side by side, vim's `:vsplit`). |
   | `s` | Open the selected workspace in a horizontal split (panes stacked, vim's `:split`). |

@@ -1500,7 +1500,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     }
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) => app.quit = true,
-        (KeyCode::Up, _) => {
+        (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
             let max = app.selectable.len().saturating_sub(1);
             app.dashboard.selected = if app.dashboard.selected == 0 {
                 max
@@ -1508,7 +1508,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.dashboard.selected - 1
             };
         }
-        (KeyCode::Down, _) => {
+        (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
             let max = app.selectable.len().saturating_sub(1);
             app.dashboard.selected = if app.dashboard.selected >= max {
                 0
@@ -1516,7 +1516,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.dashboard.selected + 1
             };
         }
-        (KeyCode::Enter, _) => match app.selected_target() {
+        (KeyCode::Char('h'), _) => set_focused_fold(app, true),
+        (KeyCode::Char('l'), _) => set_focused_fold(app, false),
+        (KeyCode::Enter, _) | (KeyCode::Char('i'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
                 app.workspace_needs_attention.remove(&id);
                 if let Some((id, path, mode, repo_path)) = build_spawn_info(app, id) {
@@ -1629,14 +1631,14 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             // 'g' on a Repo header is intentionally a no-op.
         }
-        (KeyCode::Char('k'), _) => {
+        (KeyCode::Char('K'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
                 app.modal = Some(Modal::ProcessList {
                     workspace_id: id,
                     selected: 0,
                 });
             }
-            // 'k' on a Repo header is intentionally a no-op.
+            // 'K' on a Repo header is intentionally a no-op.
         }
         (KeyCode::Char('s'), _) => {
             let repo_id = match app.selected_target() {
@@ -1780,6 +1782,24 @@ fn toggle_focused_fold(app: &mut App) {
         };
         // Store `true` = folded (i.e. !expanded).
         app.dashboard.folded.insert(id, currently_expanded);
+    }
+}
+
+/// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
+/// [`toggle_focused_fold`], this is idempotent: pressing `h` on an
+/// already-folded repo leaves it folded.
+fn set_focused_fold(app: &mut App, fold: bool) {
+    let target_rid = match app.selected_target() {
+        Some(SelectionTarget::Workspace(wid)) => app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == wid)
+            .map(|(rid, _)| *rid),
+        Some(SelectionTarget::Repo(rid)) => Some(rid),
+        None => None,
+    };
+    if let Some(rid) = target_rid {
+        app.dashboard.folded.insert(rid.0 as u64, fold);
     }
 }
 
@@ -2334,11 +2354,11 @@ async fn handle_key_modal(
                 KeyCode::Esc => {
                     app.modal = None;
                 }
-                KeyCode::Up => {
+                KeyCode::Up | KeyCode::Char('k') => {
                     let new_sel = selected_now.saturating_sub(1);
                     app.modal = Some(Modal::UpdatesPanel { selected: new_sel });
                 }
-                KeyCode::Down => {
+                KeyCode::Down | KeyCode::Char('j') => {
                     let max = order.len().saturating_sub(1);
                     let new_sel = (selected_now + 1).min(max);
                     app.modal = Some(Modal::UpdatesPanel { selected: new_sel });
@@ -2435,6 +2455,10 @@ async fn handle_key_modal(
                         selected,
                     });
                 }
+                // ProcessList intentionally does NOT alias j/k to nav like
+                // the other list modals: `k` here means SIGTERM and `K` means
+                // SIGKILL, so vim-style movement would clash with the kill
+                // verbs. Arrow keys are the only navigation.
                 KeyCode::Char('k') => {
                     if let Some(p) = procs.get(selected) {
                         let _ = crate::proc::kill_pid(p.pid, "TERM").await;
@@ -2457,11 +2481,11 @@ async fn handle_key_modal(
             KeyCode::Esc => {
                 app.modal = None;
             }
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 selected = selected.saturating_sub(1);
                 app.modal = Some(Modal::RepoSettings { repo_id, selected });
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 let max = RepoSettingField::ALL.len() - 1;
                 selected = (selected + 1).min(max);
                 app.modal = Some(Modal::RepoSettings { repo_id, selected });
@@ -3221,6 +3245,121 @@ mod pm_state_tests {
             }
             other => panic!("unexpected modal state: {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_j_k_aliases_down_up() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        for (name, branch, path) in [
+            ("alpha", "repo/alpha", "/tmp/wsx-test/alpha"),
+            ("beta", "repo/beta", "/tmp/wsx-test/beta"),
+        ] {
+            let id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name,
+                    branch,
+                    worktree_path: std::path::Path::new(path),
+                    yolo: false,
+                })
+                .unwrap();
+            store
+                .set_workspace_state(id, WorkspaceState::Ready)
+                .unwrap();
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 1 })
+            ),
+            "j should advance like Down; got {:?}",
+            app.modal
+        );
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })
+            ),
+            "k should retreat like Up; got {:?}",
+            app.modal
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn repo_settings_modal_j_k_aliases_down_up() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::RepoSettings {
+            repo_id,
+            selected: 0,
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::RepoSettings { selected: 1, .. })
+            ),
+            "j should advance in RepoSettings; got {:?}",
+            app.modal
+        );
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::RepoSettings { selected: 0, .. })
+            ),
+            "k should retreat in RepoSettings; got {:?}",
+            app.modal
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4686,6 +4825,128 @@ mod pm_state_tests {
         assert_eq!(
             app.dashboard.folded, folded_before,
             "Esc should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn j_alias_advances_selection_like_down() {
+        let (mut app, _) = make_app_with_n_repos(3);
+        app.dashboard.selected = 0;
+        press(&mut app, 'j', KeyModifiers::NONE).await;
+        assert_eq!(app.dashboard.selected, 1, "j should advance like Down");
+    }
+
+    #[tokio::test]
+    async fn k_alias_retreats_selection_like_up() {
+        let (mut app, _) = make_app_with_n_repos(3);
+        app.dashboard.selected = 2;
+        press(&mut app, 'k', KeyModifiers::NONE).await;
+        assert_eq!(app.dashboard.selected, 1, "k should retreat like Up");
+    }
+
+    #[tokio::test]
+    async fn k_does_not_open_process_list_anymore() {
+        // `k` is now a nav alias for Up. Process list must be opened by `K`.
+        let (mut app, _) = make_app_with_n_repos(1);
+        app.dashboard.selected = 0;
+        press(&mut app, 'k', KeyModifiers::NONE).await;
+        assert!(
+            app.modal.is_none(),
+            "k must not open ProcessList; it's now a nav alias"
+        );
+    }
+
+    #[tokio::test]
+    async fn shift_k_opens_process_list_on_workspace() {
+        use crate::store::{NewWorkspace, WorkspaceState};
+        let (mut app, ids) = make_app_with_n_repos(1);
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id: ids[0],
+                name: "alpha",
+                branch: "repo-0/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+            })
+            .unwrap();
+        app.store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        app.refresh().unwrap();
+        // Find and select the workspace row.
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(id) if *id == ws_id))
+            .expect("workspace should appear in selectable list");
+        app.dashboard.selected = idx;
+        press(&mut app, 'K', KeyModifiers::SHIFT).await;
+        assert!(
+            matches!(app.modal, Some(Modal::ProcessList { workspace_id, .. }) if workspace_id == ws_id),
+            "K on a workspace row should open ProcessList"
+        );
+    }
+
+    #[tokio::test]
+    async fn i_alias_opens_new_workspace_modal_like_enter_on_repo() {
+        // On a repo header, Enter opens the New Workspace modal. `i` (vim
+        // insert) should do the same — it's the "enter this thing" verb.
+        let (mut app, _) = make_app_with_n_repos(1);
+        app.dashboard.selected = 0;
+        assert!(matches!(
+            app.selected_target(),
+            Some(SelectionTarget::Repo(_))
+        ));
+        press(&mut app, 'i', KeyModifiers::NONE).await;
+        assert!(
+            matches!(app.modal, Some(Modal::NewWorkspace { .. })),
+            "i on a repo row should open NewWorkspace like Enter; got {:?}",
+            app.modal
+        );
+    }
+
+    #[tokio::test]
+    async fn h_folds_focused_repo() {
+        let (mut app, ids) = make_app_with_n_repos(2);
+        app.dashboard.selected = 0;
+        // Start expanded so we can observe the fold.
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'h', KeyModifiers::NONE).await;
+        assert_eq!(
+            app.dashboard.folded.get(&(ids[0].0 as u64)).copied(),
+            Some(true),
+            "h should fold the focused repo"
+        );
+    }
+
+    #[tokio::test]
+    async fn l_unfolds_focused_repo() {
+        let (mut app, ids) = make_app_with_n_repos(2);
+        app.dashboard.selected = 0;
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'l', KeyModifiers::NONE).await;
+        assert_eq!(
+            app.dashboard.folded.get(&(ids[0].0 as u64)).copied(),
+            Some(false),
+            "l should unfold the focused repo"
+        );
+    }
+
+    #[tokio::test]
+    async fn h_is_idempotent_on_already_folded_repo() {
+        // Unlike `zz`, `h` should not toggle — pressing it twice keeps the
+        // repo folded. This is the behavior that lets you mash `h` while
+        // navigating without accidentally re-opening a row.
+        let (mut app, ids) = make_app_with_n_repos(2);
+        app.dashboard.selected = 0;
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'h', KeyModifiers::NONE).await;
+        press(&mut app, 'h', KeyModifiers::NONE).await;
+        assert_eq!(
+            app.dashboard.folded.get(&(ids[0].0 as u64)).copied(),
+            Some(true),
+            "h on an already-folded repo must stay folded"
         );
     }
 

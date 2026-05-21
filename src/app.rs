@@ -273,6 +273,11 @@ pub struct App {
     /// When the process started — used to distinguish cold-start
     /// first-observations (suppress bell) from mid-session ones (ring).
     pub started_at: std::time::Instant,
+    /// Last `PRAGMA data_version` value observed from the store. Compared
+    /// each tick by `poll_external_changes` to detect writes from sibling
+    /// `wsx` CLI processes (e.g. `wsx workspace create`) so the dashboard
+    /// picks them up without needing a restart.
+    pub last_data_version: i64,
 }
 
 impl App {
@@ -321,6 +326,7 @@ impl App {
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),
+            last_data_version: 0,
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -331,7 +337,31 @@ impl App {
             app.activity_history.extend(buckets);
         }
         app.refresh()?;
+        app.last_data_version = app.store.data_version().unwrap_or(0);
         Ok(app)
+    }
+
+    /// Detect writes committed by other processes (e.g. `wsx workspace
+    /// create` from a sibling CLI) and pull them into the dashboard. Uses
+    /// SQLite's `data_version` pragma — bumps only on external commits, so
+    /// this is a no-op when we're the only writer. Returns true when a
+    /// refresh was triggered.
+    pub fn poll_external_changes(&mut self) -> bool {
+        let Ok(v) = self.store.data_version() else {
+            return false;
+        };
+        if v == self.last_data_version {
+            return false;
+        }
+        // Advance the cached version only after a successful refresh, so a
+        // transient error (e.g. brief DB lock) leaves us in a state where
+        // the next tick retries instead of silently staying stale.
+        if let Err(e) = self.refresh() {
+            tracing::warn!(error = %e, "external-change refresh failed; will retry next tick");
+            return false;
+        }
+        self.last_data_version = v;
+        true
     }
 
     pub fn refresh(&mut self) -> Result<()> {
@@ -596,6 +626,11 @@ pub async fn run<B: Backend + std::io::Write>(
             _ = tick.tick() => {
                 let mut g = app.lock().await;
                 g.tick = g.tick.wrapping_add(1);
+                // Pick up workspaces/repos written by sibling `wsx` CLI
+                // processes (e.g. `wsx workspace create` invoked by Claude
+                // during a related-repos flow). Cheap: PRAGMA data_version
+                // is in-process and only triggers refresh on external commits.
+                g.poll_external_changes();
                 let now_secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -4937,6 +4972,55 @@ mod pm_state_tests {
             !matches!(g.modal, Some(Modal::Error { .. })),
             "Esc race should never produce an error modal, got {:?}",
             g.modal
+        );
+    }
+}
+
+#[cfg(test)]
+mod external_change_polling_tests {
+    use super::*;
+    use crate::store::{NewWorkspace, Store};
+
+    /// Simulates the bug from issue #70: the dashboard process is holding a
+    /// snapshot of workspaces; a separate process (e.g. `wsx workspace
+    /// create` driven by Claude during a related-repos flow) writes a new
+    /// workspace to the same DB. `poll_external_changes` must pick it up.
+    #[test]
+    fn poll_external_changes_pulls_in_workspace_added_by_other_process() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("wsx.db");
+
+        // The "TUI" process: opens the store, starts the App.
+        let store_tui = Store::open(&db).unwrap();
+        let repo_id = store_tui
+            .add_repo(std::path::Path::new("/work/backend"), "backend", "")
+            .unwrap();
+        let mut app = App::new(store_tui, PathBuf::from("/tmp/wsx-poll-test")).unwrap();
+        assert!(app.workspaces.is_empty(), "no workspaces at startup");
+
+        // The "CLI" process: separate connection, writes a new workspace.
+        let store_cli = Store::open(&db).unwrap();
+        store_cli
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "from-cli",
+                branch: "backend/from-cli",
+                worktree_path: std::path::Path::new("/wt/from-cli"),
+                yolo: false,
+            })
+            .unwrap();
+
+        // Back in the TUI: the next tick polls and must pick the new row up.
+        let changed = app.poll_external_changes();
+        assert!(changed, "external commit should trigger a refresh");
+        assert_eq!(app.workspaces.len(), 1);
+        assert_eq!(app.workspaces[0].1.name, "from-cli");
+
+        // And a second poll with no further writes must be a no-op so we
+        // don't churn refresh every tick.
+        assert!(
+            !app.poll_external_changes(),
+            "idle poll must not trigger refresh"
         );
     }
 }

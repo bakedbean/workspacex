@@ -14,6 +14,7 @@ pub enum Modal {
         repo_id: RepoId,
         name_buffer: String,
         yolo: bool,
+        agent: crate::pty::session::AgentKind,
     },
     ConfirmArchive {
         workspace_id: crate::store::WorkspaceId,
@@ -688,6 +689,7 @@ mod workspace_row_tests {
             setup_status: crate::store::SetupStatus::Ok,
             created_at: 0,
             yolo: false,
+            agent: crate::pty::session::AgentKind::Claude,
         }
     }
 

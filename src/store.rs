@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::pty::session::AgentKind;
 use rusqlite::{Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -52,6 +53,7 @@ pub struct Workspace {
     pub setup_status: SetupStatus,
     pub created_at: i64,
     pub yolo: bool,
+    pub agent: AgentKind,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +63,7 @@ pub struct NewWorkspace<'a> {
     pub branch: &'a str,
     pub worktree_path: &'a Path,
     pub yolo: bool,
+    pub agent: AgentKind,
 }
 
 pub struct Store {
@@ -182,6 +185,20 @@ impl Store {
         if v < 8 {
             self.conn.execute_batch(SCHEMA_V8_ACTIVITY_BUCKETS)?;
             self.conn.execute("PRAGMA user_version = 8", [])?;
+        }
+        if v < 9 {
+            let has_col: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('workspaces') WHERE name = 'agent'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_col == 0 {
+                self.conn.execute(
+                    "ALTER TABLE workspaces ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'",
+                    [],
+                )?;
+            }
+            self.conn.execute("PRAGMA user_version = 9", [])?;
         }
         Ok(())
     }
@@ -357,10 +374,14 @@ impl Store {
 
     pub fn insert_workspace(&self, w: &NewWorkspace) -> Result<WorkspaceId> {
         let now = now_ms();
+        let agent_str = match w.agent {
+            AgentKind::Claude => "claude",
+            AgentKind::Pi => "pi",
+        };
         self.conn.execute(
-            "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo)
-             VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5, ?6)",
-            rusqlite::params![w.repo_id.0, w.name, w.branch, w.worktree_path.to_string_lossy(), now, w.yolo as i64],
+            "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)
+             VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5, ?6, ?7)",
+            rusqlite::params![w.repo_id.0, w.name, w.branch, w.worktree_path.to_string_lossy(), now, w.yolo as i64, agent_str],
         )?;
         Ok(WorkspaceId(self.conn.last_insert_rowid()))
     }
@@ -405,7 +426,7 @@ impl Store {
 
     pub fn workspaces(&self, repo_id: RepoId) -> Result<Vec<Workspace>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
              FROM workspaces WHERE repo_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([repo_id.0], |r| {
@@ -419,6 +440,7 @@ impl Store {
                 setup_status: parse_setup(&r.get::<_, String>(6)?),
                 created_at: r.get(7)?,
                 yolo: r.get::<_, i64>(8)? != 0,
+                agent: parse_agent(&r.get::<_, String>(9)?),
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -527,6 +549,13 @@ fn parse_setup(s: &str) -> SetupStatus {
     }
 }
 
+fn parse_agent(s: &str) -> AgentKind {
+    match s {
+        "pi" => AgentKind::Pi,
+        _ => AgentKind::Claude,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,6 +607,7 @@ mod tests {
                 branch: "wsx/fix-bug",
                 worktree_path: Path::new("/wts/fix-bug"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
 
@@ -783,6 +813,7 @@ mod tests {
                 branch: "wsx/tame",
                 worktree_path: Path::new("/wts/tame"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -792,6 +823,7 @@ mod tests {
                 branch: "wsx/wild",
                 worktree_path: Path::new("/wts/wild"),
                 yolo: true,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         let ws = store.workspaces(repo).unwrap();
@@ -813,6 +845,7 @@ mod tests {
                 branch: "wsx/stuck",
                 worktree_path: Path::new("/wts/stuck"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         // Backdate the row to look stale.
@@ -865,6 +898,7 @@ mod tests {
                 branch: "wsx/alpha",
                 worktree_path: Path::new("/tmp/demo/alpha"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store.set_setup_status(id, SetupStatus::Cancelled).unwrap();

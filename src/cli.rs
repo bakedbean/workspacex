@@ -73,6 +73,7 @@ pub enum CliAction {
         repo: String,
         name: Option<String>,
         yolo: bool,
+        agent: Option<String>,
     },
     WorkspaceList {
         repo: Option<String>,
@@ -337,10 +338,11 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         Some("workspace") => match it.next().as_deref() {
             Some("create") => {
                 let repo = it.next().ok_or_else(|| {
-                    Error::UserInput("workspace create <repo> [--name <slug>] [--yolo]".into())
+                    Error::UserInput("workspace create <repo> [--name <slug>] [--yolo] [--agent pi|claude]".into())
                 })?;
                 let mut name: Option<String> = None;
                 let mut yolo = false;
+                let mut agent: Option<String> = None;
                 while let Some(arg) = it.next() {
                     match arg.as_str() {
                         "--name" => {
@@ -350,12 +352,18 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                                 })?);
                         }
                         "--yolo" => yolo = true,
+                        "--agent" => {
+                            agent =
+                                Some(it.next().ok_or_else(|| {
+                                    Error::UserInput("--agent needs value (pi or claude)".into())
+                                })?);
+                        }
                         other => {
                             return Err(Error::UserInput(format!("unknown arg: {other}")));
                         }
                     }
                 }
-                Ok(CliAction::WorkspaceCreate { repo, name, yolo })
+                Ok(CliAction::WorkspaceCreate { repo, name, yolo, agent })
             }
             Some("list") => {
                 let repo = it.next();
@@ -732,16 +740,21 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             // exec only returns on failure.
             return Err(Error::UserInput(format!("exec sh: {err}")));
         }
-        CliAction::WorkspaceCreate { repo, name, yolo } => {
+        CliAction::WorkspaceCreate { repo, name, yolo, agent } => {
             let r = lookup_repo(&store, &repo)?;
             let worktree_base = dirs.app_dir().join("worktrees");
             std::fs::create_dir_all(&worktree_base)?;
+            let agent_kind = match agent.as_deref() {
+                Some("pi") => crate::pty::session::AgentKind::Pi,
+                _ => crate::pty::session::AgentKind::Claude,
+            };
             let created = crate::workspace::create(
                 &store,
                 &r,
                 name.as_deref(),
                 &worktree_base,
                 yolo,
+                agent_kind,
                 tokio_util::sync::CancellationToken::new(),
                 |_| {},
             )
@@ -1114,7 +1127,7 @@ mod tests {
     #[test]
     fn parses_workspace_create_minimal() {
         match parse(&["workspace", "create", "backend"]).unwrap() {
-            CliAction::WorkspaceCreate { repo, name, yolo } => {
+            CliAction::WorkspaceCreate { repo, name, yolo, agent: None } => {
                 assert_eq!(repo, "backend");
                 assert!(name.is_none());
                 assert!(!yolo);
@@ -1135,7 +1148,7 @@ mod tests {
         ])
         .unwrap()
         {
-            CliAction::WorkspaceCreate { repo, name, yolo } => {
+            CliAction::WorkspaceCreate { repo, name, yolo, agent: None } => {
                 assert_eq!(repo, "backend");
                 assert_eq!(name.as_deref(), Some("add-widgets"));
                 assert!(yolo);

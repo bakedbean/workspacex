@@ -374,6 +374,7 @@ mod tests {
                 branch: "demo/ready-with-session",
                 worktree_path: &ready_with_session,
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -386,6 +387,7 @@ mod tests {
                 branch: "demo/ready-no-session",
                 worktree_path: &ready_no_session,
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -398,6 +400,7 @@ mod tests {
                 branch: "demo/broken",
                 worktree_path: &failed,
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store

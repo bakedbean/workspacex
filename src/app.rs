@@ -1534,6 +1534,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
                 });
             }
             None => {}
@@ -1558,6 +1559,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo,
+                    agent: crate::pty::session::AgentKind::Claude,
                 });
             }
         }
@@ -2223,9 +2225,22 @@ async fn handle_key_modal(
             repo_id,
             mut name_buffer,
             yolo,
+            mut agent,
         } => match k.code {
             KeyCode::Esc => {
                 app.modal = None;
+            }
+            KeyCode::Tab => {
+                agent = match agent {
+                    crate::pty::session::AgentKind::Claude => crate::pty::session::AgentKind::Pi,
+                    crate::pty::session::AgentKind::Pi => crate::pty::session::AgentKind::Claude,
+                };
+                app.modal = Some(Modal::NewWorkspace {
+                    repo_id,
+                    name_buffer,
+                    yolo,
+                    agent,
+                });
             }
             KeyCode::Enter => {
                 let name = if name_buffer.trim().is_empty() {
@@ -2248,6 +2263,7 @@ async fn handle_key_modal(
                         name,
                         base,
                         yolo,
+                        agent,
                         cancel,
                     )
                     .await;
@@ -2260,6 +2276,7 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    agent,
                 });
             }
             KeyCode::Char(c) => {
@@ -2268,6 +2285,7 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    agent,
                 });
             }
             _ => {}
@@ -2618,6 +2636,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
             String,
             String,
             Option<String>,
+            crate::pty::session::AgentKind,
         )> = {
             let g = app.lock().await;
             g.workspaces
@@ -2632,12 +2651,13 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         w.branch.clone(),
                         prefix,
                         repo.base_branch.clone(),
+                        w.agent,
                     ))
                 })
                 .collect()
         };
 
-        for (id, path, db_branch, prefix, base_branch) in snapshot {
+        for (id, path, db_branch, prefix, base_branch, ws_agent) in snapshot {
             if !path.exists() {
                 continue;
             }
@@ -3214,6 +3234,7 @@ mod pm_state_tests {
                     branch,
                     worktree_path: std::path::Path::new(path),
                     yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
                 })
                 .unwrap();
             store
@@ -3290,6 +3311,7 @@ mod pm_state_tests {
                     branch,
                     worktree_path: std::path::Path::new(path),
                     yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
                 })
                 .unwrap();
             store
@@ -3404,6 +3426,7 @@ mod pm_state_tests {
                 branch: "repo/blocked",
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3459,6 +3482,7 @@ mod pm_state_tests {
                 branch: "repo/first",
                 worktree_path: std::path::Path::new("/tmp/wsx-split-1"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         let second_id = store
@@ -3468,6 +3492,7 @@ mod pm_state_tests {
                 branch: "repo/second",
                 worktree_path: std::path::Path::new("/tmp/wsx-split-2"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3580,6 +3605,7 @@ mod pm_state_tests {
                 branch: "repo/first",
                 worktree_path: std::path::Path::new("/tmp/wsx-close-1"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         let second_id = store
@@ -3589,6 +3615,7 @@ mod pm_state_tests {
                 branch: "repo/second",
                 worktree_path: std::path::Path::new("/tmp/wsx-close-2"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3686,6 +3713,7 @@ mod pm_state_tests {
                     branch: &format!("repo/{name}"),
                     worktree_path: &std::path::PathBuf::from(format!("/tmp/wsx-arrow-{name}")),
                     yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
                 })
                 .unwrap();
             store
@@ -3783,6 +3811,7 @@ mod pm_state_tests {
                 branch: "repo-alpha/alpha-ws",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3798,6 +3827,7 @@ mod pm_state_tests {
                 branch: "repo-beta/beta-ws",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/beta-ws"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3868,6 +3898,7 @@ mod pm_state_tests {
                         branch: &branch,
                         worktree_path: std::path::Path::new(&worktree),
                         yolo: false,
+                        agent: crate::pty::session::AgentKind::Claude,
                     })
                     .unwrap();
                 store
@@ -3955,6 +3986,7 @@ mod pm_state_tests {
                 branch: "repo/attached-here",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/attached"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3967,6 +3999,7 @@ mod pm_state_tests {
                 branch: "repo/the-other",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/other"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -4041,6 +4074,7 @@ mod pm_state_tests {
                 branch: "repo/only-one",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/only"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -4200,6 +4234,7 @@ mod pm_state_tests {
                 branch: "main",
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -4655,6 +4690,7 @@ mod pm_state_tests {
                 branch: "backend/test-ws",
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -4707,6 +4743,7 @@ mod pm_state_tests {
                 branch: "backend/test-ws",
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -4902,6 +4939,7 @@ mod pm_state_tests {
                 branch: "repo-0/alpha",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         app.store
@@ -5083,6 +5121,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             });
         }
         // Send Enter.
@@ -5140,6 +5179,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -5198,6 +5238,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -5245,6 +5286,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -5302,6 +5344,7 @@ mod external_change_polling_tests {
                 branch: "backend/from-cli",
                 worktree_path: std::path::Path::new("/wt/from-cli"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
 

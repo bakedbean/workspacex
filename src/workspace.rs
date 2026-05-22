@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
 use crate::git;
 use crate::names;
+use crate::pty::session::AgentKind;
 use crate::setup::{self, SetupLine, SetupResult};
 use crate::store::{
     NewWorkspace, Repo, SetupStatus, Store, Workspace, WorkspaceId, WorkspaceState,
@@ -21,6 +22,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     name: Option<&str>,
     worktree_base: &Path,
     yolo: bool,
+    agent: AgentKind,
     cancel: tokio_util::sync::CancellationToken,
     on_setup_line: F,
 ) -> Result<CreatedWorkspace> {
@@ -59,6 +61,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         branch: &branch,
         worktree_path: &worktree_path,
         yolo,
+        agent,
     })?;
 
     if cancel.is_cancelled() {
@@ -126,6 +129,7 @@ pub async fn create_with_app(
     name: Option<String>,
     worktree_base: PathBuf,
     yolo: bool,
+    agent: AgentKind,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<CreatedWorkspace> {
     // --- Phase 1 (short, locked): compute names/paths, no I/O. ---
@@ -170,6 +174,7 @@ pub async fn create_with_app(
             branch: &branch,
             worktree_path: &worktree_path,
             yolo,
+            agent,
         })?
     };
 
@@ -301,6 +306,7 @@ pub fn import_existing(
         branch: &branch,
         worktree_path: &info.path,
         yolo: false,
+        agent: AgentKind::Claude,
     })?;
     store.set_workspace_state(id, WorkspaceState::Ready)?;
     store.set_setup_status(id, SetupStatus::Skipped)?;
@@ -356,6 +362,7 @@ pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) 
     Ok(())
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,7 +408,7 @@ mod tests {
             Some("alpha"),
             base.path(),
             false,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -435,7 +442,7 @@ mod tests {
             Some("wild"),
             base.path(),
             true,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -463,7 +470,7 @@ mod tests {
             None,
             base.path(),
             false,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -492,7 +499,7 @@ mod tests {
             Some("a"),
             base.path(),
             false,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -521,7 +528,7 @@ mod tests {
             Some("doomed"),
             base.path(),
             false,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -576,7 +583,7 @@ mod tests {
             Some("alpha"),
             base.path(),
             false,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -654,7 +661,7 @@ mod tests {
             Some("a"),
             base.path(),
             false,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -693,7 +700,7 @@ mod tests {
             Some("doomed"),
             base.path(),
             false,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -736,6 +743,7 @@ mod tests {
             Some("alpha"),
             base.path(),
             false,
+            crate::pty::session::AgentKind::Claude,
             cancel,
             |_| {},
         )
@@ -777,6 +785,7 @@ mod tests {
             Some("alpha"),
             base.path(),
             false,
+            crate::pty::session::AgentKind::Claude,
             cancel,
             |_| {},
         )
@@ -819,6 +828,7 @@ mod tests {
             Some("alpha".to_string()),
             base.path().to_path_buf(),
             false,
+            crate::pty::session::AgentKind::Claude,
             cancel,
         )
         .await
@@ -873,7 +883,7 @@ mod tests {
             Some("from-staging"),
             wt_root.path(),
             false,
-            tokio_util::sync::CancellationToken::new(),
+                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await

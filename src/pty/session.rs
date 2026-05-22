@@ -11,6 +11,27 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use vt100::Parser;
 
+/// Which coding agent to spawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentKind {
+    Claude,
+    Pi,
+}
+
+impl AgentKind {
+    pub fn from_store(store: &crate::store::Store) -> Self {
+        match store
+            .get_setting("coding_agent")
+            .ok()
+            .flatten()
+            .as_deref()
+        {
+            Some("pi") => AgentKind::Pi,
+            _ => AgentKind::Claude,
+        }
+    }
+}
+
 /// True if Claude Code has a persisted session JSONL for this worktree.
 /// Claude Code stores sessions at `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`,
 /// where the encoding replaces `/` and `.` with `-`.
@@ -234,6 +255,39 @@ pub enum SpawnMode {
     },
 }
 
+/// True if pi has a persisted session JSONL for this worktree.
+/// Pi stores sessions at `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`,
+/// where the encoding replaces `/` with `-`.
+pub fn has_prior_pi_session(worktree: &Path) -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let abs = match std::fs::canonicalize(worktree) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let encoded = abs.to_string_lossy().replace('/', "-");
+    let session_dir = home.join(".pi/agent/sessions").join(format!("--{}--", encoded));
+    if !session_dir.is_dir() {
+        return false;
+    }
+    std::fs::read_dir(&session_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().map(|x| x == "jsonl").unwrap_or(false))
+        })
+        .unwrap_or(false)
+}
+
+/// Resolve whether a workspace has a prior session based on the agent kind.
+pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
+    match agent {
+        AgentKind::Claude => has_prior_session(worktree),
+        AgentKind::Pi => has_prior_pi_session(worktree),
+    }
+}
+
 /// Build a `CommandBuilder` for `claude` (or whatever `WSX_CLAUDE_BIN`
 /// points to) inside `cwd`. Inherits the current process env.
 ///
@@ -387,12 +441,123 @@ fn render_rename_system_prompt(current_branch: &str, branch_prefix: &str) -> Str
     )
 }
 
+/// Build a `CommandBuilder` for `pi` (or whatever `WSX_PI_BIN`
+/// points to) inside `cwd`. Inherits the current process env.
+///
+/// Maps wsx spawn modes to pi CLI flags:
+/// - `Fresh` with `rename_ctx` → system prompt for auto-rename
+/// - `Continue` → `--continue`
+/// - `ProjectManager` → system prompt + `--continue` if resuming
+///
+/// Pi has no permission system, so yolo/--dangerously-skip-permissions
+/// and --allowedTools are no-ops. Pi has no --add-dir or --remote-control
+/// equivalents. Pi can read from any path directly.
+pub fn build_pi_command(
+    cwd: &Path,
+    mode: &SpawnMode,
+    _remote: crate::remote_control::RemoteOpts,
+) -> CommandBuilder {
+    let bin = std::env::var("WSX_PI_BIN").unwrap_or_else(|_| "pi".to_string());
+    let mut cmd = CommandBuilder::new(bin);
+    cmd.cwd(cwd);
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
+
+    let (rename_prompt, custom, add_continue) = match mode {
+        SpawnMode::Continue {
+            custom_instructions,
+            additional_dirs: _,
+            yolo: _,
+        } => (None, custom_instructions.clone(), true),
+        SpawnMode::Fresh {
+            rename_ctx,
+            custom_instructions,
+            additional_dirs: _,
+            yolo: _,
+        } => {
+            let rename_mode =
+                std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
+            let rp = if let Some(ctx) = rename_ctx {
+                if rename_mode == "claude" {
+                    Some(render_rename_system_prompt_pi(
+                        &ctx.current_branch,
+                        &ctx.branch_prefix,
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            (rp, custom_instructions.clone(), false)
+        }
+        SpawnMode::ProjectManager {
+            workspaces_json_path: _,
+            custom_instructions,
+            additional_dirs: _,
+            resume,
+            fast_mode: _, // pi has no fast mode
+        } => (
+            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+            None,
+            *resume,
+        ),
+    };
+
+    if add_continue {
+        cmd.arg("--continue");
+    }
+
+    let combined = match (rename_prompt, custom) {
+        (None, None) => None,
+        (Some(r), None) => Some(r),
+        (None, Some(c)) => Some(c),
+        (Some(r), Some(c)) => Some(format!("{r}\n\n{c}")),
+    };
+
+    if let Some(prompt) = combined {
+        cmd.arg("--append-system-prompt");
+        cmd.arg(prompt);
+    }
+
+    cmd
+}
+
+/// Pi version of the rename system prompt. Pi uses `bash` (lowercase) as its
+/// tool name and has no permission system, so we don't need to
+/// pre-authorize the git branch command.
+fn render_rename_system_prompt_pi(current_branch: &str, branch_prefix: &str) -> String {
+    let prefix = if branch_prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", branch_prefix.trim_end_matches('/'))
+    };
+    format!(
+        "This is a wsx-managed worktree currently checked out on a placeholder branch \
+         named `{current_branch}`. The placeholder is a randomly-generated \
+         adjective-plant slug from the wsx workspace manager.\n\n\
+         BEFORE doing the work the user asks about, on their first message: \
+         run `git branch -m {current_branch} {prefix}<slug>` where `<slug>` is a \
+         2-4 word lowercase kebab-case summary of what the user is asking for. \
+         Then briefly tell the user \"renamed branch to {prefix}<slug>\" on one line \
+         and proceed with their actual request.\n\n\
+         Constraints:\n\
+         - Keep the `{prefix}` prefix exactly as shown.\n\
+         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars.\n\
+         - Don't ask for confirmation; don't add extra explanation.\n\
+         - Only do this once per worktree. If the current branch is no longer \
+         the placeholder `{current_branch}`, skip the rename — it's already done.\n"
+    )
+}
+
 pub fn spawn_session(
     cwd: &Path,
     cols: u16,
     rows: u16,
     mode: SpawnMode,
     remote: crate::remote_control::RemoteOpts,
+    agent: AgentKind,
 ) -> Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -404,9 +569,13 @@ pub fn spawn_session(
         })
         .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
 
+    let child_cmd = match agent {
+        AgentKind::Claude => build_claude_command(cwd, &mode, remote),
+        AgentKind::Pi => build_pi_command(cwd, &mode, remote),
+    };
     let mut child = pair
         .slave
-        .spawn_command(build_claude_command(cwd, &mode, remote))
+        .spawn_command(child_cmd)
         .map_err(|e| Error::Pty(format!("spawn: {e}")))?;
     drop(pair.slave);
 
@@ -510,6 +679,7 @@ impl SessionManager {
         rows: u16,
         mode: SpawnMode,
         remote: crate::remote_control::RemoteOpts,
+        agent: AgentKind,
     ) -> Result<Arc<Session>> {
         if let Some(s) = self.sessions.get(&id) {
             if matches!(*s.status.read().unwrap(), SessionStatus::Running { .. }) {
@@ -517,7 +687,7 @@ impl SessionManager {
             }
             // Otherwise fall through and respawn.
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote)?);
+        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote, agent)?);
         self.sessions.insert(id, session.clone());
         Ok(session)
     }
@@ -533,6 +703,7 @@ impl SessionManager {
         rows: u16,
         mode: SpawnMode,
         remote: crate::remote_control::RemoteOpts,
+        agent: AgentKind,
     ) -> Result<Arc<Session>> {
         if let Some(existing) = &self.pm {
             if matches!(
@@ -542,7 +713,7 @@ impl SessionManager {
                 return Ok(existing.clone());
             }
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote)?);
+        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote, agent)?);
         self.pm = Some(session.clone());
         Ok(session)
     }
@@ -595,6 +766,7 @@ mod tests {
                 yolo: false,
             },
             crate::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
         )
         .unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
@@ -624,6 +796,7 @@ mod tests {
                 yolo: false,
             },
             crate::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
         );
         assert!(result.is_err());
         unsafe {
@@ -656,6 +829,7 @@ mod tests {
                     yolo: false,
                 },
                 crate::remote_control::RemoteOpts::disabled(),
+                AgentKind::Claude,
             )
             .unwrap();
         // sh -i would run forever; we just check the session was Running.
@@ -697,6 +871,7 @@ mod tests {
                 yolo: false,
             },
             crate::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
         )
         .unwrap();
 
@@ -1202,6 +1377,7 @@ mod tests {
                 yolo: false,
             },
             crate::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
         )
         .unwrap();
         // Prime cat with some output so activity_ms is populated, then let it settle.
@@ -1240,6 +1416,7 @@ mod tests {
                 24,
                 mode,
                 crate::remote_control::RemoteOpts::disabled(),
+                AgentKind::Claude,
             )
             .unwrap();
         assert!(mgr.pm().is_some());
@@ -1258,6 +1435,7 @@ mod tests {
                 24,
                 mode2,
                 crate::remote_control::RemoteOpts::disabled(),
+                AgentKind::Claude,
             )
             .unwrap();
         assert!(Arc::ptr_eq(&s, &s2));
@@ -1293,6 +1471,7 @@ mod tests {
                 yolo: false,
             },
             crate::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
         )
         .unwrap();
         // Do NOT send any input — cat stays silent, activity_ms never gets set.
@@ -1325,6 +1504,7 @@ mod tests {
                 yolo: false,
             },
             crate::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
         )
         .expect("spawn_session for scrollback test");
         unsafe {

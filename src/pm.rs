@@ -53,12 +53,13 @@ pub fn write_workspaces_json(store: &Store, target: &Path) -> Result<()> {
             if ws.state != WorkspaceState::Ready {
                 continue;
             }
-            // Skip workspaces where claude has never been started: nothing
+            // Skip workspaces where the agent has never been started: nothing
             // for PM to summarize, and they pollute the list.
-            if !crate::pty::session::has_prior_session(&ws.worktree_path) {
+            let agent = crate::pty::session::AgentKind::from_store(store);
+            if !crate::pty::session::has_prior_session_for(&ws.worktree_path, agent) {
                 continue;
             }
-            let session_log_dir = compute_session_log_dir(&ws.worktree_path);
+            let session_log_dir = compute_session_log_dir(&ws.worktree_path, agent);
             workspaces.push(WorkspaceEntry {
                 name: ws.name,
                 branch: ws.branch,
@@ -94,11 +95,19 @@ pub fn write_workspaces_json(store: &Store, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn compute_session_log_dir(worktree: &Path) -> PathBuf {
+fn compute_session_log_dir(worktree: &Path, agent: crate::pty::session::AgentKind) -> PathBuf {
     let abs = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
-    let encoded = crate::events::encode_cwd(&abs);
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-    home.join(".claude/projects").join(encoded)
+    match agent {
+        crate::pty::session::AgentKind::Claude => {
+            let encoded = crate::events::encode_cwd(&abs);
+            home.join(".claude/projects").join(encoded)
+        }
+        crate::pty::session::AgentKind::Pi => {
+            let encoded = crate::pi_events::encode_cwd(&abs);
+            home.join(".pi/agent/sessions").join(encoded)
+        }
+    }
 }
 
 /// Initialize the PM working directory. Creates `dir` if needed and
@@ -187,7 +196,8 @@ pub async fn open_pm(
     init_pm_dir(pm_dir)?;
     let workspaces_json = pm_dir.join("workspaces.json");
     write_workspaces_json(store, &workspaces_json)?;
-    let resume = crate::pty::session::has_prior_session(pm_dir);
+    let agent = crate::pty::session::AgentKind::from_store(store);
+    let resume = crate::pty::session::has_prior_session_for(pm_dir, agent);
     let mode = crate::pty::session::SpawnMode::ProjectManager {
         workspaces_json_path: workspaces_json,
         custom_instructions,
@@ -196,7 +206,7 @@ pub async fn open_pm(
         fast_mode: pm_fast_mode_enabled(store),
     };
     let remote = crate::remote_control::RemoteOpts::from_store(store);
-    mgr.spawn_pm(pm_dir, 80, 24, mode, remote)?;
+    mgr.spawn_pm(pm_dir, 80, 24, mode, remote, agent)?;
     Ok(())
 }
 
@@ -211,7 +221,8 @@ pub async fn open_pm_with_auto_summary(
     pm_dir: &Path,
     custom_instructions: Option<String>,
 ) -> Result<()> {
-    let was_resume = crate::pty::session::has_prior_session(pm_dir);
+    let agent = crate::pty::session::AgentKind::from_store(store);
+    let was_resume = crate::pty::session::has_prior_session_for(pm_dir, agent);
     open_pm(mgr, store, pm_dir, custom_instructions).await?;
     if was_resume {
         return refresh_pm(mgr, store, pm_dir).await;

@@ -111,12 +111,11 @@ fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
 }
 
 #[test]
-fn footer_row_paints_both_bar_bg_and_chip_bg() {
+fn footer_row_paints_chip_bg_but_no_bar_bg() {
     // End-to-end check: after the whole render path runs, the bottom row
-    // (the footer) must contain BOTH the bar background (bg_alt fills the
-    // gaps + spark area) AND the chip background (bg_soft fills the cells
-    // behind each key chord). If either is absent the V5 chip treatment
-    // has regressed even when the unit-level span tests still pass.
+    // (the footer) must contain the chip background (bg_soft fills the
+    // cells behind each key chord) and must NOT contain any bg_alt
+    // bar-bg fill — the footer chrome blends flat with the main bg.
     let fixtures = fixture::repos();
     let repos: Vec<Repo> = fixtures
         .iter()
@@ -148,7 +147,10 @@ fn footer_row_paints_both_bar_bg_and_chip_bg() {
             _ => {}
         }
     }
-    assert!(saw_bar, "footer row should contain bg_alt bar-bg cells");
+    assert!(
+        !saw_bar,
+        "footer row should NOT contain bg_alt bar-bg cells"
+    );
     assert!(saw_chip, "footer row should contain bg_soft chip-bg cells");
 }
 

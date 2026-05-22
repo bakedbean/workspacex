@@ -54,24 +54,17 @@ pub fn render_panes(
     }
 
     if let Some(line) = attention_line {
-        f.render_widget(
-            Paragraph::new(line).style(theme.footer_bar_style()),
-            status_area,
-        );
+        f.render_widget(Paragraph::new(line), status_area);
     }
 
-    // Footer rect is 2 cells tall; render an empty first line so the bar
-    // bg fills it as a spacer and the keys land on the bottom cell. Gives
-    // the keys breathing room from the row above without doubling spacing
+    // Footer rect is 2 cells tall; the empty first line gives the keys
+    // breathing room from the row above without doubling spacing
     // throughout the chrome stack.
     let footer_text = ratatui::text::Text::from(vec![
         Line::from(Vec::<Span<'static>>::new()),
         footer_line(footer_label, multi_pane_footer, theme),
     ]);
-    f.render_widget(
-        Paragraph::new(footer_text).style(theme.footer_bar_style()),
-        footer_area,
-    );
+    f.render_widget(Paragraph::new(footer_text), footer_area);
 
     // Chips + inline rule filler. Always renders so the rule shows even
     // when there are no pinned commands.
@@ -136,9 +129,8 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
 /// footer sub-areas. Chip and attention rows are 1 cell tall (flush with
 /// each other — the chip row's inline `─` rule already provides visual
 /// separation from above). The footer rect is 2 cells tall so its
-/// leading blank line acts as a bar-bg spacer that lifts the keys away
-/// from the rows above. Net: one cell of breathing room just above the
-/// footer keys, regardless of whether the attention line is present.
+/// leading blank line lifts the keys one cell away from the rows above,
+/// regardless of whether the attention line is present.
 ///
 /// The chip row carries either pinned-command chips followed by a `─`
 /// rule filler, or just the rule when no chips are configured.
@@ -154,7 +146,7 @@ pub fn layout_chrome(
             Constraint::Min(1),
             Constraint::Length(1),        // chip row
             Constraint::Length(status_h), // attention row (0 when absent)
-            Constraint::Length(2),        // footer keys with 1-cell bar-bg spacer above
+            Constraint::Length(2),        // footer keys with 1-cell spacer above
         ])
         .split(area);
     (chunks[0], chunks[1], chunks[2], chunks[3])
@@ -297,10 +289,7 @@ fn render_chip_row(
             spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
         }
     }
-    f.render_widget(
-        Paragraph::new(Line::from(spans)).style(theme.footer_bar_style()),
-        area,
-    );
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
     rects
 }
 
@@ -386,7 +375,7 @@ mod tests {
         // The chip and attention rows sit flush with each other (the
         // chip's `─` rule does the visual separation from above). The
         // footer rect is 2 cells tall so its leading blank line provides
-        // a single cell of bar-bg breathing room just above the keys —
+        // a single cell of breathing room just above the keys —
         // independent of whether the attention row is present.
         let area = ratatui::layout::Rect::new(0, 0, 80, 30);
         let (pane, chip, status, footer) = layout_chrome(area, true, true);

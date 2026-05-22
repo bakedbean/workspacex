@@ -248,12 +248,6 @@ impl Theme {
     pub fn dim_style(&self) -> Style {
         Style::default().fg(self.dim)
     }
-    /// Background fill for the footer chrome bar — sits behind chip rows
-    /// in the dashboard footer and the attached view's three-row footer
-    /// (chips / attention / key chords).
-    pub fn footer_bar_style(&self) -> Style {
-        Style::default().bg(self.bg_alt)
-    }
     /// Per-chip background fill for key/chord chips inside the footer bar.
     /// Pair with the chip's own fg style (dim+bold for keys, path for
     /// labels) to get the V5 "button" look.

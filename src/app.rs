@@ -5070,6 +5070,57 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
+    async fn zm_folds_all_repos() {
+        // Vim `zm` (lowercase m) should fold all repos, same as `zM`.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'm', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zm");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(true),
+                "zm should set repo {id:?} to folded (true)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn zr_expands_all_repos() {
+        // Vim `zr` (lowercase r) should expand all repos, same as `za`.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'r', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zr");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(false),
+                "zr should set repo {id:?} to expanded (false)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn z_shift_r_expands_all_repos() {
+        // Vim `zR` (uppercase R) should also expand all repos.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'R', KeyModifiers::SHIFT).await;
+        assert!(!app.z_leader_pending, "leader should clear after zR");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(false),
+                "zR should set repo {id:?} to expanded (false)"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn tab_swap_clears_armed_z_leader() {
         // If the user arms `z` then Tabs over to PM, the leader must
         // clear — otherwise their next key after Tabbing back would

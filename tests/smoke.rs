@@ -61,9 +61,13 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
     let mut term = Terminal::new(backend).unwrap();
 
     // Single draw — we just want to verify the dashboard renders without panicking
-    // and shows the workspace we created.
+    // and shows the workspace we created. V5's `default_fold` heuristic
+    // auto-collapses repos whose workspaces have no live activity, which
+    // hides the workspace row from a freshly-created repo. Force-expand
+    // so the assertion below sees both the repo and the workspace.
     {
         let mut g = app.lock().await;
+        g.dashboard.folded.insert(repo_id.0 as u64, false);
         term.draw(|f| wsx::app::draw_for_test(f, &mut g)).unwrap();
     }
     let buf = term.backend().buffer();

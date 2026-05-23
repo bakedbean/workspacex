@@ -4132,7 +4132,12 @@ mod pm_state_tests {
         app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
         // The new status row exclusively surfaces workspaces with
         // `needs_attention` set — recent activity alone no longer qualifies.
+        // In production both flags are set together when `alert_decision`
+        // fires; mirror that here so the V5 status glyph (`!` for stalled)
+        // is what the styled line renders.
         app.workspace_needs_attention.insert(other_id);
+        app.workspace_activity
+            .insert(other_id, crate::app::ActivityState::Stalled);
 
         let backend = TestBackend::new(80, 24);
         let mut term = Terminal::new(backend).unwrap();
@@ -4151,8 +4156,8 @@ mod pm_state_tests {
             "expected status row mention of the other workspace:\n{rendered}"
         );
         assert!(
-            rendered.contains('⚠'),
-            "expected attention glyph on status row:\n{rendered}"
+            rendered.contains("! repo/the-other"),
+            "expected V5 stalled glyph next to workspace name on status row:\n{rendered}"
         );
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");

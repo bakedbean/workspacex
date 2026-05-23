@@ -869,29 +869,31 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn missing_binary_returns_pty_error() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/no/such/binary/wsx-test");
-        }
-        let cwd = PathBuf::from(".");
-        let result = spawn_session(
-            &cwd,
-            80,
-            24,
-            SpawnMode::Fresh {
-                rename_ctx: None,
-                custom_instructions: None,
-                additional_dirs: vec![],
-                yolo: false,
-            },
-            crate::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+    // `spawn_session` propagates `pty.spawn_command(...)` errors via `?`,
+    // so the contract under test is really that portable-pty rejects a
+    // missing binary at spawn time. Validating that directly avoids the
+    // need to mutate the process-global `WSX_CLAUDE_BIN` env var — every
+    // sibling test in this file (and across `app.rs`/`pm.rs`) also
+    // mutates that var, and the resulting races make any env-driven
+    // assertion here non-deterministic. The integration path is one
+    // `?` away from `spawn_command`'s `Result`, so this is enough.
+    #[test]
+    fn missing_binary_returns_pty_error() {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                cols: 80,
+                rows: 24,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let cmd = CommandBuilder::new("/no/such/binary/wsx-test");
+        let result = pair.slave.spawn_command(cmd);
+        assert!(
+            result.is_err(),
+            "spawn_command must error when the binary doesn't exist"
         );
-        assert!(result.is_err());
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -236,6 +236,10 @@ pub struct App {
     pub workspace_events_scanned: std::collections::HashSet<crate::store::WorkspaceId>,
     /// Workspaces whose alert hasn't been acknowledged (cleared on attach).
     pub workspace_needs_attention: std::collections::HashSet<crate::store::WorkspaceId>,
+    /// Anchors whose saved layout has more than one pane. Used by the
+    /// dashboard to render the split-layout indicator. Recomputed by
+    /// `App::refresh`.
+    pub workspaces_with_multi_pane_layouts: std::collections::HashSet<crate::store::WorkspaceId>,
     /// Processes detected per workspace (cwd inside the workspace's
     /// worktree). Refreshed every ~10s by branch_drift_poll.
     pub workspace_processes:
@@ -309,6 +313,7 @@ impl App {
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
+            workspaces_with_multi_pane_layouts: std::collections::HashSet::new(),
             workspace_processes: std::collections::HashMap::new(),
             tick: 0,
             workspace_diff: std::collections::HashMap::new(),
@@ -385,6 +390,12 @@ impl App {
         if !self.selectable.is_empty() && self.dashboard.selected >= self.selectable.len() {
             self.dashboard.selected = self.selectable.len() - 1;
         }
+        self.workspaces_with_multi_pane_layouts = self
+            .store
+            .list_multi_pane_layout_anchors()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         Ok(())
     }
 
@@ -5437,6 +5448,49 @@ mod external_change_polling_tests {
         assert!(
             !app.poll_external_changes(),
             "idle poll must not trigger refresh"
+        );
+    }
+}
+
+#[cfg(test)]
+mod layout_indicator_cache_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn app_refresh_populates_layout_indicator_cache_from_store() {
+        use crate::store::{NewWorkspace, Store};
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let a = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let mut pair = SplitTree::Leaf(a);
+        pair.split(&[], SplitDirection::Vertical, a);
+        store.set_workspace_layout(a, &pair, &[1]).unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(
+            app.workspaces_with_multi_pane_layouts.contains(&a),
+            "cache should contain anchor with multi-pane layout"
+        );
+        // Replace with a single-pane layout — should drop from the cache after refresh.
+        app.store
+            .set_workspace_layout(a, &SplitTree::Leaf(a), &[])
+            .unwrap();
+        app.refresh().unwrap();
+        assert!(
+            !app.workspaces_with_multi_pane_layouts.contains(&a),
+            "single-pane layouts should not appear in the cache"
         );
     }
 }

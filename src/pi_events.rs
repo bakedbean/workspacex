@@ -258,7 +258,10 @@ fn parse_pi_user(msg: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     }
     out.event = Some(EventSnapshot {
         kind: EventKind::UserMessage,
-        display: truncate_display(&format!("user: {}", collapse_ws(trimmed)), MAX_DISPLAY_CHARS),
+        display: truncate_display(
+            &format!("user: {}", collapse_ws(trimmed)),
+            MAX_DISPLAY_CHARS,
+        ),
         timestamp_ms,
     });
     out.is_user_text = true;

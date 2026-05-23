@@ -362,7 +362,6 @@ pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) 
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,7 +407,8 @@ mod tests {
             Some("alpha"),
             base.path(),
             false,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -442,7 +442,8 @@ mod tests {
             Some("wild"),
             base.path(),
             true,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -470,7 +471,8 @@ mod tests {
             None,
             base.path(),
             false,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -499,7 +501,8 @@ mod tests {
             Some("a"),
             base.path(),
             false,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -528,7 +531,8 @@ mod tests {
             Some("doomed"),
             base.path(),
             false,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -583,7 +587,8 @@ mod tests {
             Some("alpha"),
             base.path(),
             false,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -661,7 +666,8 @@ mod tests {
             Some("a"),
             base.path(),
             false,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -700,7 +706,8 @@ mod tests {
             Some("doomed"),
             base.path(),
             false,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await
@@ -883,7 +890,8 @@ mod tests {
             Some("from-staging"),
             wt_root.path(),
             false,
-                crate::pty::session::AgentKind::Claude, tokio_util::sync::CancellationToken::new(),
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
         .await

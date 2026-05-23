@@ -201,6 +201,10 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 9", [])?;
         }
+        if v < 10 {
+            self.conn.execute_batch(SCHEMA_V10_WORKSPACE_LAYOUTS)?;
+            self.conn.execute("PRAGMA user_version = 10", [])?;
+        }
         Ok(())
     }
 
@@ -505,6 +509,16 @@ const SCHEMA_V8_ACTIVITY_BUCKETS: &str = "
 CREATE TABLE IF NOT EXISTS activity_buckets (
     hour_epoch INTEGER PRIMARY KEY,
     max_live   INTEGER NOT NULL
+);
+";
+
+const SCHEMA_V10_WORKSPACE_LAYOUTS: &str = "
+CREATE TABLE IF NOT EXISTS workspace_layouts (
+    anchor_workspace_id INTEGER PRIMARY KEY
+        REFERENCES workspaces(id) ON DELETE CASCADE,
+    tree_json TEXT NOT NULL,
+    focus_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 ";
 
@@ -883,6 +897,25 @@ mod tests {
             a.data_version().unwrap() > v0,
             "external write must bump data_version"
         );
+    }
+
+    #[test]
+    fn migration_v10_creates_workspace_layouts_table() {
+        let store = Store::open_in_memory().unwrap();
+        let v: i64 = store
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(v >= 10, "user_version should be at least 10, got {v}");
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='workspace_layouts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "workspace_layouts table should exist");
     }
 
     #[test]

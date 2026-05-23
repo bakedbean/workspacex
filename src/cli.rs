@@ -142,6 +142,7 @@ fn known_setting_key(k: &str) -> bool {
             | "remotes"
             | "dashboard_name_width"
             | "dashboard_branch_width"
+            | "coding_agent"
     )
 }
 
@@ -361,6 +362,13 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                         other => {
                             return Err(Error::UserInput(format!("unknown arg: {other}")));
                         }
+                    }
+                }
+                if let Some(ref a) = agent {
+                    if a != "pi" && a != "claude" {
+                        return Err(Error::UserInput(format!(
+                            "--agent must be 'pi' or 'claude', got '{a}'"
+                        )));
                     }
                 }
                 Ok(CliAction::WorkspaceCreate { repo, name, yolo, agent })

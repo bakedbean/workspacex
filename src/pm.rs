@@ -55,11 +55,10 @@ pub fn write_workspaces_json(store: &Store, target: &Path) -> Result<()> {
             }
             // Skip workspaces where the agent has never been started: nothing
             // for PM to summarize, and they pollute the list.
-            let agent = crate::pty::session::AgentKind::from_store(store);
-            if !crate::pty::session::has_prior_session_for(&ws.worktree_path, agent) {
+            if !crate::pty::session::has_prior_session_for(&ws.worktree_path, ws.agent) {
                 continue;
             }
-            let session_log_dir = compute_session_log_dir(&ws.worktree_path, agent);
+            let session_log_dir = compute_session_log_dir(&ws.worktree_path, ws.agent);
             workspaces.push(WorkspaceEntry {
                 name: ws.name,
                 branch: ws.branch,

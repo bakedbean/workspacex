@@ -512,8 +512,7 @@ pub fn build_pi_command(
         cmd.arg("--continue");
     } else {
         // Provider for new pi sessions. Falls back to deepseek.
-        // Override with: wsx config set pi_provider anthropic
-        // or: export WSX_PI_PROVIDER=openai
+        // Override with: export WSX_PI_PROVIDER=openai
         let provider = std::env::var("WSX_PI_PROVIDER").unwrap_or_else(|_| "deepseek".to_string());
         cmd.arg("--provider");
         cmd.arg(&provider);

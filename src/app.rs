@@ -898,7 +898,19 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .workspaces
                 .iter()
                 .find(|(_, w)| w.id == focused_id)
-                .map(|(_, w)| w.name.clone())
+                .map(|(_, w)| {
+                    let repo_name = app
+                        .repos
+                        .iter()
+                        .find(|r| r.id == w.repo_id)
+                        .map(|r| r.name.as_str())
+                        .unwrap_or("");
+                    if repo_name.is_empty() {
+                        w.name.clone()
+                    } else {
+                        format!("{}/{}", repo_name, w.name)
+                    }
+                })
                 .unwrap_or_default();
 
             // The status row gets the inner width minus the "⚠ " prefix

@@ -16,6 +16,27 @@ pub enum SplitDirection {
     Horizontal,
 }
 
+/// A 1-cell-wide (or 1-cell-tall) strip between two adjacent panes,
+/// produced by `SplitTree::layout`. The renderer fills these with a
+/// subtle line glyph so the split boundary is visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Divider {
+    pub rect: Rect,
+    /// Direction of the producing split — `Vertical` means children sit
+    /// side-by-side so this divider is a vertical line; `Horizontal`
+    /// means children are stacked so the divider is a horizontal line.
+    pub direction: SplitDirection,
+}
+
+/// Result of laying out a `SplitTree`: one entry per leaf plus the
+/// divider strips reserved between adjacent siblings at every internal
+/// node.
+#[derive(Debug, Clone)]
+pub struct LayoutResult {
+    pub panes: Vec<(WorkspaceId, FocusPath, Rect)>,
+    pub dividers: Vec<Divider>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arrow {
     Left,
@@ -139,8 +160,10 @@ impl AttachedState {
     }
 
     /// Lay out the tree within `area`. Returns one entry per leaf with its
-    /// focus path and computed rect. Leaves are returned in tree order.
-    pub fn layout(&self, area: Rect) -> Vec<(WorkspaceId, FocusPath, Rect)> {
+    /// focus path and computed rect, plus the divider strips between
+    /// adjacent siblings. Leaves are returned in tree order; pane rects
+    /// are sized so dividers don't overlap their content.
+    pub fn layout(&self, area: Rect) -> LayoutResult {
         self.tree.layout(area)
     }
 }
@@ -327,10 +350,11 @@ impl SplitTree {
         }
     }
 
-    pub fn layout(&self, area: Rect) -> Vec<(WorkspaceId, FocusPath, Rect)> {
-        let mut out = Vec::new();
-        self.layout_inner(area, &mut Vec::new(), &mut out);
-        out
+    pub fn layout(&self, area: Rect) -> LayoutResult {
+        let mut panes = Vec::new();
+        let mut dividers = Vec::new();
+        self.layout_inner(area, &mut Vec::new(), &mut panes, &mut dividers);
+        LayoutResult { panes, dividers }
     }
 
     fn layout_inner(
@@ -338,6 +362,7 @@ impl SplitTree {
         area: Rect,
         path: &mut Vec<usize>,
         out: &mut Vec<(WorkspaceId, FocusPath, Rect)>,
+        dividers: &mut Vec<Divider>,
     ) {
         match self {
             SplitTree::Leaf(id) => out.push((*id, path.clone(), area)),
@@ -352,18 +377,51 @@ impl SplitTree {
                     SplitDirection::Vertical => LayoutDirection::Horizontal,
                     SplitDirection::Horizontal => LayoutDirection::Vertical,
                 };
-                let n = children.len() as u32;
-                let constraints: Vec<Constraint> = (0..children.len())
-                    .map(|_| Constraint::Ratio(1, n))
-                    .collect();
+                // Reserve one cell between each pair of children for a
+                // divider. If the area is too small to afford the
+                // dividers, fall back to the original even split (no
+                // dividers) so degenerate tiny rects don't appear.
+                let n = children.len() as u16;
+                let total = match dir {
+                    LayoutDirection::Horizontal => area.width,
+                    LayoutDirection::Vertical => area.height,
+                };
+                let divider_count = n.saturating_sub(1);
+                let constraints: Vec<Constraint> = if total > divider_count + n {
+                    let content = total - divider_count;
+                    let base = content / n;
+                    let extra = content % n;
+                    let mut cs = Vec::with_capacity((2 * n - 1) as usize);
+                    for i in 0..n {
+                        if i > 0 {
+                            cs.push(Constraint::Length(1));
+                        }
+                        let size = if i < extra { base + 1 } else { base };
+                        cs.push(Constraint::Length(size));
+                    }
+                    cs
+                } else {
+                    (0..n).map(|_| Constraint::Ratio(1, n as u32)).collect()
+                };
                 let chunks = Layout::default()
                     .direction(dir)
                     .constraints(constraints)
                     .split(area);
-                for (i, (child, rect)) in children.iter().zip(chunks.iter()).enumerate() {
+                // When dividers were reserved we emit 2n-1 chunks: even
+                // indices are panes, odd indices are dividers.
+                let with_dividers = chunks.len() == (2 * n - 1) as usize;
+                for (i, child) in children.iter().enumerate() {
+                    let pane_idx = if with_dividers { i * 2 } else { i };
+                    let rect = chunks[pane_idx];
                     path.push(i);
-                    child.layout_inner(*rect, path, out);
+                    child.layout_inner(rect, path, out, dividers);
                     path.pop();
+                    if with_dividers && i + 1 < children.len() {
+                        dividers.push(Divider {
+                            rect: chunks[pane_idx + 1],
+                            direction: *direction,
+                        });
+                    }
                 }
             }
         }
@@ -454,26 +512,36 @@ mod tests {
     #[test]
     fn single_leaf_layout_returns_full_area() {
         let s = AttachedState::single(wid(1));
-        let leaves = s.layout(Rect::new(0, 0, 80, 24));
-        assert_eq!(leaves.len(), 1);
-        assert_eq!(leaves[0].0, wid(1));
-        assert_eq!(leaves[0].1, Vec::<usize>::new());
-        assert_eq!(leaves[0].2, Rect::new(0, 0, 80, 24));
+        let result = s.layout(Rect::new(0, 0, 80, 24));
+        assert_eq!(result.panes.len(), 1);
+        assert!(result.dividers.is_empty());
+        assert_eq!(result.panes[0].0, wid(1));
+        assert_eq!(result.panes[0].1, Vec::<usize>::new());
+        assert_eq!(result.panes[0].2, Rect::new(0, 0, 80, 24));
     }
 
     #[test]
     fn vertical_split_lays_side_by_side() {
         let mut s = AttachedState::single(wid(1));
         assert!(s.split(SplitDirection::Vertical, wid(2)));
-        let leaves = s.layout(Rect::new(0, 0, 80, 24));
+        let result = s.layout(Rect::new(0, 0, 80, 24));
+        let leaves = &result.panes;
         assert_eq!(leaves.len(), 2);
-        // Vertical split = children laid out horizontally.
+        // Vertical split = children laid out horizontally with a 1-col
+        // divider between them. 80 - 1 = 79 content cells; first pane
+        // gets the extra cell (40), second gets 39, divider sits at x=40.
         assert_eq!(leaves[0].2.x, 0);
-        assert_eq!(leaves[1].2.x, 40);
-        assert_eq!(leaves[0].2.width + leaves[1].2.width, 80);
+        assert_eq!(leaves[0].2.width, 40);
+        assert_eq!(leaves[1].2.x, 41);
+        assert_eq!(leaves[1].2.width, 39);
+        assert_eq!(leaves[0].2.width + leaves[1].2.width, 79);
         // Both panes share full height.
         assert_eq!(leaves[0].2.height, 24);
         assert_eq!(leaves[1].2.height, 24);
+        // One vertical divider between them.
+        assert_eq!(result.dividers.len(), 1);
+        assert_eq!(result.dividers[0].direction, SplitDirection::Vertical);
+        assert_eq!(result.dividers[0].rect, Rect::new(40, 0, 1, 24));
         // Focus moved to the new (second) pane.
         assert_eq!(s.focused_id(), Some(wid(2)));
     }
@@ -482,11 +550,18 @@ mod tests {
     fn horizontal_split_stacks_top_bottom() {
         let mut s = AttachedState::single(wid(1));
         assert!(s.split(SplitDirection::Horizontal, wid(2)));
-        let leaves = s.layout(Rect::new(0, 0, 80, 24));
+        let result = s.layout(Rect::new(0, 0, 80, 24));
+        let leaves = &result.panes;
         assert_eq!(leaves.len(), 2);
+        // 24 - 1 (divider row) = 23 content rows: 12 + 11.
         assert_eq!(leaves[0].2.y, 0);
-        assert_eq!(leaves[1].2.y, 12);
-        assert_eq!(leaves[0].2.height + leaves[1].2.height, 24);
+        assert_eq!(leaves[0].2.height, 12);
+        assert_eq!(leaves[1].2.y, 13);
+        assert_eq!(leaves[1].2.height, 11);
+        assert_eq!(leaves[0].2.height + leaves[1].2.height, 23);
+        assert_eq!(result.dividers.len(), 1);
+        assert_eq!(result.dividers[0].direction, SplitDirection::Horizontal);
+        assert_eq!(result.dividers[0].rect, Rect::new(0, 12, 80, 1));
     }
 
     #[test]
@@ -496,11 +571,14 @@ mod tests {
         // Focus is on wid(2). Another vertical split should produce 3
         // siblings, not a nested split.
         s.split(SplitDirection::Vertical, wid(3));
-        let leaves = s.layout(Rect::new(0, 0, 90, 24));
+        let result = s.layout(Rect::new(0, 0, 90, 24));
+        let leaves = &result.panes;
         assert_eq!(leaves.len(), 3);
         assert_eq!(leaves[0].0, wid(1));
         assert_eq!(leaves[1].0, wid(2));
         assert_eq!(leaves[2].0, wid(3));
+        // Two dividers between three siblings.
+        assert_eq!(result.dividers.len(), 2);
         // Focus is on the newly inserted wid(3).
         assert_eq!(s.focused_id(), Some(wid(3)));
     }
@@ -512,7 +590,8 @@ mod tests {
         // Focus on wid(2). Now split horizontally — should nest, replacing
         // wid(2) with a 2-child horizontal split (wid(2), wid(3)).
         s.split(SplitDirection::Horizontal, wid(3));
-        let leaves = s.layout(Rect::new(0, 0, 80, 24));
+        let result = s.layout(Rect::new(0, 0, 80, 24));
+        let leaves = &result.panes;
         assert_eq!(leaves.len(), 3);
         // Layout order: wid(1) on left, then nested split: wid(2) top, wid(3) bottom.
         assert_eq!(leaves[0].0, wid(1));
@@ -520,6 +599,8 @@ mod tests {
         assert_eq!(leaves[2].0, wid(3));
         assert!(leaves[1].2.y < leaves[2].2.y);
         assert_eq!(leaves[1].2.x, leaves[2].2.x);
+        // One outer vertical divider plus one inner horizontal divider.
+        assert_eq!(result.dividers.len(), 2);
     }
 
     #[test]
@@ -620,8 +701,8 @@ mod tests {
         let back: SplitTree = serde_json::from_str(&json).expect("deserialize");
         let a = tree.layout(Rect::new(0, 0, 80, 24));
         let b = back.layout(Rect::new(0, 0, 80, 24));
-        assert_eq!(a.len(), b.len());
-        for (x, y) in a.iter().zip(b.iter()) {
+        assert_eq!(a.panes.len(), b.panes.len());
+        for (x, y) in a.panes.iter().zip(b.panes.iter()) {
             assert_eq!(x.0, y.0, "leaf id");
             assert_eq!(x.1, y.1, "focus path");
             assert_eq!(x.2, y.2, "rect");

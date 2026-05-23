@@ -951,11 +951,11 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
             let (pane_area, chip_area, status_area, footer_area) =
                 attached::layout_chrome(area, line.is_some(), !pinned.is_empty());
-            let pane_layouts = state.layout(pane_area);
-            let multi_pane = pane_layouts.len() > 1;
+            let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
+            let multi_pane = panes.len() > 1;
 
             // Resize each session's PTY to its pane area (minus title row when multi-pane).
-            for (ws_id, _path, rect) in &pane_layouts {
+            for (ws_id, _path, rect) in &panes {
                 if let Some(session) = app.sessions.get(*ws_id) {
                     attached::resize_pane(&session, *rect, multi_pane);
                 }
@@ -968,7 +968,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 String,
                 ratatui::layout::Rect,
                 bool,
-            )> = pane_layouts
+            )> = panes
                 .into_iter()
                 .filter_map(|(ws_id, path, rect)| {
                     let session = app.sessions.get(ws_id)?;
@@ -995,6 +995,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let chip_rects = attached::render_panes(
                 f,
                 &specs,
+                &dividers,
                 chip_area,
                 status_area,
                 footer_area,
@@ -1032,6 +1033,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 let _chip_rects = attached::render_panes(
                     f,
                     &specs,
+                    &[],
                     chip_area,
                     status_area,
                     footer_area,

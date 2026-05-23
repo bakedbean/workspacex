@@ -152,6 +152,25 @@ impl SplitTree {
         out
     }
 
+    /// Path from the root to the first (leftmost, depth-first) leaf.
+    /// For a `Leaf` root this returns an empty path.
+    pub fn first_leaf_path(&self) -> FocusPath {
+        let mut out = Vec::new();
+        let mut node = self;
+        loop {
+            match node {
+                SplitTree::Leaf(_) => return out,
+                SplitTree::Split { children, .. } => {
+                    if children.is_empty() {
+                        return out;
+                    }
+                    out.push(0);
+                    node = &children[0];
+                }
+            }
+        }
+    }
+
     fn collect_leaves(&self, out: &mut Vec<WorkspaceId>) {
         match self {
             SplitTree::Leaf(id) => out.push(*id),
@@ -658,5 +677,20 @@ mod tests {
         let outcome = tree.prune(&|_| true);
         assert!(matches!(outcome, PruneOutcome::Kept));
         assert_eq!(tree.leaves(), vec![wid(1)]);
+    }
+
+    #[test]
+    fn first_leaf_path_returns_empty_for_leaf_root() {
+        let tree = SplitTree::Leaf(wid(1));
+        assert_eq!(tree.first_leaf_path(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn first_leaf_path_walks_to_leftmost_leaf_of_nested_splits() {
+        // (A | (B / C)) — first leaf path is [0] (A is the leftmost leaf).
+        let mut tree = SplitTree::Leaf(wid(1));
+        tree.split(&[], SplitDirection::Vertical, wid(2));
+        tree.split(&[1], SplitDirection::Horizontal, wid(3));
+        assert_eq!(tree.first_leaf_path(), vec![0]);
     }
 }

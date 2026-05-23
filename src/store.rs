@@ -471,6 +471,68 @@ impl Store {
         )?;
         Ok(n)
     }
+
+    pub fn set_workspace_layout(
+        &self,
+        anchor: WorkspaceId,
+        tree: &crate::ui::split::SplitTree,
+        focus: &[usize],
+    ) -> Result<()> {
+        // SplitTree and Vec<usize> have no exotic Serialize impls (no maps
+        // with non-string keys, no floats, no custom serializers) — calling
+        // `to_string` on them is infallible in practice.
+        let tree_json = serde_json::to_string(tree).expect("SplitTree serialize is infallible");
+        let focus_json = serde_json::to_string(focus).expect("FocusPath serialize is infallible");
+        self.conn.execute(
+            "INSERT OR REPLACE INTO workspace_layouts
+                (anchor_workspace_id, tree_json, focus_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![anchor.0, tree_json, focus_json, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_workspace_layout(
+        &self,
+        anchor: WorkspaceId,
+    ) -> Result<Option<(crate::ui::split::SplitTree, Vec<usize>)>> {
+        let row: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT tree_json, focus_json FROM workspace_layouts WHERE anchor_workspace_id = ?1",
+                [anchor.0],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((tree_json, focus_json)) = row else {
+            return Ok(None);
+        };
+        match (
+            serde_json::from_str::<crate::ui::split::SplitTree>(&tree_json),
+            serde_json::from_str::<Vec<usize>>(&focus_json),
+        ) {
+            (Ok(tree), Ok(focus)) => Ok(Some((tree, focus))),
+            _ => {
+                tracing::warn!(
+                    ?anchor,
+                    "workspace_layouts row failed to parse; deleting corrupt entry"
+                );
+                self.conn.execute(
+                    "DELETE FROM workspace_layouts WHERE anchor_workspace_id = ?1",
+                    [anchor.0],
+                )?;
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn delete_workspace_layout(&self, anchor: WorkspaceId) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM workspace_layouts WHERE anchor_workspace_id = ?1",
+            [anchor.0],
+        )?;
+        Ok(())
+    }
 }
 
 const SCHEMA_V1: &str = r#"
@@ -938,5 +1000,113 @@ mod tests {
         store.set_setup_status(id, SetupStatus::Cancelled).unwrap();
         let ws = store.workspaces(repo_id).unwrap();
         assert_eq!(ws[0].setup_status, SetupStatus::Cancelled);
+    }
+
+    #[test]
+    fn set_then_get_workspace_layout_round_trips() {
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let mut tree = SplitTree::Leaf(id);
+        tree.split(&[], SplitDirection::Vertical, id);
+        let focus = vec![1];
+        store.set_workspace_layout(id, &tree, &focus).unwrap();
+        let got = store.get_workspace_layout(id).unwrap().expect("layout present");
+        assert_eq!(got.0.leaves().len(), 2);
+        assert_eq!(got.1, focus);
+    }
+
+    #[test]
+    fn get_workspace_layout_returns_none_when_absent() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.get_workspace_layout(WorkspaceId(999)).unwrap().is_none());
+    }
+
+    #[test]
+    fn archiving_workspace_cascades_to_layout_row() {
+        use crate::ui::split::SplitTree;
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store.set_workspace_layout(id, &SplitTree::Leaf(id), &[]).unwrap();
+        store.delete_workspace(id).unwrap();
+        assert!(store.get_workspace_layout(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn set_workspace_layout_replaces_existing() {
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let single = SplitTree::Leaf(id);
+        let mut pair = SplitTree::Leaf(id);
+        pair.split(&[], SplitDirection::Vertical, id);
+        store.set_workspace_layout(id, &single, &[]).unwrap();
+        store.set_workspace_layout(id, &pair, &[1]).unwrap();
+        let got = store.get_workspace_layout(id).unwrap().unwrap();
+        assert_eq!(got.0.leaves().len(), 2, "second write wins");
+    }
+
+    #[test]
+    fn get_workspace_layout_returns_none_on_corrupted_json_and_deletes_row() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO workspace_layouts (anchor_workspace_id, tree_json, focus_json, updated_at)
+                 VALUES (?1, 'not-json', '[]', 0)",
+                [id.0],
+            )
+            .unwrap();
+        assert!(store.get_workspace_layout(id).unwrap().is_none());
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT count(*) FROM workspace_layouts WHERE anchor_workspace_id = ?1",
+                [id.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "corrupt row deleted on read");
     }
 }

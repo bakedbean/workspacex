@@ -463,6 +463,9 @@ pub fn build_pi_command(
     for (k, v) in std::env::vars() {
         cmd.env(k, v);
     }
+    // Suppress pi's startup npm chatter and update checks.
+    cmd.env("PI_OFFLINE", "1");
+    cmd.env("npm_config_loglevel", "error");
 
     let (rename_prompt, custom, add_continue) = match mode {
         SpawnMode::Continue {
@@ -507,6 +510,13 @@ pub fn build_pi_command(
 
     if add_continue {
         cmd.arg("--continue");
+    } else {
+        // Provider for new pi sessions. Falls back to deepseek.
+        // Override with: wsx config set pi_provider anthropic
+        // or: export WSX_PI_PROVIDER=openai
+        let provider = std::env::var("WSX_PI_PROVIDER").unwrap_or_else(|_| "deepseek".to_string());
+        cmd.arg("--provider");
+        cmd.arg(&provider);
     }
 
     let combined = match (rename_prompt, custom) {

@@ -463,8 +463,7 @@ impl App {
         let has_prior = if running {
             false
         } else {
-            let agent = crate::pty::session::AgentKind::from_store(&self.store);
-            crate::pty::session::has_prior_session_for(&ws.worktree_path, agent)
+            crate::pty::session::has_prior_session_for(&ws.worktree_path, ws.agent)
         };
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1534,7 +1533,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo: false,
-                    agent: crate::pty::session::AgentKind::Claude,
+                    agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
             }
             None => {}
@@ -1559,7 +1558,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo,
-                    agent: crate::pty::session::AgentKind::Claude,
+                    agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
             }
         }
@@ -1906,7 +1905,7 @@ fn build_spawn_info(
         .ok()
         .flatten();
     let yolo = ws.yolo;
-    let agent = crate::pty::session::AgentKind::from_store(&app.store);
+    let agent = ws.agent;
     // Resolve related repos (per-repo names → source paths), filter out
     // the spawning repo itself, build the read-only system-prompt
     // fragment, and fold it into custom_instructions before the agent sees it.
@@ -2761,13 +2760,8 @@ pub async fn branch_drift_poll(app: SharedApp) {
             // re-acquire to commit the new offset + events. This keeps the
             // UI responsive even when sessions grow large.
             //
-            // Branches on coding_agent setting: Claude Code sessions at
-            // ~/.claude/projects/, pi sessions at ~/.pi/agent/sessions/.
-            let agent = {
-                let g = app.lock().await;
-                crate::pty::session::AgentKind::from_store(&g.store)
-            };
-            let current_file = match agent {
+            // Branches on per-workspace agent kind.
+            let current_file = match ws_agent {
                 crate::pty::session::AgentKind::Claude => {
                     crate::events::locate_session_file(&path)
                 }
@@ -2785,7 +2779,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 }
             };
             if let Some(file) = current_file {
-                let tail_result = match agent {
+                let tail_result = match ws_agent {
                     crate::pty::session::AgentKind::Claude => {
                         crate::events::tail_session(&file, prev_offset)
                     }

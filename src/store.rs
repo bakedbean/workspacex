@@ -1023,7 +1023,9 @@ mod tests {
     fn set_then_get_workspace_layout_round_trips() {
         use crate::ui::split::{SplitDirection, SplitTree};
         let store = Store::open_in_memory().unwrap();
-        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/r"), "r", "x")
+            .unwrap();
         let id = store
             .insert_workspace(&NewWorkspace {
                 repo_id: repo,
@@ -1038,7 +1040,10 @@ mod tests {
         tree.split(&[], SplitDirection::Vertical, id);
         let focus = vec![1];
         store.set_workspace_layout(id, &tree, &focus).unwrap();
-        let got = store.get_workspace_layout(id).unwrap().expect("layout present");
+        let got = store
+            .get_workspace_layout(id)
+            .unwrap()
+            .expect("layout present");
         assert_eq!(got.0.leaves().len(), 2);
         assert_eq!(got.1, focus);
     }
@@ -1046,14 +1051,21 @@ mod tests {
     #[test]
     fn get_workspace_layout_returns_none_when_absent() {
         let store = Store::open_in_memory().unwrap();
-        assert!(store.get_workspace_layout(WorkspaceId(999)).unwrap().is_none());
+        assert!(
+            store
+                .get_workspace_layout(WorkspaceId(999))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn archiving_workspace_cascades_to_layout_row() {
         use crate::ui::split::SplitTree;
         let store = Store::open_in_memory().unwrap();
-        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/r"), "r", "x")
+            .unwrap();
         let id = store
             .insert_workspace(&NewWorkspace {
                 repo_id: repo,
@@ -1064,7 +1076,9 @@ mod tests {
                 agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
-        store.set_workspace_layout(id, &SplitTree::Leaf(id), &[]).unwrap();
+        store
+            .set_workspace_layout(id, &SplitTree::Leaf(id), &[])
+            .unwrap();
         store.delete_workspace(id).unwrap();
         assert!(store.get_workspace_layout(id).unwrap().is_none());
     }
@@ -1073,7 +1087,9 @@ mod tests {
     fn set_workspace_layout_replaces_existing() {
         use crate::ui::split::{SplitDirection, SplitTree};
         let store = Store::open_in_memory().unwrap();
-        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/r"), "r", "x")
+            .unwrap();
         let id = store
             .insert_workspace(&NewWorkspace {
                 repo_id: repo,
@@ -1096,7 +1112,9 @@ mod tests {
     #[test]
     fn get_workspace_layout_returns_none_on_corrupted_json_and_deletes_row() {
         let store = Store::open_in_memory().unwrap();
-        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/r"), "r", "x")
+            .unwrap();
         let id = store
             .insert_workspace(&NewWorkspace {
                 repo_id: repo,
@@ -1131,7 +1149,9 @@ mod tests {
     fn list_multi_pane_layout_anchors_returns_only_multi_leaf_layouts() {
         use crate::ui::split::{SplitDirection, SplitTree};
         let store = Store::open_in_memory().unwrap();
-        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/r"), "r", "x")
+            .unwrap();
         let a = store
             .insert_workspace(&NewWorkspace {
                 repo_id: repo,
@@ -1153,7 +1173,9 @@ mod tests {
             })
             .unwrap();
         // a: single-leaf layout (should NOT appear).
-        store.set_workspace_layout(a, &SplitTree::Leaf(a), &[]).unwrap();
+        store
+            .set_workspace_layout(a, &SplitTree::Leaf(a), &[])
+            .unwrap();
         // b: two-leaf layout (should appear).
         let mut pair = SplitTree::Leaf(b);
         pair.split(&[], SplitDirection::Vertical, a);

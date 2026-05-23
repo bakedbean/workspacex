@@ -612,7 +612,10 @@ mod tests {
     fn splittree_serde_round_trip_preserves_nested_structure() {
         let mut tree = SplitTree::Leaf(wid(1));
         assert!(tree.split(&[], SplitDirection::Vertical, wid(2)).is_some());
-        assert!(tree.split(&[1], SplitDirection::Horizontal, wid(3)).is_some());
+        assert!(
+            tree.split(&[1], SplitDirection::Horizontal, wid(3))
+                .is_some()
+        );
         let json = serde_json::to_string(&tree).expect("serialize");
         let back: SplitTree = serde_json::from_str(&json).expect("deserialize");
         let a = tree.layout(Rect::new(0, 0, 80, 24));
@@ -657,7 +660,9 @@ mod tests {
         fn no_singleton_splits(t: &SplitTree) {
             if let SplitTree::Split { children, .. } = t {
                 assert!(children.len() >= 2, "found singleton split");
-                for c in children { no_singleton_splits(c); }
+                for c in children {
+                    no_singleton_splits(c);
+                }
             }
         }
         no_singleton_splits(&tree);

@@ -126,8 +126,14 @@ pub fn render(
     // "right-pad name then append badge" approach buried the badge in
     // the column gap next to the branch glyph, where it was easy to
     // miss.
+    // The nf-cod-split_horizontal codicon (U+EBB0) renders as a
+    // 2-cell-wide glyph in most nerd-font terminals, so the badge
+    // consumes 3 display cells: 1 leading space + 2 cells for the
+    // glyph. Reserving only 2 cells (the naive `chars().count()`)
+    // caused the second half of the codicon to be clipped by the
+    // following column on narrow displays.
     let layout_badge_width = if inputs.has_multi_pane_layout && inputs.nerd_fonts {
-        2 // " " + codicon
+        3
     } else {
         0
     };

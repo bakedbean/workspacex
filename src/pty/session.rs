@@ -518,16 +518,28 @@ pub fn build_pi_command(
         //   2. WSX_PI_PROVIDER — scope to that provider via `--models "<p>/*"`
         //      (plural `--models` accepts globs; singular `--model` does not).
         //   3. Default to the deepseek provider.
-        if let Ok(model) = std::env::var("WSX_PI_MODEL") {
+        //
+        // Empty/whitespace env var values are treated as unset — shells expand
+        // `export FOO=$BAR` to "" when $BAR is unset, and we don't want to
+        // emit `--model ""` (re-triggers the pi short-circuit) or `--models
+        // "/*"` (malformed glob).
+        let model = std::env::var("WSX_PI_MODEL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let provider = std::env::var("WSX_PI_PROVIDER")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if let Some(model) = model {
             cmd.arg("--model");
             cmd.arg(&model);
-            if let Ok(provider) = std::env::var("WSX_PI_PROVIDER") {
+            if let Some(provider) = provider {
                 cmd.arg("--provider");
                 cmd.arg(&provider);
             }
         } else {
-            let provider =
-                std::env::var("WSX_PI_PROVIDER").unwrap_or_else(|_| "deepseek".to_string());
+            let provider = provider.unwrap_or_else(|| "deepseek".to_string());
             cmd.arg("--models");
             cmd.arg(format!("{provider}/*"));
         }
@@ -761,8 +773,62 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
     use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
     use std::time::Duration;
+
+    // Several tests in this module mutate process-global env vars
+    // (WSX_PI_MODEL, WSX_PI_PROVIDER, WSX_CLAUDE_BIN). They must not run in
+    // parallel, or one's restore clobbers another's setup. Mirrors the
+    // EnvGuard pattern in src/pm.rs::tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// RAII guard for env-mutating tests: acquires `ENV_LOCK`, stashes the
+    /// original value of any env var it sets/removes, and restores them on
+    /// drop — even on panic — so a failed assertion can't leak stale env
+    /// into subsequent tests.
+    struct EnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved: Vec<(String, Option<OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            Self {
+                _lock: lock,
+                saved: Vec::new(),
+            }
+        }
+
+        fn set(&mut self, key: &str, value: impl AsRef<OsStr>) {
+            self.saved.push((key.to_string(), std::env::var_os(key)));
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+
+        fn remove(&mut self, key: &str) {
+            self.saved.push((key.to_string(), std::env::var_os(key)));
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, prior) in self.saved.drain(..).rev() {
+                unsafe {
+                    match prior {
+                        Some(v) => std::env::set_var(&key, v),
+                        None => std::env::remove_var(&key),
+                    }
+                }
+            }
+        }
+    }
 
     fn echo_bin() -> &'static str {
         if std::path::Path::new("/usr/bin/cat").exists() {
@@ -1624,9 +1690,10 @@ mod tests {
         s.kill();
     }
 
-    // All three branches in one test: env vars are process-global and the
-    // function reads them at call time, so splitting these into separate
-    // #[test] fns would race under cargo test's default parallelism.
+    // All branches in one test: env vars are process-global and the function
+    // reads them at call time, so splitting these into separate #[test] fns
+    // would only race within ENV_LOCK anyway. EnvGuard restores values on
+    // drop, so panicking assertions can't leak state into other tests.
     #[test]
     fn build_pi_command_passes_model_selection() {
         let cwd = PathBuf::from(".");
@@ -1637,78 +1704,80 @@ mod tests {
             yolo: false,
         };
 
+        let argv_of = |env: &mut EnvGuard, mode: &SpawnMode| -> Vec<String> {
+            let _ = env;
+            let cmd = build_pi_command(&cwd, mode, crate::remote_control::RemoteOpts::disabled());
+            cmd.get_argv()
+                .iter()
+                .map(|s| s.to_string_lossy().into_owned())
+                .collect()
+        };
+
         // 1. Default (no env vars) → --models "deepseek/*"
-        unsafe {
-            std::env::remove_var("WSX_PI_MODEL");
-            std::env::remove_var("WSX_PI_PROVIDER");
+        {
+            let mut env = EnvGuard::new();
+            env.remove("WSX_PI_MODEL");
+            env.remove("WSX_PI_PROVIDER");
+            let argv = argv_of(&mut env, &mode);
+            let models_idx = argv
+                .iter()
+                .position(|a| a == "--models")
+                .unwrap_or_else(|| panic!("expected --models in {argv:?}"));
+            assert_eq!(argv[models_idx + 1], "deepseek/*");
+            assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
         }
-        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
-        let argv: Vec<String> = cmd
-            .get_argv()
-            .iter()
-            .map(|s| s.to_string_lossy().into_owned())
-            .collect();
-        let models_idx = argv
-            .iter()
-            .position(|a| a == "--models")
-            .unwrap_or_else(|| panic!("expected --models in {argv:?}"));
-        assert_eq!(argv[models_idx + 1], "deepseek/*");
-        assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
-        assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
 
         // 2. WSX_PI_PROVIDER set → --models "<provider>/*"
-        unsafe {
-            std::env::set_var("WSX_PI_PROVIDER", "anthropic");
+        {
+            let mut env = EnvGuard::new();
+            env.remove("WSX_PI_MODEL");
+            env.set("WSX_PI_PROVIDER", "anthropic");
+            let argv = argv_of(&mut env, &mode);
+            let models_idx = argv.iter().position(|a| a == "--models").unwrap();
+            assert_eq!(argv[models_idx + 1], "anthropic/*");
         }
-        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
-        let argv: Vec<String> = cmd
-            .get_argv()
-            .iter()
-            .map(|s| s.to_string_lossy().into_owned())
-            .collect();
-        let models_idx = argv.iter().position(|a| a == "--models").unwrap();
-        assert_eq!(argv[models_idx + 1], "anthropic/*");
 
         // 3. WSX_PI_MODEL set → --model <value>, with --provider also forwarded
-        unsafe {
-            std::env::set_var("WSX_PI_MODEL", "deepseek/deepseek-v4-pro");
+        {
+            let mut env = EnvGuard::new();
+            env.set("WSX_PI_PROVIDER", "anthropic");
+            env.set("WSX_PI_MODEL", "deepseek/deepseek-v4-pro");
+            let argv = argv_of(&mut env, &mode);
+            let model_idx = argv.iter().position(|a| a == "--model").unwrap();
+            assert_eq!(argv[model_idx + 1], "deepseek/deepseek-v4-pro");
+            let provider_idx = argv.iter().position(|a| a == "--provider").unwrap();
+            assert_eq!(argv[provider_idx + 1], "anthropic");
+            assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
         }
-        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
-        let argv: Vec<String> = cmd
-            .get_argv()
-            .iter()
-            .map(|s| s.to_string_lossy().into_owned())
-            .collect();
-        let model_idx = argv.iter().position(|a| a == "--model").unwrap();
-        assert_eq!(argv[model_idx + 1], "deepseek/deepseek-v4-pro");
-        let provider_idx = argv.iter().position(|a| a == "--provider").unwrap();
-        assert_eq!(argv[provider_idx + 1], "anthropic");
-        assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
 
-        // 4. Continue mode → no model/provider flags at all (pi reuses session)
-        let cont_mode = SpawnMode::Continue {
-            custom_instructions: None,
-            additional_dirs: vec![],
-            yolo: false,
-        };
-        let cmd = build_pi_command(
-            &cwd,
-            &cont_mode,
-            crate::remote_control::RemoteOpts::disabled(),
-        );
-        let argv: Vec<String> = cmd
-            .get_argv()
-            .iter()
-            .map(|s| s.to_string_lossy().into_owned())
-            .collect();
-        assert!(argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
-        assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
-        assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
-        assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
+        // 4. Empty/whitespace env values → treated as unset, fall back to default
+        {
+            let mut env = EnvGuard::new();
+            env.set("WSX_PI_MODEL", "   ");
+            env.set("WSX_PI_PROVIDER", "");
+            let argv = argv_of(&mut env, &mode);
+            let models_idx = argv.iter().position(|a| a == "--models").unwrap();
+            assert_eq!(argv[models_idx + 1], "deepseek/*");
+            assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
+        }
 
-        unsafe {
-            std::env::remove_var("WSX_PI_MODEL");
-            std::env::remove_var("WSX_PI_PROVIDER");
+        // 5. Continue mode → no model/provider flags at all (pi reuses session)
+        {
+            let mut env = EnvGuard::new();
+            env.set("WSX_PI_PROVIDER", "anthropic");
+            env.set("WSX_PI_MODEL", "claude-opus-4-7");
+            let cont_mode = SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let argv = argv_of(&mut env, &cont_mode);
+            assert!(argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
         }
     }
 }

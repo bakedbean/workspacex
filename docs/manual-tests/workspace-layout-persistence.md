@@ -11,8 +11,9 @@ real PTY.
    existing split entry point).
 3. Press `Ctrl-x Esc` to park the layout.
 4. Confirm you are back on the dashboard and that workspace A's row
-   shows the `split_horizontal` codicon (right of the name; only
-   visible with nerd fonts).
+   shows the `split_horizontal` codicon (at the start of the branch
+   column, immediately before the branch glyph; only visible with
+   nerd fonts).
 5. Press `Enter` on workspace A.
 6. Expect: the (A | B) layout restores with both PTYs live.
 

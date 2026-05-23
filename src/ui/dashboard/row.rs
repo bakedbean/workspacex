@@ -119,29 +119,17 @@ pub fn render(
         theme.status_style(inputs.status),
     ));
 
-    // 4: name (with badges and YOLO styling). Badges sit IMMEDIATELY
-    // after the visible name characters (then trailing padding fills
-    // the rest of `name_width`), so they remain attached to the name
-    // even when the name is short or truncated to `…`. The earlier
-    // "right-pad name then append badge" approach buried the badge in
-    // the column gap next to the branch glyph, where it was easy to
-    // miss.
-    // The nf-cod-split_horizontal codicon (U+EBB0) renders as a
-    // 2-cell-wide glyph in most nerd-font terminals, so the badge
-    // consumes 3 display cells: 1 leading space + 2 cells for the
-    // glyph. Reserving only 2 cells (the naive `chars().count()`)
-    // caused the second half of the codicon to be clipped by the
-    // following column on narrow displays.
-    let layout_badge_width = if inputs.has_multi_pane_layout && inputs.nerd_fonts {
-        3
-    } else {
-        0
-    };
+    // 4: name (with setup-failed badge and YOLO styling). The badge
+    // sits IMMEDIATELY after the visible name characters (then trailing
+    // padding fills the rest of `name_width`) so it stays attached to
+    // the name even when the name is short or truncated to `…`. The
+    // multi-pane-layout codicon used to live here too, but on narrow
+    // displays the name truncated to `…` AND the codicon's trailing
+    // cell still got clipped by the column edge. It now lives at the
+    // START of the branch column where it never has to fight name
+    // truncation for space.
     let setup_badge_width = if inputs.setup_failed { 3 } else { 0 };
-    let name_target = name_width
-        .saturating_sub(setup_badge_width)
-        .saturating_sub(layout_badge_width)
-        .max(1);
+    let name_target = name_width.saturating_sub(setup_badge_width).max(1);
     let name_truncated = truncate(&inputs.name, name_target);
     let name_visible_width = name_truncated.chars().count();
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
@@ -152,15 +140,25 @@ pub fn render(
     if inputs.setup_failed {
         spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
     }
-    if inputs.has_multi_pane_layout && inputs.nerd_fonts {
-        spans.push(Span::styled(" \u{ebb0}".to_string(), theme.dim_style()));
-    }
-    let consumed = name_visible_width + setup_badge_width + layout_badge_width;
+    let consumed = name_visible_width + setup_badge_width;
     if consumed < name_width {
         spans.push(Span::raw(" ".repeat(name_width - consumed)));
     }
 
-    // 5: branch
+    // 5: branch — optionally prefixed by the multi-pane-layout codicon.
+    // The nf-cod-split_horizontal codicon (U+EBB0) renders as a 2-cell
+    // glyph in most nerd-font terminals, so the prefix consumes 3
+    // display cells: 2 for the glyph + 1 trailing space. The branch
+    // text target shrinks by that amount so the total span width still
+    // equals `branch_width` and downstream columns stay aligned.
+    let layout_badge_width = if inputs.has_multi_pane_layout && inputs.nerd_fonts {
+        3
+    } else {
+        0
+    };
+    if inputs.has_multi_pane_layout && inputs.nerd_fonts {
+        spans.push(Span::styled("\u{ebb0} ".to_string(), theme.dim_style()));
+    }
     let branch_glyph = if inputs.nerd_fonts {
         match inputs.lifecycle {
             Some(BranchLifecycle::PrMerged) => "\u{f419}",
@@ -173,7 +171,8 @@ pub fn render(
         "⎇"
     };
     let branch_text = format!("{} {}", branch_glyph, inputs.branch);
-    let branch_padded = truncate_pad(&branch_text, branch_width);
+    let branch_target = branch_width.saturating_sub(layout_badge_width).max(1);
+    let branch_padded = truncate_pad(&branch_text, branch_target);
     let branch_style = theme
         .lifecycle_style(inputs.lifecycle)
         .unwrap_or_else(|| theme.dim_style());
@@ -614,40 +613,75 @@ mod tests {
     }
 
     #[test]
-    fn name_shrinks_to_accommodate_layout_badge() {
+    fn name_column_is_not_shrunk_by_layout_badge() {
+        // The layout badge lives in the branch column now, so the name
+        // column gets its full width even when the badge is showing.
+        // This is the whole point of the move: on narrow displays the
+        // name no longer has to give up cells (and then truncate to
+        // `…`) just so the codicon can fit.
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.nerd_fonts = true;
         inputs.has_multi_pane_layout = true;
-        inputs.name = "this-is-a-pretty-long-workspace-name-indeed".into();
+        inputs.name = "exactly-24-characterz!!!".into(); // 24 chars = DEFAULT_NAME_WIDTH
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
-        assert!(text.contains("\u{ebb0}"));
-        assert!(text.contains("…"), "long name truncated to fit: {text:?}");
+        assert!(
+            text.contains("exactly-24-characterz!!!"),
+            "full name fits when badge is in branch col: {text:?}"
+        );
+        assert!(
+            !text.contains("exactly-24-characterz!!…"),
+            "name should not be truncated to make room for badge: {text:?}"
+        );
     }
 
     #[test]
-    fn layout_badge_sits_immediately_after_visible_name_not_at_column_edge() {
-        // Regression guard for the "badge invisible on narrow displays"
-        // bug: when the name is short, the codicon must appear right
-        // after the visible name characters (with trailing padding
-        // filling the rest of the name column), not at the far right
-        // edge of the column where the branch glyph follows immediately.
+    fn layout_badge_sits_at_start_of_branch_column_before_branch_glyph() {
+        // Regression guard for the "badge clipped on narrow displays"
+        // bug: when the name is short, the codicon used to sit at the
+        // far end of the name column where its second cell could be
+        // clipped by the following column. It now lives at the start
+        // of the branch column, immediately before the branch glyph,
+        // where it is never truncated.
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.nerd_fonts = true;
         inputs.has_multi_pane_layout = true;
-        inputs.name = "alpha".into();
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
-        let name_pos = text.find("alpha").expect("name present");
-        let codicon_pos = text
-            .find('\u{ebb0}')
-            .expect("codicon present with nerd fonts on");
-        let gap = codicon_pos - (name_pos + "alpha".len());
         assert!(
-            gap <= 1,
-            "codicon should follow the name with at most one space, got gap={gap}: {text:?}"
+            text.contains("\u{ebb0} \u{e0a0}"),
+            "codicon should sit immediately before branch glyph, \
+             separated only by one space: {text:?}"
+        );
+    }
+
+    #[test]
+    fn branch_text_shrinks_to_accommodate_layout_badge() {
+        // The badge takes cells from the branch column's text target,
+        // so a long branch name shows fewer characters on rows that
+        // have a saved layout. The total branch-column width is
+        // unchanged, so downstream columns stay aligned.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.branch = "bakedbean/a-fairly-long-branch-name-here".into();
+        inputs.has_multi_pane_layout = true;
+        let with_badge_text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        inputs.has_multi_pane_layout = false;
+        let without_badge_text =
+            line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        // Without the badge, more branch characters fit before the
+        // truncation ellipsis — pick a substring that lands inside the
+        // unbadged truncation window but outside the badged one.
+        assert!(
+            without_badge_text.contains("a-fairly-long-b"),
+            "without badge, branch shows further into the name: {without_badge_text:?}"
+        );
+        assert!(
+            !with_badge_text.contains("a-fairly-long-b"),
+            "with badge, branch truncates earlier (badge took 3 cells): {with_badge_text:?}"
         );
     }
 

@@ -402,34 +402,23 @@ impl App {
 
     /// If the workspace has any pending tool_use that is a real permission
     /// prompt (NOT AskUserQuestion / ExitPlanMode, which are question tools
-    /// surfaced separately as AwaitingAnswer), return the oldest pending
-    /// tool's (name, first-seen epoch ms). Returns None otherwise.
+    /// surfaced separately as AwaitingAnswer, and NOT Agent subagent
+    /// dispatches, which run for minutes by design), return the oldest
+    /// pending tool's (name, first-seen epoch ms). Returns None otherwise.
     ///
     /// 3 seconds is well past the latency of any auto-approved tool, so a
-    /// pending entry that crosses that threshold is almost certainly waiting
-    /// on a permission prompt the user needs to address.
+    /// pending entry that crosses that threshold is usually waiting on a
+    /// permission prompt — but the classifier additionally suppresses this
+    /// signal when the PTY is still actively streaming (see
+    /// `Status::classify`) to avoid false positives from long-running
+    /// shell commands.
     pub fn awaiting_permission(&self, ws_id: crate::store::WorkspaceId) -> Option<(String, i64)> {
         let evt = self.workspace_events.get(&ws_id)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        const STALE_MS: i64 = 3000;
-        let mut oldest: Option<(&str, i64)> = None;
-        for (name, ts) in evt.pending_tool_uses.values() {
-            if name == "AskUserQuestion" || name == "ExitPlanMode" {
-                continue;
-            }
-            let age = now - *ts;
-            if age >= STALE_MS {
-                match oldest {
-                    None => oldest = Some((name.as_str(), *ts)),
-                    Some((_, t)) if *ts < t => oldest = Some((name.as_str(), *ts)),
-                    _ => {}
-                }
-            }
-        }
-        oldest.map(|(n, ts)| (n.to_string(), ts))
+        evt.pending_permission_tool(now, 3_000)
     }
 
     /// Classify a workspace into the V5 dashboard `Status` vocabulary.
@@ -446,16 +435,21 @@ impl App {
                 crate::pty::session::SessionStatus::Running { .. }
             )
         });
-        let secs = session.as_ref().map(|s| {
+        // Returns `None` (not `Some(0)`) when the session is attached but
+        // no PTY output has been observed yet, so `Status::classify`'s
+        // PTY-active guard treats it as "unknown" rather than "fresh
+        // output" — otherwise a permission prompt that fires before the
+        // first PTY byte would be misclassified as Thinking.
+        let secs = session.as_ref().and_then(|s| {
             let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
             if last == 0 {
-                return 0;
+                return None;
             }
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
-            now.saturating_sub(last) / 1000
+            Some(now.saturating_sub(last) / 1000)
         });
         // `has_prior_session` does filesystem I/O (canonicalize +
         // read_dir); skip it when we already have a live session, since

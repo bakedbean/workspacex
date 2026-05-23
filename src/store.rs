@@ -74,6 +74,7 @@ pub struct Store {
 impl Store {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         let store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -478,11 +479,13 @@ impl Store {
         tree: &crate::ui::split::SplitTree,
         focus: &[usize],
     ) -> Result<()> {
-        // SplitTree and Vec<usize> have no exotic Serialize impls (no maps
-        // with non-string keys, no floats, no custom serializers) — calling
-        // `to_string` on them is infallible in practice.
-        let tree_json = serde_json::to_string(tree).expect("SplitTree serialize is infallible");
-        let focus_json = serde_json::to_string(focus).expect("FocusPath serialize is infallible");
+        // Serialization is `?`-propagated rather than `.expect()`-ed:
+        // serde_json's default 128-deep recursion limit makes a hostile
+        // tree theoretically capable of erroring, and a save-flow panic
+        // would crash the TUI. Callers (see `save_layout_for`) already
+        // log + degrade on save failure.
+        let tree_json = serde_json::to_string(tree)?;
+        let focus_json = serde_json::to_string(focus)?;
         self.conn.execute(
             "INSERT OR REPLACE INTO workspace_layouts
                 (anchor_workspace_id, tree_json, focus_json, updated_at)
@@ -540,13 +543,28 @@ impl Store {
             .prepare("SELECT anchor_workspace_id, tree_json FROM workspace_layouts ORDER BY anchor_workspace_id")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
         let mut out = Vec::new();
+        let mut corrupt: Vec<i64> = Vec::new();
         for row in rows {
             let (anchor, tree_json) = row?;
-            if let Ok(tree) = serde_json::from_str::<crate::ui::split::SplitTree>(&tree_json) {
-                if tree.leaves().len() > 1 {
-                    out.push(WorkspaceId(anchor));
+            match serde_json::from_str::<crate::ui::split::SplitTree>(&tree_json) {
+                Ok(tree) => {
+                    if tree.leaves().len() > 1 {
+                        out.push(WorkspaceId(anchor));
+                    }
                 }
+                Err(_) => corrupt.push(anchor),
             }
+        }
+        drop(stmt);
+        for anchor in corrupt {
+            tracing::warn!(
+                anchor,
+                "workspace_layouts row failed to parse during list; deleting corrupt entry"
+            );
+            self.conn.execute(
+                "DELETE FROM workspace_layouts WHERE anchor_workspace_id = ?1",
+                [anchor],
+            )?;
         }
         Ok(out)
     }
@@ -1182,5 +1200,43 @@ mod tests {
         store.set_workspace_layout(b, &pair, &[1]).unwrap();
         let got = store.list_multi_pane_layout_anchors().unwrap();
         assert_eq!(got, vec![b], "only multi-pane anchors returned");
+    }
+
+    #[test]
+    fn list_multi_pane_layout_anchors_deletes_corrupt_rows() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/r"), "r", "x")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        // Plant a corrupt row directly.
+        store
+            .conn
+            .execute(
+                "INSERT INTO workspace_layouts (anchor_workspace_id, tree_json, focus_json, updated_at)
+                 VALUES (?1, 'not-json', '[]', 0)",
+                [id.0],
+            )
+            .unwrap();
+        let got = store.list_multi_pane_layout_anchors().unwrap();
+        assert!(got.is_empty(), "corrupt row not returned");
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT count(*) FROM workspace_layouts WHERE anchor_workspace_id = ?1",
+                [id.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "corrupt row deleted by the listing call");
     }
 }

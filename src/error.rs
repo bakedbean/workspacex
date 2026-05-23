@@ -14,6 +14,8 @@ pub enum Error {
     Setup(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("serde: {0}")]
+    Serde(#[from] serde_json::Error),
     #[error("invalid input: {0}")]
     UserInput(String),
     #[error("cancelled")]

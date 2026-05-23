@@ -11,7 +11,7 @@ real PTY.
    existing split entry point).
 3. Press `Ctrl-x Esc` to park the layout.
 4. Confirm you are back on the dashboard and that workspace A's row
-   shows the `split_horizontal` codicon (at the start of the branch
+   shows the `nf-fa-columns` glyph (at the start of the branch
    column, immediately before the branch glyph; only visible with
    nerd fonts).
 5. Press `Enter` on workspace A.

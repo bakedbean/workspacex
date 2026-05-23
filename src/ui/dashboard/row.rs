@@ -123,11 +123,11 @@ pub fn render(
     // sits IMMEDIATELY after the visible name characters (then trailing
     // padding fills the rest of `name_width`) so it stays attached to
     // the name even when the name is short or truncated to `…`. The
-    // multi-pane-layout codicon used to live here too, but on narrow
-    // displays the name truncated to `…` AND the codicon's trailing
-    // cell still got clipped by the column edge. It now lives at the
-    // START of the branch column where it never has to fight name
-    // truncation for space.
+    // multi-pane-layout glyph used to live here too, but on narrow
+    // displays the name truncated to `…` AND the glyph could be
+    // clipped by the column edge. It now lives at the START of the
+    // branch column where it never has to fight name truncation for
+    // space.
     let setup_badge_width = if inputs.setup_failed { 3 } else { 0 };
     let name_target = name_width.saturating_sub(setup_badge_width).max(1);
     let name_truncated = truncate(&inputs.name, name_target);
@@ -145,19 +145,19 @@ pub fn render(
         spans.push(Span::raw(" ".repeat(name_width - consumed)));
     }
 
-    // 5: branch — optionally prefixed by the multi-pane-layout codicon.
-    // The nf-cod-split_horizontal codicon (U+EBB0) renders as a 2-cell
-    // glyph in most nerd-font terminals, so the prefix consumes 3
-    // display cells: 2 for the glyph + 1 trailing space. The branch
-    // text target shrinks by that amount so the total span width still
+    // 5: branch — optionally prefixed by the multi-pane-layout glyph.
+    // The nf-fa-columns glyph (U+F0DB) renders as a 1-cell glyph in
+    // most nerd-font terminals, so the prefix consumes 2 display
+    // cells: 1 for the glyph + 1 trailing space. The branch text
+    // target shrinks by that amount so the total span width still
     // equals `branch_width` and downstream columns stay aligned.
     let layout_badge_width = if inputs.has_multi_pane_layout && inputs.nerd_fonts {
-        3
+        2
     } else {
         0
     };
     if inputs.has_multi_pane_layout && inputs.nerd_fonts {
-        spans.push(Span::styled("\u{ebb0} ".to_string(), theme.dim_style()));
+        spans.push(Span::styled("\u{f0db} ".to_string(), theme.dim_style()));
     }
     let branch_glyph = if inputs.nerd_fonts {
         match inputs.lifecycle {
@@ -572,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_pane_layout_appends_codicon_when_nerd_fonts() {
+    fn multi_pane_layout_appends_columns_glyph_when_nerd_fonts() {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.nerd_fonts = true;
@@ -580,8 +580,8 @@ mod tests {
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(
-            text.contains("\u{ebb0}"),
-            "split_horizontal codicon present: {text:?}"
+            text.contains("\u{f0db}"),
+            "nf-fa-columns glyph present: {text:?}"
         );
     }
 
@@ -594,8 +594,8 @@ mod tests {
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(
-            !text.contains("\u{ebb0}"),
-            "codicon should not render without nerd fonts: {text:?}"
+            !text.contains("\u{f0db}"),
+            "columns glyph should not render without nerd fonts: {text:?}"
         );
     }
 
@@ -609,7 +609,7 @@ mod tests {
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("⚙!"), "setup badge present: {text:?}");
-        assert!(text.contains("\u{ebb0}"), "layout badge present: {text:?}");
+        assert!(text.contains("\u{f0db}"), "layout badge present: {text:?}");
     }
 
     #[test]
@@ -618,7 +618,7 @@ mod tests {
         // column gets its full width even when the badge is showing.
         // This is the whole point of the move: on narrow displays the
         // name no longer has to give up cells (and then truncate to
-        // `…`) just so the codicon can fit.
+        // `…`) just so the glyph can fit.
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.nerd_fonts = true;
@@ -639,11 +639,10 @@ mod tests {
     #[test]
     fn layout_badge_sits_at_start_of_branch_column_before_branch_glyph() {
         // Regression guard for the "badge clipped on narrow displays"
-        // bug: when the name is short, the codicon used to sit at the
-        // far end of the name column where its second cell could be
-        // clipped by the following column. It now lives at the start
-        // of the branch column, immediately before the branch glyph,
-        // where it is never truncated.
+        // bug: the layout glyph used to sit at the far end of the name
+        // column where it could be clipped by the following column. It
+        // now lives at the start of the branch column, immediately
+        // before the branch glyph, where it is never truncated.
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.nerd_fonts = true;
@@ -651,8 +650,8 @@ mod tests {
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(
-            text.contains("\u{ebb0} \u{e0a0}"),
-            "codicon should sit immediately before branch glyph, \
+            text.contains("\u{f0db} \u{e0a0}"),
+            "columns glyph should sit immediately before branch glyph, \
              separated only by one space: {text:?}"
         );
     }

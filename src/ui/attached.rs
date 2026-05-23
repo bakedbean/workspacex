@@ -1,6 +1,7 @@
 use crate::pinned::{PinnedCommand, truncate_label};
 use crate::pty::render::render_screen;
 use crate::pty::session::Session;
+use crate::ui::split::{Divider, SplitDirection};
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
@@ -38,6 +39,7 @@ pub struct PaneSpec<'a> {
 pub fn render_panes(
     f: &mut Frame,
     panes: &[PaneSpec<'_>],
+    dividers: &[Divider],
     chip_area: Rect,
     status_area: Rect,
     footer_area: Rect,
@@ -52,6 +54,8 @@ pub fn render_panes(
     for pane in panes {
         render_one_pane(f, pane, show_titles, theme);
     }
+
+    render_dividers(f, dividers, theme);
 
     if let Some(line) = attention_line {
         f.render_widget(Paragraph::new(line), status_area);
@@ -123,6 +127,45 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
         }
     }
     drop(parser);
+}
+
+/// Draw subtle 1-cell dividers between adjacent split panes. Vertical
+/// dividers (between side-by-side panes) use `│`, horizontal dividers
+/// (between stacked panes) use `─`, both in the muted `path` color so
+/// they read as chrome, not content.
+fn render_dividers(f: &mut Frame, dividers: &[Divider], theme: &Theme) {
+    if dividers.is_empty() {
+        return;
+    }
+    let style = Style::default().fg(theme.path);
+    let buf = f.buffer_mut();
+    for div in dividers {
+        let (glyph, w, h) = match div.direction {
+            SplitDirection::Vertical => ("│", 1u16, div.rect.height),
+            SplitDirection::Horizontal => ("─", div.rect.width, 1u16),
+        };
+        if w == 0 || h == 0 {
+            continue;
+        }
+        match div.direction {
+            SplitDirection::Vertical => {
+                let x = div.rect.x;
+                for y in div.rect.y..div.rect.y.saturating_add(h) {
+                    if buf.area().contains((x, y).into()) {
+                        buf[(x, y)].set_symbol(glyph).set_style(style);
+                    }
+                }
+            }
+            SplitDirection::Horizontal => {
+                let y = div.rect.y;
+                for x in div.rect.x..div.rect.x.saturating_add(w) {
+                    if buf.area().contains((x, y).into()) {
+                        buf[(x, y)].set_symbol(glyph).set_style(style);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Carve the attached view's full `area` into pane / chip / status /

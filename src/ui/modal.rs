@@ -75,7 +75,10 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
     f.render_widget(Clear, rect);
     let (title, body) = match modal {
         Modal::NewWorkspace {
-            name_buffer, yolo, agent, ..
+            name_buffer,
+            yolo,
+            agent,
+            ..
         } => {
             let agent_label = match agent {
                 crate::pty::session::AgentKind::Claude => "claude",

@@ -1489,11 +1489,15 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         app.z_leader_pending = false;
         match (k.code, k.modifiers) {
             (KeyCode::Char('z'), _) => toggle_focused_fold(app),
-            (KeyCode::Char('a'), _) => expand_all_repos(app),
+            // Vim `zr` / `zR` (reduce fold / open all folds).
+            (KeyCode::Char('r'), _) | (KeyCode::Char('R'), _) | (KeyCode::Char('a'), _) => {
+                expand_all_repos(app)
+            }
             // Match bare `Char('M')` (no SHIFT guard) to match the
             // codebase convention for capital-letter binds like `G` —
             // some terminals + CapsLock report uppercase without SHIFT.
-            (KeyCode::Char('M'), _) => fold_all_repos(app),
+            // Also accept lowercase `m` (Vim `zm`) for muscle-memory compat.
+            (KeyCode::Char('M'), _) | (KeyCode::Char('m'), _) => fold_all_repos(app),
             _ => {} // Esc, unknown key, anything else: just clear.
         }
         return Ok(());
@@ -1947,7 +1951,13 @@ fn build_spawn_info(
             yolo,
         }
     };
-    Some((ws_id, ws.worktree_path.clone(), mode, repo.path.clone(), agent))
+    Some((
+        ws_id,
+        ws.worktree_path.clone(),
+        mode,
+        repo.path.clone(),
+        agent,
+    ))
 }
 
 /// Best-effort MCP server mirror. Logs and continues on any failure.
@@ -2388,7 +2398,9 @@ async fn handle_key_modal(
                         // Mirror the dashboard-attach flow: clear the
                         // alert, spawn (or resume) the PTY, switch view.
                         app.workspace_needs_attention.remove(&ws_id);
-                        if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
+                        if let Some((id, path, mode, repo_path, agent)) =
+                            build_spawn_info(app, ws_id)
+                        {
                             maybe_mirror_mcp(app, &repo_path, &path);
                             let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
@@ -2409,7 +2421,9 @@ async fn handle_key_modal(
                     };
                     if let Some(ws_id) = order.get(selected_now).copied() {
                         app.workspace_needs_attention.remove(&ws_id);
-                        if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
+                        if let Some((id, path, mode, repo_path, agent)) =
+                            build_spawn_info(app, ws_id)
+                        {
                             maybe_mirror_mcp(app, &repo_path, &path);
                             let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
@@ -2762,12 +2776,8 @@ pub async fn branch_drift_poll(app: SharedApp) {
             //
             // Branches on per-workspace agent kind.
             let current_file = match ws_agent {
-                crate::pty::session::AgentKind::Claude => {
-                    crate::events::locate_session_file(&path)
-                }
-                crate::pty::session::AgentKind::Pi => {
-                    crate::pi_events::locate_session_file(&path)
-                }
+                crate::pty::session::AgentKind::Claude => crate::events::locate_session_file(&path),
+                crate::pty::session::AgentKind::Pi => crate::pi_events::locate_session_file(&path),
             };
             let prev_offset = {
                 let g = app.lock().await;

@@ -1,7 +1,9 @@
 //! Tail pi session JSONL files for activity events.
 //!
 //! Pi stores sessions at `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`,
-//! where the cwd encoding replaces `/` with `-` and wraps with `--`.
+//! where the cwd encoding strips the leading `/`, replaces remaining `/` with
+//! `-`, and wraps with `--`. So `/home/eben` becomes `--home-eben--`, not
+//! `---home-eben--`.
 //!
 //! ## JSONL schema (pi v3)
 //!
@@ -56,9 +58,12 @@ use crate::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
 use std::path::{Path, PathBuf};
 
 /// Encode an absolute path the way pi does for `~/.pi/agent/sessions/`.
-/// Replaces `/` with `-` and wraps with `--`.
+/// Strips the leading `/`, replaces remaining `/` with `-`, and wraps with `--`.
 pub fn encode_cwd(path: &Path) -> String {
-    let inner = path.to_string_lossy().replace('/', "-");
+    let inner = path
+        .to_string_lossy()
+        .trim_start_matches('/')
+        .replace('/', "-");
     format!("--{}--", inner)
 }
 
@@ -386,15 +391,17 @@ mod tests {
     fn encode_cwd_wraps_with_double_dash() {
         let path = Path::new("/home/eben/work");
         let encoded = encode_cwd(path);
-        assert_eq!(encoded, "---home-eben-work--");
+        // Matches pi's actual on-disk encoding (verify with
+        // `ls ~/.pi/agent/sessions/`).
+        assert_eq!(encoded, "--home-eben-work--");
     }
 
     #[test]
     fn encode_cwd_empty_path() {
         let path = Path::new("/");
         let encoded = encode_cwd(path);
-        // "/" → replace '/' with '-' → "-" → wrap with "--" → "-----"
-        assert_eq!(encoded, "-----");
+        // "/" → strip leading '/' → "" → wrap with "--" → "----"
+        assert_eq!(encoded, "----");
     }
 
     #[test]

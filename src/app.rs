@@ -6,7 +6,9 @@ use crate::store::{Repo, Store, Workspace, WorkspaceId};
 use crate::ui::View;
 use crate::ui::dashboard::DashboardState;
 use crate::ui::modal::Modal;
-use crate::ui::split::{Arrow, AttachedState, CloseOutcome, SplitDirection};
+#[cfg(test)]
+use crate::ui::split::AttachedState;
+use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -236,6 +238,10 @@ pub struct App {
     pub workspace_events_scanned: std::collections::HashSet<crate::store::WorkspaceId>,
     /// Workspaces whose alert hasn't been acknowledged (cleared on attach).
     pub workspace_needs_attention: std::collections::HashSet<crate::store::WorkspaceId>,
+    /// Anchors whose saved layout has more than one pane. Used by the
+    /// dashboard to render the split-layout indicator. Recomputed by
+    /// `App::refresh`.
+    pub workspaces_with_multi_pane_layouts: std::collections::HashSet<crate::store::WorkspaceId>,
     /// Processes detected per workspace (cwd inside the workspace's
     /// worktree). Refreshed every ~10s by branch_drift_poll.
     pub workspace_processes:
@@ -309,6 +315,7 @@ impl App {
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
+            workspaces_with_multi_pane_layouts: std::collections::HashSet::new(),
             workspace_processes: std::collections::HashMap::new(),
             tick: 0,
             workspace_diff: std::collections::HashMap::new(),
@@ -385,6 +392,12 @@ impl App {
         if !self.selectable.is_empty() && self.dashboard.selected >= self.selectable.len() {
             self.dashboard.selected = self.selectable.len() - 1;
         }
+        self.workspaces_with_multi_pane_layouts = self
+            .store
+            .list_multi_pane_layout_anchors()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         Ok(())
     }
 
@@ -737,6 +750,9 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         nerd_fonts,
                         workspace_id: ws.id,
+                        has_multi_pane_layout: app
+                            .workspaces_with_multi_pane_layouts
+                            .contains(&ws.id),
                     };
                     workspaces.push(dashboard::WorkspaceItem {
                         repo,
@@ -1535,7 +1551,8 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     maybe_mirror_mcp(app, &repo_path, &path);
                     let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                     let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
-                    app.view = View::Attached(AttachedState::single(id));
+                    let restored = restore_attached_state(app, id);
+                    app.view = View::Attached(restored);
                 }
             }
             Some(SelectionTarget::Repo(id)) => {
@@ -1966,6 +1983,62 @@ fn build_spawn_info(
     ))
 }
 
+fn save_layout_for(app: &mut App, state: crate::ui::AttachedState) {
+    let Some(anchor) = state.leaves().first().copied() else {
+        return;
+    };
+    if let Err(e) = app
+        .store
+        .set_workspace_layout(anchor, &state.tree, &state.focus)
+    {
+        tracing::warn!(error = %e, "failed to save workspace layout");
+    }
+    // Recompute the dashboard indicator cache so the badge updates
+    // immediately when the user returns to the dashboard.
+    let _ = app.refresh();
+}
+
+/// Restore a saved layout for `anchor`, pruning any workspaces that no longer
+/// exist. Spawns missing sessions for surviving side panes. Falls back to a
+/// single-pane view if no layout is saved or all panes were pruned.
+fn restore_attached_state(
+    app: &mut App,
+    anchor: crate::store::WorkspaceId,
+) -> crate::ui::AttachedState {
+    let Some((mut tree, mut focus)) = app.store.get_workspace_layout(anchor).ok().flatten() else {
+        return crate::ui::AttachedState::single(anchor);
+    };
+    let valid: std::collections::HashSet<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
+    use crate::ui::split::PruneOutcome;
+    let outcome = tree.prune(&|id| valid.contains(&id));
+    match outcome {
+        PruneOutcome::Empty => {
+            let _ = app.store.delete_workspace_layout(anchor);
+            let _ = app.refresh();
+            crate::ui::AttachedState::single(anchor)
+        }
+        PruneOutcome::Kept => {
+            if tree.leaf_at(&focus).is_none() {
+                focus = tree.first_leaf_path();
+            }
+            // Spawn any missing sessions for the side panes. Anchor was
+            // already spawned by the caller. Skip on failure and continue
+            // with remaining panes — partial restore is better than no restore.
+            for leaf_id in tree.leaves() {
+                if leaf_id == anchor || app.sessions.get(leaf_id).is_some() {
+                    continue;
+                }
+                if let Some((sid, sp, mode, repo_path, agent)) = build_spawn_info(app, leaf_id) {
+                    maybe_mirror_mcp(app, &repo_path, &sp);
+                    let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+                    let _ = app.sessions.spawn(sid, &sp, 80, 24, mode, remote, agent);
+                }
+            }
+            crate::ui::AttachedState { tree, focus }
+        }
+    }
+}
+
 /// Best-effort MCP server mirror. Logs and continues on any failure.
 fn maybe_mirror_mcp(app: &App, repo_path: &std::path::Path, worktree_path: &std::path::Path) {
     if !crate::mcp::enabled(&app.store) {
@@ -2006,6 +2079,13 @@ async fn handle_key_attached(
                             }
                         }
                     }
+                }
+                app.view = View::Dashboard;
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                if let View::Attached(state) = &app.view {
+                    save_layout_for(app, state.clone());
                 }
                 app.view = View::Dashboard;
                 return Ok(());
@@ -2410,7 +2490,8 @@ async fn handle_key_modal(
                             maybe_mirror_mcp(app, &repo_path, &path);
                             let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
-                            app.view = View::Attached(AttachedState::single(id));
+                            let restored = restore_attached_state(app, id);
+                            app.view = View::Attached(restored);
                         }
                     }
                     app.modal = None;
@@ -2455,8 +2536,9 @@ async fn handle_key_modal(
                                     }
                                 }
                                 _ => {
-                                    // No attached pane yet — attach plainly.
-                                    app.view = View::Attached(AttachedState::single(id));
+                                    // No attached pane yet — restore saved layout or attach plainly.
+                                    let restored = restore_attached_state(app, id);
+                                    app.view = View::Attached(restored);
                                 }
                             }
                         }
@@ -5436,6 +5518,49 @@ mod external_change_polling_tests {
 }
 
 #[cfg(test)]
+mod layout_indicator_cache_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn app_refresh_populates_layout_indicator_cache_from_store() {
+        use crate::store::{NewWorkspace, Store};
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let a = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let mut pair = SplitTree::Leaf(a);
+        pair.split(&[], SplitDirection::Vertical, a);
+        store.set_workspace_layout(a, &pair, &[1]).unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(
+            app.workspaces_with_multi_pane_layouts.contains(&a),
+            "cache should contain anchor with multi-pane layout"
+        );
+        // Replace with a single-pane layout — should drop from the cache after refresh.
+        app.store
+            .set_workspace_layout(a, &SplitTree::Leaf(a), &[])
+            .unwrap();
+        app.refresh().unwrap();
+        assert!(
+            !app.workspaces_with_multi_pane_layouts.contains(&a),
+            "single-pane layouts should not appear in the cache"
+        );
+    }
+}
+
+#[cfg(test)]
 mod bell_tests {
     use super::*;
 
@@ -5669,5 +5794,322 @@ mod derive_stopped_kind_tests {
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
+    }
+}
+
+#[cfg(test)]
+mod ctrl_x_esc_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_esc_saves_layout_and_returns_to_dashboard() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::ui::split::{AttachedState, SplitDirection};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("/tmp/wsx-esc-1"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new("/tmp/wsx-esc-2"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                first_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        let second_mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                second_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                second_mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+
+        let mut state = AttachedState::single(first_id);
+        state.split(SplitDirection::Vertical, second_id);
+        app.view = crate::ui::View::Attached(state);
+
+        // Send Ctrl-x then Esc.
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(app.view, crate::ui::View::Dashboard),
+            "should return to dashboard"
+        );
+        let saved = app.store.get_workspace_layout(first_id).unwrap();
+        assert!(saved.is_some(), "layout should be saved under first leaf");
+        let (tree, _focus) = saved.unwrap();
+        assert_eq!(tree.leaves(), vec![first_id, second_id]);
+        assert!(
+            app.workspaces_with_multi_pane_layouts.contains(&first_id),
+            "cache should refresh to include the new layout's anchor"
+        );
+
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+}
+
+#[cfg(test)]
+mod restore_layout_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn setup_two_workspaces_with_sessions(
+        slug: &str,
+    ) -> (App, crate::store::WorkspaceId, crate::store::WorkspaceId) {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new(&format!("/tmp/wsx-{slug}-1")),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new(&format!("/tmp/wsx-{slug}-2")),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        for id in [first_id, second_id] {
+            let mode = crate::pty::session::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            app.sessions
+                .spawn(
+                    id,
+                    std::path::Path::new("."),
+                    80,
+                    24,
+                    mode,
+                    crate::remote_control::RemoteOpts::disabled(),
+                    crate::pty::session::AgentKind::Claude,
+                )
+                .unwrap();
+        }
+        (app, first_id, second_id)
+    }
+
+    fn select_workspace_in_app(app: &mut App, id: crate::store::WorkspaceId) {
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(w) if *w == id))
+            .expect("workspace in selectable list");
+        app.dashboard.selected = idx;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_enter_restores_saved_layout() {
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("restore");
+        let mut tree = SplitTree::Leaf(first_id);
+        tree.split(&[], SplitDirection::Vertical, second_id);
+        app.store
+            .set_workspace_layout(first_id, &tree, &[1])
+            .unwrap();
+        app.refresh().unwrap();
+        select_workspace_in_app(&mut app, first_id);
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(s) => {
+                assert_eq!(s.leaves(), vec![first_id, second_id]);
+                assert_eq!(s.focus, vec![1]);
+            }
+            _ => panic!("expected attached view with restored layout"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_enter_falls_back_to_single_pane_when_no_layout() {
+        let (mut app, first_id, _second_id) = setup_two_workspaces_with_sessions("fallback");
+        select_workspace_in_app(&mut app, first_id);
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(s) => {
+                assert_eq!(s.leaves(), vec![first_id]);
+            }
+            _ => panic!("expected single-pane attached view"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn restore_prunes_archived_side_panes() {
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("prune");
+        let mut tree = SplitTree::Leaf(first_id);
+        tree.split(&[], SplitDirection::Vertical, second_id);
+        app.store
+            .set_workspace_layout(first_id, &tree, &[1])
+            .unwrap();
+        // Archive second_id directly and refresh so app.workspaces drops it.
+        app.store.delete_workspace(second_id).unwrap();
+        app.refresh().unwrap();
+        select_workspace_in_app(&mut app, first_id);
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(s) => {
+                assert_eq!(s.leaves(), vec![first_id], "side pane pruned");
+            }
+            _ => panic!("expected attached view with pruned layout"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_d_does_not_modify_saved_layout() {
+        use crate::ui::split::{AttachedState, SplitDirection, SplitTree};
+        let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("ctrlxd");
+        let mut tree = SplitTree::Leaf(first_id);
+        tree.split(&[], SplitDirection::Vertical, second_id);
+        app.store
+            .set_workspace_layout(first_id, &tree, &[1])
+            .unwrap();
+        let mut state = AttachedState::single(first_id);
+        state.split(SplitDirection::Vertical, second_id);
+        app.view = crate::ui::View::Attached(state);
+        // Close second pane with Ctrl-x d (focus is on second_id from the split).
+        handle_key_attached(
+            &mut app,
+            second_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            second_id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        // Close last pane → dashboard.
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        // The stored layout is unchanged.
+        let (saved, _) = app.store.get_workspace_layout(first_id).unwrap().unwrap();
+        assert_eq!(saved.leaves(), vec![first_id, second_id]);
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 }

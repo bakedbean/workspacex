@@ -6,7 +6,7 @@
 use crate::store::WorkspaceId;
 use ratatui::layout::{Constraint, Direction as LayoutDirection, Layout, Rect};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SplitDirection {
     /// Children are stacked side-by-side with a vertical divider, like
     /// vim's `:vsplit`. New pane appears to the right of the focused one.
@@ -24,7 +24,7 @@ pub enum Arrow {
     Down,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SplitTree {
     Leaf(WorkspaceId),
     Split {
@@ -42,6 +42,15 @@ pub enum CloseOutcome {
     /// Tree still has at least one leaf; this is the new focus.
     Focus(FocusPath),
     /// Tree is now empty — caller should leave the attached view.
+    Empty,
+}
+
+/// What `prune` produced.
+pub enum PruneOutcome {
+    /// At least one leaf survived; the tree is still well-formed (no
+    /// 1-child Splits).
+    Kept,
+    /// No leaf survived; caller should treat this tree as gone.
     Empty,
 }
 
@@ -141,6 +150,25 @@ impl SplitTree {
         let mut out = Vec::new();
         self.collect_leaves(&mut out);
         out
+    }
+
+    /// Path from the root to the first (leftmost, depth-first) leaf.
+    /// For a `Leaf` root this returns an empty path.
+    pub fn first_leaf_path(&self) -> FocusPath {
+        let mut out = Vec::new();
+        let mut node = self;
+        loop {
+            match node {
+                SplitTree::Leaf(_) => return out,
+                SplitTree::Split { children, .. } => {
+                    if children.is_empty() {
+                        return out;
+                    }
+                    out.push(0);
+                    node = &children[0];
+                }
+            }
+        }
     }
 
     fn collect_leaves(&self, out: &mut Vec<WorkspaceId>) {
@@ -261,6 +289,41 @@ impl SplitTree {
             let mut new_focus = parent_path.to_vec();
             new_focus.push(new_last);
             CloseOutcome::Focus(first_leaf_path(self, &new_focus))
+        }
+    }
+
+    /// Drop every leaf whose `keep(id)` returns false. After pruning,
+    /// any `Split` that ends up with a single child is collapsed into
+    /// that child (matches the invariant maintained by `close`).
+    pub fn prune<F: Fn(WorkspaceId) -> bool>(&mut self, keep: &F) -> PruneOutcome {
+        match self {
+            SplitTree::Leaf(id) => {
+                if keep(*id) {
+                    PruneOutcome::Kept
+                } else {
+                    PruneOutcome::Empty
+                }
+            }
+            SplitTree::Split { children, .. } => {
+                let mut i = 0;
+                while i < children.len() {
+                    match children[i].prune(keep) {
+                        PruneOutcome::Kept => i += 1,
+                        PruneOutcome::Empty => {
+                            children.remove(i);
+                        }
+                    }
+                }
+                if children.is_empty() {
+                    PruneOutcome::Empty
+                } else if children.len() == 1 {
+                    let only = children.remove(0);
+                    *self = only;
+                    PruneOutcome::Kept
+                } else {
+                    PruneOutcome::Kept
+                }
+            }
         }
     }
 
@@ -543,5 +606,96 @@ mod tests {
         assert_eq!(s.focused_id(), Some(wid(1)));
         assert!(s.focus_next());
         assert_eq!(s.focused_id(), Some(wid(2)));
+    }
+
+    #[test]
+    fn splittree_serde_round_trip_preserves_nested_structure() {
+        let mut tree = SplitTree::Leaf(wid(1));
+        assert!(tree.split(&[], SplitDirection::Vertical, wid(2)).is_some());
+        assert!(
+            tree.split(&[1], SplitDirection::Horizontal, wid(3))
+                .is_some()
+        );
+        let json = serde_json::to_string(&tree).expect("serialize");
+        let back: SplitTree = serde_json::from_str(&json).expect("deserialize");
+        let a = tree.layout(Rect::new(0, 0, 80, 24));
+        let b = back.layout(Rect::new(0, 0, 80, 24));
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.0, y.0, "leaf id");
+            assert_eq!(x.1, y.1, "focus path");
+            assert_eq!(x.2, y.2, "rect");
+        }
+    }
+
+    #[test]
+    fn workspaceid_serializes_as_bare_integer() {
+        let id = crate::store::WorkspaceId(42);
+        assert_eq!(serde_json::to_string(&id).unwrap(), "42");
+        let back: crate::store::WorkspaceId = serde_json::from_str("42").unwrap();
+        assert_eq!(back, id);
+    }
+
+    #[test]
+    fn prune_removes_dropped_leaves_and_collapses_singletons() {
+        // (A | B | C), prune B → (A | C)
+        let mut tree = SplitTree::Leaf(wid(1));
+        tree.split(&[], SplitDirection::Vertical, wid(2));
+        tree.split(&[1], SplitDirection::Vertical, wid(3));
+        let outcome = tree.prune(&|id| id != wid(2));
+        assert!(matches!(outcome, PruneOutcome::Kept));
+        assert_eq!(tree.leaves(), vec![wid(1), wid(3)]);
+    }
+
+    #[test]
+    fn prune_collapses_nested_singleton() {
+        // (A | (B / C)) — prune C → (A | B). The nested split must collapse
+        // (no 1-child Split allowed).
+        let mut tree = SplitTree::Leaf(wid(1));
+        tree.split(&[], SplitDirection::Vertical, wid(2));
+        tree.split(&[1], SplitDirection::Horizontal, wid(3));
+        let outcome = tree.prune(&|id| id != wid(3));
+        assert!(matches!(outcome, PruneOutcome::Kept));
+        assert_eq!(tree.leaves(), vec![wid(1), wid(2)]);
+        fn no_singleton_splits(t: &SplitTree) {
+            if let SplitTree::Split { children, .. } = t {
+                assert!(children.len() >= 2, "found singleton split");
+                for c in children {
+                    no_singleton_splits(c);
+                }
+            }
+        }
+        no_singleton_splits(&tree);
+    }
+
+    #[test]
+    fn prune_returns_empty_when_no_leaves_survive() {
+        let mut tree = SplitTree::Leaf(wid(1));
+        tree.split(&[], SplitDirection::Vertical, wid(2));
+        let outcome = tree.prune(&|_| false);
+        assert!(matches!(outcome, PruneOutcome::Empty));
+    }
+
+    #[test]
+    fn prune_keeps_leaf_when_predicate_true() {
+        let mut tree = SplitTree::Leaf(wid(1));
+        let outcome = tree.prune(&|_| true);
+        assert!(matches!(outcome, PruneOutcome::Kept));
+        assert_eq!(tree.leaves(), vec![wid(1)]);
+    }
+
+    #[test]
+    fn first_leaf_path_returns_empty_for_leaf_root() {
+        let tree = SplitTree::Leaf(wid(1));
+        assert_eq!(tree.first_leaf_path(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn first_leaf_path_walks_to_leftmost_leaf_of_nested_splits() {
+        // (A | (B / C)) — first leaf path is [0] (A is the leftmost leaf).
+        let mut tree = SplitTree::Leaf(wid(1));
+        tree.split(&[], SplitDirection::Vertical, wid(2));
+        tree.split(&[1], SplitDirection::Horizontal, wid(3));
+        assert_eq!(tree.first_leaf_path(), vec![0]);
     }
 }

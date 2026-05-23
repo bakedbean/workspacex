@@ -75,6 +75,7 @@ pub struct RowInputs {
     pub selected: bool,
     pub yolo: bool,
     pub setup_failed: bool,
+    pub has_multi_pane_layout: bool,
     pub lifecycle: Option<BranchLifecycle>,
     pub nerd_fonts: bool,
     pub workspace_id: crate::store::WorkspaceId,
@@ -118,20 +119,45 @@ pub fn render(
         theme.status_style(inputs.status),
     ));
 
-    // 4: name (with setup-failed badge and YOLO styling)
-    let name_target = if inputs.setup_failed {
-        name_width.saturating_sub(3).max(1)
+    // 4: name (with badges and YOLO styling). Badges sit IMMEDIATELY
+    // after the visible name characters (then trailing padding fills
+    // the rest of `name_width`), so they remain attached to the name
+    // even when the name is short or truncated to `…`. The earlier
+    // "right-pad name then append badge" approach buried the badge in
+    // the column gap next to the branch glyph, where it was easy to
+    // miss.
+    // The nf-cod-split_horizontal codicon (U+EBB0) renders as a
+    // 2-cell-wide glyph in most nerd-font terminals, so the badge
+    // consumes 3 display cells: 1 leading space + 2 cells for the
+    // glyph. Reserving only 2 cells (the naive `chars().count()`)
+    // caused the second half of the codicon to be clipped by the
+    // following column on narrow displays.
+    let layout_badge_width = if inputs.has_multi_pane_layout && inputs.nerd_fonts {
+        3
     } else {
-        name_width
+        0
     };
-    let name_padded = truncate_pad(&inputs.name, name_target);
+    let setup_badge_width = if inputs.setup_failed { 3 } else { 0 };
+    let name_target = name_width
+        .saturating_sub(setup_badge_width)
+        .saturating_sub(layout_badge_width)
+        .max(1);
+    let name_truncated = truncate(&inputs.name, name_target);
+    let name_visible_width = name_truncated.chars().count();
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
     if inputs.yolo {
         name_style = name_style.fg(theme.warn);
     }
-    spans.push(Span::styled(name_padded, name_style));
+    spans.push(Span::styled(name_truncated, name_style));
     if inputs.setup_failed {
         spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
+    }
+    if inputs.has_multi_pane_layout && inputs.nerd_fonts {
+        spans.push(Span::styled(" \u{ebb0}".to_string(), theme.dim_style()));
+    }
+    let consumed = name_visible_width + setup_badge_width + layout_badge_width;
+    if consumed < name_width {
+        spans.push(Span::raw(" ".repeat(name_width - consumed)));
     }
 
     // 5: branch
@@ -297,6 +323,7 @@ mod tests {
             selected: false,
             yolo: false,
             setup_failed: false,
+            has_multi_pane_layout: false,
             lifecycle: None,
             nerd_fonts: false,
             workspace_id: crate::store::WorkspaceId(0),
@@ -543,6 +570,85 @@ mod tests {
         let mid = ColumnWidths::clamped(30, 40);
         assert_eq!(mid.name, 30);
         assert_eq!(mid.branch, 40);
+    }
+
+    #[test]
+    fn multi_pane_layout_appends_codicon_when_nerd_fonts() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.has_multi_pane_layout = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(
+            text.contains("\u{ebb0}"),
+            "split_horizontal codicon present: {text:?}"
+        );
+    }
+
+    #[test]
+    fn multi_pane_layout_skipped_without_nerd_fonts() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = false;
+        inputs.has_multi_pane_layout = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(
+            !text.contains("\u{ebb0}"),
+            "codicon should not render without nerd fonts: {text:?}"
+        );
+    }
+
+    #[test]
+    fn layout_and_setup_failed_badges_both_render() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.has_multi_pane_layout = true;
+        inputs.setup_failed = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("⚙!"), "setup badge present: {text:?}");
+        assert!(text.contains("\u{ebb0}"), "layout badge present: {text:?}");
+    }
+
+    #[test]
+    fn name_shrinks_to_accommodate_layout_badge() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.has_multi_pane_layout = true;
+        inputs.name = "this-is-a-pretty-long-workspace-name-indeed".into();
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("\u{ebb0}"));
+        assert!(text.contains("…"), "long name truncated to fit: {text:?}");
+    }
+
+    #[test]
+    fn layout_badge_sits_immediately_after_visible_name_not_at_column_edge() {
+        // Regression guard for the "badge invisible on narrow displays"
+        // bug: when the name is short, the codicon must appear right
+        // after the visible name characters (with trailing padding
+        // filling the rest of the name column), not at the far right
+        // edge of the column where the branch glyph follows immediately.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.has_multi_pane_layout = true;
+        inputs.name = "alpha".into();
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        let name_pos = text.find("alpha").expect("name present");
+        let codicon_pos = text
+            .find('\u{ebb0}')
+            .expect("codicon present with nerd fonts on");
+        let gap = codicon_pos - (name_pos + "alpha".len());
+        assert!(
+            gap <= 1,
+            "codicon should follow the name with at most one space, got gap={gap}: {text:?}"
+        );
     }
 
     #[test]

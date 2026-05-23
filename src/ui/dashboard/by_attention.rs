@@ -265,6 +265,7 @@ mod tests {
                         lifecycle: None,
                         nerd_fonts: false,
                         workspace_id: crate::store::WorkspaceId(i as i64),
+                        has_multi_pane_layout: false,
                     },
                 });
             }
@@ -420,6 +421,7 @@ mod tests {
                 lifecycle: None,
                 nerd_fonts: false,
                 workspace_id: crate::store::WorkspaceId(0),
+                has_multi_pane_layout: false,
             },
         };
         let line = flat_row_line(&row, row::ColumnWidths::default(), 0, &theme, 120);

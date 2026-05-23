@@ -147,6 +147,7 @@ mod tests {
                 lifecycle: None,
                 nerd_fonts: false,
                 workspace_id: crate::store::WorkspaceId(i as i64),
+                has_multi_pane_layout: false,
             })
             .collect();
         workspaces.sort_by(|a, b| b.status.priority().cmp(&a.status.priority()));

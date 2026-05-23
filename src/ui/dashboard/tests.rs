@@ -55,6 +55,7 @@ fn build_inputs<'a>(
                     lifecycle: None,
                     nerd_fonts: false,
                     workspace_id: id,
+                    has_multi_pane_layout: false,
                 },
             });
         }

@@ -6,7 +6,9 @@ use crate::store::{Repo, Store, Workspace, WorkspaceId};
 use crate::ui::View;
 use crate::ui::dashboard::DashboardState;
 use crate::ui::modal::Modal;
-use crate::ui::split::{Arrow, AttachedState, CloseOutcome, SplitDirection};
+use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
+#[cfg(test)]
+use crate::ui::split::AttachedState;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -754,6 +756,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         nerd_fonts,
                         workspace_id: ws.id,
+                        has_multi_pane_layout: app.workspaces_with_multi_pane_layouts.contains(&ws.id),
                     };
                     workspaces.push(dashboard::WorkspaceItem {
                         repo,

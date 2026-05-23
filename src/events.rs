@@ -572,7 +572,7 @@ fn parse_timestamp(v: Option<&serde_json::Value>) -> i64 {
 
 /// Minimal ISO 8601 parser for the format Claude Code emits:
 /// `YYYY-MM-DDTHH:MM:SS.fffZ` (always UTC, always millisecond precision).
-fn parse_iso8601_ms(s: &str) -> Option<i64> {
+pub fn parse_iso8601_ms(s: &str) -> Option<i64> {
     // Strip trailing Z; we treat the timestamp as UTC.
     let s = s.strip_suffix('Z').unwrap_or(s);
     // Split date and time at 'T'.

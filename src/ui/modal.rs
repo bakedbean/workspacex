@@ -14,6 +14,7 @@ pub enum Modal {
         repo_id: RepoId,
         name_buffer: String,
         yolo: bool,
+        agent: crate::pty::session::AgentKind,
     },
     ConfirmArchive {
         workspace_id: crate::store::WorkspaceId,
@@ -74,15 +75,23 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
     f.render_widget(Clear, rect);
     let (title, body) = match modal {
         Modal::NewWorkspace {
-            name_buffer, yolo, ..
-        } => (
-            if *yolo {
-                "new workspace (permissive)"
-            } else {
-                "new workspace"
-            },
-            format!("name: {name_buffer}\n\n[enter] create   [esc] cancel"),
-        ),
+            name_buffer, yolo, agent, ..
+        } => {
+            let agent_label = match agent {
+                crate::pty::session::AgentKind::Claude => "claude",
+                crate::pty::session::AgentKind::Pi => "pi",
+            };
+            (
+                if *yolo {
+                    "new workspace (permissive)"
+                } else {
+                    "new workspace"
+                },
+                format!(
+                    "name: {name_buffer}\nagent: {agent_label}  [tab] toggle\n\n[enter] create   [esc] cancel"
+                ),
+            )
+        }
         Modal::ConfirmArchive { name, .. } => (
             "archive workspace",
             format!("archive '{name}'?\n\n[y] yes   [n]/[esc] cancel"),
@@ -688,6 +697,7 @@ mod workspace_row_tests {
             setup_status: crate::store::SetupStatus::Ok,
             created_at: 0,
             yolo: false,
+            agent: crate::pty::session::AgentKind::Claude,
         }
     }
 

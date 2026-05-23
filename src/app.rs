@@ -463,7 +463,7 @@ impl App {
         let has_prior = if running {
             false
         } else {
-            crate::pty::session::has_prior_session(&ws.worktree_path)
+            crate::pty::session::has_prior_session_for(&ws.worktree_path, ws.agent)
         };
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1521,10 +1521,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         (KeyCode::Enter, _) | (KeyCode::Char('i'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
                 app.workspace_needs_attention.remove(&id);
-                if let Some((id, path, mode, repo_path)) = build_spawn_info(app, id) {
+                if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, id) {
                     maybe_mirror_mcp(app, &repo_path, &path);
                     let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-                    let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
+                    let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
                     app.view = View::Attached(AttachedState::single(id));
                 }
             }
@@ -1533,6 +1533,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo: false,
+                    agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
             }
             None => {}
@@ -1557,6 +1558,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo,
+                    agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
             }
         }
@@ -1895,6 +1897,7 @@ fn build_spawn_info(
     std::path::PathBuf,
     crate::pty::session::SpawnMode,
     std::path::PathBuf,
+    crate::pty::session::AgentKind,
 )> {
     let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
     let repo = app.repos.iter().find(|r| r.id == *rid)?;
@@ -1902,9 +1905,10 @@ fn build_spawn_info(
         .ok()
         .flatten();
     let yolo = ws.yolo;
+    let agent = ws.agent;
     // Resolve related repos (per-repo names → source paths), filter out
     // the spawning repo itself, build the read-only system-prompt
-    // fragment, and fold it into custom_instructions before claude sees it.
+    // fragment, and fold it into custom_instructions before the agent sees it.
     let resolved = crate::related::resolve(repo.related_repos.as_deref(), &app.repos);
     let resolved: Vec<(String, std::path::PathBuf)> = resolved
         .into_iter()
@@ -1919,7 +1923,7 @@ fn build_spawn_info(
         (None, Some(r)) => Some(r),
         (Some(c), Some(r)) => Some(format!("{c}\n\n{r}")),
     };
-    let mode = if crate::pty::session::has_prior_session(&ws.worktree_path) {
+    let mode = if crate::pty::session::has_prior_session_for(&ws.worktree_path, agent) {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
             additional_dirs,
@@ -1943,7 +1947,7 @@ fn build_spawn_info(
             yolo,
         }
     };
-    Some((ws_id, ws.worktree_path.clone(), mode, repo.path.clone()))
+    Some((ws_id, ws.worktree_path.clone(), mode, repo.path.clone(), agent))
 }
 
 /// Best-effort MCP server mirror. Logs and continues on any failure.
@@ -2220,9 +2224,22 @@ async fn handle_key_modal(
             repo_id,
             mut name_buffer,
             yolo,
+            mut agent,
         } => match k.code {
             KeyCode::Esc => {
                 app.modal = None;
+            }
+            KeyCode::Tab => {
+                agent = match agent {
+                    crate::pty::session::AgentKind::Claude => crate::pty::session::AgentKind::Pi,
+                    crate::pty::session::AgentKind::Pi => crate::pty::session::AgentKind::Claude,
+                };
+                app.modal = Some(Modal::NewWorkspace {
+                    repo_id,
+                    name_buffer,
+                    yolo,
+                    agent,
+                });
             }
             KeyCode::Enter => {
                 let name = if name_buffer.trim().is_empty() {
@@ -2245,6 +2262,7 @@ async fn handle_key_modal(
                         name,
                         base,
                         yolo,
+                        agent,
                         cancel,
                     )
                     .await;
@@ -2257,6 +2275,7 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    agent,
                 });
             }
             KeyCode::Char(c) => {
@@ -2265,6 +2284,7 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    agent,
                 });
             }
             _ => {}
@@ -2368,10 +2388,10 @@ async fn handle_key_modal(
                         // Mirror the dashboard-attach flow: clear the
                         // alert, spawn (or resume) the PTY, switch view.
                         app.workspace_needs_attention.remove(&ws_id);
-                        if let Some((id, path, mode, repo_path)) = build_spawn_info(app, ws_id) {
+                        if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
                             maybe_mirror_mcp(app, &repo_path, &path);
                             let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-                            let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
+                            let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
                             app.view = View::Attached(AttachedState::single(id));
                         }
                     }
@@ -2389,10 +2409,10 @@ async fn handle_key_modal(
                     };
                     if let Some(ws_id) = order.get(selected_now).copied() {
                         app.workspace_needs_attention.remove(&ws_id);
-                        if let Some((id, path, mode, repo_path)) = build_spawn_info(app, ws_id) {
+                        if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
                             maybe_mirror_mcp(app, &repo_path, &path);
                             let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-                            let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote)?;
+                            let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
                             match &mut app.view {
                                 View::Attached(state) => {
                                     // Same pane already focused: switch focus
@@ -2615,6 +2635,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
             String,
             String,
             Option<String>,
+            crate::pty::session::AgentKind,
         )> = {
             let g = app.lock().await;
             g.workspaces
@@ -2629,12 +2650,13 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         w.branch.clone(),
                         prefix,
                         repo.base_branch.clone(),
+                        w.agent,
                     ))
                 })
                 .collect()
         };
 
-        for (id, path, db_branch, prefix, base_branch) in snapshot {
+        for (id, path, db_branch, prefix, base_branch, ws_agent) in snapshot {
             if !path.exists() {
                 continue;
             }
@@ -2731,13 +2753,22 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 // network error.
             }
 
-            // 4) Tail Claude Code session JSONL for events.
+            // 4) Tail agent session JSONL for events.
             //
-            // Lock-ordering: snapshot the previous offset under the lock,
-            // do the file I/O without the lock held, then re-acquire to
-            // commit the new offset + events. This keeps the UI responsive
-            // even when sessions grow large.
-            let current_file = crate::events::locate_session_file(&path);
+            // Lock-ordering: snapshot the previous offset and agent kind
+            // under the lock, do the file I/O without the lock held, then
+            // re-acquire to commit the new offset + events. This keeps the
+            // UI responsive even when sessions grow large.
+            //
+            // Branches on per-workspace agent kind.
+            let current_file = match ws_agent {
+                crate::pty::session::AgentKind::Claude => {
+                    crate::events::locate_session_file(&path)
+                }
+                crate::pty::session::AgentKind::Pi => {
+                    crate::pi_events::locate_session_file(&path)
+                }
+            };
             let prev_offset = {
                 let g = app.lock().await;
                 match (g.workspace_events.get(&id), current_file.as_ref()) {
@@ -2748,7 +2779,15 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 }
             };
             if let Some(file) = current_file {
-                if let Ok(update) = crate::events::tail_session(&file, prev_offset) {
+                let tail_result = match ws_agent {
+                    crate::pty::session::AgentKind::Claude => {
+                        crate::events::tail_session(&file, prev_offset)
+                    }
+                    crate::pty::session::AgentKind::Pi => {
+                        crate::pi_events::tail_session(&file, prev_offset)
+                    }
+                };
+                if let Ok(update) = tail_result {
                     let crate::events::TailUpdate {
                         new_offset,
                         events,
@@ -3189,6 +3228,7 @@ mod pm_state_tests {
                     branch,
                     worktree_path: std::path::Path::new(path),
                     yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
                 })
                 .unwrap();
             store
@@ -3265,6 +3305,7 @@ mod pm_state_tests {
                     branch,
                     worktree_path: std::path::Path::new(path),
                     yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
                 })
                 .unwrap();
             store
@@ -3379,6 +3420,7 @@ mod pm_state_tests {
                 branch: "repo/blocked",
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3434,6 +3476,7 @@ mod pm_state_tests {
                 branch: "repo/first",
                 worktree_path: std::path::Path::new("/tmp/wsx-split-1"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         let second_id = store
@@ -3443,6 +3486,7 @@ mod pm_state_tests {
                 branch: "repo/second",
                 worktree_path: std::path::Path::new("/tmp/wsx-split-2"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3470,6 +3514,7 @@ mod pm_state_tests {
                 24,
                 mode,
                 crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
         let second_mode = crate::pty::session::SpawnMode::Fresh {
@@ -3486,6 +3531,7 @@ mod pm_state_tests {
                 24,
                 second_mode,
                 crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(first_id));
@@ -3553,6 +3599,7 @@ mod pm_state_tests {
                 branch: "repo/first",
                 worktree_path: std::path::Path::new("/tmp/wsx-close-1"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         let second_id = store
@@ -3562,6 +3609,7 @@ mod pm_state_tests {
                 branch: "repo/second",
                 worktree_path: std::path::Path::new("/tmp/wsx-close-2"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3586,6 +3634,7 @@ mod pm_state_tests {
                     24,
                     mode,
                     crate::remote_control::RemoteOpts::disabled(),
+                    crate::pty::session::AgentKind::Claude,
                 )
                 .unwrap();
         }
@@ -3658,6 +3707,7 @@ mod pm_state_tests {
                     branch: &format!("repo/{name}"),
                     worktree_path: &std::path::PathBuf::from(format!("/tmp/wsx-arrow-{name}")),
                     yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
                 })
                 .unwrap();
             store
@@ -3681,6 +3731,7 @@ mod pm_state_tests {
                     24,
                     mode,
                     crate::remote_control::RemoteOpts::disabled(),
+                    crate::pty::session::AgentKind::Claude,
                 )
                 .unwrap();
         }
@@ -3754,6 +3805,7 @@ mod pm_state_tests {
                 branch: "repo-alpha/alpha-ws",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3769,6 +3821,7 @@ mod pm_state_tests {
                 branch: "repo-beta/beta-ws",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/beta-ws"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3839,6 +3892,7 @@ mod pm_state_tests {
                         branch: &branch,
                         worktree_path: std::path::Path::new(&worktree),
                         yolo: false,
+                        agent: crate::pty::session::AgentKind::Claude,
                     })
                     .unwrap();
                 store
@@ -3926,6 +3980,7 @@ mod pm_state_tests {
                 branch: "repo/attached-here",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/attached"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3938,6 +3993,7 @@ mod pm_state_tests {
                 branch: "repo/the-other",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/other"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -3959,6 +4015,7 @@ mod pm_state_tests {
                 24,
                 mode,
                 crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
@@ -4011,6 +4068,7 @@ mod pm_state_tests {
                 branch: "repo/only-one",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/only"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -4031,6 +4089,7 @@ mod pm_state_tests {
                 24,
                 mode,
                 crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
@@ -4083,6 +4142,7 @@ mod pm_state_tests {
                 24,
                 mode,
                 crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
         app.pm = Some(s);
@@ -4142,6 +4202,7 @@ mod pm_state_tests {
                 24,
                 mode,
                 crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
         app.pm = Some(s);
@@ -4167,6 +4228,7 @@ mod pm_state_tests {
                 branch: "main",
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -4183,6 +4245,7 @@ mod pm_state_tests {
                 24,
                 mode,
                 crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(ws_id));
@@ -4621,6 +4684,7 @@ mod pm_state_tests {
                 branch: "backend/test-ws",
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -4630,7 +4694,7 @@ mod pm_state_tests {
         let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let info = build_spawn_info(&app, ws_id);
         assert!(info.is_some());
-        let (_id, _path, mode, _repo_path) = info.unwrap();
+        let (_id, _path, mode, _repo_path, _agent) = info.unwrap();
         match mode {
             crate::pty::session::SpawnMode::Fresh {
                 additional_dirs,
@@ -4673,6 +4737,7 @@ mod pm_state_tests {
                 branch: "backend/test-ws",
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         store
@@ -4680,7 +4745,7 @@ mod pm_state_tests {
             .unwrap();
 
         let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        let (_id, _path, mode, _repo_path) = build_spawn_info(&app, ws_id).unwrap();
+        let (_id, _path, mode, _repo_path, _agent) = build_spawn_info(&app, ws_id).unwrap();
         match mode {
             crate::pty::session::SpawnMode::Fresh {
                 additional_dirs,
@@ -4868,6 +4933,7 @@ mod pm_state_tests {
                 branch: "repo-0/alpha",
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
         app.store
@@ -5049,6 +5115,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             });
         }
         // Send Enter.
@@ -5106,6 +5173,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -5164,6 +5232,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -5211,6 +5280,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -5268,6 +5338,7 @@ mod external_change_polling_tests {
                 branch: "backend/from-cli",
                 worktree_path: std::path::Path::new("/wt/from-cli"),
                 yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
 

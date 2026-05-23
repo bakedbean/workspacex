@@ -70,7 +70,13 @@ impl Status {
         session_running: bool,
         has_prior_session: bool,
     ) -> Self {
-        if awaiting_tool {
+        // The `awaiting_tool` heuristic flags any non-question tool_use
+        // pending >3s as a permission prompt — but if the PTY is still
+        // streaming output the agent is clearly mid-work, so suppress the
+        // false-positive `?`. Catches long `Bash` runs and any other
+        // tool whose process pipes activity to the parent PTY.
+        let pty_active = matches!(seconds_since_activity, Some(s) if s < 2);
+        if awaiting_tool && !pty_active {
             return Status::Question;
         }
         match stopped_kind {
@@ -134,9 +140,44 @@ mod tests {
     }
 
     #[test]
-    fn awaiting_tool_outranks_everything() {
+    fn awaiting_tool_outranks_everything_when_pty_quiet() {
+        // PTY has been idle for 5s — strong signal that the pending tool
+        // really is parked on a permission prompt rather than running.
         assert_eq!(
-            Status::classify(true, Some(StoppedKind::Complete), true, s(0), true, true),
+            Status::classify(true, Some(StoppedKind::Complete), true, s(5), true, true),
+            Status::Question
+        );
+    }
+
+    #[test]
+    fn awaiting_tool_suppressed_when_pty_active() {
+        // Pending tool_use is >3s old, but the PTY is actively streaming
+        // output (e.g. an Agent subagent or a long Bash run). Don't paint
+        // the false-positive `?` — show the live thinking spinner instead.
+        assert_eq!(
+            Status::classify(true, None, false, s(0), true, false),
+            Status::Thinking
+        );
+        assert_eq!(
+            Status::classify(true, None, false, s(1), true, false),
+            Status::Thinking
+        );
+    }
+
+    #[test]
+    fn awaiting_answer_not_suppressed_by_active_pty() {
+        // An explicit AskUserQuestion / trailing-? must still surface as
+        // Question even if the PTY is briefly active — the agent has
+        // genuinely stopped its turn.
+        assert_eq!(
+            Status::classify(
+                false,
+                Some(StoppedKind::AwaitingAnswer),
+                false,
+                s(0),
+                true,
+                true
+            ),
             Status::Question
         );
     }

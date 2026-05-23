@@ -188,6 +188,29 @@ impl WorkspaceEvents {
         None
     }
 
+    /// Return the oldest pending `tool_use` that looks like a permission
+    /// prompt: pending for ≥ `stale_ms` and not one of the tools we know
+    /// are not prompts. Excludes `AskUserQuestion` / `ExitPlanMode`
+    /// (surfaced separately as `AwaitingAnswer`) and `Agent` (subagent
+    /// dispatches that legitimately run for minutes and would otherwise
+    /// pin the workspace to the false-positive `?` glyph).
+    pub fn pending_permission_tool(&self, now_ms: i64, stale_ms: i64) -> Option<(String, i64)> {
+        let mut oldest: Option<(&str, i64)> = None;
+        for (name, ts) in self.pending_tool_uses.values() {
+            if matches!(name.as_str(), "AskUserQuestion" | "ExitPlanMode" | "Agent") {
+                continue;
+            }
+            if now_ms.saturating_sub(*ts) >= stale_ms {
+                match oldest {
+                    None => oldest = Some((name.as_str(), *ts)),
+                    Some((_, t)) if *ts < t => oldest = Some((name.as_str(), *ts)),
+                    _ => {}
+                }
+            }
+        }
+        oldest.map(|(n, ts)| (n.to_string(), ts))
+    }
+
     /// True iff the most recent assistant text block ends with `?` (after
     /// stripping trailing whitespace and markdown noise — `*`, `_`, `` ` ``).
     /// Fallback signal used by the question-vs-complete classifier when
@@ -1164,6 +1187,58 @@ mod tests {
         evt.pending_tool_uses
             .insert("t2".into(), ("Read".into(), 2));
         assert_eq!(evt.pending_question_tool(), None);
+    }
+
+    #[test]
+    fn pending_permission_tool_returns_stale_bash() {
+        let mut evt = WorkspaceEvents::default();
+        evt.pending_tool_uses
+            .insert("t1".into(), ("Bash".into(), 0));
+        let hit = evt.pending_permission_tool(5_000, 3_000);
+        assert_eq!(hit, Some(("Bash".into(), 0)));
+    }
+
+    #[test]
+    fn pending_permission_tool_ignores_fresh_tools() {
+        let mut evt = WorkspaceEvents::default();
+        evt.pending_tool_uses
+            .insert("t1".into(), ("Bash".into(), 4_000));
+        // Only 1s old — below the 3s stale threshold.
+        assert_eq!(evt.pending_permission_tool(5_000, 3_000), None);
+    }
+
+    #[test]
+    fn pending_permission_tool_excludes_question_tools() {
+        let mut evt = WorkspaceEvents::default();
+        evt.pending_tool_uses
+            .insert("t1".into(), ("AskUserQuestion".into(), 0));
+        evt.pending_tool_uses
+            .insert("t2".into(), ("ExitPlanMode".into(), 0));
+        assert_eq!(evt.pending_permission_tool(10_000, 3_000), None);
+    }
+
+    #[test]
+    fn pending_permission_tool_excludes_agent_dispatch() {
+        // Agent subagent dispatches routinely run for minutes by design;
+        // they should never be misread as a permission prompt.
+        let mut evt = WorkspaceEvents::default();
+        evt.pending_tool_uses
+            .insert("t1".into(), ("Agent".into(), 0));
+        assert_eq!(evt.pending_permission_tool(60_000, 3_000), None);
+    }
+
+    #[test]
+    fn pending_permission_tool_picks_oldest_among_eligible() {
+        let mut evt = WorkspaceEvents::default();
+        evt.pending_tool_uses
+            .insert("t1".into(), ("Bash".into(), 100));
+        evt.pending_tool_uses
+            .insert("t2".into(), ("Read".into(), 50));
+        evt.pending_tool_uses
+            .insert("t3".into(), ("Agent".into(), 0));
+        // Agent (oldest overall) is excluded; Read at ts=50 wins.
+        let hit = evt.pending_permission_tool(10_000, 3_000);
+        assert_eq!(hit, Some(("Read".into(), 50)));
     }
 
     #[test]

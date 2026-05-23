@@ -20,12 +20,7 @@ pub enum AgentKind {
 
 impl AgentKind {
     pub fn from_store(store: &crate::store::Store) -> Self {
-        match store
-            .get_setting("coding_agent")
-            .ok()
-            .flatten()
-            .as_deref()
-        {
+        match store.get_setting("coding_agent").ok().flatten().as_deref() {
             Some("pi") => AgentKind::Pi,
             _ => AgentKind::Claude,
         }
@@ -267,7 +262,9 @@ pub fn has_prior_pi_session(worktree: &Path) -> bool {
         Err(_) => return false,
     };
     let encoded = abs.to_string_lossy().replace('/', "-");
-    let session_dir = home.join(".pi/agent/sessions").join(format!("--{}--", encoded));
+    let session_dir = home
+        .join(".pi/agent/sessions")
+        .join(format!("--{}--", encoded));
     if !session_dir.is_dir() {
         return false;
     }
@@ -511,11 +508,29 @@ pub fn build_pi_command(
     if add_continue {
         cmd.arg("--continue");
     } else {
-        // Provider for new pi sessions. Falls back to deepseek.
-        // Override with: export WSX_PI_PROVIDER=openai
-        let provider = std::env::var("WSX_PI_PROVIDER").unwrap_or_else(|_| "deepseek".to_string());
-        cmd.arg("--provider");
-        cmd.arg(&provider);
+        // Model selection for new pi sessions.
+        //
+        // Pi silently ignores `--provider` unless `--model` is also passed
+        // (see pi's resolveCliModel: it short-circuits when cliModel is empty),
+        // so we always pass a model selector. Precedence:
+        //   1. WSX_PI_MODEL — explicit model pattern, e.g. "claude-sonnet-4-5"
+        //      or "deepseek/deepseek-v4-pro". Pi resolves via substring/exact.
+        //   2. WSX_PI_PROVIDER — scope to that provider via `--models "<p>/*"`
+        //      (plural `--models` accepts globs; singular `--model` does not).
+        //   3. Default to the deepseek provider.
+        if let Ok(model) = std::env::var("WSX_PI_MODEL") {
+            cmd.arg("--model");
+            cmd.arg(&model);
+            if let Ok(provider) = std::env::var("WSX_PI_PROVIDER") {
+                cmd.arg("--provider");
+                cmd.arg(&provider);
+            }
+        } else {
+            let provider =
+                std::env::var("WSX_PI_PROVIDER").unwrap_or_else(|_| "deepseek".to_string());
+            cmd.arg("--models");
+            cmd.arg(format!("{provider}/*"));
+        }
     }
 
     let combined = match (rename_prompt, custom) {
@@ -1607,5 +1622,93 @@ mod tests {
             );
         }
         s.kill();
+    }
+
+    // All three branches in one test: env vars are process-global and the
+    // function reads them at call time, so splitting these into separate
+    // #[test] fns would race under cargo test's default parallelism.
+    #[test]
+    fn build_pi_command_passes_model_selection() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+
+        // 1. Default (no env vars) → --models "deepseek/*"
+        unsafe {
+            std::env::remove_var("WSX_PI_MODEL");
+            std::env::remove_var("WSX_PI_PROVIDER");
+        }
+        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        let models_idx = argv
+            .iter()
+            .position(|a| a == "--models")
+            .unwrap_or_else(|| panic!("expected --models in {argv:?}"));
+        assert_eq!(argv[models_idx + 1], "deepseek/*");
+        assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
+        assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
+
+        // 2. WSX_PI_PROVIDER set → --models "<provider>/*"
+        unsafe {
+            std::env::set_var("WSX_PI_PROVIDER", "anthropic");
+        }
+        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        let models_idx = argv.iter().position(|a| a == "--models").unwrap();
+        assert_eq!(argv[models_idx + 1], "anthropic/*");
+
+        // 3. WSX_PI_MODEL set → --model <value>, with --provider also forwarded
+        unsafe {
+            std::env::set_var("WSX_PI_MODEL", "deepseek/deepseek-v4-pro");
+        }
+        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        let model_idx = argv.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(argv[model_idx + 1], "deepseek/deepseek-v4-pro");
+        let provider_idx = argv.iter().position(|a| a == "--provider").unwrap();
+        assert_eq!(argv[provider_idx + 1], "anthropic");
+        assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
+
+        // 4. Continue mode → no model/provider flags at all (pi reuses session)
+        let cont_mode = SpawnMode::Continue {
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cmd = build_pi_command(
+            &cwd,
+            &cont_mode,
+            crate::remote_control::RemoteOpts::disabled(),
+        );
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        assert!(argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
+        assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
+        assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
+        assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
+
+        unsafe {
+            std::env::remove_var("WSX_PI_MODEL");
+            std::env::remove_var("WSX_PI_PROVIDER");
+        }
     }
 }

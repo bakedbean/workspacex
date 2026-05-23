@@ -1983,6 +1983,18 @@ fn build_spawn_info(
     ))
 }
 
+fn save_layout_for(app: &mut App, state: crate::ui::AttachedState) {
+    let Some(anchor) = state.leaves().first().copied() else {
+        return;
+    };
+    if let Err(e) = app.store.set_workspace_layout(anchor, &state.tree, &state.focus) {
+        tracing::warn!(error = %e, "failed to save workspace layout");
+    }
+    // Recompute the dashboard indicator cache so the badge updates
+    // immediately when the user returns to the dashboard.
+    let _ = app.refresh();
+}
+
 /// Best-effort MCP server mirror. Logs and continues on any failure.
 fn maybe_mirror_mcp(app: &App, repo_path: &std::path::Path, worktree_path: &std::path::Path) {
     if !crate::mcp::enabled(&app.store) {
@@ -2023,6 +2035,13 @@ async fn handle_key_attached(
                             }
                         }
                     }
+                }
+                app.view = View::Dashboard;
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                if let View::Attached(state) = &app.view {
+                    save_layout_for(app, state.clone());
                 }
                 app.view = View::Dashboard;
                 return Ok(());
@@ -5729,5 +5748,120 @@ mod derive_stopped_kind_tests {
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
+    }
+}
+
+#[cfg(test)]
+mod ctrl_x_esc_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_esc_saves_layout_and_returns_to_dashboard() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::ui::split::{AttachedState, SplitDirection};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("/tmp/wsx-esc-1"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new("/tmp/wsx-esc-2"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store.set_workspace_state(first_id, WorkspaceState::Ready).unwrap();
+        store.set_workspace_state(second_id, WorkspaceState::Ready).unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                first_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        let second_mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                second_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                second_mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+
+        let mut state = AttachedState::single(first_id);
+        state.split(SplitDirection::Vertical, second_id);
+        app.view = crate::ui::View::Attached(state);
+
+        // Send Ctrl-x then Esc.
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(app.view, crate::ui::View::Dashboard),
+            "should return to dashboard"
+        );
+        let saved = app.store.get_workspace_layout(first_id).unwrap();
+        assert!(saved.is_some(), "layout should be saved under first leaf");
+        let (tree, _focus) = saved.unwrap();
+        assert_eq!(tree.leaves(), vec![first_id, second_id]);
+        assert!(
+            app.workspaces_with_multi_pane_layouts.contains(&first_id),
+            "cache should refresh to include the new layout's anchor"
+        );
+
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
     }
 }

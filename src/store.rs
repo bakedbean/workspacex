@@ -7,7 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RepoId(pub i64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct WorkspaceId(pub i64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]

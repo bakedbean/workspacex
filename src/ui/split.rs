@@ -6,7 +6,7 @@
 use crate::store::WorkspaceId;
 use ratatui::layout::{Constraint, Direction as LayoutDirection, Layout, Rect};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SplitDirection {
     /// Children are stacked side-by-side with a vertical divider, like
     /// vim's `:vsplit`. New pane appears to the right of the focused one.
@@ -24,7 +24,7 @@ pub enum Arrow {
     Down,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SplitTree {
     Leaf(WorkspaceId),
     Split {
@@ -543,5 +543,30 @@ mod tests {
         assert_eq!(s.focused_id(), Some(wid(1)));
         assert!(s.focus_next());
         assert_eq!(s.focused_id(), Some(wid(2)));
+    }
+
+    #[test]
+    fn splittree_serde_round_trip_preserves_nested_structure() {
+        let mut tree = SplitTree::Leaf(wid(1));
+        assert!(tree.split(&[], SplitDirection::Vertical, wid(2)).is_some());
+        assert!(tree.split(&[1], SplitDirection::Horizontal, wid(3)).is_some());
+        let json = serde_json::to_string(&tree).expect("serialize");
+        let back: SplitTree = serde_json::from_str(&json).expect("deserialize");
+        let a = tree.layout(Rect::new(0, 0, 80, 24));
+        let b = back.layout(Rect::new(0, 0, 80, 24));
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.0, y.0, "leaf id");
+            assert_eq!(x.1, y.1, "focus path");
+            assert_eq!(x.2, y.2, "rect");
+        }
+    }
+
+    #[test]
+    fn workspaceid_serializes_as_bare_integer() {
+        let id = crate::store::WorkspaceId(42);
+        assert_eq!(serde_json::to_string(&id).unwrap(), "42");
+        let back: crate::store::WorkspaceId = serde_json::from_str("42").unwrap();
+        assert_eq!(back, id);
     }
 }

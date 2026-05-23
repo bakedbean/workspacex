@@ -533,6 +533,23 @@ impl Store {
         )?;
         Ok(())
     }
+
+    pub fn list_multi_pane_layout_anchors(&self) -> Result<Vec<WorkspaceId>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT anchor_workspace_id, tree_json FROM workspace_layouts ORDER BY anchor_workspace_id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (anchor, tree_json) = row?;
+            if let Ok(tree) = serde_json::from_str::<crate::ui::split::SplitTree>(&tree_json) {
+                if tree.leaves().len() > 1 {
+                    out.push(WorkspaceId(anchor));
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 const SCHEMA_V1: &str = r#"
@@ -1108,5 +1125,40 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0, "corrupt row deleted on read");
+    }
+
+    #[test]
+    fn list_multi_pane_layout_anchors_returns_only_multi_leaf_layouts() {
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(std::path::Path::new("/r"), "r", "x").unwrap();
+        let a = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let b = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "b",
+                branch: "x/b",
+                worktree_path: std::path::Path::new("/r/b"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        // a: single-leaf layout (should NOT appear).
+        store.set_workspace_layout(a, &SplitTree::Leaf(a), &[]).unwrap();
+        // b: two-leaf layout (should appear).
+        let mut pair = SplitTree::Leaf(b);
+        pair.split(&[], SplitDirection::Vertical, a);
+        store.set_workspace_layout(b, &pair, &[1]).unwrap();
+        let got = store.list_multi_pane_layout_anchors().unwrap();
+        assert_eq!(got, vec![b], "only multi-pane anchors returned");
     }
 }

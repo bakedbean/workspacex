@@ -75,6 +75,7 @@ pub struct RowInputs {
     pub selected: bool,
     pub yolo: bool,
     pub setup_failed: bool,
+    pub has_multi_pane_layout: bool,
     pub lifecycle: Option<BranchLifecycle>,
     pub nerd_fonts: bool,
     pub workspace_id: crate::store::WorkspaceId,
@@ -119,11 +120,16 @@ pub fn render(
     ));
 
     // 4: name (with setup-failed badge and YOLO styling)
-    let name_target = if inputs.setup_failed {
-        name_width.saturating_sub(3).max(1)
+    let layout_badge_width = if inputs.has_multi_pane_layout && inputs.nerd_fonts {
+        2 // " " + codicon
     } else {
-        name_width
+        0
     };
+    let setup_badge_width = if inputs.setup_failed { 3 } else { 0 };
+    let name_target = name_width
+        .saturating_sub(setup_badge_width)
+        .saturating_sub(layout_badge_width)
+        .max(1);
     let name_padded = truncate_pad(&inputs.name, name_target);
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
     if inputs.yolo {
@@ -132,6 +138,9 @@ pub fn render(
     spans.push(Span::styled(name_padded, name_style));
     if inputs.setup_failed {
         spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
+    }
+    if inputs.has_multi_pane_layout && inputs.nerd_fonts {
+        spans.push(Span::styled(" \u{ebb0}".to_string(), theme.dim_style()));
     }
 
     // 5: branch
@@ -297,6 +306,7 @@ mod tests {
             selected: false,
             yolo: false,
             setup_failed: false,
+            has_multi_pane_layout: false,
             lifecycle: None,
             nerd_fonts: false,
             workspace_id: crate::store::WorkspaceId(0),
@@ -543,6 +553,60 @@ mod tests {
         let mid = ColumnWidths::clamped(30, 40);
         assert_eq!(mid.name, 30);
         assert_eq!(mid.branch, 40);
+    }
+
+    #[test]
+    fn multi_pane_layout_appends_codicon_when_nerd_fonts() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.has_multi_pane_layout = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(
+            text.contains("\u{ebb0}"),
+            "split_horizontal codicon present: {text:?}"
+        );
+    }
+
+    #[test]
+    fn multi_pane_layout_skipped_without_nerd_fonts() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = false;
+        inputs.has_multi_pane_layout = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(
+            !text.contains("\u{ebb0}"),
+            "codicon should not render without nerd fonts: {text:?}"
+        );
+    }
+
+    #[test]
+    fn layout_and_setup_failed_badges_both_render() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.has_multi_pane_layout = true;
+        inputs.setup_failed = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("⚙!"), "setup badge present: {text:?}");
+        assert!(text.contains("\u{ebb0}"), "layout badge present: {text:?}");
+    }
+
+    #[test]
+    fn name_shrinks_to_accommodate_layout_badge() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.nerd_fonts = true;
+        inputs.has_multi_pane_layout = true;
+        inputs.name = "this-is-a-pretty-long-workspace-name-indeed".into();
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("\u{ebb0}"));
+        assert!(text.contains("…"), "long name truncated to fit: {text:?}");
     }
 
     #[test]

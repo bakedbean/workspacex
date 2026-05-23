@@ -435,16 +435,21 @@ impl App {
                 crate::pty::session::SessionStatus::Running { .. }
             )
         });
-        let secs = session.as_ref().map(|s| {
+        // Returns `None` (not `Some(0)`) when the session is attached but
+        // no PTY output has been observed yet, so `Status::classify`'s
+        // PTY-active guard treats it as "unknown" rather than "fresh
+        // output" — otherwise a permission prompt that fires before the
+        // first PTY byte would be misclassified as Thinking.
+        let secs = session.as_ref().and_then(|s| {
             let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
             if last == 0 {
-                return 0;
+                return None;
             }
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
-            now.saturating_sub(last) / 1000
+            Some(now.saturating_sub(last) / 1000)
         });
         // `has_prior_session` does filesystem I/O (canonicalize +
         // read_dir); skip it when we already have a live session, since

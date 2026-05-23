@@ -165,6 +165,17 @@ mod tests {
     }
 
     #[test]
+    fn awaiting_tool_not_suppressed_when_pty_unknown() {
+        // `None` means we have no PTY recency data (e.g. session just
+        // attached, no output yet). That's not positive evidence the
+        // agent is working, so the permission heuristic must still fire.
+        assert_eq!(
+            Status::classify(true, None, false, None, true, false),
+            Status::Question
+        );
+    }
+
+    #[test]
     fn awaiting_answer_not_suppressed_by_active_pty() {
         // An explicit AskUserQuestion / trailing-? must still surface as
         // Question even if the PTY is briefly active — the agent has

@@ -45,6 +45,15 @@ pub enum CloseOutcome {
     Empty,
 }
 
+/// What `prune` produced.
+pub enum PruneOutcome {
+    /// At least one leaf survived; the tree is still well-formed (no
+    /// 1-child Splits).
+    Kept,
+    /// No leaf survived; caller should treat this tree as gone.
+    Empty,
+}
+
 #[derive(Debug, Clone)]
 pub struct AttachedState {
     pub tree: SplitTree,
@@ -261,6 +270,41 @@ impl SplitTree {
             let mut new_focus = parent_path.to_vec();
             new_focus.push(new_last);
             CloseOutcome::Focus(first_leaf_path(self, &new_focus))
+        }
+    }
+
+    /// Drop every leaf whose `keep(id)` returns false. After pruning,
+    /// any `Split` that ends up with a single child is collapsed into
+    /// that child (matches the invariant maintained by `close`).
+    pub fn prune<F: Fn(WorkspaceId) -> bool>(&mut self, keep: &F) -> PruneOutcome {
+        match self {
+            SplitTree::Leaf(id) => {
+                if keep(*id) {
+                    PruneOutcome::Kept
+                } else {
+                    PruneOutcome::Empty
+                }
+            }
+            SplitTree::Split { children, .. } => {
+                let mut i = 0;
+                while i < children.len() {
+                    match children[i].prune(keep) {
+                        PruneOutcome::Kept => i += 1,
+                        PruneOutcome::Empty => {
+                            children.remove(i);
+                        }
+                    }
+                }
+                if children.is_empty() {
+                    PruneOutcome::Empty
+                } else if children.len() == 1 {
+                    let only = children.remove(0);
+                    *self = only;
+                    PruneOutcome::Kept
+                } else {
+                    PruneOutcome::Kept
+                }
+            }
         }
     }
 
@@ -568,5 +612,51 @@ mod tests {
         assert_eq!(serde_json::to_string(&id).unwrap(), "42");
         let back: crate::store::WorkspaceId = serde_json::from_str("42").unwrap();
         assert_eq!(back, id);
+    }
+
+    #[test]
+    fn prune_removes_dropped_leaves_and_collapses_singletons() {
+        // (A | B | C), prune B → (A | C)
+        let mut tree = SplitTree::Leaf(wid(1));
+        tree.split(&[], SplitDirection::Vertical, wid(2));
+        tree.split(&[1], SplitDirection::Vertical, wid(3));
+        let outcome = tree.prune(&|id| id != wid(2));
+        assert!(matches!(outcome, PruneOutcome::Kept));
+        assert_eq!(tree.leaves(), vec![wid(1), wid(3)]);
+    }
+
+    #[test]
+    fn prune_collapses_nested_singleton() {
+        // (A | (B / C)) — prune C → (A | B). The nested split must collapse
+        // (no 1-child Split allowed).
+        let mut tree = SplitTree::Leaf(wid(1));
+        tree.split(&[], SplitDirection::Vertical, wid(2));
+        tree.split(&[1], SplitDirection::Horizontal, wid(3));
+        let outcome = tree.prune(&|id| id != wid(3));
+        assert!(matches!(outcome, PruneOutcome::Kept));
+        assert_eq!(tree.leaves(), vec![wid(1), wid(2)]);
+        fn no_singleton_splits(t: &SplitTree) {
+            if let SplitTree::Split { children, .. } = t {
+                assert!(children.len() >= 2, "found singleton split");
+                for c in children { no_singleton_splits(c); }
+            }
+        }
+        no_singleton_splits(&tree);
+    }
+
+    #[test]
+    fn prune_returns_empty_when_no_leaves_survive() {
+        let mut tree = SplitTree::Leaf(wid(1));
+        tree.split(&[], SplitDirection::Vertical, wid(2));
+        let outcome = tree.prune(&|_| false);
+        assert!(matches!(outcome, PruneOutcome::Empty));
+    }
+
+    #[test]
+    fn prune_keeps_leaf_when_predicate_true() {
+        let mut tree = SplitTree::Leaf(wid(1));
+        let outcome = tree.prune(&|_| true);
+        assert!(matches!(outcome, PruneOutcome::Kept));
+        assert_eq!(tree.leaves(), vec![wid(1)]);
     }
 }

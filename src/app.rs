@@ -2625,12 +2625,23 @@ async fn reconcile_create_result(
     if is_mine {
         g.pending_create_gen = None;
     }
+    let new_ws_id = result.as_ref().ok().map(|c| c.workspace.id);
     match result {
         Ok(_) => {
             if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::SetupRunning { .. })) {
                 g.modal = None;
             }
             let _ = g.refresh();
+            // Select the newly created workspace so the dashboard lands on it.
+            if let Some(id) = new_ws_id {
+                if let Some(idx) = g
+                    .selectable
+                    .iter()
+                    .position(|t| *t == SelectionTarget::Workspace(id))
+                {
+                    g.dashboard.selected = idx;
+                }
+            }
         }
         Err(crate::error::Error::Cancelled) => {
             // User cancelled — modal already cleared by Esc handler. Refresh

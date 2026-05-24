@@ -299,6 +299,70 @@ pub(super) fn build_procs_and_files(
     out
 }
 
+const REPLY_CHIP: &str = "┃ Reply to agent ┃";
+const REPLY_HINT: &str = "  ↵ send · Esc cancel";
+
+/// Reply input row. Returns a `Line` plus an optional cursor X-offset
+/// (within the line) that the caller passes to `f.set_cursor_position`
+/// when `focused == true`. The caller adds `area.x` and the row's `y`.
+pub(super) fn build_reply_row(
+    draft: &str,
+    focused: bool,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let chip_style = if focused {
+        Style::default().fg(theme.path).add_modifier(Modifier::BOLD)
+    } else {
+        theme.dim_style()
+    };
+    spans.push(Span::styled(REPLY_CHIP.to_string(), chip_style));
+    spans.push(Span::raw(" ".to_string()));
+
+    let hint_width = if focused { REPLY_HINT.chars().count() } else { 0 };
+    let chip_width = REPLY_CHIP.chars().count() + 1; // chip + 1 trailing space
+    let field_width = width
+        .saturating_sub(chip_width)
+        .saturating_sub(hint_width)
+        .max(1);
+
+    // Right-align the cursor in the visible window: take the LAST
+    // `field_width - 1` chars (reserve 1 cell for the cursor when
+    // focused; when unfocused that cell holds the trailing space).
+    let cursor_room = if focused { 1 } else { 0 };
+    let visible_chars = field_width.saturating_sub(cursor_room).max(1);
+    let total = draft.chars().count();
+    let skip = total.saturating_sub(visible_chars);
+    let visible: String = draft.chars().skip(skip).collect();
+    let padding = field_width.saturating_sub(visible.chars().count() + cursor_room);
+    spans.push(Span::styled(visible, Style::default()));
+    if padding > 0 {
+        spans.push(Span::raw(" ".repeat(padding)));
+    }
+
+    if focused {
+        spans.push(Span::styled(REPLY_HINT.to_string(), theme.dim_style()));
+    }
+
+    Line::from(spans)
+}
+
+/// Cursor x-offset (within the reply row) when focused. Returns the
+/// column where `f.set_cursor_position` should be set.
+pub(super) fn reply_cursor_x(draft: &str, width: usize) -> u16 {
+    let chip_width = REPLY_CHIP.chars().count() + 1;
+    let hint_width = REPLY_HINT.chars().count();
+    let field_width = width
+        .saturating_sub(chip_width)
+        .saturating_sub(hint_width)
+        .max(1);
+    let visible_chars = field_width.saturating_sub(1).max(1);
+    let total = draft.chars().count();
+    let visible_count = total.min(visible_chars);
+    (chip_width + visible_count) as u16
+}
+
 /// Greedy word-wrap. Splits long words at the column boundary.
 fn wrap_lines(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
@@ -722,5 +786,45 @@ mod tests {
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("Cargo.toml"), "expected Cargo.toml in output: {joined:?}");
         assert!(joined.contains("main.rs"), "expected main.rs in output: {joined:?}");
+    }
+
+    #[test]
+    fn reply_input_row_shows_chip_and_draft() {
+        let theme = Theme::wsx();
+        let line = build_reply_row("hello agent", false, &theme, 80);
+        let text = line_to_string(&line);
+        assert!(text.contains("Reply to agent"), "chip present: {text:?}");
+        assert!(text.contains("hello agent"), "draft present: {text:?}");
+    }
+
+    #[test]
+    fn reply_input_row_shows_send_hint_when_focused() {
+        let theme = Theme::wsx();
+        let line = build_reply_row("", true, &theme, 80);
+        let text = line_to_string(&line);
+        assert!(text.contains("send"), "send hint present when focused: {text:?}");
+        assert!(text.contains("cancel"), "cancel hint present when focused: {text:?}");
+    }
+
+    #[test]
+    fn reply_input_row_hides_hints_when_unfocused() {
+        let theme = Theme::wsx();
+        let line = build_reply_row("", false, &theme, 80);
+        let text = line_to_string(&line);
+        assert!(!text.contains("send"), "send hint absent when unfocused: {text:?}");
+        assert!(!text.contains("cancel"), "cancel hint absent when unfocused: {text:?}");
+    }
+
+    #[test]
+    fn reply_input_row_scrolls_long_drafts_to_end() {
+        // A long draft must show its END (where the cursor lives), not
+        // its beginning — otherwise the user can't see what they're typing.
+        let theme = Theme::wsx();
+        let long: String = "a".repeat(60);
+        // Construct with " END" appended so we can detect that the tail is visible.
+        let draft = format!("{long} END");
+        let line = build_reply_row(&draft, true, &theme, 60);
+        let text = line_to_string(&line);
+        assert!(text.contains("END"), "tail of draft visible: {text:?}");
     }
 }

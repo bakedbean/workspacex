@@ -96,6 +96,35 @@ impl StopReason {
     }
 }
 
+/// Running tallies of tool_use blocks by category. Populated by the
+/// tail loop as JSONL lines parse. Used by the dashboard detail bar
+/// to synthesize a one-line action trace like "read 14 files, edited
+/// 3 files, ran 2 commands".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolUseCounts {
+    pub read: u32,
+    pub edit: u32,
+    pub write: u32,
+    pub bash: u32,
+    pub other: u32,
+}
+
+impl ToolUseCounts {
+    /// Increment the appropriate field based on the Claude Code tool name.
+    /// Edit/MultiEdit count as `edit`; Write/NotebookEdit count as `write`;
+    /// Bash counts as `bash`; Read counts as `read`; everything else
+    /// (Task, Glob, Grep, WebFetch, …) counts as `other`.
+    pub fn increment(&mut self, tool_name: &str) {
+        match tool_name {
+            "Read" => self.read += 1,
+            "Edit" | "MultiEdit" => self.edit += 1,
+            "Write" | "NotebookEdit" => self.write += 1,
+            "Bash" => self.bash += 1,
+            _ => self.other += 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceEvents {
     pub latest: Option<EventSnapshot>,
@@ -133,6 +162,20 @@ pub struct WorkspaceEvents {
     /// session drifts into `Stalled` after 60s. Cleared by any subsequent
     /// real assistant message or real user text.
     pub last_user_interrupted: bool,
+    /// First plain-text user content block observed since the most
+    /// recent session reset. Set once per session; preserved across
+    /// log rotation past MAX_LOG. Used by the detail bar's SESSION
+    /// SUMMARY column.
+    pub first_user_text: Option<String>,
+    /// Running tallies of tool_use blocks by category. Populated by
+    /// the tail loop. Used by the detail bar to synthesize a
+    /// one-line action trace.
+    pub tool_use_counts: ToolUseCounts,
+    /// Most-recent-first ring of edited file paths, bounded to 7.
+    /// A path already in the ring is moved to the front rather than
+    /// duplicated, so repeated edits to the same file don't appear
+    /// multiple times in the dashboard's RECENT FILES list.
+    pub recent_edited_files: VecDeque<String>,
 }
 
 impl Default for WorkspaceEvents {
@@ -148,11 +191,25 @@ impl Default for WorkspaceEvents {
             last_log_activity_ms: 0,
             last_assistant_text: None,
             last_user_interrupted: false,
+            first_user_text: None,
+            tool_use_counts: ToolUseCounts::default(),
+            recent_edited_files: VecDeque::with_capacity(7),
         }
     }
 }
 
 impl WorkspaceEvents {
+    /// Push a path onto `recent_edited_files`, moving any existing
+    /// entry for that path to the front instead of duplicating it.
+    /// Bounds the ring to 7 entries.
+    pub fn push_recent_edited_file(&mut self, path: String) {
+        self.recent_edited_files.retain(|p| p != &path);
+        self.recent_edited_files.push_front(path);
+        while self.recent_edited_files.len() > 7 {
+            self.recent_edited_files.pop_back();
+        }
+    }
+
     /// Clear all session-derived state. Used when the underlying jsonl file
     /// is replaced or truncated — stale tool_uses and stop_reasons from the
     /// prior session must not leak into the new one.
@@ -163,6 +220,9 @@ impl WorkspaceEvents {
         self.last_log_activity_ms = 0;
         self.last_assistant_text = None;
         self.last_user_interrupted = false;
+        self.first_user_text = None;
+        self.tool_use_counts = ToolUseCounts::default();
+        self.recent_edited_files.clear();
     }
 
     /// The agent is stopped and the human hasn't replied yet.
@@ -275,6 +335,19 @@ pub struct TailUpdate {
     ///                 (a real assistant message or real user text),
     /// `None`        — batch was silent on this signal; caller keeps prior.
     pub last_user_interrupted: Option<bool>,
+    /// First user-text content block observed in this batch (in line
+    /// order). The caller assigns this to `WorkspaceEvents.first_user_text`
+    /// only when the destination is currently `None` — once the first
+    /// prompt is captured, subsequent user messages don't overwrite it.
+    pub first_user_text: Option<String>,
+    /// Tool-use category increments observed in this batch. The caller
+    /// adds these into `WorkspaceEvents.tool_use_counts` (saturating).
+    pub tool_use_counts: ToolUseCounts,
+    /// File paths the agent touched in this batch, in source order
+    /// (most-recent last). The caller push-fronts each entry into
+    /// `WorkspaceEvents.recent_edited_files`, deduping consecutive
+    /// same-path entries and bounding to 7.
+    pub edited_file_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -364,8 +437,19 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
         if let Some(snap) = parsed.event {
             update.events.push(snap);
         }
+        // Borrow parsed.tool_use_starts to increment counts BEFORE the
+        // extend (which moves it).
+        for (_id, name, _ts) in &parsed.tool_use_starts {
+            update.tool_use_counts.increment(name);
+        }
         update.tool_use_starts.extend(parsed.tool_use_starts);
         update.tool_use_resolves.extend(parsed.tool_use_resolves);
+        update.edited_file_paths.extend(parsed.edited_file_paths);
+        if update.first_user_text.is_none()
+            && let Some(t) = parsed.first_user_text
+        {
+            update.first_user_text = Some(t);
+        }
         // Order-aware: a fresh stop_reason restarts the "has the user
         // replied since this stop?" count. A user_text after it sets it.
         if let Some(sr) = parsed.stop_reason {
@@ -414,6 +498,14 @@ pub struct ParsedLine {
     /// sentinel is system-generated, not a real human reply, so the
     /// `human_replied_after_last_stop` machinery should ignore it.
     pub user_interrupt_sentinel: bool,
+    /// Plain user text content for the first real user message in this
+    /// line (None for tool_result or non-user lines). Aggregated into
+    /// `TailUpdate.first_user_text` upstream.
+    pub first_user_text: Option<String>,
+    /// File paths extracted from Read/Edit/MultiEdit/Write/NotebookEdit
+    /// tool_use blocks on this line, in source order. Empty for any
+    /// other tool / non-assistant line.
+    pub edited_file_paths: Vec<String>,
 }
 
 /// Parse a single JSONL line into a [`ParsedLine`]. Malformed lines and
@@ -456,6 +548,7 @@ fn parse_user(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
             timestamp_ms,
         });
         out.is_user_text = true;
+        out.first_user_text = Some(text.to_string());
         return out;
     }
     if let Some(blocks) = content.as_array() {
@@ -530,6 +623,16 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
                 if let Some(id) = block.get("id").and_then(|i| i.as_str()) {
                     out.tool_use_starts
                         .push((id.to_string(), name.to_string(), timestamp_ms));
+                }
+                // Only mutating tools count as a "recent edit" — Read
+                // never modifies the worktree, so files the agent just
+                // read shouldn't show up in the detail bar's
+                // RECENT FILES list (they'd render without a diff count
+                // and confuse the user).
+                if matches!(name, "Edit" | "MultiEdit" | "Write" | "NotebookEdit")
+                    && let Some(p) = input.get("file_path").and_then(|p| p.as_str())
+                {
+                    out.edited_file_paths.push(p.to_string());
                 }
             }
             _ => {}
@@ -1243,8 +1346,10 @@ mod tests {
 
     #[test]
     fn last_text_ends_with_question_true_for_simple_question() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("Want me to also handle X?".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("Want me to also handle X?".into()),
+            ..Default::default()
+        };
         assert!(evt.last_text_ends_with_question());
     }
 
@@ -1252,22 +1357,28 @@ mod tests {
     fn last_text_ends_with_question_strips_trailing_markdown() {
         // Claude often writes `Want me to refactor `foo`?*` where the literal
         // final char is `*` — we still want this classified as a question.
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("Want me to refactor `foo`?*".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("Want me to refactor `foo`?*".into()),
+            ..Default::default()
+        };
         assert!(evt.last_text_ends_with_question());
     }
 
     #[test]
     fn last_text_ends_with_question_strips_trailing_whitespace() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("Should I proceed?\n   ".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("Should I proceed?\n   ".into()),
+            ..Default::default()
+        };
         assert!(evt.last_text_ends_with_question());
     }
 
     #[test]
     fn last_text_ends_with_question_false_for_period_ending() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("Done. Let me know if you'd like changes.".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("Done. Let me know if you'd like changes.".into()),
+            ..Default::default()
+        };
         assert!(!evt.last_text_ends_with_question());
     }
 
@@ -1276,8 +1387,10 @@ mod tests {
         // A `?` in the middle followed by a declarative final sentence should
         // not trip the heuristic. Only the trailing char (after markdown trim)
         // matters.
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("I considered: does this work? Yes, it works.".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("I considered: does this work? Yes, it works.".into()),
+            ..Default::default()
+        };
         assert!(!evt.last_text_ends_with_question());
     }
 
@@ -1416,5 +1529,125 @@ mod tests {
         );
         // Oldest entry should have been evicted.
         assert_eq!(ws.log.front().unwrap().display, format!("e{}", 10));
+    }
+
+    #[test]
+    fn workspace_events_new_fields_default_to_empty() {
+        let evt = WorkspaceEvents::default();
+        assert!(evt.first_user_text.is_none());
+        assert_eq!(evt.tool_use_counts.read, 0);
+        assert_eq!(evt.tool_use_counts.edit, 0);
+        assert_eq!(evt.tool_use_counts.write, 0);
+        assert_eq!(evt.tool_use_counts.bash, 0);
+        assert_eq!(evt.tool_use_counts.other, 0);
+        assert!(evt.recent_edited_files.is_empty());
+    }
+
+    #[test]
+    fn push_recent_edited_file_moves_repeats_to_front_no_duplicates() {
+        // A re-edit of an already-tracked file moves it to the front
+        // rather than appearing twice in the ring.
+        let mut evt = WorkspaceEvents::default();
+        evt.push_recent_edited_file("a.rs".into());
+        evt.push_recent_edited_file("b.rs".into());
+        evt.push_recent_edited_file("a.rs".into());
+        let entries: Vec<&str> = evt.recent_edited_files.iter().map(String::as_str).collect();
+        assert_eq!(entries, vec!["a.rs", "b.rs"], "no duplicate a.rs");
+    }
+
+    #[test]
+    fn push_recent_edited_file_bounds_to_seven() {
+        let mut evt = WorkspaceEvents::default();
+        for i in 0..10 {
+            evt.push_recent_edited_file(format!("f{i}.rs"));
+        }
+        assert_eq!(evt.recent_edited_files.len(), 7);
+        // Newest at front, oldest dropped.
+        assert_eq!(evt.recent_edited_files.front().map(String::as_str), Some("f9.rs"));
+        assert!(
+            !evt.recent_edited_files.iter().any(|p| p == "f0.rs"),
+            "oldest evicted"
+        );
+    }
+
+    #[test]
+    fn reset_session_state_clears_new_fields() {
+        let mut evt = WorkspaceEvents {
+            first_user_text: Some("hello".to_string()),
+            tool_use_counts: ToolUseCounts { read: 3, bash: 1, ..Default::default() },
+            ..Default::default()
+        };
+        evt.recent_edited_files.push_front("src/main.rs".to_string());
+
+        evt.reset_session_state();
+
+        assert!(evt.first_user_text.is_none());
+        assert_eq!(evt.tool_use_counts.read, 0);
+        assert_eq!(evt.tool_use_counts.bash, 0);
+        assert!(evt.recent_edited_files.is_empty());
+    }
+
+    #[test]
+    fn parse_user_surfaces_first_user_text() {
+        let line = r#"{"type":"user","message":{"role":"user","content":"summarize this repo"},"timestamp":"2026-05-14T17:32:02.744Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(
+            parsed.first_user_text.as_deref(),
+            Some("summarize this repo")
+        );
+    }
+
+    #[test]
+    fn parse_user_omits_first_user_text_for_tool_results() {
+        // A "user" line whose content is a tool_result array is not a real
+        // user prompt — first_user_text must stay None.
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":"ok","is_error":false}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(parsed.first_user_text.is_none());
+    }
+
+    #[test]
+    fn parse_assistant_surfaces_edited_file_paths() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/tmp/x/src/main.rs","old_string":"a","new_string":"b"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(parsed.edited_file_paths, vec!["/tmp/x/src/main.rs".to_string()]);
+    }
+
+    #[test]
+    fn parse_assistant_skips_read_paths() {
+        // Read never modifies the worktree — its file_path should not
+        // be captured as a recent edit (otherwise the dashboard detail
+        // bar lists files with no diff count next to them).
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/x/Cargo.toml"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(parsed.edited_file_paths.is_empty());
+    }
+
+    #[test]
+    fn parse_assistant_skips_paths_for_non_file_tools() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(parsed.edited_file_paths.is_empty());
+    }
+
+    #[test]
+    fn tail_session_aggregates_first_user_text_and_counts() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"type":"user","message":{{"role":"user","content":"do the thing"}},"timestamp":"2026-05-14T17:32:02.744Z"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t1","name":"Read","input":{{"file_path":"/a.rs"}}}}]}},"timestamp":"2026-05-14T17:32:03.744Z"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t2","name":"Edit","input":{{"file_path":"/b.rs","old_string":"x","new_string":"y"}}}}]}},"timestamp":"2026-05-14T17:32:04.744Z"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t3","name":"Bash","input":{{"command":"ls"}}}}]}},"timestamp":"2026-05-14T17:32:05.744Z"}}"#).unwrap();
+        drop(f);
+
+        let upd = tail_session(&path, 0).unwrap();
+        assert_eq!(upd.first_user_text.as_deref(), Some("do the thing"));
+        assert_eq!(upd.tool_use_counts.read, 1);
+        assert_eq!(upd.tool_use_counts.edit, 1);
+        assert_eq!(upd.tool_use_counts.bash, 1);
+        // Only Edit contributes to edited_file_paths — Read does not.
+        assert_eq!(upd.edited_file_paths, vec!["/b.rs".to_string()]);
     }
 }

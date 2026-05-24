@@ -255,6 +255,15 @@ pub struct App {
     /// Cached `git diff --shortstat` output per workspace (added/deleted).
     /// Populated lazily by the workspace-status poller.
     pub workspace_diff: std::collections::HashMap<crate::store::WorkspaceId, crate::git::DiffStats>,
+    /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
+    /// to the worktree root (as `git diff --numstat` emits them).
+    /// Populated by the same poller that maintains `workspace_diff`.
+    /// Used by the detail bar's RECENT FILES section to annotate each
+    /// file with its `+X −Y` delta.
+    pub workspace_diff_per_file: std::collections::HashMap<
+        crate::store::WorkspaceId,
+        std::collections::HashMap<String, crate::git::DiffStats>,
+    >,
     /// Rolling 24-hour history of `(hour_epoch_secs, max_live_count)` for
     /// the dashboard footer sparkline. Hydrated from `store.recent_activity_buckets`
     /// at startup; updated each tick. Newest bucket at the back.
@@ -322,6 +331,7 @@ impl App {
             workspace_processes: std::collections::HashMap::new(),
             tick: 0,
             workspace_diff: std::collections::HashMap::new(),
+            workspace_diff_per_file: std::collections::HashMap::new(),
             activity_history: std::collections::VecDeque::new(),
             last_proc_scan_ms: 0,
             pending_edit: None,
@@ -695,18 +705,27 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.pinned_commands_cache.clear();
     match &app.view {
         View::Dashboard => {
-            let (dashboard_area, pm_area) = if app.pm_visible {
-                let chunks = ratatui::layout::Layout::default()
-                    .direction(ratatui::layout::Direction::Vertical)
-                    .constraints([
-                        ratatui::layout::Constraint::Percentage(60),
-                        ratatui::layout::Constraint::Percentage(40),
-                    ])
-                    .split(area);
-                (chunks[0], Some(chunks[1]))
+            let selection_is_workspace = matches!(
+                app.selected_target(),
+                Some(SelectionTarget::Workspace(_))
+            );
+            let detail_visible = selection_is_workspace
+                && area.height >= crate::ui::dashboard::detail::MIN_HEIGHT + 10;
+            // Carve a 1-row footer off the bottom of the full area so the
+            // spec order (list / detail / pm / footer) is respected. The
+            // detail and PM regions are placed ABOVE the footer row.
+            let inner_area = if area.height > 1 {
+                ratatui::layout::Rect { height: area.height - 1, ..area }
             } else {
-                (area, None)
+                area
             };
+            let footer_area = ratatui::layout::Rect {
+                y: area.y + area.height.saturating_sub(1),
+                height: 1,
+                ..area
+            };
+            let (dashboard_area, detail_area, pm_area) =
+                dashboard_regions(inner_area, app.pm_visible, detail_visible);
             let notifications_on = notifications_enabled(&app.store);
             let nerd_fonts = nerd_fonts_enabled(&app.store);
 
@@ -874,7 +893,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 }
             }
             app.dashboard.selection = app.selected_target();
-            dashboard::render(
+            dashboard::render_without_footer(
                 f,
                 dashboard_area,
                 &inputs,
@@ -888,6 +907,75 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 }
                 crate::ui::pm_pane::render(f, pm_area, app.pm.as_ref(), app.focus, &app.theme);
             }
+            if let (Some(detail_area), Some(SelectionTarget::Workspace(ws_id))) =
+                (detail_area, app.selected_target())
+            {
+                if let Some((rid, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
+                    if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
+                        let session = app.sessions.get(ws.id);
+                        // Activity timestamp: prefer whichever signal is more
+                        // recent. `session.activity_ms` only exists for
+                        // workspaces wsx is currently attached to. The JSONL
+                        // event's own `timestamp_ms` (parsed from the line's
+                        // `timestamp` field) is the actual event time — this
+                        // is what we want, NOT `last_log_activity_ms`, which
+                        // is the wall-clock time when wsx observed the log
+                        // growing (gets stamped to "now" on the first tail
+                        // pass after startup, so all workspaces would
+                        // otherwise show the same age starting from zero).
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        let session_last_ms = session
+                            .as_ref()
+                            .map(|s| {
+                                s.activity_ms.load(std::sync::atomic::Ordering::Relaxed) as i64
+                            })
+                            .unwrap_or(0);
+                        let event_last_ms = app
+                            .workspace_events
+                            .get(&ws.id)
+                            .and_then(|e| e.latest.as_ref().map(|ev| ev.timestamp_ms))
+                            .unwrap_or(0);
+                        let last_ms = session_last_ms.max(event_last_ms);
+                        let ago_secs = if last_ms == 0 {
+                            None
+                        } else {
+                            Some(((now_ms - last_ms).max(0) / 1000) as u64)
+                        };
+                        let status = app.classify_status(ws);
+                        let procs: &[crate::proc::ProcInfo] = app
+                            .workspace_processes
+                            .get(&ws.id)
+                            .map(Vec::as_slice)
+                            .unwrap_or(&[]);
+                        let inputs = crate::ui::dashboard::detail::DetailInputs {
+                            repo,
+                            workspace: ws,
+                            events: app.workspace_events.get(&ws.id),
+                            procs,
+                            diff: app.workspace_diff.get(&ws.id).copied(),
+                            diff_per_file: app.workspace_diff_per_file.get(&ws.id),
+                            lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
+                            pr_title: None,
+                            pr_number: None,
+                            status,
+                            ago_secs,
+                            reply_draft: &app.dashboard.reply_draft,
+                            reply_focused: matches!(
+                                app.focus,
+                                crate::ui::PaneFocus::DetailBarReply
+                            ),
+                            events_scanned: app.workspace_events_scanned.contains(&ws.id),
+                        };
+                        crate::ui::dashboard::detail::render(f, detail_area, &inputs, &app.theme);
+                    }
+                }
+            }
+            // Render footer below detail/PM so the spec order
+            // list / detail / pm / footer is respected.
+            dashboard::render_footer(f, footer_area, &activity, &app.theme);
         }
         View::Attached(state) => {
             // If any leaf's session has gone away (e.g. workspace was
@@ -1141,6 +1229,50 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 #[doc(hidden)]
 pub fn draw_for_test(f: &mut ratatui::Frame, app: &mut App) {
     draw(f, app);
+}
+
+/// Carve the dashboard area into list / detail / pm regions based on
+/// whether PM is visible and whether a workspace is selected.
+fn dashboard_regions(
+    area: ratatui::layout::Rect,
+    pm_visible: bool,
+    detail_visible: bool,
+) -> (
+    ratatui::layout::Rect,
+    Option<ratatui::layout::Rect>,
+    Option<ratatui::layout::Rect>,
+) {
+    use ratatui::layout::{Constraint, Direction, Layout};
+    let detail_h = crate::ui::dashboard::detail::preferred_height(area.height);
+    match (pm_visible, detail_visible) {
+        (false, false) => (area, None, None),
+        (false, true) => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(detail_h)])
+                .split(area);
+            (chunks[0], Some(chunks[1]), None)
+        }
+        (true, false) => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(area);
+            (chunks[0], None, Some(chunks[1]))
+        }
+        (true, true) => {
+            let pm_h = ((u32::from(area.height) * 33 / 100) as u16).max(6);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(0),
+                    Constraint::Length(detail_h),
+                    Constraint::Length(pm_h),
+                ])
+                .split(area);
+            (chunks[0], Some(chunks[1]), Some(chunks[2]))
+        }
+    }
 }
 
 fn nerd_fonts_enabled(store: &crate::store::Store) -> bool {
@@ -1433,6 +1565,70 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
     }
 }
 
+/// Handle a key event while [`PaneFocus::DetailBarReply`] is active.
+///
+/// Returns `true` if the key was consumed (caller should early-return),
+/// or `false` if the key should fall through to the main dashboard handler
+/// (e.g. navigation keys that also move the selection).
+async fn handle_detail_bar_reply_key(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+) -> bool {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    match (k.code, k.modifiers) {
+        (KeyCode::Tab, _) => {
+            // Spec: Dashboard → DetailBarReply → ProjectManager (when visible)
+            // → Dashboard. If PM is not visible, skip straight back to Dashboard.
+            if app.pm_visible {
+                app.focus = crate::ui::PaneFocus::ProjectManager;
+            } else {
+                app.focus = crate::ui::PaneFocus::Dashboard;
+            }
+            true
+        }
+        (KeyCode::Esc, _) => {
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            app.dashboard.reply_draft.clear();
+            true
+        }
+        (KeyCode::Enter, _) => {
+            let draft = std::mem::take(&mut app.dashboard.reply_draft);
+            if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                if let Some(session) = app.sessions.get(ws_id) {
+                    let mut bytes = draft.into_bytes();
+                    bytes.push(b'\r');
+                    session.scroll_to_live();
+                    let _ = session.writer.send(bytes).await;
+                }
+            }
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            true
+        }
+        (KeyCode::Backspace, _) => {
+            app.dashboard.reply_draft.pop();
+            true
+        }
+        (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+            app.dashboard.reply_draft.push(c);
+            true
+        }
+        (KeyCode::Up, _)
+        | (KeyCode::Down, _)
+        | (KeyCode::Left, _)
+        | (KeyCode::Right, _)
+        | (KeyCode::PageUp, _)
+        | (KeyCode::PageDown, _)
+        | (KeyCode::Home, _)
+        | (KeyCode::End, _) => {
+            // Yield to dashboard: it will handle the navigation. Discard draft.
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            app.dashboard.reply_draft.clear();
+            false
+        }
+        _ => true, // unknown key — swallow rather than fall through
+    }
+}
+
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
     // PM pane focus handling. When PM is focused, all keystrokes forward
     // to its PTY — including 'p' and 'r' (typing words containing those
@@ -1468,16 +1664,35 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
         }
     }
-    // Tab when focus is on Dashboard and PM is visible: swap to PM.
-    if app.pm_visible
-        && matches!(app.focus, crate::ui::PaneFocus::Dashboard)
-        && k.code == KeyCode::Tab
-    {
+    // DetailBarReply focus: keystrokes go to the reply input.
+    if matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {
+        // If the selected target is no longer a workspace (e.g.
+        // refresh moved selection), auto-return focus and discard.
+        if !matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            app.dashboard.reply_draft.clear();
+            return Ok(());
+        }
+        let consumed = handle_detail_bar_reply_key(app, k).await;
+        if consumed {
+            return Ok(());
+        }
+        // Not consumed → fall through so the dashboard handler picks up
+        // the key (e.g. arrow nav). `handle_detail_bar_reply_key` has
+        // already cleared the draft and reset focus when bailing out.
+    }
+    // Tab when focus is on Dashboard: workspace selection → DetailBarReply;
+    // repo selection with PM visible → ProjectManager.
+    if matches!(app.focus, crate::ui::PaneFocus::Dashboard) && k.code == KeyCode::Tab {
         // Treat Tab as a "never mind" for any armed z-leader so it
         // doesn't unexpectedly eat the next dashboard key after the
         // user Tabs back from PM.
         app.z_leader_pending = false;
-        app.focus = crate::ui::PaneFocus::ProjectManager;
+        if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+            app.focus = crate::ui::PaneFocus::DetailBarReply;
+        } else if app.pm_visible {
+            app.focus = crate::ui::PaneFocus::ProjectManager;
+        }
         return Ok(());
     }
     // Filter input mode: while a filter buffer is active, intercept
@@ -1539,6 +1754,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             } else {
                 app.dashboard.selected - 1
             };
+            // Clear any in-flight reply draft so it can't leak to the newly
+            // selected workspace (draft is tied to the workspace at the time
+            // keystrokes arrived, not to wherever the cursor ends up).
+            app.dashboard.reply_draft.clear();
         }
         (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
             let max = app.selectable.len().saturating_sub(1);
@@ -1547,6 +1766,8 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             } else {
                 app.dashboard.selected + 1
             };
+            // Clear any in-flight reply draft (same rationale as Up/k above).
+            app.dashboard.reply_draft.clear();
         }
         (KeyCode::Char('h'), _) => set_focused_fold(app, true),
         (KeyCode::Char('l'), _) => match app.selected_target() {
@@ -2815,6 +3036,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     // so the cached diff and its throttle stamp are
                     // stale. Drop them to force a fresh poll.
                     g.workspace_diff.remove(&id);
+                    g.workspace_diff_per_file.remove(&id);
                     g.diff_last_poll_ms.remove(&id);
                 }
             }
@@ -2850,6 +3072,10 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
                         let mut g = app.lock().await;
                         g.workspace_diff.insert(id, diff);
+                    }
+                    if let Some(per_file) = crate::git::workspace_diff_per_file(&path, base).await {
+                        let mut g = app.lock().await;
+                        g.workspace_diff_per_file.insert(id, per_file);
                     }
                 }
             }
@@ -2926,6 +3152,9 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         reset_from_zero,
                         last_assistant_text,
                         last_user_interrupted,
+                        first_user_text,
+                        tool_use_counts,
+                        edited_file_paths,
                     } = update;
                     let mut g = app.lock().await;
                     let evt = g.workspace_events.entry(id).or_default();
@@ -2973,6 +3202,24 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     }
                     if let Some(text) = last_assistant_text {
                         evt.last_assistant_text = Some(text);
+                    }
+                    if evt.first_user_text.is_none() {
+                        if let Some(t) = first_user_text {
+                            evt.first_user_text = Some(t);
+                        }
+                    }
+                    evt.tool_use_counts.read =
+                        evt.tool_use_counts.read.saturating_add(tool_use_counts.read);
+                    evt.tool_use_counts.edit =
+                        evt.tool_use_counts.edit.saturating_add(tool_use_counts.edit);
+                    evt.tool_use_counts.write =
+                        evt.tool_use_counts.write.saturating_add(tool_use_counts.write);
+                    evt.tool_use_counts.bash =
+                        evt.tool_use_counts.bash.saturating_add(tool_use_counts.bash);
+                    evt.tool_use_counts.other =
+                        evt.tool_use_counts.other.saturating_add(tool_use_counts.other);
+                    for path in edited_file_paths {
+                        evt.push_recent_edited_file(path);
                     }
                     // Sticky between batches: only overwrite when the batch
                     // had a definitive signal. Some(true) = batch ended on
@@ -5489,6 +5736,85 @@ mod pm_state_tests {
             g.modal
         );
     }
+
+    fn seed_app_with_workspace() -> App {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Idle repos fold by default; force-expand so the workspace row is
+        // visible in `visible_targets` during draw.
+        app.dashboard.folded.insert(repo_id.0 as u64, false);
+        app
+    }
+
+    #[test]
+    fn detail_bar_renders_when_workspace_is_selected() {
+        let mut app = seed_app_with_workspace();
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(_)))
+            .expect("workspace target present");
+        app.dashboard.selected = idx;
+
+        let backend = TestBackend::new(120, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Reply to agent"), "bar visible: {rendered}");
+    }
+
+    #[test]
+    fn detail_bar_absent_when_repo_header_is_selected() {
+        let mut app = seed_app_with_workspace();
+        let repo_idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Repo(_)))
+            .expect("repo target present");
+        app.dashboard.selected = repo_idx;
+
+        let backend = TestBackend::new(120, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !rendered.contains("Reply to agent"),
+            "bar absent on repo header: {rendered}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -5752,8 +6078,10 @@ mod derive_stopped_kind_tests {
         // AskUserQuestion is in flight: stop_reason is ToolUse (so
         // is_awaiting_user() returns false), but the question tool is in
         // pending_tool_uses. Should still classify as AwaitingAnswer.
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::ToolUse);
+        let mut evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            ..Default::default()
+        };
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
@@ -5761,8 +6089,10 @@ mod derive_stopped_kind_tests {
 
     #[test]
     fn awaiting_answer_when_exit_plan_mode_pending_mid_turn() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::ToolUse);
+        let mut evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            ..Default::default()
+        };
         evt.pending_tool_uses
             .insert("t1".into(), ("ExitPlanMode".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
@@ -5770,27 +6100,33 @@ mod derive_stopped_kind_tests {
 
     #[test]
     fn complete_when_end_turn_with_no_question_signal() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::EndTurn);
-        evt.user_replied_since_stop = false;
-        evt.last_assistant_text = Some("Done.".into());
+        let evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            user_replied_since_stop: false,
+            last_assistant_text: Some("Done.".into()),
+            ..Default::default()
+        };
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::Complete));
     }
 
     #[test]
     fn awaiting_answer_when_end_turn_with_trailing_question() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::EndTurn);
-        evt.user_replied_since_stop = false;
-        evt.last_assistant_text = Some("Want me to also handle X?".into());
+        let evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            user_replied_since_stop: false,
+            last_assistant_text: Some("Want me to also handle X?".into()),
+            ..Default::default()
+        };
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
     }
 
     #[test]
     fn none_when_user_has_already_replied() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::EndTurn);
-        evt.user_replied_since_stop = true;
+        let evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            user_replied_since_stop: true,
+            ..Default::default()
+        };
         assert_eq!(derive_stopped_kind(&evt), None);
     }
 
@@ -5801,9 +6137,11 @@ mod derive_stopped_kind_tests {
         // tool resolved, then the human hit interrupt. Without the
         // interrupt branch wsx falls through to Stalled after 60s; with
         // it, this is Complete (the agent was told to stop).
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::ToolUse);
-        evt.last_user_interrupted = true;
+        let evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            last_user_interrupted: true,
+            ..Default::default()
+        };
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::Complete));
     }
 
@@ -5812,9 +6150,11 @@ mod derive_stopped_kind_tests {
         // Edge case: interrupt fires while an AskUserQuestion is in
         // flight. The pending question tool should take precedence —
         // there's a real question to answer.
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::ToolUse);
-        evt.last_user_interrupted = true;
+        let mut evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            last_user_interrupted: true,
+            ..Default::default()
+        };
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
@@ -6156,5 +6496,154 @@ mod restore_layout_tests {
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
+    }
+}
+
+#[cfg(test)]
+mod detail_bar_focus_tests {
+    use super::*;
+    use crate::store::{NewWorkspace, Store, WorkspaceState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn make_app_with_workspace_selected() -> App {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Force-expand the repo so the workspace stays in `selectable`
+        // (idle repos default-fold).
+        app.dashboard.folded.insert(repo_id.0 as u64, false);
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(_)))
+            .unwrap();
+        app.dashboard.selected = idx;
+        app
+    }
+
+    #[tokio::test]
+    async fn tab_on_workspace_moves_focus_to_detail_bar_reply() {
+        let mut app = make_app_with_workspace_selected();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
+    }
+
+    #[tokio::test]
+    async fn tab_in_detail_bar_returns_focus_to_dashboard() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test]
+    async fn esc_in_detail_bar_clears_draft_and_returns_to_dashboard() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "half-typed message".to_string();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "");
+    }
+
+    #[tokio::test]
+    async fn char_in_detail_bar_appends_to_draft() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.reply_draft, "hi");
+        // Focus must NOT have changed (this is a regression guard
+        // against accidentally letting dashboard hotkeys fire).
+        assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
+    }
+
+    #[tokio::test]
+    async fn backspace_in_detail_bar_pops_last_char() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "abc".to_string();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.reply_draft, "ab");
+    }
+
+    #[tokio::test]
+    async fn arrow_down_while_focused_returns_to_dashboard_and_clears_draft() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "draft".to_string();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "");
+    }
+
+    // Issue 2: Tab cycle should include PM when visible.
+    #[tokio::test]
+    async fn tab_in_detail_bar_routes_to_pm_when_visible() {
+        let mut app = make_app_with_workspace_selected();
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+    }
+
+    // Issue 3: Arrow navigation in Dashboard focus must clear the reply draft
+    // so it cannot be sent to the wrong workspace.
+    #[tokio::test]
+    async fn arrow_down_in_dashboard_focus_clears_reply_draft() {
+        let mut app = make_app_with_workspace_selected();
+        // Compose a draft in DetailBarReply, then Tab back to Dashboard.
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "hi");
+
+        // Now arrow-navigate. The draft should be discarded so it can't
+        // be sent to the wrong workspace.
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.reply_draft, "", "draft must clear on navigation");
     }
 }

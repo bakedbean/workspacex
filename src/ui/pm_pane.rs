@@ -28,7 +28,9 @@ pub fn render(
 
     let label = match focus {
         PaneFocus::ProjectManager => "Project Manager [Tab/Esc back]",
-        PaneFocus::Dashboard => "Project Manager [Tab to focus · r refresh]",
+        PaneFocus::Dashboard | PaneFocus::DetailBarReply => {
+            "Project Manager [Tab to focus · r refresh]"
+        }
     };
     let width = title_area.width as usize;
     let used = label.chars().count();

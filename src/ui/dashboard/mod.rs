@@ -3,6 +3,7 @@
 
 pub mod by_attention;
 pub mod by_repo;
+pub mod detail;
 #[cfg(test)]
 pub(crate) mod fixture;
 pub mod layout;
@@ -56,6 +57,10 @@ pub struct DashboardState {
     /// `app.rs` can mutate it without touching ratatui internals; the
     /// renderer uses `selection` (resolved `SelectionTarget`) for display.
     pub selected: usize,
+    /// In-flight reply text for the detail bar input. Tied to whichever
+    /// workspace is selected at the time keystrokes arrived; cleared on
+    /// selection change, Enter (send), or Esc (cancel).
+    pub reply_draft: String,
 }
 
 impl Default for GroupMode {
@@ -75,11 +80,33 @@ pub fn render(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Min(0),    // list + chrome
+            Constraint::Length(1), // footer
+        ])
+        .split(area);
+    render_without_footer(f, chunks[0], inputs, state, tick, theme);
+    render_footer(f, chunks[1], inputs.activity, theme);
+}
+
+/// Render chrome, status strip, and the workspace list into `area` without
+/// painting a footer row. The caller is responsible for rendering the footer
+/// (usually in a separately-carved row below the detail/PM regions so the
+/// spec order list/detail/pm/footer is respected).
+pub fn render_without_footer(
+    f: &mut Frame,
+    area: Rect,
+    inputs: &DashboardInputs<'_>,
+    state: &mut DashboardState,
+    tick: u32,
+    theme: &Theme,
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
             Constraint::Length(1), // top chrome
             Constraint::Length(1), // status strip
             Constraint::Length(1), // spacer
             Constraint::Min(0),    // main list
-            Constraint::Length(1), // footer
         ])
         .split(area);
     let width = chunks[3].width as usize;
@@ -107,15 +134,19 @@ pub fn render(
     };
     let list = List::new(items).highlight_style(theme.selected_bg_style());
     f.render_stateful_widget(list, chunks[3], &mut state.list_state);
+}
 
+/// Render only the footer line (key hints + sparkline) into `area`.
+/// `area` should be exactly 1 row tall.
+pub fn render_footer(f: &mut Frame, area: Rect, activity: &[u32], theme: &Theme) {
     f.render_widget(
         Paragraph::new(layout::footer(
-            inputs.activity,
+            activity,
             env!("CARGO_PKG_VERSION"),
-            chunks[4].width as usize,
+            area.width as usize,
             theme,
         )),
-        chunks[4],
+        area,
     );
 }
 
@@ -431,3 +462,14 @@ fn render_by_attention<'a>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod state_defaults {
+    use super::*;
+
+    #[test]
+    fn default_state_has_empty_reply_draft() {
+        let s = DashboardState::default();
+        assert_eq!(s.reply_draft, "");
+    }
+}

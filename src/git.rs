@@ -507,6 +507,41 @@ pub async fn workspace_diff_stats(worktree: &std::path::Path, base: &str) -> Opt
     parse_shortstat(&stdout)
 }
 
+/// Per-file line-count diff stats for a worktree against `base`. Keyed by
+/// path *relative to the worktree root*, as `git diff --numstat` emits
+/// them. Binary files (numstat output `-`) are silently omitted.
+/// Returns `None` on any git failure.
+pub async fn workspace_diff_per_file(
+    worktree: &std::path::Path,
+    base: &str,
+) -> Option<std::collections::HashMap<String, DiffStats>> {
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .arg("diff")
+        .arg("--numstat")
+        .arg(format!("{base}...HEAD"))
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut map = std::collections::HashMap::new();
+    for line in stdout.lines() {
+        // numstat format: "<added>\t<removed>\t<path>"; "-" for binary.
+        let mut parts = line.splitn(3, '\t');
+        let added = parts.next().and_then(|s| s.parse::<u32>().ok());
+        let removed = parts.next().and_then(|s| s.parse::<u32>().ok());
+        let path = parts.next();
+        if let (Some(a), Some(r), Some(p)) = (added, removed, path) {
+            map.insert(p.to_string(), DiffStats { added: a, removed: r });
+        }
+    }
+    Some(map)
+}
+
 #[cfg(test)]
 mod worktree_tests {
     use super::tests::init_repo;

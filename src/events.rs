@@ -612,10 +612,13 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
                     out.tool_use_starts
                         .push((id.to_string(), name.to_string(), timestamp_ms));
                 }
-                if matches!(
-                    name,
-                    "Read" | "Edit" | "MultiEdit" | "Write" | "NotebookEdit"
-                ) && let Some(p) = input.get("file_path").and_then(|p| p.as_str())
+                // Only mutating tools count as a "recent edit" — Read
+                // never modifies the worktree, so files the agent just
+                // read shouldn't show up in the detail bar's
+                // RECENT FILES list (they'd render without a diff count
+                // and confuse the user).
+                if matches!(name, "Edit" | "MultiEdit" | "Write" | "NotebookEdit")
+                    && let Some(p) = input.get("file_path").and_then(|p| p.as_str())
                 {
                     out.edited_file_paths.push(p.to_string());
                 }
@@ -1572,10 +1575,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_assistant_surfaces_read_paths() {
+    fn parse_assistant_skips_read_paths() {
+        // Read never modifies the worktree — its file_path should not
+        // be captured as a recent edit (otherwise the dashboard detail
+        // bar lists files with no diff count next to them).
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/x/Cargo.toml"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
         let parsed = parse_jsonl_line(line);
-        assert_eq!(parsed.edited_file_paths, vec!["/tmp/x/Cargo.toml".to_string()]);
+        assert!(parsed.edited_file_paths.is_empty());
     }
 
     #[test]
@@ -1593,13 +1599,16 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, r#"{{"type":"user","message":{{"role":"user","content":"do the thing"}},"timestamp":"2026-05-14T17:32:02.744Z"}}"#).unwrap();
         writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t1","name":"Read","input":{{"file_path":"/a.rs"}}}}]}},"timestamp":"2026-05-14T17:32:03.744Z"}}"#).unwrap();
-        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t2","name":"Bash","input":{{"command":"ls"}}}}]}},"timestamp":"2026-05-14T17:32:04.744Z"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t2","name":"Edit","input":{{"file_path":"/b.rs","old_string":"x","new_string":"y"}}}}]}},"timestamp":"2026-05-14T17:32:04.744Z"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t3","name":"Bash","input":{{"command":"ls"}}}}]}},"timestamp":"2026-05-14T17:32:05.744Z"}}"#).unwrap();
         drop(f);
 
         let upd = tail_session(&path, 0).unwrap();
         assert_eq!(upd.first_user_text.as_deref(), Some("do the thing"));
         assert_eq!(upd.tool_use_counts.read, 1);
+        assert_eq!(upd.tool_use_counts.edit, 1);
         assert_eq!(upd.tool_use_counts.bash, 1);
-        assert_eq!(upd.edited_file_paths, vec!["/a.rs".to_string()]);
+        // Only Edit contributes to edited_file_paths — Read does not.
+        assert_eq!(upd.edited_file_paths, vec!["/b.rs".to_string()]);
     }
 }

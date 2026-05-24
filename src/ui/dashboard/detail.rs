@@ -69,14 +69,6 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
         ])
         .split(area);
 
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // `Workspace.created_at` is epoch ms (see store.rs::now_ms).
-    let created_at_secs = (inputs.workspace.created_at.max(0) / 1000) as u64;
-    let created_secs = now_secs.saturating_sub(created_at_secs);
-
     let header = build_header_strip(
         &inputs.workspace.name,
         &inputs.workspace.branch,
@@ -112,8 +104,6 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
             inputs.status,
             theme,
             body_chunks[0].width as usize,
-            &inputs.workspace.worktree_path.to_string_lossy(),
-            created_secs,
         );
         let chat_lines = build_recent_chat(
             if inputs.events_scanned { inputs.events } else { None },
@@ -136,8 +126,6 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
             inputs.status,
             theme,
             chunks[2].width as usize,
-            &inputs.workspace.worktree_path.to_string_lossy(),
-            created_secs,
         );
         f.render_widget(Paragraph::new(summary_lines), chunks[2]);
     }
@@ -259,16 +247,22 @@ fn format_ago_short(secs: Option<u64>) -> String {
     }
 }
 
-/// Build the lines that make up the SESSION SUMMARY column. Returns a
-/// Vec because the caller is responsible for slicing to fit the body
+/// Build the lines that make up the SESSION SUMMARY column.
+///
+/// Renders just two pieces:
+/// 1. The session's initial user prompt (multi-line, respects `\n`),
+///    italicized.
+/// 2. The action trace synthesized from `tool_use_counts`.
+///
+/// The "where we are now" signal and the worktree path / age lines
+/// were removed because they overlapped too heavily with RECENT CHAT
+/// and the header strip. Callers slice the result to fit the body
 /// area height.
 pub(super) fn build_session_summary(
     events: Option<&WorkspaceEvents>,
     status: Status,
     theme: &Theme,
     column_width: usize,
-    worktree_path: &str,
-    created_secs: u64,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
@@ -285,16 +279,26 @@ pub(super) fn build_session_summary(
     // Bullet prefix takes the workspace's status color so the SESSION
     // SUMMARY column visually echoes the row's status gutter.
     let prefix = Span::styled("▸ ".to_string(), theme.status_style(status));
+    // Continuation indent for wrapped/multi-line prompts: 2 cells, so
+    // wrapped lines align with the first character of the prompt text.
+    let continuation = Span::raw("  ".to_string());
 
     if let Some(prompt) = evt.first_user_text.as_deref() {
-        let truncated = truncate_to_chars(prompt, column_width.saturating_sub(4));
-        out.push(Line::from(vec![
-            prefix.clone(),
-            Span::styled(
-                format!("\"{truncated}\""),
-                Style::default().add_modifier(Modifier::ITALIC),
-            ),
-        ]));
+        let trimmed = prompt.trim();
+        if !trimmed.is_empty() {
+            // Respect `\n` from the original prompt AND wrap long lines
+            // to the column width so the prompt is fully readable.
+            let inner_width = column_width.saturating_sub(2).max(1);
+            let wrapped = wrap_lines(trimmed, inner_width);
+            let italic = Style::default().add_modifier(Modifier::ITALIC);
+            for (i, line_text) in wrapped.iter().enumerate() {
+                let leader = if i == 0 { prefix.clone() } else { continuation.clone() };
+                out.push(Line::from(vec![
+                    leader,
+                    Span::styled(line_text.clone(), italic),
+                ]));
+            }
+        }
     }
 
     let trace = format_tool_trace(&evt.tool_use_counts);
@@ -304,24 +308,6 @@ pub(super) fn build_session_summary(
         Span::raw(truncate_to_chars(&trace, column_width.saturating_sub(2)))
     };
     out.push(Line::from(vec![prefix.clone(), trace_body]));
-
-    let now_signal = format_where_now(evt);
-    if !now_signal.is_empty() {
-        out.push(Line::from(vec![
-            prefix.clone(),
-            Span::raw(truncate_to_chars(&now_signal, column_width.saturating_sub(2))),
-        ]));
-    }
-
-    // (PR row is wired but always omitted in v1 — pr_title/pr_number arrive as None.)
-
-    let age = format_ago_short(Some(created_secs));
-    let path_text = format!("{worktree_path} · created {age}");
-    let path_truncated = truncate_to_chars_left(&path_text, column_width.saturating_sub(2));
-    out.push(Line::from(vec![
-        prefix.clone(),
-        Span::styled(path_truncated, theme.dim_style()),
-    ]));
 
     out
 }
@@ -548,25 +534,6 @@ fn plural(noun: &str, n: u32) -> String {
     }
 }
 
-fn format_where_now(evt: &WorkspaceEvents) -> String {
-    if let Some(q) = evt.pending_question_tool() {
-        return format!("agent asked via {q}");
-    }
-    // Pending non-question permission tool, if any:
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    if let Some((name, _)) = evt.pending_permission_tool(now_ms, 0) {
-        return format!("awaiting permission for {name}");
-    }
-    if let Some(t) = evt.last_assistant_text.as_deref() {
-        let first_line = t.lines().next().unwrap_or(t);
-        return first_line.to_string();
-    }
-    String::new()
-}
-
 fn truncate_to_chars(s: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
@@ -779,7 +746,7 @@ mod tests {
     fn session_summary_renders_initial_prompt_when_present() {
         let theme = Theme::wsx();
         let evt = make_events_with(Some("summarize the repo"), ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, "/tmp/wt", 0);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("summarize the repo"), "{joined:?}");
     }
@@ -788,7 +755,7 @@ mod tests {
     fn session_summary_tool_trace_omits_zero_counts() {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts { read: 5, edit: 0, write: 0, bash: 2, other: 0 }, None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, "/tmp/wt", 0);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("read 5 files"), "{joined:?}");
         assert!(joined.contains("ran 2 commands"), "{joined:?}");
@@ -800,7 +767,7 @@ mod tests {
     fn session_summary_singular_plural_forms() {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts { read: 1, edit: 1, write: 1, bash: 1, other: 1 }, None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 100, "/tmp/wt", 0);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 100);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("read 1 file") && !joined.contains("read 1 files"), "{joined:?}");
         assert!(joined.contains("edited 1 file"), "{joined:?}");
@@ -810,18 +777,43 @@ mod tests {
     #[test]
     fn session_summary_shows_loading_when_events_none() {
         let theme = Theme::wsx();
-        let lines = build_session_summary(None, Status::Idle, &theme, 50, "/tmp/wt", 0);
+        let lines = build_session_summary(None, Status::Idle, &theme, 50);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("loading"), "{joined:?}");
     }
 
     #[test]
-    fn session_summary_includes_worktree_path() {
+    fn session_summary_respects_newlines_in_initial_prompt() {
+        // A prompt with embedded newlines should render across multiple
+        // lines (one per paragraph), with continuation lines indented
+        // to align with the first character after the bullet prefix.
         let theme = Theme::wsx();
-        let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 60, "/tmp/very/long/path/workspaces/foo", 120);
+        let evt = make_events_with(
+            Some("first line\nsecond line\nthird line"),
+            ToolUseCounts::default(),
+            None,
+        );
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 60);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("foo") || joined.contains("workspaces"), "basename retained: {joined:?}");
+        assert!(joined.contains("first line"), "first paragraph: {joined:?}");
+        assert!(joined.contains("second line"), "second paragraph: {joined:?}");
+        assert!(joined.contains("third line"), "third paragraph: {joined:?}");
+        // Label + 3 prompt lines + 1 tool-trace line = 5 lines minimum.
+        assert!(lines.len() >= 5, "expected >=5 lines, got {}", lines.len());
+    }
+
+    #[test]
+    fn session_summary_wraps_long_single_line_prompts() {
+        // A single-line prompt longer than the column should wrap so
+        // the user can see the whole prompt instead of an ellipsis.
+        let theme = Theme::wsx();
+        let long_prompt =
+            "summarize the entire repository in extreme detail and list every public symbol";
+        let evt = make_events_with(Some(long_prompt), ToolUseCounts::default(), None);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 30);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("summarize the entire"), "head visible: {joined:?}");
+        assert!(joined.contains("every public symbol"), "tail visible too: {joined:?}");
     }
 
     #[test]
@@ -830,7 +822,7 @@ mod tests {
         // column structure stays consistent across workspace ages.
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, "/tmp/wt", 0);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("—"), "expected em-dash placeholder: {joined:?}");
     }
@@ -840,7 +832,7 @@ mod tests {
         // Per spec: `▸` prefix lines render in the workspace's status color.
         let theme = Theme::wsx();
         let evt = make_events_with(Some("hello"), ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Question, &theme, 50, "/tmp/wt", 0);
+        let lines = build_session_summary(Some(&evt), Status::Question, &theme, 50);
         let expected_fg = theme.status_style(Status::Question).fg;
         let prefix_span = lines
             .iter()

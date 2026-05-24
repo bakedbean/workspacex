@@ -34,6 +34,9 @@ pub struct DetailInputs<'a> {
     pub events: Option<&'a WorkspaceEvents>,
     pub procs: &'a [ProcInfo],
     pub diff: Option<DiffStats>,
+    /// Per-file diff stats keyed by path relative to the worktree
+    /// root. Used to annotate RECENT FILES entries with `+X −Y`.
+    pub diff_per_file: Option<&'a std::collections::HashMap<String, DiffStats>>,
     pub lifecycle: Option<BranchLifecycle>,
     pub pr_title: Option<String>,
     pub pr_number: Option<u32>,
@@ -124,6 +127,8 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
         let procs_lines = build_procs_and_files(
             inputs.procs,
             inputs.events,
+            inputs.diff_per_file,
+            &inputs.workspace.worktree_path,
             theme,
             body_chunks[2].width as usize,
         );
@@ -380,10 +385,14 @@ pub(super) fn build_recent_chat(
 }
 
 /// Build the PROCESSES + RECENT FILES column. Procs go on top, recent
-/// files (from `WorkspaceEvents.recent_edited_files`) below.
+/// files (from `WorkspaceEvents.recent_edited_files`) below, each
+/// annotated with a `+X −Y` delta when the per-file diff map has an
+/// entry for it.
 pub(super) fn build_procs_and_files(
     procs: &[ProcInfo],
     events: Option<&WorkspaceEvents>,
+    diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,
+    worktree_path: &std::path::Path,
     theme: &Theme,
     column_width: usize,
 ) -> Vec<Line<'static>> {
@@ -418,11 +427,45 @@ pub(super) fn build_procs_and_files(
         out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
     } else {
         for f in files.iter().take(5) {
-            let truncated = truncate_to_chars_left(f, column_width);
-            out.push(Line::from(Span::styled(truncated, theme.dim_style())));
+            let diff = lookup_file_diff(f, worktree_path, diff_per_file);
+            let suffix_width = match diff {
+                Some(d) if d.added > 0 || d.removed > 0 => {
+                    // "  +A −R" — 2 leading spaces + sign + digits + sep + sign + digits.
+                    4 + d.added.to_string().chars().count()
+                        + d.removed.to_string().chars().count()
+                }
+                _ => 0,
+            };
+            let path_width = column_width.saturating_sub(suffix_width);
+            let truncated = truncate_to_chars_left(f, path_width);
+            let mut spans: Vec<Span<'static>> = vec![Span::styled(truncated, theme.dim_style())];
+            if let Some(d) = diff
+                && (d.added > 0 || d.removed > 0)
+            {
+                spans.push(Span::raw("  ".to_string()));
+                spans.push(Span::styled(format!("+{}", d.added), theme.ok_style()));
+                spans.push(Span::raw(" ".to_string()));
+                spans.push(Span::styled(format!("−{}", d.removed), theme.err_style()));
+            }
+            out.push(Line::from(spans));
         }
     }
     out
+}
+
+/// Look up a recent-edited file's per-file diff. `file` is whatever
+/// the JSONL `file_path` field contained (usually an absolute path
+/// inside the worktree). `worktree_path` is the workspace's worktree
+/// root. The diff map is keyed by paths relative to that root.
+fn lookup_file_diff(
+    file: &str,
+    worktree_path: &std::path::Path,
+    diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,
+) -> Option<DiffStats> {
+    let map = diff_per_file?;
+    let rel = std::path::Path::new(file).strip_prefix(worktree_path).ok()?;
+    let key = rel.to_str()?;
+    map.get(key).copied()
 }
 
 const REPLY_CHIP: &str = "┃ Reply to agent ┃";
@@ -675,6 +718,7 @@ mod tests {
                 events: None,
                 procs: &[],
                 diff: None,
+                diff_per_file: None,
                 lifecycle: None,
                 pr_title: None,
                 pr_number: None,
@@ -960,7 +1004,7 @@ mod tests {
     fn procs_column_shows_dash_when_empty() {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_procs_and_files(&[], Some(&evt), &theme, 30);
+        let lines = build_procs_and_files(&[], Some(&evt), None, std::path::Path::new("/tmp/r/ws"), &theme, 30);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("—"), "expected em-dash when no procs/files: {joined:?}");
     }
@@ -970,7 +1014,7 @@ mod tests {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
         let procs: Vec<ProcInfo> = (0..7).map(|i| proc(&format!("cmd{i}"))).collect();
-        let lines = build_procs_and_files(&procs, Some(&evt), &theme, 30);
+        let lines = build_procs_and_files(&procs, Some(&evt), None, std::path::Path::new("/tmp/r/ws"), &theme, 30);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("+2 more"), "expected +2 more: {joined:?}");
     }
@@ -981,10 +1025,63 @@ mod tests {
         let mut evt = make_events_with(None, ToolUseCounts::default(), None);
         evt.recent_edited_files.push_front("/tmp/x/src/main.rs".to_string());
         evt.recent_edited_files.push_front("/tmp/x/Cargo.toml".to_string());
-        let lines = build_procs_and_files(&[], Some(&evt), &theme, 30);
+        let lines = build_procs_and_files(&[], Some(&evt), None, std::path::Path::new("/tmp/r/ws"), &theme, 30);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("Cargo.toml"), "expected Cargo.toml in output: {joined:?}");
         assert!(joined.contains("main.rs"), "expected main.rs in output: {joined:?}");
+    }
+
+    #[test]
+    fn recent_files_section_annotates_with_diff_counts() {
+        // RECENT FILES entries get a `+A −R` suffix when the per-file
+        // diff map has a matching entry (keyed by path relative to
+        // the worktree root).
+        let theme = Theme::wsx();
+        let mut evt = make_events_with(None, ToolUseCounts::default(), None);
+        // Absolute paths inside the worktree, matching how the JSONL
+        // `file_path` field stores them.
+        evt.recent_edited_files
+            .push_front("/tmp/wt/src/main.rs".to_string());
+        evt.recent_edited_files
+            .push_front("/tmp/wt/Cargo.toml".to_string());
+        let mut diffs = std::collections::HashMap::new();
+        diffs.insert("src/main.rs".to_string(), DiffStats { added: 12, removed: 3 });
+        diffs.insert("Cargo.toml".to_string(), DiffStats { added: 1, removed: 0 });
+        let lines = build_procs_and_files(
+            &[],
+            Some(&evt),
+            Some(&diffs),
+            std::path::Path::new("/tmp/wt"),
+            &theme,
+            40,
+        );
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("+12") && joined.contains("−3"), "main.rs delta: {joined:?}");
+        assert!(joined.contains("+1") && joined.contains("−0"), "Cargo.toml delta: {joined:?}");
+    }
+
+    #[test]
+    fn recent_files_section_omits_diff_when_no_match() {
+        // A file not in the per-file map renders without a delta
+        // suffix (no fake +0 −0).
+        let theme = Theme::wsx();
+        let mut evt = make_events_with(None, ToolUseCounts::default(), None);
+        evt.recent_edited_files
+            .push_front("/tmp/wt/some/untracked.txt".to_string());
+        let diffs: std::collections::HashMap<String, DiffStats> =
+            std::collections::HashMap::new();
+        let lines = build_procs_and_files(
+            &[],
+            Some(&evt),
+            Some(&diffs),
+            std::path::Path::new("/tmp/wt"),
+            &theme,
+            40,
+        );
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("untracked.txt"), "path present: {joined:?}");
+        assert!(!joined.contains("+0"), "no fake delta: {joined:?}");
+        assert!(!joined.contains("−0"), "no fake delta: {joined:?}");
     }
 
     #[test]
@@ -1042,6 +1139,7 @@ mod tests {
             events: Some(&evt),
             procs: &[],
             diff: Some(DiffStats { added: 12, removed: 3 }),
+            diff_per_file: None,
             lifecycle: Some(BranchLifecycle::PrOpen),
             pr_title: None,
             pr_number: None,
@@ -1075,6 +1173,7 @@ mod tests {
             events: Some(&evt),
             procs: &[],
             diff: None,
+            diff_per_file: None,
             lifecycle: None,
             pr_title: None,
             pr_number: None,

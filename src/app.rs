@@ -255,6 +255,15 @@ pub struct App {
     /// Cached `git diff --shortstat` output per workspace (added/deleted).
     /// Populated lazily by the workspace-status poller.
     pub workspace_diff: std::collections::HashMap<crate::store::WorkspaceId, crate::git::DiffStats>,
+    /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
+    /// to the worktree root (as `git diff --numstat` emits them).
+    /// Populated by the same poller that maintains `workspace_diff`.
+    /// Used by the detail bar's RECENT FILES section to annotate each
+    /// file with its `+X −Y` delta.
+    pub workspace_diff_per_file: std::collections::HashMap<
+        crate::store::WorkspaceId,
+        std::collections::HashMap<String, crate::git::DiffStats>,
+    >,
     /// Rolling 24-hour history of `(hour_epoch_secs, max_live_count)` for
     /// the dashboard footer sparkline. Hydrated from `store.recent_activity_buckets`
     /// at startup; updated each tick. Newest bucket at the back.
@@ -322,6 +331,7 @@ impl App {
             workspace_processes: std::collections::HashMap::new(),
             tick: 0,
             workspace_diff: std::collections::HashMap::new(),
+            workspace_diff_per_file: std::collections::HashMap::new(),
             activity_history: std::collections::VecDeque::new(),
             last_proc_scan_ms: 0,
             pending_edit: None,
@@ -946,6 +956,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             events: app.workspace_events.get(&ws.id),
                             procs,
                             diff: app.workspace_diff.get(&ws.id).copied(),
+                            diff_per_file: app.workspace_diff_per_file.get(&ws.id),
                             lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                             pr_title: None,
                             pr_number: None,
@@ -3025,6 +3036,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     // so the cached diff and its throttle stamp are
                     // stale. Drop them to force a fresh poll.
                     g.workspace_diff.remove(&id);
+                    g.workspace_diff_per_file.remove(&id);
                     g.diff_last_poll_ms.remove(&id);
                 }
             }
@@ -3060,6 +3072,10 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
                         let mut g = app.lock().await;
                         g.workspace_diff.insert(id, diff);
+                    }
+                    if let Some(per_file) = crate::git::workspace_diff_per_file(&path, base).await {
+                        let mut g = app.lock().await;
+                        g.workspace_diff_per_file.insert(id, per_file);
                     }
                 }
             }

@@ -1553,16 +1553,63 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
         }
     }
-    // Tab when focus is on Dashboard and PM is visible: swap to PM.
-    if app.pm_visible
-        && matches!(app.focus, crate::ui::PaneFocus::Dashboard)
-        && k.code == KeyCode::Tab
-    {
+    // DetailBarReply focus: keystrokes go to the reply input.
+    if matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {
+        // If the selected target is no longer a workspace (e.g.
+        // refresh moved selection), auto-return focus and discard.
+        if !matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            app.dashboard.reply_draft.clear();
+            return Ok(());
+        }
+        match (k.code, k.modifiers) {
+            (KeyCode::Tab, _) => {
+                app.focus = crate::ui::PaneFocus::Dashboard;
+                return Ok(());
+            }
+            (KeyCode::Esc, _) => {
+                app.focus = crate::ui::PaneFocus::Dashboard;
+                app.dashboard.reply_draft.clear();
+                return Ok(());
+            }
+            (KeyCode::Enter, _) => {
+                let draft = std::mem::take(&mut app.dashboard.reply_draft);
+                if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                    if let Some(session) = app.sessions.get(ws_id) {
+                        let mut bytes = draft.into_bytes();
+                        bytes.push(b'\r');
+                        session.scroll_to_live();
+                        let _ = session.writer.send(bytes).await;
+                    }
+                }
+                app.focus = crate::ui::PaneFocus::Dashboard;
+                return Ok(());
+            }
+            (KeyCode::Backspace, _) => {
+                app.dashboard.reply_draft.pop();
+                return Ok(());
+            }
+            (KeyCode::Char(c), m)
+                if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
+            {
+                app.dashboard.reply_draft.push(c);
+                return Ok(());
+            }
+            _ => return Ok(()), // swallow everything else (arrow yield handled in Task 16)
+        }
+    }
+    // Tab when focus is on Dashboard: workspace selection → DetailBarReply;
+    // repo selection with PM visible → ProjectManager.
+    if matches!(app.focus, crate::ui::PaneFocus::Dashboard) && k.code == KeyCode::Tab {
         // Treat Tab as a "never mind" for any armed z-leader so it
         // doesn't unexpectedly eat the next dashboard key after the
         // user Tabs back from PM.
         app.z_leader_pending = false;
-        app.focus = crate::ui::PaneFocus::ProjectManager;
+        if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+            app.focus = crate::ui::PaneFocus::DetailBarReply;
+        } else if app.pm_visible {
+            app.focus = crate::ui::PaneFocus::ProjectManager;
+        }
         return Ok(());
     }
     // Filter input mode: while a filter buffer is active, intercept
@@ -6346,5 +6393,103 @@ mod restore_layout_tests {
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }
+    }
+}
+
+#[cfg(test)]
+mod detail_bar_focus_tests {
+    use super::*;
+    use crate::store::{NewWorkspace, Store, WorkspaceState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn make_app_with_workspace_selected() -> App {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Force-expand the repo so the workspace stays in `selectable`
+        // (idle repos default-fold).
+        app.dashboard.folded.insert(repo_id.0 as u64, false);
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(_)))
+            .unwrap();
+        app.dashboard.selected = idx;
+        app
+    }
+
+    #[tokio::test]
+    async fn tab_on_workspace_moves_focus_to_detail_bar_reply() {
+        let mut app = make_app_with_workspace_selected();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
+    }
+
+    #[tokio::test]
+    async fn tab_in_detail_bar_returns_focus_to_dashboard() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test]
+    async fn esc_in_detail_bar_clears_draft_and_returns_to_dashboard() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "half-typed message".to_string();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "");
+    }
+
+    #[tokio::test]
+    async fn char_in_detail_bar_appends_to_draft() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.reply_draft, "hi");
+        // Focus must NOT have changed (this is a regression guard
+        // against accidentally letting dashboard hotkeys fire).
+        assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
+    }
+
+    #[tokio::test]
+    async fn backspace_in_detail_bar_pops_last_char() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "abc".to_string();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.reply_draft, "ab");
     }
 }

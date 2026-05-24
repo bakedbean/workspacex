@@ -73,7 +73,9 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let created_secs = now_secs.saturating_sub(inputs.workspace.created_at as u64);
+    // `Workspace.created_at` is epoch ms (see store.rs::now_ms).
+    let created_at_secs = (inputs.workspace.created_at.max(0) / 1000) as u64;
+    let created_secs = now_secs.saturating_sub(created_at_secs);
 
     let header = build_header_strip(
         &inputs.workspace.name,
@@ -107,6 +109,7 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
             .split(chunks[2]);
         let summary_lines = build_session_summary(
             if inputs.events_scanned { inputs.events } else { None },
+            inputs.status,
             theme,
             body_chunks[0].width as usize,
             &inputs.workspace.worktree_path.to_string_lossy(),
@@ -130,6 +133,7 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
     } else {
         let summary_lines = build_session_summary(
             if inputs.events_scanned { inputs.events } else { None },
+            inputs.status,
             theme,
             chunks[2].width as usize,
             &inputs.workspace.worktree_path.to_string_lossy(),
@@ -207,14 +211,12 @@ pub(super) fn build_header_strip(
     }
 
     spans.push(Span::raw("  ".to_string()));
-    if procs > 0 {
-        spans.push(Span::styled(
-            format!("● {procs} procs"),
-            theme.status_style(Status::Thinking),
-        ));
+    let procs_style = if procs > 0 {
+        theme.status_style(Status::Thinking)
     } else {
-        spans.push(Span::styled("  · 0 procs".to_string(), theme.dim_style()));
-    }
+        theme.dim_style()
+    };
+    spans.push(Span::styled(format!("● {procs} procs"), procs_style));
 
     spans.push(Span::raw("  ".to_string()));
     spans.push(Span::styled(
@@ -262,6 +264,7 @@ fn format_ago_short(secs: Option<u64>) -> String {
 /// area height.
 pub(super) fn build_session_summary(
     events: Option<&WorkspaceEvents>,
+    status: Status,
     theme: &Theme,
     column_width: usize,
     worktree_path: &str,
@@ -279,7 +282,9 @@ pub(super) fn build_session_summary(
         return out;
     };
 
-    let prefix = Span::styled("▸ ".to_string(), theme.dim_style());
+    // Bullet prefix takes the workspace's status color so the SESSION
+    // SUMMARY column visually echoes the row's status gutter.
+    let prefix = Span::styled("▸ ".to_string(), theme.status_style(status));
 
     if let Some(prompt) = evt.first_user_text.as_deref() {
         let truncated = truncate_to_chars(prompt, column_width.saturating_sub(4));
@@ -293,12 +298,12 @@ pub(super) fn build_session_summary(
     }
 
     let trace = format_tool_trace(&evt.tool_use_counts);
-    if !trace.is_empty() {
-        out.push(Line::from(vec![
-            prefix.clone(),
-            Span::raw(truncate_to_chars(&trace, column_width.saturating_sub(2))),
-        ]));
-    }
+    let trace_body = if trace.is_empty() {
+        Span::styled("—".to_string(), theme.dim_style())
+    } else {
+        Span::raw(truncate_to_chars(&trace, column_width.saturating_sub(2)))
+    };
+    out.push(Line::from(vec![prefix.clone(), trace_body]));
 
     let now_signal = format_where_now(evt);
     if !now_signal.is_empty() {
@@ -774,7 +779,7 @@ mod tests {
     fn session_summary_renders_initial_prompt_when_present() {
         let theme = Theme::wsx();
         let evt = make_events_with(Some("summarize the repo"), ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), &theme, 50, "/tmp/wt", 0);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, "/tmp/wt", 0);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("summarize the repo"), "{joined:?}");
     }
@@ -783,7 +788,7 @@ mod tests {
     fn session_summary_tool_trace_omits_zero_counts() {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts { read: 5, edit: 0, write: 0, bash: 2, other: 0 }, None);
-        let lines = build_session_summary(Some(&evt), &theme, 50, "/tmp/wt", 0);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, "/tmp/wt", 0);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("read 5 files"), "{joined:?}");
         assert!(joined.contains("ran 2 commands"), "{joined:?}");
@@ -795,7 +800,7 @@ mod tests {
     fn session_summary_singular_plural_forms() {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts { read: 1, edit: 1, write: 1, bash: 1, other: 1 }, None);
-        let lines = build_session_summary(Some(&evt), &theme, 100, "/tmp/wt", 0);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 100, "/tmp/wt", 0);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("read 1 file") && !joined.contains("read 1 files"), "{joined:?}");
         assert!(joined.contains("edited 1 file"), "{joined:?}");
@@ -805,7 +810,7 @@ mod tests {
     #[test]
     fn session_summary_shows_loading_when_events_none() {
         let theme = Theme::wsx();
-        let lines = build_session_summary(None, &theme, 50, "/tmp/wt", 0);
+        let lines = build_session_summary(None, Status::Idle, &theme, 50, "/tmp/wt", 0);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("loading"), "{joined:?}");
     }
@@ -814,9 +819,35 @@ mod tests {
     fn session_summary_includes_worktree_path() {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), &theme, 60, "/tmp/very/long/path/workspaces/foo", 120);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 60, "/tmp/very/long/path/workspaces/foo", 120);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("foo") || joined.contains("workspaces"), "basename retained: {joined:?}");
+    }
+
+    #[test]
+    fn session_summary_empty_tool_counts_renders_em_dash() {
+        // Per spec: empty tool_use_counts shows a faint `—` so the
+        // column structure stays consistent across workspace ages.
+        let theme = Theme::wsx();
+        let evt = make_events_with(None, ToolUseCounts::default(), None);
+        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, "/tmp/wt", 0);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("—"), "expected em-dash placeholder: {joined:?}");
+    }
+
+    #[test]
+    fn session_summary_prefix_uses_workspace_status_color() {
+        // Per spec: `▸` prefix lines render in the workspace's status color.
+        let theme = Theme::wsx();
+        let evt = make_events_with(Some("hello"), ToolUseCounts::default(), None);
+        let lines = build_session_summary(Some(&evt), Status::Question, &theme, 50, "/tmp/wt", 0);
+        let expected_fg = theme.status_style(Status::Question).fg;
+        let prefix_span = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .find(|s| s.content.as_ref() == "▸ ")
+            .expect("at least one prefix span");
+        assert_eq!(prefix_span.style.fg, expected_fg, "prefix not in status color");
     }
 
     #[test]

@@ -915,16 +915,16 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             Some(now.saturating_sub(last) / 1000)
                         });
                         let status = app.classify_status(ws);
-                        let procs: Vec<crate::proc::ProcInfo> = app
+                        let procs: &[crate::proc::ProcInfo] = app
                             .workspace_processes
                             .get(&ws.id)
-                            .cloned()
-                            .unwrap_or_default();
+                            .map(Vec::as_slice)
+                            .unwrap_or(&[]);
                         let inputs = crate::ui::dashboard::detail::DetailInputs {
                             repo,
                             workspace: ws,
                             events: app.workspace_events.get(&ws.id),
-                            procs: &procs,
+                            procs,
                             diff: app.workspace_diff.get(&ws.id).copied(),
                             lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                             pr_title: None,

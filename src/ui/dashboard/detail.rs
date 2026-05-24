@@ -95,40 +95,48 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
         chunks[1],
     );
 
-    // Body: 3 columns 30/40/30.
-    let body_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(30),
-            Constraint::Percentage(40),
-            Constraint::Percentage(30),
-        ])
-        .split(chunks[2]);
-    let summary_lines = build_session_summary(
-        if inputs.events_scanned { inputs.events } else { None },
-        theme,
-        body_chunks[0].width as usize,
-        &inputs.workspace.worktree_path.to_string_lossy(),
-        created_secs,
-    );
-    let chat_lines = build_recent_chat(
-        if inputs.events_scanned { inputs.events } else { None },
-        theme,
-        body_chunks[1].width as usize,
-        (chunks[2].height as usize).saturating_sub(1).max(1),
-    );
-    let procs_lines = build_procs_and_files(
-        inputs.procs,
-        inputs.events,
-        theme,
-        body_chunks[2].width as usize,
-    );
-    f.render_widget(
-        Paragraph::new(summary_lines),
-        body_chunks[0],
-    );
-    f.render_widget(Paragraph::new(chat_lines), body_chunks[1]);
-    f.render_widget(Paragraph::new(procs_lines), body_chunks[2]);
+    // Body: 3 columns on wide terminals, single column on narrow.
+    if chunks[2].width >= 80 {
+        let body_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(30),
+                Constraint::Percentage(40),
+                Constraint::Percentage(30),
+            ])
+            .split(chunks[2]);
+        let summary_lines = build_session_summary(
+            if inputs.events_scanned { inputs.events } else { None },
+            theme,
+            body_chunks[0].width as usize,
+            &inputs.workspace.worktree_path.to_string_lossy(),
+            created_secs,
+        );
+        let chat_lines = build_recent_chat(
+            if inputs.events_scanned { inputs.events } else { None },
+            theme,
+            body_chunks[1].width as usize,
+            (chunks[2].height as usize).saturating_sub(1).max(1),
+        );
+        let procs_lines = build_procs_and_files(
+            inputs.procs,
+            inputs.events,
+            theme,
+            body_chunks[2].width as usize,
+        );
+        f.render_widget(Paragraph::new(summary_lines), body_chunks[0]);
+        f.render_widget(Paragraph::new(chat_lines), body_chunks[1]);
+        f.render_widget(Paragraph::new(procs_lines), body_chunks[2]);
+    } else {
+        let summary_lines = build_session_summary(
+            if inputs.events_scanned { inputs.events } else { None },
+            theme,
+            chunks[2].width as usize,
+            &inputs.workspace.worktree_path.to_string_lossy(),
+            created_secs,
+        );
+        f.render_widget(Paragraph::new(summary_lines), chunks[2]);
+    }
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -953,5 +961,33 @@ mod tests {
         assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
         assert!(text.contains("give me a tour"), "initial prompt: {text:?}");
         assert!(text.contains("Reading the repo"), "recent chat: {text:?}");
+    }
+
+    #[test]
+    fn narrow_terminal_drops_chat_and_procs_columns() {
+        let theme = Theme::wsx();
+        let (_store, repo, ws) = seed_workspace();
+        let mut evt = WorkspaceEvents::default();
+        evt.first_user_text = Some("hi".into());
+        evt.last_assistant_text = Some("ack".into());
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: Some(&evt),
+            procs: &[],
+            diff: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+        };
+        let text = render_to_text(&inputs, 70, 10);
+        assert!(text.contains("SESSION SUMMARY"), "summary kept: {text:?}");
+        assert!(!text.contains("RECENT CHAT"), "chat dropped on narrow: {text:?}");
+        assert!(!text.contains("PROCESSES"), "procs dropped on narrow: {text:?}");
     }
 }

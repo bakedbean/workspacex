@@ -1723,6 +1723,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             } else {
                 app.dashboard.selected - 1
             };
+            // Clear any in-flight reply draft so it can't leak to the newly
+            // selected workspace (draft is tied to the workspace at the time
+            // keystrokes arrived, not to wherever the cursor ends up).
+            app.dashboard.reply_draft.clear();
         }
         (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
             let max = app.selectable.len().saturating_sub(1);
@@ -1731,6 +1735,8 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             } else {
                 app.dashboard.selected + 1
             };
+            // Clear any in-flight reply draft (same rationale as Up/k above).
+            app.dashboard.reply_draft.clear();
         }
         (KeyCode::Char('h'), _) => set_focused_fold(app, true),
         (KeyCode::Char('l'), _) => match app.selected_target() {
@@ -6581,5 +6587,32 @@ mod detail_bar_focus_tests {
             .await
             .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+    }
+
+    // Issue 3: Arrow navigation in Dashboard focus must clear the reply draft
+    // so it cannot be sent to the wrong workspace.
+    #[tokio::test]
+    async fn arrow_down_in_dashboard_focus_clears_reply_draft() {
+        let mut app = make_app_with_workspace_selected();
+        // Compose a draft in DetailBarReply, then Tab back to Dashboard.
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "hi");
+
+        // Now arrow-navigate. The draft should be discarded so it can't
+        // be sent to the wrong workspace.
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.reply_draft, "", "draft must clear on navigation");
     }
 }

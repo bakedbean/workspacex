@@ -23,4 +23,7 @@ pub enum View {
 pub enum PaneFocus {
     Dashboard,
     ProjectManager,
+    /// Reply input in the dashboard's detail bar. Active only while a
+    /// workspace is selected. See `src/ui/dashboard/detail.rs`.
+    DetailBarReply,
 }

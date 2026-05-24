@@ -56,6 +56,10 @@ pub struct DashboardState {
     /// `app.rs` can mutate it without touching ratatui internals; the
     /// renderer uses `selection` (resolved `SelectionTarget`) for display.
     pub selected: usize,
+    /// In-flight reply text for the detail bar input. Tied to whichever
+    /// workspace is selected at the time keystrokes arrived; cleared on
+    /// selection change, Enter (send), or Esc (cancel).
+    pub reply_draft: String,
 }
 
 impl Default for GroupMode {
@@ -431,3 +435,14 @@ fn render_by_attention<'a>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod state_defaults {
+    use super::*;
+
+    #[test]
+    fn default_state_has_empty_reply_draft() {
+        let s = DashboardState::default();
+        assert_eq!(s.reply_draft, "");
+    }
+}

@@ -2977,6 +2977,29 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     if let Some(text) = last_assistant_text {
                         evt.last_assistant_text = Some(text);
                     }
+                    if evt.first_user_text.is_none() {
+                        if let Some(t) = first_user_text {
+                            evt.first_user_text = Some(t);
+                        }
+                    }
+                    evt.tool_use_counts.read =
+                        evt.tool_use_counts.read.saturating_add(tool_use_counts.read);
+                    evt.tool_use_counts.edit =
+                        evt.tool_use_counts.edit.saturating_add(tool_use_counts.edit);
+                    evt.tool_use_counts.write =
+                        evt.tool_use_counts.write.saturating_add(tool_use_counts.write);
+                    evt.tool_use_counts.bash =
+                        evt.tool_use_counts.bash.saturating_add(tool_use_counts.bash);
+                    evt.tool_use_counts.other =
+                        evt.tool_use_counts.other.saturating_add(tool_use_counts.other);
+                    for path in edited_file_paths {
+                        if evt.recent_edited_files.front().map(|s| s.as_str()) != Some(&path) {
+                            evt.recent_edited_files.push_front(path);
+                            while evt.recent_edited_files.len() > 7 {
+                                evt.recent_edited_files.pop_back();
+                            }
+                        }
+                    }
                     // Sticky between batches: only overwrite when the batch
                     // had a definitive signal. Some(true) = batch ended on
                     // the interrupt sentinel; Some(false) = batch had a

@@ -1518,6 +1518,64 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
     }
 }
 
+/// Handle a key event while [`PaneFocus::DetailBarReply`] is active.
+///
+/// Returns `true` if the key was consumed (caller should early-return),
+/// or `false` if the key should fall through to the main dashboard handler
+/// (e.g. navigation keys that also move the selection).
+async fn handle_detail_bar_reply_key(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+) -> bool {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    match (k.code, k.modifiers) {
+        (KeyCode::Tab, _) => {
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            true
+        }
+        (KeyCode::Esc, _) => {
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            app.dashboard.reply_draft.clear();
+            true
+        }
+        (KeyCode::Enter, _) => {
+            let draft = std::mem::take(&mut app.dashboard.reply_draft);
+            if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                if let Some(session) = app.sessions.get(ws_id) {
+                    let mut bytes = draft.into_bytes();
+                    bytes.push(b'\r');
+                    session.scroll_to_live();
+                    let _ = session.writer.send(bytes).await;
+                }
+            }
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            true
+        }
+        (KeyCode::Backspace, _) => {
+            app.dashboard.reply_draft.pop();
+            true
+        }
+        (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+            app.dashboard.reply_draft.push(c);
+            true
+        }
+        (KeyCode::Up, _)
+        | (KeyCode::Down, _)
+        | (KeyCode::Left, _)
+        | (KeyCode::Right, _)
+        | (KeyCode::PageUp, _)
+        | (KeyCode::PageDown, _)
+        | (KeyCode::Home, _)
+        | (KeyCode::End, _) => {
+            // Yield to dashboard: it will handle the navigation. Discard draft.
+            app.focus = crate::ui::PaneFocus::Dashboard;
+            app.dashboard.reply_draft.clear();
+            false
+        }
+        _ => true, // unknown key — swallow rather than fall through
+    }
+}
+
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
     // PM pane focus handling. When PM is focused, all keystrokes forward
     // to its PTY — including 'p' and 'r' (typing words containing those
@@ -1562,41 +1620,13 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             app.dashboard.reply_draft.clear();
             return Ok(());
         }
-        match (k.code, k.modifiers) {
-            (KeyCode::Tab, _) => {
-                app.focus = crate::ui::PaneFocus::Dashboard;
-                return Ok(());
-            }
-            (KeyCode::Esc, _) => {
-                app.focus = crate::ui::PaneFocus::Dashboard;
-                app.dashboard.reply_draft.clear();
-                return Ok(());
-            }
-            (KeyCode::Enter, _) => {
-                let draft = std::mem::take(&mut app.dashboard.reply_draft);
-                if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
-                    if let Some(session) = app.sessions.get(ws_id) {
-                        let mut bytes = draft.into_bytes();
-                        bytes.push(b'\r');
-                        session.scroll_to_live();
-                        let _ = session.writer.send(bytes).await;
-                    }
-                }
-                app.focus = crate::ui::PaneFocus::Dashboard;
-                return Ok(());
-            }
-            (KeyCode::Backspace, _) => {
-                app.dashboard.reply_draft.pop();
-                return Ok(());
-            }
-            (KeyCode::Char(c), m)
-                if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
-            {
-                app.dashboard.reply_draft.push(c);
-                return Ok(());
-            }
-            _ => return Ok(()), // swallow everything else (arrow yield handled in Task 16)
+        let consumed = handle_detail_bar_reply_key(app, k).await;
+        if consumed {
+            return Ok(());
         }
+        // Not consumed → fall through so the dashboard handler picks up
+        // the key (e.g. arrow nav). `handle_detail_bar_reply_key` has
+        // already cleared the draft and reset focus when bailing out.
     }
     // Tab when focus is on Dashboard: workspace selection → DetailBarReply;
     // repo selection with PM visible → ProjectManager.
@@ -6491,5 +6521,17 @@ mod detail_bar_focus_tests {
             .await
             .unwrap();
         assert_eq!(app.dashboard.reply_draft, "ab");
+    }
+
+    #[tokio::test]
+    async fn arrow_down_while_focused_returns_to_dashboard_and_clears_draft() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "draft".to_string();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "");
     }
 }

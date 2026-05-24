@@ -436,8 +436,13 @@ pub(super) fn build_procs_and_files(
                 }
                 _ => 0,
             };
+            // Show the path relative to the worktree root so the column
+            // isn't dominated by the shared `/Users/.../worktrees/...`
+            // prefix. Falls back to the absolute path if the file isn't
+            // inside the worktree.
+            let display = display_relative_path(f, worktree_path);
             let path_width = column_width.saturating_sub(suffix_width);
-            let truncated = truncate_to_chars_left(f, path_width);
+            let truncated = truncate_to_chars_left(&display, path_width);
             let mut spans: Vec<Span<'static>> = vec![Span::styled(truncated, theme.dim_style())];
             if let Some(d) = diff
                 && (d.added > 0 || d.removed > 0)
@@ -451,6 +456,19 @@ pub(super) fn build_procs_and_files(
         }
     }
     out
+}
+
+/// Render a recent-edited file path relative to the worktree root.
+/// Returns the absolute path unchanged when it doesn't sit inside the
+/// worktree (rare — only happens if claude wrote a path outside its
+/// own cwd).
+fn display_relative_path(file: &str, worktree_path: &std::path::Path) -> String {
+    std::path::Path::new(file)
+        .strip_prefix(worktree_path)
+        .ok()
+        .and_then(|p| p.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| file.to_string())
 }
 
 /// Look up a recent-edited file's per-file diff. `file` is whatever
@@ -1020,15 +1038,52 @@ mod tests {
     }
 
     #[test]
-    fn recent_files_section_renders_paths() {
+    fn recent_files_section_renders_paths_relative_to_worktree() {
+        // Paths inside the worktree render relative to its root —
+        // not as absolute paths with the shared prefix duplicated on
+        // every line.
         let theme = Theme::wsx();
         let mut evt = make_events_with(None, ToolUseCounts::default(), None);
-        evt.recent_edited_files.push_front("/tmp/x/src/main.rs".to_string());
-        evt.recent_edited_files.push_front("/tmp/x/Cargo.toml".to_string());
-        let lines = build_procs_and_files(&[], Some(&evt), None, std::path::Path::new("/tmp/r/ws"), &theme, 30);
+        evt.recent_edited_files
+            .push_front("/tmp/wt/src/main.rs".to_string());
+        evt.recent_edited_files
+            .push_front("/tmp/wt/Cargo.toml".to_string());
+        let lines = build_procs_and_files(
+            &[],
+            Some(&evt),
+            None,
+            std::path::Path::new("/tmp/wt"),
+            &theme,
+            40,
+        );
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("Cargo.toml"), "expected Cargo.toml in output: {joined:?}");
-        assert!(joined.contains("main.rs"), "expected main.rs in output: {joined:?}");
+        assert!(joined.contains("Cargo.toml"), "Cargo.toml visible: {joined:?}");
+        assert!(joined.contains("src/main.rs"), "src/main.rs visible: {joined:?}");
+        assert!(
+            !joined.contains("/tmp/wt"),
+            "absolute prefix should be stripped: {joined:?}"
+        );
+    }
+
+    #[test]
+    fn recent_files_section_keeps_absolute_path_when_outside_worktree() {
+        // Defensive: if claude somehow logged a path outside the
+        // worktree, fall back to the original string instead of
+        // hiding it.
+        let theme = Theme::wsx();
+        let mut evt = make_events_with(None, ToolUseCounts::default(), None);
+        evt.recent_edited_files
+            .push_front("/etc/passwd".to_string());
+        let lines = build_procs_and_files(
+            &[],
+            Some(&evt),
+            None,
+            std::path::Path::new("/tmp/wt"),
+            &theme,
+            40,
+        );
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("/etc/passwd"), "absolute path kept: {joined:?}");
     }
 
     #[test]

@@ -15,7 +15,7 @@ pub fn preferred_height(total_height: u16) -> u16 {
     target.clamp(MIN_HEIGHT, 14)
 }
 
-use crate::events::WorkspaceEvents;
+use crate::events::{ToolUseCounts, WorkspaceEvents};
 use crate::forge::BranchLifecycle;
 use crate::git::DiffStats;
 use crate::proc::ProcInfo;
@@ -152,6 +152,145 @@ fn format_ago_short(secs: Option<u64>) -> String {
         Some(s) if s < 60 => format!("{s}s"),
         Some(s) if s < 3600 => format!("{}m", s / 60),
         Some(s) => format!("{}h", s / 3600),
+    }
+}
+
+/// Build the lines that make up the SESSION SUMMARY column. Returns a
+/// Vec because the caller is responsible for slicing to fit the body
+/// area height.
+pub(super) fn build_session_summary(
+    events: Option<&WorkspaceEvents>,
+    theme: &Theme,
+    column_width: usize,
+    worktree_path: &str,
+    created_secs: u64,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
+    out.push(Line::from(Span::styled("SESSION SUMMARY".to_string(), label_style)));
+
+    let Some(evt) = events else {
+        out.push(Line::from(Span::styled(
+            "  loading…".to_string(),
+            theme.dim_style(),
+        )));
+        return out;
+    };
+
+    let prefix = Span::styled("▸ ".to_string(), theme.dim_style());
+
+    if let Some(prompt) = evt.first_user_text.as_deref() {
+        let truncated = truncate_to_chars(prompt, column_width.saturating_sub(4));
+        out.push(Line::from(vec![
+            prefix.clone(),
+            Span::styled(
+                format!("\"{truncated}\""),
+                Style::default().add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+    }
+
+    let trace = format_tool_trace(&evt.tool_use_counts);
+    if !trace.is_empty() {
+        out.push(Line::from(vec![
+            prefix.clone(),
+            Span::raw(truncate_to_chars(&trace, column_width.saturating_sub(2))),
+        ]));
+    }
+
+    let now_signal = format_where_now(evt);
+    if !now_signal.is_empty() {
+        out.push(Line::from(vec![
+            prefix.clone(),
+            Span::raw(truncate_to_chars(&now_signal, column_width.saturating_sub(2))),
+        ]));
+    }
+
+    // (PR row is wired but always omitted in v1 — pr_title/pr_number arrive as None.)
+
+    let age = format_ago_short(Some(created_secs));
+    let path_text = format!("{worktree_path} · created {age}");
+    let path_truncated = truncate_to_chars_left(&path_text, column_width.saturating_sub(2));
+    out.push(Line::from(vec![
+        prefix.clone(),
+        Span::styled(path_truncated, theme.dim_style()),
+    ]));
+
+    out
+}
+
+fn format_tool_trace(counts: &ToolUseCounts) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if counts.read > 0 {
+        parts.push(format!("read {} {}", counts.read, plural("file", counts.read)));
+    }
+    if counts.edit > 0 {
+        parts.push(format!("edited {} {}", counts.edit, plural("file", counts.edit)));
+    }
+    if counts.write > 0 {
+        parts.push(format!("wrote {} {}", counts.write, plural("file", counts.write)));
+    }
+    if counts.bash > 0 {
+        parts.push(format!("ran {} {}", counts.bash, plural("command", counts.bash)));
+    }
+    if counts.other > 0 {
+        parts.push(format!("+{} other actions", counts.other));
+    }
+    parts.join(", ")
+}
+
+fn plural(noun: &str, n: u32) -> String {
+    if n == 1 {
+        noun.to_string()
+    } else {
+        format!("{noun}s")
+    }
+}
+
+fn format_where_now(evt: &WorkspaceEvents) -> String {
+    if let Some(q) = evt.pending_question_tool() {
+        return format!("agent asked via {q}");
+    }
+    // Pending non-question permission tool, if any:
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    if let Some((name, _)) = evt.pending_permission_tool(now_ms, 0) {
+        return format!("awaiting permission for {name}");
+    }
+    if let Some(t) = evt.last_assistant_text.as_deref() {
+        let first_line = t.lines().next().unwrap_or(t);
+        return first_line.to_string();
+    }
+    String::new()
+}
+
+fn truncate_to_chars(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let count = s.chars().count();
+    if count <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+fn truncate_to_chars_left(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let count = s.chars().count();
+    if count <= max {
+        s.to_string()
+    } else {
+        let skip = count.saturating_sub(max.saturating_sub(1));
+        let tail: String = s.chars().skip(skip).collect();
+        format!("…{tail}")
     }
 }
 
@@ -320,5 +459,66 @@ mod tests {
         let lower = text.to_lowercase();
         assert!(!lower.contains("pr open"), "no pr label: {text:?}");
         assert!(!lower.contains("merged"), "no pr label: {text:?}");
+    }
+
+    fn make_events_with(
+        first: Option<&str>,
+        counts: ToolUseCounts,
+        last_assistant: Option<&str>,
+    ) -> WorkspaceEvents {
+        let mut e = WorkspaceEvents::default();
+        e.first_user_text = first.map(str::to_string);
+        e.tool_use_counts = counts;
+        e.last_assistant_text = last_assistant.map(str::to_string);
+        e
+    }
+
+    #[test]
+    fn session_summary_renders_initial_prompt_when_present() {
+        let theme = Theme::wsx();
+        let evt = make_events_with(Some("summarize the repo"), ToolUseCounts::default(), None);
+        let lines = build_session_summary(Some(&evt), &theme, 50, "/tmp/wt", 0);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("summarize the repo"), "{joined:?}");
+    }
+
+    #[test]
+    fn session_summary_tool_trace_omits_zero_counts() {
+        let theme = Theme::wsx();
+        let evt = make_events_with(None, ToolUseCounts { read: 5, edit: 0, write: 0, bash: 2, other: 0 }, None);
+        let lines = build_session_summary(Some(&evt), &theme, 50, "/tmp/wt", 0);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("read 5 files"), "{joined:?}");
+        assert!(joined.contains("ran 2 commands"), "{joined:?}");
+        assert!(!joined.contains("edited"), "edit fragment should be omitted: {joined:?}");
+        assert!(!joined.contains("wrote"), "write fragment should be omitted: {joined:?}");
+    }
+
+    #[test]
+    fn session_summary_singular_plural_forms() {
+        let theme = Theme::wsx();
+        let evt = make_events_with(None, ToolUseCounts { read: 1, edit: 1, write: 1, bash: 1, other: 1 }, None);
+        let lines = build_session_summary(Some(&evt), &theme, 100, "/tmp/wt", 0);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("read 1 file") && !joined.contains("read 1 files"), "{joined:?}");
+        assert!(joined.contains("edited 1 file"), "{joined:?}");
+        assert!(joined.contains("ran 1 command"), "{joined:?}");
+    }
+
+    #[test]
+    fn session_summary_shows_loading_when_events_none() {
+        let theme = Theme::wsx();
+        let lines = build_session_summary(None, &theme, 50, "/tmp/wt", 0);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("loading"), "{joined:?}");
+    }
+
+    #[test]
+    fn session_summary_includes_worktree_path() {
+        let theme = Theme::wsx();
+        let evt = make_events_with(None, ToolUseCounts::default(), None);
+        let lines = build_session_summary(Some(&evt), &theme, 60, "/tmp/very/long/path/workspaces/foo", 120);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("foo") || joined.contains("workspaces"), "basename retained: {joined:?}");
     }
 }

@@ -304,10 +304,74 @@ impl Store {
     }
 
     pub fn set_repo_name(&self, id: RepoId, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(crate::error::Error::UserInput(
+                "repo name cannot be empty".into(),
+            ));
+        }
+        // Check for duplicate name on a different repo.
+        let dup: std::result::Result<Option<i64>, _> = self
+            .conn
+            .query_row(
+                "SELECT id FROM repos WHERE name = ?1 AND id != ?2",
+                rusqlite::params![name, id.0],
+                |r| r.get(0),
+            )
+            .optional();
+        if let Ok(Some(_existing_id)) = dup {
+            return Err(crate::error::Error::UserInput(format!(
+                "a repo named '{name}' already exists"
+            )));
+        }
+        // Read the old name for the related_repos cascade.
+        let old_name: String =
+            self.conn
+                .query_row("SELECT name FROM repos WHERE id = ?1", [id.0], |r| {
+                    r.get::<_, String>(0)
+                })?;
+
         self.conn.execute(
             "UPDATE repos SET name = ?1 WHERE id = ?2",
             rusqlite::params![name, id.0],
         )?;
+
+        // Cascade: rewrite related_repos entries in other repos that
+        // mention the old name. We do this in Rust to avoid substring
+        // false positives (e.g. "front" matching inside "frontend").
+        let mut stmt = self.conn.prepare(
+            "SELECT id, related_repos FROM repos \
+             WHERE related_repos IS NOT NULL AND id != ?1",
+        )?;
+        let rows: Vec<(i64, String)> =
+            match stmt.query_map([id.0], |r| Ok((r.get(0)?, r.get::<_, String>(1)?))) {
+                Ok(mapped) => mapped.filter_map(|r| r.ok()).collect(),
+                Err(_) => Vec::new(),
+            };
+        drop(stmt);
+        for (other_id, spec) in rows {
+            let names = crate::related::parse(&spec);
+            if !names.iter().any(|n| n == &old_name) {
+                continue;
+            }
+            let mut new_parts: Vec<&str> = names
+                .iter()
+                .map(|n| {
+                    if n == &old_name {
+                        name.as_ref()
+                    } else {
+                        n.as_str()
+                    }
+                })
+                .collect();
+            new_parts.dedup();
+            let new_spec = new_parts.join(", ");
+            self.conn.execute(
+                "UPDATE repos SET related_repos = ?1 WHERE id = ?2",
+                rusqlite::params![new_spec, other_id],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -920,6 +984,126 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         assert!(repo.related_repos.is_none());
+    }
+
+    #[test]
+    fn set_repo_name_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/r"), "old-name", "").unwrap();
+        store.set_repo_name(id, "new-name").unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(repo.name, "new-name");
+    }
+
+    #[test]
+    fn set_repo_name_rejects_empty() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/r"), "demo", "").unwrap();
+        let err = store.set_repo_name(id, "");
+        assert!(err.is_err());
+        let err = store.set_repo_name(id, "  ");
+        assert!(err.is_err());
+        // Name unchanged after failed attempts.
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(repo.name, "demo");
+    }
+
+    #[test]
+    fn set_repo_name_rejects_duplicate() {
+        let store = Store::open_in_memory().unwrap();
+        store.add_repo(Path::new("/a"), "existing", "").unwrap();
+        let id = store.add_repo(Path::new("/b"), "demo", "").unwrap();
+        let err = store.set_repo_name(id, "existing");
+        assert!(err.is_err());
+        // Renaming to the same name is fine.
+        store.set_repo_name(id, "demo").unwrap();
+    }
+
+    #[test]
+    fn set_repo_name_cascades_to_related_repos() {
+        let store = Store::open_in_memory().unwrap();
+        let backend = store
+            .add_repo(Path::new("/backend"), "backend", "")
+            .unwrap();
+        let frontend = store
+            .add_repo(Path::new("/frontend"), "frontend", "")
+            .unwrap();
+        // frontend lists backend as a related repo.
+        store
+            .set_repo_related_repos(frontend, Some("backend, marketing"))
+            .unwrap();
+        // Rename backend -> api-backend
+        store.set_repo_name(backend, "api-backend").unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == frontend)
+            .unwrap();
+        assert_eq!(
+            repo.related_repos.as_deref(),
+            Some("api-backend, marketing"),
+            "frontend's related_repos should have 'backend' replaced with 'api-backend'"
+        );
+    }
+
+    #[test]
+    fn set_repo_name_does_not_cascade_to_unrelated_repos() {
+        let store = Store::open_in_memory().unwrap();
+        let backend = store
+            .add_repo(Path::new("/backend"), "backend", "")
+            .unwrap();
+        let frontend = store
+            .add_repo(Path::new("/frontend"), "frontend", "")
+            .unwrap();
+        store
+            .set_repo_related_repos(frontend, Some("marketing"))
+            .unwrap();
+        // Rename backend; frontend doesn't reference it, so should be unchanged.
+        store.set_repo_name(backend, "api-backend").unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == frontend)
+            .unwrap();
+        assert_eq!(repo.related_repos.as_deref(), Some("marketing"));
+    }
+
+    #[test]
+    fn set_repo_name_no_substring_false_positive_in_related_repos() {
+        let store = Store::open_in_memory().unwrap();
+        let front = store.add_repo(Path::new("/front"), "front", "").unwrap();
+        let frontend = store
+            .add_repo(Path::new("/frontend"), "frontend", "")
+            .unwrap();
+        // frontend lists both "front" and "frontend" (referring to itself?).
+        store
+            .set_repo_related_repos(frontend, Some("front, marketing"))
+            .unwrap();
+        // Rename "front" -> "old-front" — should NOT touch "front" inside "frontend"
+        store.set_repo_name(front, "old-front").unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == frontend)
+            .unwrap();
+        assert_eq!(
+            repo.related_repos.as_deref(),
+            Some("old-front, marketing"),
+            "should replace exact name only, no substring damage"
+        );
     }
 
     #[test]

@@ -1906,9 +1906,7 @@ fn apply_repo_setting(
     };
     match field {
         RepoSettingField::RepoName => {
-            if !trimmed.is_empty() {
-                app.store.set_repo_name(repo_id, trimmed)?;
-            }
+            app.store.set_repo_name(repo_id, trimmed)?;
             Ok(())
         }
         RepoSettingField::BranchPrefix => app.store.set_repo_branch_prefix(repo_id, trimmed),

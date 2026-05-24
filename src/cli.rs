@@ -664,8 +664,9 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 .into_iter()
                 .find(|r| r.name == name)
                 .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
-            store.set_repo_name(r.id, &new_name)?;
-            println!("renamed repo {name} to {new_name}");
+            let trimmed = new_name.trim();
+            store.set_repo_name(r.id, trimmed)?;
+            println!("renamed repo {name} to {trimmed}");
         }
         CliAction::RepoSetRelatedRepos { name, source } => {
             let repos = crate::repo::list(&store)?;
@@ -1127,6 +1128,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_repo_set_name() {
+        let a = parse(&["repo", "set-name", "myrepo", "my-new-name"]).unwrap();
+        match a {
+            CliAction::RepoSetName { name, new_name } => {
+                assert_eq!(name, "myrepo");
+                assert_eq!(new_name, "my-new-name");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
     fn parse_repo_edit_related_repos() {
         match parse(&["repo", "edit-related-repos", "backend"]).unwrap() {
             CliAction::RepoEditRelatedRepos { name } => assert_eq!(name, "backend"),

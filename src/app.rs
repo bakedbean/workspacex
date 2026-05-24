@@ -3219,12 +3219,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     evt.tool_use_counts.other =
                         evt.tool_use_counts.other.saturating_add(tool_use_counts.other);
                     for path in edited_file_paths {
-                        if evt.recent_edited_files.front().map(|s| s.as_str()) != Some(&path) {
-                            evt.recent_edited_files.push_front(path);
-                            while evt.recent_edited_files.len() > 7 {
-                                evt.recent_edited_files.pop_back();
-                            }
-                        }
+                        evt.push_recent_edited_file(path);
                     }
                     // Sticky between batches: only overwrite when the batch
                     // had a definitive signal. Some(true) = batch ended on

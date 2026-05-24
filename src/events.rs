@@ -171,9 +171,10 @@ pub struct WorkspaceEvents {
     /// the tail loop. Used by the detail bar to synthesize a
     /// one-line action trace.
     pub tool_use_counts: ToolUseCounts,
-    /// Most-recent-first ring of file paths the agent has read or
-    /// edited, bounded to 7. Consecutive duplicates collapse so a
-    /// single repeated edit doesn't crowd out other recent files.
+    /// Most-recent-first ring of edited file paths, bounded to 7.
+    /// A path already in the ring is moved to the front rather than
+    /// duplicated, so repeated edits to the same file don't appear
+    /// multiple times in the dashboard's RECENT FILES list.
     pub recent_edited_files: VecDeque<String>,
 }
 
@@ -198,6 +199,17 @@ impl Default for WorkspaceEvents {
 }
 
 impl WorkspaceEvents {
+    /// Push a path onto `recent_edited_files`, moving any existing
+    /// entry for that path to the front instead of duplicating it.
+    /// Bounds the ring to 7 entries.
+    pub fn push_recent_edited_file(&mut self, path: String) {
+        self.recent_edited_files.retain(|p| p != &path);
+        self.recent_edited_files.push_front(path);
+        while self.recent_edited_files.len() > 7 {
+            self.recent_edited_files.pop_back();
+        }
+    }
+
     /// Clear all session-derived state. Used when the underlying jsonl file
     /// is replaced or truncated — stale tool_uses and stop_reasons from the
     /// prior session must not leak into the new one.
@@ -1529,6 +1541,33 @@ mod tests {
         assert_eq!(evt.tool_use_counts.bash, 0);
         assert_eq!(evt.tool_use_counts.other, 0);
         assert!(evt.recent_edited_files.is_empty());
+    }
+
+    #[test]
+    fn push_recent_edited_file_moves_repeats_to_front_no_duplicates() {
+        // A re-edit of an already-tracked file moves it to the front
+        // rather than appearing twice in the ring.
+        let mut evt = WorkspaceEvents::default();
+        evt.push_recent_edited_file("a.rs".into());
+        evt.push_recent_edited_file("b.rs".into());
+        evt.push_recent_edited_file("a.rs".into());
+        let entries: Vec<&str> = evt.recent_edited_files.iter().map(String::as_str).collect();
+        assert_eq!(entries, vec!["a.rs", "b.rs"], "no duplicate a.rs");
+    }
+
+    #[test]
+    fn push_recent_edited_file_bounds_to_seven() {
+        let mut evt = WorkspaceEvents::default();
+        for i in 0..10 {
+            evt.push_recent_edited_file(format!("f{i}.rs"));
+        }
+        assert_eq!(evt.recent_edited_files.len(), 7);
+        // Newest at front, oldest dropped.
+        assert_eq!(evt.recent_edited_files.front().map(String::as_str), Some("f9.rs"));
+        assert!(
+            !evt.recent_edited_files.iter().any(|p| p == "f0.rs"),
+            "oldest evicted"
+        );
     }
 
     #[test]

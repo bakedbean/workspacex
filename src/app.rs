@@ -701,8 +701,21 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             );
             let detail_visible = selection_is_workspace
                 && area.height >= crate::ui::dashboard::detail::MIN_HEIGHT + 10;
+            // Carve a 1-row footer off the bottom of the full area so the
+            // spec order (list / detail / pm / footer) is respected. The
+            // detail and PM regions are placed ABOVE the footer row.
+            let inner_area = if area.height > 1 {
+                ratatui::layout::Rect { height: area.height - 1, ..area }
+            } else {
+                area
+            };
+            let footer_area = ratatui::layout::Rect {
+                y: area.y + area.height.saturating_sub(1),
+                height: 1,
+                ..area
+            };
             let (dashboard_area, detail_area, pm_area) =
-                dashboard_regions(area, app.pm_visible, detail_visible);
+                dashboard_regions(inner_area, app.pm_visible, detail_visible);
             let notifications_on = notifications_enabled(&app.store);
             let nerd_fonts = nerd_fonts_enabled(&app.store);
 
@@ -870,7 +883,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 }
             }
             app.dashboard.selection = app.selected_target();
-            dashboard::render(
+            dashboard::render_without_footer(
                 f,
                 dashboard_area,
                 &inputs,
@@ -929,6 +942,9 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     }
                 }
             }
+            // Render footer below detail/PM so the spec order
+            // list / detail / pm / footer is respected.
+            dashboard::render_footer(f, footer_area, &activity, &app.theme);
         }
         View::Attached(state) => {
             // If any leaf's session has gone away (e.g. workspace was

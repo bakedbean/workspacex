@@ -695,18 +695,33 @@ pub async fn run<B: Backend + std::io::Write>(
             }
             maybe_evt = events.next() => {
                 let Some(Ok(evt)) = maybe_evt else { break; };
-                let pending: Vec<WorkspaceId> = {
+                // Drain any refreshes scheduled by detach handlers while
+                // we held the lock; resolve each id to its (path, agent)
+                // pair under the same lock so the spawned tail doesn't
+                // need to walk `App::workspaces`. Then spawn outside the
+                // lock so the tails don't serialize event handling.
+                let pending: Vec<(
+                    WorkspaceId,
+                    std::path::PathBuf,
+                    crate::pty::session::AgentKind,
+                )> = {
                     let mut g = app.lock().await;
                     handle_event(&mut g, &app, evt).await?;
-                    // Drain any refreshes scheduled by detach handlers
-                    // while we held the lock; spawn the tails outside
-                    // the lock so they don't serialize event handling.
-                    g.pending_workspace_refresh.drain().collect()
+                    let ids: Vec<WorkspaceId> =
+                        g.pending_workspace_refresh.drain().collect();
+                    ids.into_iter()
+                        .filter_map(|id| {
+                            g.workspaces
+                                .iter()
+                                .find(|(_, w)| w.id == id)
+                                .map(|(_, w)| (id, w.worktree_path.clone(), w.agent))
+                        })
+                        .collect()
                 };
-                for id in pending {
+                for (id, path, agent) in pending {
                     let app_clone = app.clone();
                     tokio::spawn(async move {
-                        tail_workspace_events(app_clone, id).await;
+                        tail_workspace_events(app_clone, id, path, agent).await;
                     });
                 }
             }
@@ -2310,8 +2325,8 @@ fn maybe_mirror_mcp(app: &App, repo_path: &std::path::Path, worktree_path: &std:
 
 /// Mark `ids` for an immediate out-of-band refresh: clear the per-workspace
 /// throttle stamps (so the next periodic poll re-fetches diff/PR right
-/// away), bump `last_proc_scan_ms` so the next tick reruns `lsof`, and
-/// queue the workspaces into `pending_workspace_refresh` so `run_loop`
+/// away), reset `last_proc_scan_ms` to 0 so the next tick reruns `lsof`,
+/// and queue the workspaces into `pending_workspace_refresh` so `run_loop`
 /// spawns an immediate JSONL events tail. Called by detach handlers so
 /// the dashboard detail bar reflects work the user just did in the
 /// attached session instead of waiting for the next 2s tick.
@@ -3035,39 +3050,60 @@ async fn reconcile_create_result(
 /// return-to-dashboard so the detail bar reflects work done in the
 /// just-detached session without waiting for the next tick).
 ///
+/// Callers pass `worktree_path` + `ws_agent` directly so this helper
+/// doesn't have to walk `App::workspaces` (O(n) lookup that would make
+/// the poll's per-tick work O(n²) over the workspace list).
+///
 /// Lock-ordering: snapshot path/offset under brief locks, do the file
 /// I/O without the lock held, then re-acquire to commit the update.
-/// Returns early if the workspace is gone or its session file is missing.
-pub async fn tail_workspace_events(app: SharedApp, id: crate::store::WorkspaceId) {
-    let (path, ws_agent) = {
-        let g = app.lock().await;
-        match g.workspaces.iter().find(|(_, w)| w.id == id) {
-            Some((_, w)) => (w.worktree_path.clone(), w.agent),
-            None => return,
-        }
-    };
-    if !path.exists() {
+///
+/// Concurrent-tail safety: this helper can race with itself (the periodic
+/// poll's awaited call and a detach-driven spawn for the same workspace
+/// can interleave). The commit block re-checks `evt.file_path` and
+/// `evt.byte_offset` against the values seen at snapshot time and skips
+/// the update if either has changed — the winning tail already absorbed
+/// the bytes we read, so applying our update on top would double-count
+/// events and tool-use metrics. The next periodic tick picks up anything
+/// past the newer offset.
+pub async fn tail_workspace_events(
+    app: SharedApp,
+    id: crate::store::WorkspaceId,
+    worktree_path: std::path::PathBuf,
+    ws_agent: crate::pty::session::AgentKind,
+) {
+    if !worktree_path.exists() {
         return;
     }
     let current_file = match ws_agent {
-        crate::pty::session::AgentKind::Claude => crate::events::locate_session_file(&path),
-        crate::pty::session::AgentKind::Pi => crate::pi_events::locate_session_file(&path),
-    };
-    let prev_offset = {
-        let g = app.lock().await;
-        match (g.workspace_events.get(&id), current_file.as_ref()) {
-            (Some(evt), Some(f)) if evt.file_path.as_deref() == Some(f.as_path()) => {
-                evt.byte_offset
-            }
-            _ => 0,
+        crate::pty::session::AgentKind::Claude => {
+            crate::events::locate_session_file(&worktree_path)
         }
+        crate::pty::session::AgentKind::Pi => {
+            crate::pi_events::locate_session_file(&worktree_path)
+        }
+    };
+    // Snapshot the FULL (file_path, byte_offset) pair so the commit can
+    // detect a concurrent tail that landed between our snapshot and now.
+    let (snapshot_file, snapshot_offset) = {
+        let g = app.lock().await;
+        match g.workspace_events.get(&id) {
+            Some(evt) => (evt.file_path.clone(), evt.byte_offset),
+            None => (None, 0),
+        }
+    };
+    // The byte we actually tail from: reuse the prior offset only when
+    // the snapshot's file matches the current session file; otherwise
+    // start fresh (file rotated, first observation, etc.).
+    let tail_from = match (snapshot_file.as_ref(), current_file.as_ref()) {
+        (Some(p), Some(c)) if p == c => snapshot_offset,
+        _ => 0,
     };
     let Some(file) = current_file else {
         return;
     };
     let tail_result = match ws_agent {
-        crate::pty::session::AgentKind::Claude => crate::events::tail_session(&file, prev_offset),
-        crate::pty::session::AgentKind::Pi => crate::pi_events::tail_session(&file, prev_offset),
+        crate::pty::session::AgentKind::Claude => crate::events::tail_session(&file, tail_from),
+        crate::pty::session::AgentKind::Pi => crate::pi_events::tail_session(&file, tail_from),
     };
     let Ok(update) = tail_result else {
         return;
@@ -3087,6 +3123,20 @@ pub async fn tail_workspace_events(app: SharedApp, id: crate::store::WorkspaceId
         edited_file_paths,
     } = update;
     let mut g = app.lock().await;
+    // Concurrent-tail guard. If another `tail_workspace_events` call
+    // for the same workspace committed between our snapshot and now,
+    // its commit already advanced `byte_offset` (and may have replaced
+    // `file_path`). Our `update` was computed against the snapshot —
+    // applying it on top would re-add the same events and double-count
+    // tool-use metrics. Skip; the next periodic tick re-snapshots and
+    // catches any bytes past the newer offset.
+    let still_at_snapshot = match g.workspace_events.get(&id) {
+        Some(evt) => evt.file_path == snapshot_file && evt.byte_offset == snapshot_offset,
+        None => snapshot_file.is_none() && snapshot_offset == 0,
+    };
+    if !still_at_snapshot {
+        return;
+    }
     let evt = g.workspace_events.entry(id).or_default();
     // If the session file was replaced (different path) or
     // truncated/rewound (reset_from_zero), discard all
@@ -3097,7 +3147,7 @@ pub async fn tail_workspace_events(app: SharedApp, id: crate::store::WorkspaceId
     if file_changed || reset_from_zero {
         evt.reset_session_state();
     }
-    if new_offset != prev_offset {
+    if new_offset != tail_from {
         // The log grew this iteration — stamp the activity marker so
         // is_stalled can compute time-since-last-write.
         let now_ms = std::time::SystemTime::now()
@@ -3177,6 +3227,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
             String,
             String,
             Option<String>,
+            crate::pty::session::AgentKind,
         )> = {
             let g = app.lock().await;
             g.workspaces
@@ -3191,12 +3242,13 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         w.branch.clone(),
                         prefix,
                         repo.base_branch.clone(),
+                        w.agent,
                     ))
                 })
                 .collect()
         };
 
-        for (id, path, db_branch, prefix, base_branch) in snapshot {
+        for (id, path, db_branch, prefix, base_branch, ws_agent) in snapshot {
             if !path.exists() {
                 continue;
             }
@@ -3301,8 +3353,10 @@ pub async fn branch_drift_poll(app: SharedApp) {
             // 4) Tail agent session JSONL for events.
             //    Extracted into `tail_workspace_events` so detach handlers
             //    can trigger an immediate refresh on return-to-dashboard
-            //    without waiting for the next poll tick.
-            tail_workspace_events(app.clone(), id).await;
+            //    without waiting for the next poll tick. Path/agent are
+            //    passed from the snapshot above so the helper doesn't
+            //    re-walk `App::workspaces` (would make this loop O(n²)).
+            tail_workspace_events(app.clone(), id, path.clone(), ws_agent).await;
         }
 
         // 5) Per-workspace process scan. Throttled to once per 10 s globally —

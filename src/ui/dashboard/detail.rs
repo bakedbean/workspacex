@@ -51,12 +51,105 @@ pub struct DetailInputs<'a> {
 /// Render the detail bar into `area`. No-op when `area.height < MIN_HEIGHT`
 /// (caller is expected to fall back to a condensed banner — see
 /// `app.rs::draw`).
-pub fn render(f: &mut Frame, area: Rect, _inputs: &DetailInputs<'_>, _theme: &Theme) {
+pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
     if area.height == 0 || area.height < MIN_HEIGHT {
         return;
     }
-    // Real rendering arrives in subsequent tasks.
-    let _ = f;
+    use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::widgets::Paragraph;
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // header strip
+            Constraint::Length(1), // rule
+            Constraint::Min(1),    // body (3 columns)
+            Constraint::Length(1), // rule
+            Constraint::Length(1), // reply row
+        ])
+        .split(area);
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let created_secs = now_secs.saturating_sub(inputs.workspace.created_at as u64);
+
+    let header = build_header_strip(
+        &inputs.workspace.name,
+        &inputs.workspace.branch,
+        inputs.lifecycle,
+        inputs.diff,
+        inputs.procs.len() as u32,
+        inputs.status,
+        inputs.ago_secs,
+        theme,
+        chunks[0].width as usize,
+    );
+    f.render_widget(Paragraph::new(header), chunks[0]);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(chunks[1].width as usize),
+            theme.dim_style(),
+        ))),
+        chunks[1],
+    );
+
+    // Body: 3 columns 30/40/30.
+    let body_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+        ])
+        .split(chunks[2]);
+    let summary_lines = build_session_summary(
+        if inputs.events_scanned { inputs.events } else { None },
+        theme,
+        body_chunks[0].width as usize,
+        &inputs.workspace.worktree_path.to_string_lossy(),
+        created_secs,
+    );
+    let chat_lines = build_recent_chat(
+        if inputs.events_scanned { inputs.events } else { None },
+        theme,
+        body_chunks[1].width as usize,
+        (chunks[2].height as usize).saturating_sub(1).max(1),
+    );
+    let procs_lines = build_procs_and_files(
+        inputs.procs,
+        inputs.events,
+        theme,
+        body_chunks[2].width as usize,
+    );
+    f.render_widget(
+        Paragraph::new(summary_lines),
+        body_chunks[0],
+    );
+    f.render_widget(Paragraph::new(chat_lines), body_chunks[1]);
+    f.render_widget(Paragraph::new(procs_lines), body_chunks[2]);
+
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(chunks[3].width as usize),
+            theme.dim_style(),
+        ))),
+        chunks[3],
+    );
+
+    let reply = build_reply_row(
+        inputs.reply_draft,
+        inputs.reply_focused,
+        theme,
+        chunks[4].width as usize,
+    );
+    f.render_widget(Paragraph::new(reply), chunks[4]);
+
+    if inputs.reply_focused {
+        let cx = reply_cursor_x(inputs.reply_draft, chunks[4].width as usize);
+        f.set_cursor_position((chunks[4].x + cx, chunks[4].y));
+    }
 }
 
 use ratatui::style::{Modifier, Style};
@@ -826,5 +919,39 @@ mod tests {
         let line = build_reply_row(&draft, true, &theme, 60);
         let text = line_to_string(&line);
         assert!(text.contains("END"), "tail of draft visible: {text:?}");
+    }
+
+    #[test]
+    fn full_render_paints_header_body_and_reply_row() {
+        let theme = Theme::wsx();
+        let (_store, repo, ws) = seed_workspace();
+        let mut evt = WorkspaceEvents::default();
+        evt.first_user_text = Some("give me a tour".into());
+        evt.tool_use_counts.read = 14;
+        evt.tool_use_counts.bash = 2;
+        evt.last_assistant_text = Some("Reading the repo now.".into());
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: Some(&evt),
+            procs: &[],
+            diff: Some(DiffStats { added: 12, removed: 3 }),
+            lifecycle: Some(BranchLifecycle::PrOpen),
+            pr_title: None,
+            pr_number: None,
+            status: Status::Question,
+            ago_secs: Some(29),
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+        };
+        let text = render_to_text(&inputs, 120, 10);
+        assert!(text.contains("repo-overview") || text.contains("ws"), "header name: {text:?}");
+        assert!(text.contains("SESSION SUMMARY"), "summary label: {text:?}");
+        assert!(text.contains("RECENT CHAT"), "chat label: {text:?}");
+        assert!(text.contains("PROCESSES"), "procs label: {text:?}");
+        assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
+        assert!(text.contains("give me a tour"), "initial prompt: {text:?}");
+        assert!(text.contains("Reading the repo"), "recent chat: {text:?}");
     }
 }

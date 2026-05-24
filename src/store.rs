@@ -303,6 +303,14 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_repo_name(&self, id: RepoId, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET name = ?1 WHERE id = ?2",
+            rusqlite::params![name, id.0],
+        )?;
+        Ok(())
+    }
+
     pub fn set_repo_base_branch(&self, id: RepoId, value: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE repos SET base_branch = ?1 WHERE id = ?2",

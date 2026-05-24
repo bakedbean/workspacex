@@ -37,6 +37,8 @@ Running with no arguments opens the dashboard.
 
 ```
 wsx repo add <path> [--name <name>] [--prefix <prefix>]
+
+wsx repo set-name <name> <new-name>
 ```
 
 Registers a git repository. `<path>` must be an existing git working tree.
@@ -55,6 +57,12 @@ wsx repo remove <name>
 ```
 
 Removes a repo from the wsx registry. Does not delete the git repository on disk. Workspaces under the removed repo are also unregistered (but their worktrees remain on disk).
+
+```
+wsx repo set-name <name> <new-name>
+```
+
+Renames the repo in the wsx registry. The new name appears on the dashboard and is used in workspace references (e.g. `wsx workspace create <repo>`). Other commands like `wsx repo set-prefix <new-name> ...` must use the new name afterwards.
 
 ```
 wsx repo set-prefix <name> <prefix>

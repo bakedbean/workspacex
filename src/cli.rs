@@ -47,6 +47,10 @@ pub enum CliAction {
     RepoEditPinnedCommands {
         name: String,
     },
+    RepoSetName {
+        name: String,
+        new_name: String,
+    },
     RepoSetRelatedRepos {
         name: String,
         source: ValueSource,
@@ -272,6 +276,15 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                     .next()
                     .ok_or_else(|| Error::UserInput("repo edit-pinned-commands <name>".into()))?;
                 Ok(CliAction::RepoEditPinnedCommands { name })
+            }
+            Some("set-name") => {
+                let name = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("repo set-name <name> <new-name>".into()))?;
+                let new_name = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("repo set-name <name> <new-name>".into()))?;
+                Ok(CliAction::RepoSetName { name, new_name })
             }
             Some("set-related-repos") => {
                 let name = it.next().ok_or_else(|| {
@@ -644,6 +657,15 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 store.set_repo_pinned_commands(r.id, Some(&new_value))?;
                 println!("set pinned commands for {name} ({} chars)", new_value.len());
             }
+        }
+        CliAction::RepoSetName { name, new_name } => {
+            let repos = crate::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            store.set_repo_name(r.id, &new_name)?;
+            println!("renamed repo {name} to {new_name}");
         }
         CliAction::RepoSetRelatedRepos { name, source } => {
             let repos = crate::repo::list(&store)?;

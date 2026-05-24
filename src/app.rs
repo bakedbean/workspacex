@@ -38,6 +38,7 @@ pub enum SelectionTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoSettingField {
+    RepoName,
     BranchPrefix,
     BaseBranch,
     CustomInstructions,
@@ -48,7 +49,8 @@ pub enum RepoSettingField {
 }
 
 impl RepoSettingField {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
+        Self::RepoName,
         Self::BranchPrefix,
         Self::BaseBranch,
         Self::CustomInstructions,
@@ -60,6 +62,7 @@ impl RepoSettingField {
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::RepoName => "name",
             Self::BranchPrefix => "branch_prefix",
             Self::BaseBranch => "base_branch",
             Self::CustomInstructions => "custom_instructions",
@@ -549,6 +552,7 @@ where
             return Ok(());
         };
         match edit.field {
+            RepoSettingField::RepoName => (repo.name.clone(), "txt"),
             RepoSettingField::BranchPrefix => (repo.branch_prefix.clone(), "txt"),
             RepoSettingField::BaseBranch => (repo.base_branch.clone().unwrap_or_default(), "txt"),
             RepoSettingField::CustomInstructions => {
@@ -1901,6 +1905,10 @@ fn apply_repo_setting(
         Some(trimmed)
     };
     match field {
+        RepoSettingField::RepoName => {
+            app.store.set_repo_name(repo_id, trimmed)?;
+            Ok(())
+        }
         RepoSettingField::BranchPrefix => app.store.set_repo_branch_prefix(repo_id, trimmed),
         RepoSettingField::BaseBranch => app.store.set_repo_base_branch(repo_id, opt),
         RepoSettingField::CustomInstructions => {
@@ -6055,9 +6063,12 @@ mod restore_layout_tests {
     async fn l_key_opens_workspace_like_enter() {
         let (mut app, first_id, _second_id) = setup_two_workspaces_with_sessions("l-key");
         select_workspace_in_app(&mut app, first_id);
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         match &app.view {
             crate::ui::View::Attached(s) => {
                 assert_eq!(s.leaves(), vec![first_id]);

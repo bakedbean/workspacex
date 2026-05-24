@@ -513,7 +513,7 @@ pub fn render_repo_settings(
     theme: &Theme,
 ) {
     let w = area.width.clamp(40, 90);
-    let h = area.height.clamp(11, 18);
+    let h = area.height.clamp(12, 20);
     let rect = centered(area, w, h);
     f.render_widget(Clear, rect);
 
@@ -532,7 +532,11 @@ pub fn render_repo_settings(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let rows: [(crate::app::RepoSettingField, Option<&str>); 7] = [
+    let rows: [(crate::app::RepoSettingField, Option<&str>); 8] = [
+        (
+            crate::app::RepoSettingField::RepoName,
+            Some(repo.name.as_str()),
+        ),
         (
             crate::app::RepoSettingField::BranchPrefix,
             if repo.branch_prefix.is_empty() {

@@ -3,6 +3,7 @@
 
 pub mod by_attention;
 pub mod by_repo;
+pub mod detail;
 #[cfg(test)]
 pub(crate) mod fixture;
 pub mod layout;

@@ -219,6 +219,90 @@ pub(super) fn build_session_summary(
     out
 }
 
+/// Build the RECENT CHAT column. `max_body_lines` caps how many content
+/// lines render below the column label.
+pub(super) fn build_recent_chat(
+    events: Option<&WorkspaceEvents>,
+    theme: &Theme,
+    column_width: usize,
+    max_body_lines: usize,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
+    out.push(Line::from(Span::styled("RECENT CHAT".to_string(), label_style)));
+
+    let Some(evt) = events else {
+        out.push(Line::from(Span::styled(
+            "  loading…".to_string(),
+            theme.dim_style(),
+        )));
+        return out;
+    };
+
+    let Some(text) = evt.last_assistant_text.as_deref() else {
+        out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
+        return out;
+    };
+
+    // Word-wrap to column_width. Take the last `max_body_lines` after wrapping.
+    let wrapped = wrap_lines(text, column_width);
+    let start = wrapped.len().saturating_sub(max_body_lines);
+    for line in wrapped.iter().skip(start) {
+        out.push(Line::from(Span::styled(line.clone(), theme.dim_style())));
+    }
+    out
+}
+
+/// Greedy word-wrap. Splits long words at the column boundary.
+fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            if word.chars().count() > width {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+                let mut buf: String = String::new();
+                for ch in word.chars() {
+                    if buf.chars().count() == width {
+                        out.push(std::mem::take(&mut buf));
+                    }
+                    buf.push(ch);
+                }
+                if !buf.is_empty() {
+                    current = buf;
+                }
+                continue;
+            }
+            let projected = if current.is_empty() {
+                word.chars().count()
+            } else {
+                current.chars().count() + 1 + word.chars().count()
+            };
+            if projected > width {
+                out.push(std::mem::take(&mut current));
+                current.push_str(word);
+            } else {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(word);
+            }
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
 fn format_tool_trace(counts: &ToolUseCounts) -> String {
     let mut parts: Vec<String> = Vec::new();
     if counts.read > 0 {
@@ -520,5 +604,37 @@ mod tests {
         let lines = build_session_summary(Some(&evt), &theme, 60, "/tmp/very/long/path/workspaces/foo", 120);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("foo") || joined.contains("workspaces"), "basename retained: {joined:?}");
+    }
+
+    #[test]
+    fn recent_chat_renders_em_dash_when_no_assistant_text() {
+        let theme = Theme::wsx();
+        let evt = make_events_with(None, ToolUseCounts::default(), None);
+        let lines = build_recent_chat(Some(&evt), &theme, 40, 6);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("—"), "{joined:?}");
+    }
+
+    #[test]
+    fn recent_chat_renders_assistant_text_wrapped() {
+        let theme = Theme::wsx();
+        let evt = make_events_with(
+            None,
+            ToolUseCounts::default(),
+            Some("This is a longer assistant message that should wrap across multiple lines when the column width is small."),
+        );
+        let lines = build_recent_chat(Some(&evt), &theme, 30, 6);
+        // Expect at least 2 lines (label + ≥1 content line); total ≤ 1 (label) + 6 (max).
+        assert!(lines.len() >= 2 && lines.len() <= 7, "got {} lines", lines.len());
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("longer assistant"), "content present: {joined:?}");
+    }
+
+    #[test]
+    fn recent_chat_shows_loading_when_events_none() {
+        let theme = Theme::wsx();
+        let lines = build_recent_chat(None, &theme, 40, 6);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("loading"), "{joined:?}");
     }
 }

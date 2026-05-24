@@ -906,10 +906,13 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         // Activity timestamp: prefer whichever signal is more
                         // recent. `session.activity_ms` only exists for
                         // workspaces wsx is currently attached to. The JSONL
-                        // tail loop stamps `events.last_log_activity_ms` for
-                        // any workspace whose claude session writes to disk,
-                        // attached or not — without that fallback the bar
-                        // shows `active —` for every unattached workspace.
+                        // event's own `timestamp_ms` (parsed from the line's
+                        // `timestamp` field) is the actual event time — this
+                        // is what we want, NOT `last_log_activity_ms`, which
+                        // is the wall-clock time when wsx observed the log
+                        // growing (gets stamped to "now" on the first tail
+                        // pass after startup, so all workspaces would
+                        // otherwise show the same age starting from zero).
                         let now_ms = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as i64)
@@ -923,7 +926,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         let event_last_ms = app
                             .workspace_events
                             .get(&ws.id)
-                            .map(|e| e.last_log_activity_ms)
+                            .and_then(|e| e.latest.as_ref().map(|ev| ev.timestamp_ms))
                             .unwrap_or(0);
                         let last_ms = session_last_ms.max(event_last_ms);
                         let ago_secs = if last_ms == 0 {

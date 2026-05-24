@@ -253,6 +253,52 @@ pub(super) fn build_recent_chat(
     out
 }
 
+/// Build the PROCESSES + RECENT FILES column. Procs go on top, recent
+/// files (from `WorkspaceEvents.recent_edited_files`) below.
+pub(super) fn build_procs_and_files(
+    procs: &[ProcInfo],
+    events: Option<&WorkspaceEvents>,
+    theme: &Theme,
+    column_width: usize,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
+
+    out.push(Line::from(Span::styled("PROCESSES".to_string(), label_style)));
+    if procs.is_empty() {
+        out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
+    } else {
+        let visible = procs.iter().take(5);
+        for p in visible {
+            let cmd = truncate_to_chars(&p.command, column_width.saturating_sub(4));
+            out.push(Line::from(vec![
+                Span::styled("● ".to_string(), theme.status_style(Status::Thinking)),
+                Span::styled(cmd, theme.dim_style()),
+            ]));
+        }
+        if procs.len() > 5 {
+            out.push(Line::from(Span::styled(
+                format!("+{} more", procs.len() - 5),
+                theme.dim_style(),
+            )));
+        }
+    }
+
+    out.push(Line::from(Span::styled("RECENT FILES".to_string(), label_style)));
+    let files: Vec<&String> = events
+        .map(|e| e.recent_edited_files.iter().collect())
+        .unwrap_or_default();
+    if files.is_empty() {
+        out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
+    } else {
+        for f in files.iter().take(5) {
+            let truncated = truncate_to_chars_left(f, column_width);
+            out.push(Line::from(Span::styled(truncated, theme.dim_style())));
+        }
+    }
+    out
+}
+
 /// Greedy word-wrap. Splits long words at the column boundary.
 fn wrap_lines(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
@@ -636,5 +682,45 @@ mod tests {
         let lines = build_recent_chat(None, &theme, 40, 6);
         let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("loading"), "{joined:?}");
+    }
+
+    fn proc(cmd: &str) -> ProcInfo {
+        ProcInfo {
+            pid: 1234,
+            ppid: 1,
+            command: cmd.into(),
+            cwd: std::path::PathBuf::from("/tmp"),
+        }
+    }
+
+    #[test]
+    fn procs_column_shows_dash_when_empty() {
+        let theme = Theme::wsx();
+        let evt = make_events_with(None, ToolUseCounts::default(), None);
+        let lines = build_procs_and_files(&[], Some(&evt), &theme, 30);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("—"), "expected em-dash when no procs/files: {joined:?}");
+    }
+
+    #[test]
+    fn procs_column_truncates_with_plus_n_more() {
+        let theme = Theme::wsx();
+        let evt = make_events_with(None, ToolUseCounts::default(), None);
+        let procs: Vec<ProcInfo> = (0..7).map(|i| proc(&format!("cmd{i}"))).collect();
+        let lines = build_procs_and_files(&procs, Some(&evt), &theme, 30);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("+2 more"), "expected +2 more: {joined:?}");
+    }
+
+    #[test]
+    fn recent_files_section_renders_paths() {
+        let theme = Theme::wsx();
+        let mut evt = make_events_with(None, ToolUseCounts::default(), None);
+        evt.recent_edited_files.push_front("/tmp/x/src/main.rs".to_string());
+        evt.recent_edited_files.push_front("/tmp/x/Cargo.toml".to_string());
+        let lines = build_procs_and_files(&[], Some(&evt), &theme, 30);
+        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("Cargo.toml"), "expected Cargo.toml in output: {joined:?}");
+        assert!(joined.contains("main.rs"), "expected main.rs in output: {joined:?}");
     }
 }

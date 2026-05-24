@@ -1545,7 +1545,20 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             };
         }
         (KeyCode::Char('h'), _) => set_focused_fold(app, true),
-        (KeyCode::Char('l'), _) => set_focused_fold(app, false),
+        (KeyCode::Char('l'), _) => match app.selected_target() {
+            Some(SelectionTarget::Workspace(id)) => {
+                app.workspace_needs_attention.remove(&id);
+                if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, id) {
+                    maybe_mirror_mcp(app, &repo_path, &path);
+                    let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+                    let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
+                    let restored = restore_attached_state(app, id);
+                    app.view = View::Attached(restored);
+                }
+            }
+            Some(SelectionTarget::Repo(_)) => set_focused_fold(app, false),
+            None => {}
+        },
         (KeyCode::Enter, _) | (KeyCode::Char('i'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
                 app.workspace_needs_attention.remove(&id);

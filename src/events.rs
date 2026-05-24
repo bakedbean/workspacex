@@ -96,6 +96,35 @@ impl StopReason {
     }
 }
 
+/// Running tallies of tool_use blocks by category. Populated by the
+/// tail loop as JSONL lines parse. Used by the dashboard detail bar
+/// to synthesize a one-line action trace like "read 14 files, edited
+/// 3 files, ran 2 commands".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolUseCounts {
+    pub read: u32,
+    pub edit: u32,
+    pub write: u32,
+    pub bash: u32,
+    pub other: u32,
+}
+
+impl ToolUseCounts {
+    /// Increment the appropriate field based on the Claude Code tool name.
+    /// Edit/MultiEdit count as `edit`; Write/NotebookEdit count as `write`;
+    /// Bash counts as `bash`; Read counts as `read`; everything else
+    /// (Task, Glob, Grep, WebFetch, …) counts as `other`.
+    pub fn increment(&mut self, tool_name: &str) {
+        match tool_name {
+            "Read" => self.read += 1,
+            "Edit" | "MultiEdit" => self.edit += 1,
+            "Write" | "NotebookEdit" => self.write += 1,
+            "Bash" => self.bash += 1,
+            _ => self.other += 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceEvents {
     pub latest: Option<EventSnapshot>,
@@ -133,6 +162,19 @@ pub struct WorkspaceEvents {
     /// session drifts into `Stalled` after 60s. Cleared by any subsequent
     /// real assistant message or real user text.
     pub last_user_interrupted: bool,
+    /// First plain-text user content block observed since the most
+    /// recent session reset. Set once per session; preserved across
+    /// log rotation past MAX_LOG. Used by the detail bar's SESSION
+    /// SUMMARY column.
+    pub first_user_text: Option<String>,
+    /// Running tallies of tool_use blocks by category. Populated by
+    /// the tail loop. Used by the detail bar to synthesize a
+    /// one-line action trace.
+    pub tool_use_counts: ToolUseCounts,
+    /// Most-recent-first ring of file paths the agent has read or
+    /// edited, bounded to 7. Consecutive duplicates collapse so a
+    /// single repeated edit doesn't crowd out other recent files.
+    pub recent_edited_files: VecDeque<String>,
 }
 
 impl Default for WorkspaceEvents {
@@ -148,6 +190,9 @@ impl Default for WorkspaceEvents {
             last_log_activity_ms: 0,
             last_assistant_text: None,
             last_user_interrupted: false,
+            first_user_text: None,
+            tool_use_counts: ToolUseCounts::default(),
+            recent_edited_files: VecDeque::with_capacity(7),
         }
     }
 }
@@ -163,6 +208,9 @@ impl WorkspaceEvents {
         self.last_log_activity_ms = 0;
         self.last_assistant_text = None;
         self.last_user_interrupted = false;
+        self.first_user_text = None;
+        self.tool_use_counts = ToolUseCounts::default();
+        self.recent_edited_files.clear();
     }
 
     /// The agent is stopped and the human hasn't replied yet.
@@ -1416,5 +1464,33 @@ mod tests {
         );
         // Oldest entry should have been evicted.
         assert_eq!(ws.log.front().unwrap().display, format!("e{}", 10));
+    }
+
+    #[test]
+    fn workspace_events_new_fields_default_to_empty() {
+        let evt = WorkspaceEvents::default();
+        assert!(evt.first_user_text.is_none());
+        assert_eq!(evt.tool_use_counts.read, 0);
+        assert_eq!(evt.tool_use_counts.edit, 0);
+        assert_eq!(evt.tool_use_counts.write, 0);
+        assert_eq!(evt.tool_use_counts.bash, 0);
+        assert_eq!(evt.tool_use_counts.other, 0);
+        assert!(evt.recent_edited_files.is_empty());
+    }
+
+    #[test]
+    fn reset_session_state_clears_new_fields() {
+        let mut evt = WorkspaceEvents::default();
+        evt.first_user_text = Some("hello".to_string());
+        evt.tool_use_counts.read = 3;
+        evt.tool_use_counts.bash = 1;
+        evt.recent_edited_files.push_front("src/main.rs".to_string());
+
+        evt.reset_session_state();
+
+        assert!(evt.first_user_text.is_none());
+        assert_eq!(evt.tool_use_counts.read, 0);
+        assert_eq!(evt.tool_use_counts.bash, 0);
+        assert!(evt.recent_edited_files.is_empty());
     }
 }

@@ -323,6 +323,19 @@ pub struct TailUpdate {
     ///                 (a real assistant message or real user text),
     /// `None`        — batch was silent on this signal; caller keeps prior.
     pub last_user_interrupted: Option<bool>,
+    /// First user-text content block observed in this batch (in line
+    /// order). The caller assigns this to `WorkspaceEvents.first_user_text`
+    /// only when the destination is currently `None` — once the first
+    /// prompt is captured, subsequent user messages don't overwrite it.
+    pub first_user_text: Option<String>,
+    /// Tool-use category increments observed in this batch. The caller
+    /// adds these into `WorkspaceEvents.tool_use_counts` (saturating).
+    pub tool_use_counts: ToolUseCounts,
+    /// File paths the agent touched in this batch, in source order
+    /// (most-recent last). The caller push-fronts each entry into
+    /// `WorkspaceEvents.recent_edited_files`, deduping consecutive
+    /// same-path entries and bounding to 7.
+    pub edited_file_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -412,8 +425,19 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
         if let Some(snap) = parsed.event {
             update.events.push(snap);
         }
+        // Borrow parsed.tool_use_starts to increment counts BEFORE the
+        // extend (which moves it).
+        for (_id, name, _ts) in &parsed.tool_use_starts {
+            update.tool_use_counts.increment(name);
+        }
         update.tool_use_starts.extend(parsed.tool_use_starts);
         update.tool_use_resolves.extend(parsed.tool_use_resolves);
+        update.edited_file_paths.extend(parsed.edited_file_paths);
+        if update.first_user_text.is_none() {
+            if let Some(t) = parsed.first_user_text {
+                update.first_user_text = Some(t);
+            }
+        }
         // Order-aware: a fresh stop_reason restarts the "has the user
         // replied since this stop?" count. A user_text after it sets it.
         if let Some(sr) = parsed.stop_reason {
@@ -462,6 +486,14 @@ pub struct ParsedLine {
     /// sentinel is system-generated, not a real human reply, so the
     /// `human_replied_after_last_stop` machinery should ignore it.
     pub user_interrupt_sentinel: bool,
+    /// Plain user text content for the first real user message in this
+    /// line (None for tool_result or non-user lines). Aggregated into
+    /// `TailUpdate.first_user_text` upstream.
+    pub first_user_text: Option<String>,
+    /// File paths extracted from Read/Edit/MultiEdit/Write/NotebookEdit
+    /// tool_use blocks on this line, in source order. Empty for any
+    /// other tool / non-assistant line.
+    pub edited_file_paths: Vec<String>,
 }
 
 /// Parse a single JSONL line into a [`ParsedLine`]. Malformed lines and
@@ -504,6 +536,7 @@ fn parse_user(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
             timestamp_ms,
         });
         out.is_user_text = true;
+        out.first_user_text = Some(text.to_string());
         return out;
     }
     if let Some(blocks) = content.as_array() {
@@ -578,6 +611,14 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
                 if let Some(id) = block.get("id").and_then(|i| i.as_str()) {
                     out.tool_use_starts
                         .push((id.to_string(), name.to_string(), timestamp_ms));
+                }
+                if matches!(
+                    name,
+                    "Read" | "Edit" | "MultiEdit" | "Write" | "NotebookEdit"
+                ) {
+                    if let Some(p) = input.get("file_path").and_then(|p| p.as_str()) {
+                        out.edited_file_paths.push(p.to_string());
+                    }
                 }
             }
             _ => {}
@@ -1492,5 +1533,63 @@ mod tests {
         assert_eq!(evt.tool_use_counts.read, 0);
         assert_eq!(evt.tool_use_counts.bash, 0);
         assert!(evt.recent_edited_files.is_empty());
+    }
+
+    #[test]
+    fn parse_user_surfaces_first_user_text() {
+        let line = r#"{"type":"user","message":{"role":"user","content":"summarize this repo"},"timestamp":"2026-05-14T17:32:02.744Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(
+            parsed.first_user_text.as_deref(),
+            Some("summarize this repo")
+        );
+    }
+
+    #[test]
+    fn parse_user_omits_first_user_text_for_tool_results() {
+        // A "user" line whose content is a tool_result array is not a real
+        // user prompt — first_user_text must stay None.
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":"ok","is_error":false}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(parsed.first_user_text.is_none());
+    }
+
+    #[test]
+    fn parse_assistant_surfaces_edited_file_paths() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/tmp/x/src/main.rs","old_string":"a","new_string":"b"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(parsed.edited_file_paths, vec!["/tmp/x/src/main.rs".to_string()]);
+    }
+
+    #[test]
+    fn parse_assistant_surfaces_read_paths() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/tmp/x/Cargo.toml"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert_eq!(parsed.edited_file_paths, vec!["/tmp/x/Cargo.toml".to_string()]);
+    }
+
+    #[test]
+    fn parse_assistant_skips_paths_for_non_file_tools() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let parsed = parse_jsonl_line(line);
+        assert!(parsed.edited_file_paths.is_empty());
+    }
+
+    #[test]
+    fn tail_session_aggregates_first_user_text_and_counts() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"type":"user","message":{{"role":"user","content":"do the thing"}},"timestamp":"2026-05-14T17:32:02.744Z"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t1","name":"Read","input":{{"file_path":"/a.rs"}}}}]}},"timestamp":"2026-05-14T17:32:03.744Z"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t2","name":"Bash","input":{{"command":"ls"}}}}]}},"timestamp":"2026-05-14T17:32:04.744Z"}}"#).unwrap();
+        drop(f);
+
+        let upd = tail_session(&path, 0).unwrap();
+        assert_eq!(upd.first_user_text.as_deref(), Some("do the thing"));
+        assert_eq!(upd.tool_use_counts.read, 1);
+        assert_eq!(upd.tool_use_counts.bash, 1);
+        assert_eq!(upd.edited_file_paths, vec!["/a.rs".to_string()]);
     }
 }

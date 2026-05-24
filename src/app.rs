@@ -2926,6 +2926,9 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         reset_from_zero,
                         last_assistant_text,
                         last_user_interrupted,
+                        first_user_text,
+                        tool_use_counts,
+                        edited_file_paths,
                     } = update;
                     let mut g = app.lock().await;
                     let evt = g.workspace_events.entry(id).or_default();

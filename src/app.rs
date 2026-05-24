@@ -695,18 +695,14 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.pinned_commands_cache.clear();
     match &app.view {
         View::Dashboard => {
-            let (dashboard_area, pm_area) = if app.pm_visible {
-                let chunks = ratatui::layout::Layout::default()
-                    .direction(ratatui::layout::Direction::Vertical)
-                    .constraints([
-                        ratatui::layout::Constraint::Percentage(60),
-                        ratatui::layout::Constraint::Percentage(40),
-                    ])
-                    .split(area);
-                (chunks[0], Some(chunks[1]))
-            } else {
-                (area, None)
-            };
+            let selection_is_workspace = matches!(
+                app.selected_target(),
+                Some(SelectionTarget::Workspace(_))
+            );
+            let detail_visible = selection_is_workspace
+                && area.height >= crate::ui::dashboard::detail::MIN_HEIGHT + 10;
+            let (dashboard_area, detail_area, pm_area) =
+                dashboard_regions(area, app.pm_visible, detail_visible);
             let notifications_on = notifications_enabled(&app.store);
             let nerd_fonts = nerd_fonts_enabled(&app.store);
 
@@ -887,6 +883,51 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     crate::ui::pm_pane::resize_session(session, pm_area);
                 }
                 crate::ui::pm_pane::render(f, pm_area, app.pm.as_ref(), app.focus, &app.theme);
+            }
+            if let (Some(detail_area), Some(SelectionTarget::Workspace(ws_id))) =
+                (detail_area, app.selected_target())
+            {
+                if let Some((rid, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
+                    if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
+                        let session = app.sessions.get(ws.id);
+                        let ago_secs = session.as_ref().and_then(|s| {
+                            let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+                            if last == 0 {
+                                return None;
+                            }
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            Some(now.saturating_sub(last) / 1000)
+                        });
+                        let status = app.classify_status(ws);
+                        let procs: Vec<crate::proc::ProcInfo> = app
+                            .workspace_processes
+                            .get(&ws.id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let inputs = crate::ui::dashboard::detail::DetailInputs {
+                            repo,
+                            workspace: ws,
+                            events: app.workspace_events.get(&ws.id),
+                            procs: &procs,
+                            diff: app.workspace_diff.get(&ws.id).copied(),
+                            lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
+                            pr_title: None,
+                            pr_number: None,
+                            status,
+                            ago_secs,
+                            reply_draft: &app.dashboard.reply_draft,
+                            reply_focused: matches!(
+                                app.focus,
+                                crate::ui::PaneFocus::DetailBarReply
+                            ),
+                            events_scanned: app.workspace_events_scanned.contains(&ws.id),
+                        };
+                        crate::ui::dashboard::detail::render(f, detail_area, &inputs, &app.theme);
+                    }
+                }
             }
         }
         View::Attached(state) => {
@@ -1141,6 +1182,50 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
 #[doc(hidden)]
 pub fn draw_for_test(f: &mut ratatui::Frame, app: &mut App) {
     draw(f, app);
+}
+
+/// Carve the dashboard area into list / detail / pm regions based on
+/// whether PM is visible and whether a workspace is selected.
+fn dashboard_regions(
+    area: ratatui::layout::Rect,
+    pm_visible: bool,
+    detail_visible: bool,
+) -> (
+    ratatui::layout::Rect,
+    Option<ratatui::layout::Rect>,
+    Option<ratatui::layout::Rect>,
+) {
+    use ratatui::layout::{Constraint, Direction, Layout};
+    let detail_h = crate::ui::dashboard::detail::preferred_height(area.height);
+    match (pm_visible, detail_visible) {
+        (false, false) => (area, None, None),
+        (false, true) => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(detail_h)])
+                .split(area);
+            (chunks[0], Some(chunks[1]), None)
+        }
+        (true, false) => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(area);
+            (chunks[0], None, Some(chunks[1]))
+        }
+        (true, true) => {
+            let pm_h = ((u32::from(area.height) * 33 / 100) as u16).max(6);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(0),
+                    Constraint::Length(detail_h),
+                    Constraint::Length(pm_h),
+                ])
+                .split(area);
+            (chunks[0], Some(chunks[1]), Some(chunks[2]))
+        }
+    }
 }
 
 fn nerd_fonts_enabled(store: &crate::store::Store) -> bool {
@@ -5513,6 +5598,85 @@ mod pm_state_tests {
             !matches!(g.modal, Some(Modal::Error { .. })),
             "Esc race should never produce an error modal, got {:?}",
             g.modal
+        );
+    }
+
+    fn seed_app_with_workspace() -> App {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Idle repos fold by default; force-expand so the workspace row is
+        // visible in `visible_targets` during draw.
+        app.dashboard.folded.insert(repo_id.0 as u64, false);
+        app
+    }
+
+    #[test]
+    fn detail_bar_renders_when_workspace_is_selected() {
+        let mut app = seed_app_with_workspace();
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(_)))
+            .expect("workspace target present");
+        app.dashboard.selected = idx;
+
+        let backend = TestBackend::new(120, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Reply to agent"), "bar visible: {rendered}");
+    }
+
+    #[test]
+    fn detail_bar_absent_when_repo_header_is_selected() {
+        let mut app = seed_app_with_workspace();
+        let repo_idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Repo(_)))
+            .expect("repo target present");
+        app.dashboard.selected = repo_idx;
+
+        let backend = TestBackend::new(120, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !rendered.contains("Reply to agent"),
+            "bar absent on repo header: {rendered}"
         );
     }
 }

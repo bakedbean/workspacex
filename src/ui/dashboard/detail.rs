@@ -59,6 +59,102 @@ pub fn render(f: &mut Frame, area: Rect, _inputs: &DetailInputs<'_>, _theme: &Th
     let _ = f;
 }
 
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+
+const GUTTER: &str = "▍";
+
+/// One-line header strip at the top of the bar.
+pub(super) fn build_header_strip(
+    name: &str,
+    branch: &str,
+    lifecycle: Option<BranchLifecycle>,
+    diff: Option<DiffStats>,
+    procs: u32,
+    status: Status,
+    ago_secs: Option<u64>,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::styled(GUTTER.to_string(), theme.status_style(status)));
+    spans.push(Span::raw(" ".to_string()));
+    spans.push(Span::styled(
+        name.to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::raw("  ".to_string()));
+    spans.push(Span::styled(format!("⎇ {branch}"), theme.dim_style()));
+
+    if let Some(lc) = lifecycle {
+        spans.push(Span::raw("  ".to_string()));
+        let (glyph, label) = lifecycle_chip(lc);
+        spans.push(Span::styled(
+            format!("{glyph} {label}"),
+            theme.lifecycle_style(Some(lc)).unwrap_or_else(|| theme.dim_style()),
+        ));
+    }
+
+    if let Some(d) = diff {
+        if d.added > 0 || d.removed > 0 {
+            spans.push(Span::raw("  ".to_string()));
+            spans.push(Span::styled(format!("+{}", d.added), theme.ok_style()));
+            spans.push(Span::raw(" ".to_string()));
+            spans.push(Span::styled(format!("−{}", d.removed), theme.err_style()));
+        }
+    }
+
+    spans.push(Span::raw("  ".to_string()));
+    if procs > 0 {
+        spans.push(Span::styled(
+            format!("● {procs} procs"),
+            theme.status_style(Status::Thinking),
+        ));
+    } else {
+        spans.push(Span::styled("  · 0 procs".to_string(), theme.dim_style()));
+    }
+
+    spans.push(Span::raw("  ".to_string()));
+    spans.push(Span::styled(
+        status.glyph().to_string(),
+        theme.status_style(status),
+    ));
+    spans.push(Span::raw(" ".to_string()));
+    spans.push(Span::styled(
+        status.label().to_string(),
+        theme.status_style(status),
+    ));
+
+    let ago = format_ago_short(ago_secs);
+    spans.push(Span::styled(format!("  · {ago}"), theme.dim_style()));
+
+    // Right-truncate the full line to `width` cells by padding or
+    // dropping spans — for v1 we trust the caller to give us enough
+    // room (width >= 60); narrow-width handling is in Task 12.
+    let _ = width;
+    Line::from(spans)
+}
+
+fn lifecycle_chip(lc: BranchLifecycle) -> (&'static str, &'static str) {
+    match lc {
+        BranchLifecycle::PrOpen => ("⏺", "open"),
+        BranchLifecycle::PrDraft => ("⏷", "draft"),
+        BranchLifecycle::PrMerged => ("⏺", "merged"),
+        BranchLifecycle::PrClosed => ("⏸", "closed"),
+        BranchLifecycle::PrConflicted => ("⏺", "conflict"),
+        BranchLifecycle::NoPr => ("", ""),
+    }
+}
+
+fn format_ago_short(secs: Option<u64>) -> String {
+    match secs {
+        None => "—".to_string(),
+        Some(s) if s < 60 => format!("{s}s"),
+        Some(s) if s < 3600 => format!("{}m", s / 60),
+        Some(s) => format!("{}h", s / 3600),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,6 +162,10 @@ mod tests {
     use crate::ui::theme::Theme;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
 
     fn render_to_text(inputs: &DetailInputs<'_>, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
@@ -171,5 +271,54 @@ mod tests {
     fn preferred_height_handles_zero_height() {
         // 22% of 0 = 0 → clamps up to MIN_HEIGHT.
         assert_eq!(preferred_height(0), MIN_HEIGHT);
+    }
+
+    #[test]
+    fn header_strip_contains_all_chips_in_order() {
+        let theme = Theme::wsx();
+        let line = build_header_strip(
+            "repo-overview",
+            "bakedbean/repo-overview",
+            Some(BranchLifecycle::PrOpen),
+            Some(DiffStats { added: 12, removed: 3 }),
+            2,
+            Status::Question,
+            Some(29),
+            &theme,
+            120,
+        );
+        let text = line_to_string(&line);
+        assert!(text.contains("repo-overview"), "name missing: {text:?}");
+        assert!(text.contains("bakedbean/repo-overview"), "branch missing: {text:?}");
+        assert!(text.contains("+12") && text.contains("−3"), "diff missing: {text:?}");
+        assert!(text.contains("● 2") || text.contains("2 procs"), "procs missing: {text:?}");
+        assert!(text.contains("?"), "status glyph missing: {text:?}");
+        assert!(text.contains("29s"), "ago missing: {text:?}");
+    }
+
+    #[test]
+    fn header_strip_omits_diff_when_none() {
+        let theme = Theme::wsx();
+        let line = build_header_strip(
+            "ws", "br", None, None, 0, Status::Idle, None, &theme, 80,
+        );
+        let text = line_to_string(&line);
+        assert!(!text.contains("+"), "diff cell should be absent: {text:?}");
+        assert!(!text.contains("−"), "diff cell should be absent: {text:?}");
+    }
+
+    #[test]
+    fn header_strip_omits_lifecycle_when_none() {
+        let theme = Theme::wsx();
+        let line = build_header_strip(
+            "ws", "br", None, None, 0, Status::Idle, None, &theme, 80,
+        );
+        let text = line_to_string(&line);
+        // The PR lifecycle glyph set is { ⏺, ⏵, ⏷, ⏸ } (any specific
+        // mapping in theme); none should appear when lifecycle is None.
+        // Use a simple proxy: there's no "PR" or "open"/"merged" label.
+        let lower = text.to_lowercase();
+        assert!(!lower.contains("pr open"), "no pr label: {text:?}");
+        assert!(!lower.contains("merged"), "no pr label: {text:?}");
     }
 }

@@ -903,17 +903,34 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 if let Some((rid, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
                     if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
                         let session = app.sessions.get(ws.id);
-                        let ago_secs = session.as_ref().and_then(|s| {
-                            let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
-                            if last == 0 {
-                                return None;
-                            }
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64)
-                                .unwrap_or(0);
-                            Some(now.saturating_sub(last) / 1000)
-                        });
+                        // Activity timestamp: prefer whichever signal is more
+                        // recent. `session.activity_ms` only exists for
+                        // workspaces wsx is currently attached to. The JSONL
+                        // tail loop stamps `events.last_log_activity_ms` for
+                        // any workspace whose claude session writes to disk,
+                        // attached or not — without that fallback the bar
+                        // shows `active —` for every unattached workspace.
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        let session_last_ms = session
+                            .as_ref()
+                            .map(|s| {
+                                s.activity_ms.load(std::sync::atomic::Ordering::Relaxed) as i64
+                            })
+                            .unwrap_or(0);
+                        let event_last_ms = app
+                            .workspace_events
+                            .get(&ws.id)
+                            .map(|e| e.last_log_activity_ms)
+                            .unwrap_or(0);
+                        let last_ms = session_last_ms.max(event_last_ms);
+                        let ago_secs = if last_ms == 0 {
+                            None
+                        } else {
+                            Some(((now_ms - last_ms).max(0) / 1000) as u64)
+                        };
                         let status = app.classify_status(ws);
                         let procs: &[crate::proc::ProcInfo] = app
                             .workspace_processes

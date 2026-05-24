@@ -166,6 +166,7 @@ use ratatui::text::{Line, Span};
 const GUTTER: &str = "▍";
 
 /// One-line header strip at the top of the bar.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_header_strip(
     name: &str,
     branch: &str,
@@ -196,13 +197,13 @@ pub(super) fn build_header_strip(
         ));
     }
 
-    if let Some(d) = diff {
-        if d.added > 0 || d.removed > 0 {
-            spans.push(Span::raw("  ".to_string()));
-            spans.push(Span::styled(format!("+{}", d.added), theme.ok_style()));
-            spans.push(Span::raw(" ".to_string()));
-            spans.push(Span::styled(format!("−{}", d.removed), theme.err_style()));
-        }
+    if let Some(d) = diff
+        && (d.added > 0 || d.removed > 0)
+    {
+        spans.push(Span::raw("  ".to_string()));
+        spans.push(Span::styled(format!("+{}", d.added), theme.ok_style()));
+        spans.push(Span::raw(" ".to_string()));
+        spans.push(Span::styled(format!("−{}", d.removed), theme.err_style()));
     }
 
     spans.push(Span::raw("  ".to_string()));
@@ -761,11 +762,12 @@ mod tests {
         counts: ToolUseCounts,
         last_assistant: Option<&str>,
     ) -> WorkspaceEvents {
-        let mut e = WorkspaceEvents::default();
-        e.first_user_text = first.map(str::to_string);
-        e.tool_use_counts = counts;
-        e.last_assistant_text = last_assistant.map(str::to_string);
-        e
+        WorkspaceEvents {
+            first_user_text: first.map(str::to_string),
+            tool_use_counts: counts,
+            last_assistant_text: last_assistant.map(str::to_string),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -931,13 +933,13 @@ mod tests {
 
     #[test]
     fn full_render_paints_header_body_and_reply_row() {
-        let theme = Theme::wsx();
         let (_store, repo, ws) = seed_workspace();
-        let mut evt = WorkspaceEvents::default();
-        evt.first_user_text = Some("give me a tour".into());
-        evt.tool_use_counts.read = 14;
-        evt.tool_use_counts.bash = 2;
-        evt.last_assistant_text = Some("Reading the repo now.".into());
+        let evt = WorkspaceEvents {
+            first_user_text: Some("give me a tour".into()),
+            tool_use_counts: ToolUseCounts { read: 14, bash: 2, ..Default::default() },
+            last_assistant_text: Some("Reading the repo now.".into()),
+            ..Default::default()
+        };
         let inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -965,11 +967,12 @@ mod tests {
 
     #[test]
     fn narrow_terminal_drops_chat_and_procs_columns() {
-        let theme = Theme::wsx();
         let (_store, repo, ws) = seed_workspace();
-        let mut evt = WorkspaceEvents::default();
-        evt.first_user_text = Some("hi".into());
-        evt.last_assistant_text = Some("ack".into());
+        let evt = WorkspaceEvents {
+            first_user_text: Some("hi".into()),
+            last_assistant_text: Some("ack".into()),
+            ..Default::default()
+        };
         let inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,

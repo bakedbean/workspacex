@@ -433,10 +433,10 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
         update.tool_use_starts.extend(parsed.tool_use_starts);
         update.tool_use_resolves.extend(parsed.tool_use_resolves);
         update.edited_file_paths.extend(parsed.edited_file_paths);
-        if update.first_user_text.is_none() {
-            if let Some(t) = parsed.first_user_text {
-                update.first_user_text = Some(t);
-            }
+        if update.first_user_text.is_none()
+            && let Some(t) = parsed.first_user_text
+        {
+            update.first_user_text = Some(t);
         }
         // Order-aware: a fresh stop_reason restarts the "has the user
         // replied since this stop?" count. A user_text after it sets it.
@@ -615,10 +615,9 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
                 if matches!(
                     name,
                     "Read" | "Edit" | "MultiEdit" | "Write" | "NotebookEdit"
-                ) {
-                    if let Some(p) = input.get("file_path").and_then(|p| p.as_str()) {
-                        out.edited_file_paths.push(p.to_string());
-                    }
+                ) && let Some(p) = input.get("file_path").and_then(|p| p.as_str())
+                {
+                    out.edited_file_paths.push(p.to_string());
                 }
             }
             _ => {}
@@ -1332,8 +1331,10 @@ mod tests {
 
     #[test]
     fn last_text_ends_with_question_true_for_simple_question() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("Want me to also handle X?".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("Want me to also handle X?".into()),
+            ..Default::default()
+        };
         assert!(evt.last_text_ends_with_question());
     }
 
@@ -1341,22 +1342,28 @@ mod tests {
     fn last_text_ends_with_question_strips_trailing_markdown() {
         // Claude often writes `Want me to refactor `foo`?*` where the literal
         // final char is `*` — we still want this classified as a question.
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("Want me to refactor `foo`?*".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("Want me to refactor `foo`?*".into()),
+            ..Default::default()
+        };
         assert!(evt.last_text_ends_with_question());
     }
 
     #[test]
     fn last_text_ends_with_question_strips_trailing_whitespace() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("Should I proceed?\n   ".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("Should I proceed?\n   ".into()),
+            ..Default::default()
+        };
         assert!(evt.last_text_ends_with_question());
     }
 
     #[test]
     fn last_text_ends_with_question_false_for_period_ending() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("Done. Let me know if you'd like changes.".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("Done. Let me know if you'd like changes.".into()),
+            ..Default::default()
+        };
         assert!(!evt.last_text_ends_with_question());
     }
 
@@ -1365,8 +1372,10 @@ mod tests {
         // A `?` in the middle followed by a declarative final sentence should
         // not trip the heuristic. Only the trailing char (after markdown trim)
         // matters.
-        let mut evt = WorkspaceEvents::default();
-        evt.last_assistant_text = Some("I considered: does this work? Yes, it works.".into());
+        let evt = WorkspaceEvents {
+            last_assistant_text: Some("I considered: does this work? Yes, it works.".into()),
+            ..Default::default()
+        };
         assert!(!evt.last_text_ends_with_question());
     }
 
@@ -1521,10 +1530,11 @@ mod tests {
 
     #[test]
     fn reset_session_state_clears_new_fields() {
-        let mut evt = WorkspaceEvents::default();
-        evt.first_user_text = Some("hello".to_string());
-        evt.tool_use_counts.read = 3;
-        evt.tool_use_counts.bash = 1;
+        let mut evt = WorkspaceEvents {
+            first_user_text: Some("hello".to_string()),
+            tool_use_counts: ToolUseCounts { read: 3, bash: 1, ..Default::default() },
+            ..Default::default()
+        };
         evt.recent_edited_files.push_front("src/main.rs".to_string());
 
         evt.reset_session_state();

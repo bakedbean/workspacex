@@ -6019,8 +6019,10 @@ mod derive_stopped_kind_tests {
         // AskUserQuestion is in flight: stop_reason is ToolUse (so
         // is_awaiting_user() returns false), but the question tool is in
         // pending_tool_uses. Should still classify as AwaitingAnswer.
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::ToolUse);
+        let mut evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            ..Default::default()
+        };
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
@@ -6028,8 +6030,10 @@ mod derive_stopped_kind_tests {
 
     #[test]
     fn awaiting_answer_when_exit_plan_mode_pending_mid_turn() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::ToolUse);
+        let mut evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            ..Default::default()
+        };
         evt.pending_tool_uses
             .insert("t1".into(), ("ExitPlanMode".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
@@ -6037,27 +6041,33 @@ mod derive_stopped_kind_tests {
 
     #[test]
     fn complete_when_end_turn_with_no_question_signal() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::EndTurn);
-        evt.user_replied_since_stop = false;
-        evt.last_assistant_text = Some("Done.".into());
+        let evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            user_replied_since_stop: false,
+            last_assistant_text: Some("Done.".into()),
+            ..Default::default()
+        };
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::Complete));
     }
 
     #[test]
     fn awaiting_answer_when_end_turn_with_trailing_question() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::EndTurn);
-        evt.user_replied_since_stop = false;
-        evt.last_assistant_text = Some("Want me to also handle X?".into());
+        let evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            user_replied_since_stop: false,
+            last_assistant_text: Some("Want me to also handle X?".into()),
+            ..Default::default()
+        };
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
     }
 
     #[test]
     fn none_when_user_has_already_replied() {
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::EndTurn);
-        evt.user_replied_since_stop = true;
+        let evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            user_replied_since_stop: true,
+            ..Default::default()
+        };
         assert_eq!(derive_stopped_kind(&evt), None);
     }
 
@@ -6068,9 +6078,11 @@ mod derive_stopped_kind_tests {
         // tool resolved, then the human hit interrupt. Without the
         // interrupt branch wsx falls through to Stalled after 60s; with
         // it, this is Complete (the agent was told to stop).
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::ToolUse);
-        evt.last_user_interrupted = true;
+        let evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            last_user_interrupted: true,
+            ..Default::default()
+        };
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::Complete));
     }
 
@@ -6079,9 +6091,11 @@ mod derive_stopped_kind_tests {
         // Edge case: interrupt fires while an AskUserQuestion is in
         // flight. The pending question tool should take precedence —
         // there's a real question to answer.
-        let mut evt = WorkspaceEvents::default();
-        evt.last_stop_reason = Some(StopReason::ToolUse);
-        evt.last_user_interrupted = true;
+        let mut evt = WorkspaceEvents {
+            last_stop_reason: Some(StopReason::ToolUse),
+            last_user_interrupted: true,
+            ..Default::default()
+        };
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));

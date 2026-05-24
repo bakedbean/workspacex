@@ -1546,30 +1546,12 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         }
         (KeyCode::Char('h'), _) => set_focused_fold(app, true),
         (KeyCode::Char('l'), _) => match app.selected_target() {
-            Some(SelectionTarget::Workspace(id)) => {
-                app.workspace_needs_attention.remove(&id);
-                if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, id) {
-                    maybe_mirror_mcp(app, &repo_path, &path);
-                    let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-                    let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
-                    let restored = restore_attached_state(app, id);
-                    app.view = View::Attached(restored);
-                }
-            }
+            Some(SelectionTarget::Workspace(id)) => attach_workspace(app, id)?,
             Some(SelectionTarget::Repo(_)) => set_focused_fold(app, false),
             None => {}
         },
         (KeyCode::Enter, _) | (KeyCode::Char('i'), _) => match app.selected_target() {
-            Some(SelectionTarget::Workspace(id)) => {
-                app.workspace_needs_attention.remove(&id);
-                if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, id) {
-                    maybe_mirror_mcp(app, &repo_path, &path);
-                    let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-                    let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
-                    let restored = restore_attached_state(app, id);
-                    app.view = View::Attached(restored);
-                }
-            }
+            Some(SelectionTarget::Workspace(id)) => attach_workspace(app, id)?,
             Some(SelectionTarget::Repo(id)) => {
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
@@ -2052,6 +2034,20 @@ fn restore_attached_state(
             crate::ui::AttachedState { tree, focus }
         }
     }
+}
+
+/// Attach to a workspace: spawn a session, restore layout, and switch to
+/// attached view. Shared by the `Enter` / `i` / `l` key handlers.
+fn attach_workspace(app: &mut App, ws_id: crate::store::WorkspaceId) -> Result<()> {
+    app.workspace_needs_attention.remove(&ws_id);
+    if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
+        maybe_mirror_mcp(app, &repo_path, &path);
+        let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+        let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
+        let restored = restore_attached_state(app, id);
+        app.view = View::Attached(restored);
+    }
+    Ok(())
 }
 
 /// Best-effort MCP server mirror. Logs and continues on any failure.
@@ -6049,6 +6045,24 @@ mod restore_layout_tests {
                 assert_eq!(s.leaves(), vec![first_id]);
             }
             _ => panic!("expected single-pane attached view"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn l_key_opens_workspace_like_enter() {
+        let (mut app, first_id, _second_id) = setup_two_workspaces_with_sessions("l-key");
+        select_workspace_in_app(&mut app, first_id);
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(s) => {
+                assert_eq!(s.leaves(), vec![first_id]);
+            }
+            _ => panic!("expected single-pane attached view after 'l' on workspace"),
         }
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");

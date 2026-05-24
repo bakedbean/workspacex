@@ -1546,7 +1546,13 @@ async fn handle_detail_bar_reply_key(
     use crossterm::event::{KeyCode, KeyModifiers};
     match (k.code, k.modifiers) {
         (KeyCode::Tab, _) => {
-            app.focus = crate::ui::PaneFocus::Dashboard;
+            // Spec: Dashboard → DetailBarReply → ProjectManager (when visible)
+            // → Dashboard. If PM is not visible, skip straight back to Dashboard.
+            if app.pm_visible {
+                app.focus = crate::ui::PaneFocus::ProjectManager;
+            } else {
+                app.focus = crate::ui::PaneFocus::Dashboard;
+            }
             true
         }
         (KeyCode::Esc, _) => {
@@ -6563,5 +6569,17 @@ mod detail_bar_focus_tests {
             .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
         assert_eq!(app.dashboard.reply_draft, "");
+    }
+
+    // Issue 2: Tab cycle should include PM when visible.
+    #[tokio::test]
+    async fn tab_in_detail_bar_routes_to_pm_when_visible() {
+        let mut app = make_app_with_workspace_selected();
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
     }
 }

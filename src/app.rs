@@ -296,6 +296,12 @@ pub struct App {
     /// `wsx` CLI processes (e.g. `wsx workspace create`) so the dashboard
     /// picks them up without needing a restart.
     pub last_data_version: i64,
+    /// Workspaces whose detail-bar data needs an out-of-band refresh on
+    /// the next run-loop iteration. Populated by detach handlers so the
+    /// dashboard shows fresh JSONL events the moment the user returns
+    /// from attached view instead of waiting for the next 2s poll.
+    /// Drained by `run_loop` after each handled event.
+    pub pending_workspace_refresh: std::collections::HashSet<crate::store::WorkspaceId>,
 }
 
 impl App {
@@ -334,6 +340,7 @@ impl App {
             workspace_diff_per_file: std::collections::HashMap::new(),
             activity_history: std::collections::VecDeque::new(),
             last_proc_scan_ms: 0,
+            pending_workspace_refresh: std::collections::HashSet::new(),
             pending_edit: None,
             theme,
             pm: None,
@@ -688,8 +695,20 @@ pub async fn run<B: Backend + std::io::Write>(
             }
             maybe_evt = events.next() => {
                 let Some(Ok(evt)) = maybe_evt else { break; };
-                let mut g = app.lock().await;
-                handle_event(&mut g, &app, evt).await?;
+                let pending: Vec<WorkspaceId> = {
+                    let mut g = app.lock().await;
+                    handle_event(&mut g, &app, evt).await?;
+                    // Drain any refreshes scheduled by detach handlers
+                    // while we held the lock; spawn the tails outside
+                    // the lock so they don't serialize event handling.
+                    g.pending_workspace_refresh.drain().collect()
+                };
+                for id in pending {
+                    let app_clone = app.clone();
+                    tokio::spawn(async move {
+                        tail_workspace_events(app_clone, id).await;
+                    });
+                }
             }
         }
     }
@@ -2289,6 +2308,22 @@ fn maybe_mirror_mcp(app: &App, repo_path: &std::path::Path, worktree_path: &std:
     }
 }
 
+/// Mark `ids` for an immediate out-of-band refresh: clear the per-workspace
+/// throttle stamps (so the next periodic poll re-fetches diff/PR right
+/// away), bump `last_proc_scan_ms` so the next tick reruns `lsof`, and
+/// queue the workspaces into `pending_workspace_refresh` so `run_loop`
+/// spawns an immediate JSONL events tail. Called by detach handlers so
+/// the dashboard detail bar reflects work the user just did in the
+/// attached session instead of waiting for the next 2s tick.
+fn schedule_detach_refresh(app: &mut App, ids: impl IntoIterator<Item = WorkspaceId>) {
+    app.last_proc_scan_ms = 0;
+    for id in ids {
+        app.diff_last_poll_ms.remove(&id);
+        app.pr_last_poll_ms.remove(&id);
+        app.pending_workspace_refresh.insert(id);
+    }
+}
+
 async fn handle_key_attached(
     app: &mut App,
     id: WorkspaceId,
@@ -2311,15 +2346,29 @@ async fn handle_key_attached(
                 // only when the last pane closes.
                 if let View::Attached(state) = &mut app.view {
                     if state.leaf_count() > 1 {
+                        let closed = state.focused_id();
                         match state.close_focused() {
-                            CloseOutcome::Focus(_) => return Ok(()),
+                            CloseOutcome::Focus(_) => {
+                                if let Some(cid) = closed {
+                                    schedule_detach_refresh(app, [cid]);
+                                }
+                                return Ok(());
+                            }
                             CloseOutcome::Empty => {
+                                if let Some(cid) = closed {
+                                    schedule_detach_refresh(app, [cid]);
+                                }
                                 app.view = View::Dashboard;
                                 return Ok(());
                             }
                         }
                     }
                 }
+                let leaves = match &app.view {
+                    View::Attached(state) => state.leaves(),
+                    _ => Vec::new(),
+                };
+                schedule_detach_refresh(app, leaves);
                 app.view = View::Dashboard;
                 return Ok(());
             }
@@ -2327,6 +2376,11 @@ async fn handle_key_attached(
                 if let View::Attached(state) = &app.view {
                     save_layout_for(app, state.clone());
                 }
+                let leaves = match &app.view {
+                    View::Attached(state) => state.leaves(),
+                    _ => Vec::new(),
+                };
+                schedule_detach_refresh(app, leaves);
                 app.view = View::Dashboard;
                 return Ok(());
             }
@@ -2975,6 +3029,141 @@ async fn reconcile_create_result(
     }
 }
 
+/// Tail the agent session JSONL for `id` and merge any new events into
+/// `App::workspace_events`. Shared by `branch_drift_poll` (the periodic
+/// 2s poll) and the detach handlers (which spawn this immediately on
+/// return-to-dashboard so the detail bar reflects work done in the
+/// just-detached session without waiting for the next tick).
+///
+/// Lock-ordering: snapshot path/offset under brief locks, do the file
+/// I/O without the lock held, then re-acquire to commit the update.
+/// Returns early if the workspace is gone or its session file is missing.
+pub async fn tail_workspace_events(app: SharedApp, id: crate::store::WorkspaceId) {
+    let (path, ws_agent) = {
+        let g = app.lock().await;
+        match g.workspaces.iter().find(|(_, w)| w.id == id) {
+            Some((_, w)) => (w.worktree_path.clone(), w.agent),
+            None => return,
+        }
+    };
+    if !path.exists() {
+        return;
+    }
+    let current_file = match ws_agent {
+        crate::pty::session::AgentKind::Claude => crate::events::locate_session_file(&path),
+        crate::pty::session::AgentKind::Pi => crate::pi_events::locate_session_file(&path),
+    };
+    let prev_offset = {
+        let g = app.lock().await;
+        match (g.workspace_events.get(&id), current_file.as_ref()) {
+            (Some(evt), Some(f)) if evt.file_path.as_deref() == Some(f.as_path()) => {
+                evt.byte_offset
+            }
+            _ => 0,
+        }
+    };
+    let Some(file) = current_file else {
+        return;
+    };
+    let tail_result = match ws_agent {
+        crate::pty::session::AgentKind::Claude => crate::events::tail_session(&file, prev_offset),
+        crate::pty::session::AgentKind::Pi => crate::pi_events::tail_session(&file, prev_offset),
+    };
+    let Ok(update) = tail_result else {
+        return;
+    };
+    let crate::events::TailUpdate {
+        new_offset,
+        events,
+        tool_use_starts,
+        tool_use_resolves,
+        last_stop_reason,
+        human_replied_after_last_stop,
+        reset_from_zero,
+        last_assistant_text,
+        last_user_interrupted,
+        first_user_text,
+        tool_use_counts,
+        edited_file_paths,
+    } = update;
+    let mut g = app.lock().await;
+    let evt = g.workspace_events.entry(id).or_default();
+    // If the session file was replaced (different path) or
+    // truncated/rewound (reset_from_zero), discard all
+    // session-derived state before applying the new batch.
+    // Otherwise stale tool_uses or stop_reasons from the
+    // prior session keep the dashboard stuck on "awaiting".
+    let file_changed = evt.file_path.as_deref() != Some(file.as_path());
+    if file_changed || reset_from_zero {
+        evt.reset_session_state();
+    }
+    if new_offset != prev_offset {
+        // The log grew this iteration — stamp the activity marker so
+        // is_stalled can compute time-since-last-write.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        evt.last_log_activity_ms = now_ms;
+    }
+    evt.file_path = Some(file);
+    evt.byte_offset = new_offset;
+    for (tu_id, tu_name, ts) in tool_use_starts {
+        evt.pending_tool_uses.insert(tu_id, (tu_name, ts));
+    }
+    for tu_id in tool_use_resolves {
+        evt.pending_tool_uses.remove(&tu_id);
+    }
+    // Update the "agent is waiting on user" tracking.
+    // - A fresh assistant stop_reason replaces the prior one
+    //   and resets the user-replied latch (the agent just
+    //   produced a new stopping point).
+    // - `human_replied_after_last_stop` from this batch
+    //   already accounts for within-batch ordering: it's set
+    //   only if real user text appears AFTER the last
+    //   stop_reason in the batch (or anywhere in the batch
+    //   if there's no new stop_reason).
+    if let Some(sr) = last_stop_reason {
+        evt.last_stop_reason = Some(sr);
+        evt.user_replied_since_stop = false;
+    }
+    if human_replied_after_last_stop {
+        evt.user_replied_since_stop = true;
+    }
+    if let Some(text) = last_assistant_text {
+        evt.last_assistant_text = Some(text);
+    }
+    if evt.first_user_text.is_none() {
+        if let Some(t) = first_user_text {
+            evt.first_user_text = Some(t);
+        }
+    }
+    evt.tool_use_counts.read = evt.tool_use_counts.read.saturating_add(tool_use_counts.read);
+    evt.tool_use_counts.edit = evt.tool_use_counts.edit.saturating_add(tool_use_counts.edit);
+    evt.tool_use_counts.write = evt.tool_use_counts.write.saturating_add(tool_use_counts.write);
+    evt.tool_use_counts.bash = evt.tool_use_counts.bash.saturating_add(tool_use_counts.bash);
+    evt.tool_use_counts.other = evt.tool_use_counts.other.saturating_add(tool_use_counts.other);
+    for path in edited_file_paths {
+        evt.push_recent_edited_file(path);
+    }
+    // Sticky between batches: only overwrite when the batch
+    // had a definitive signal. Some(true) = batch ended on
+    // the interrupt sentinel; Some(false) = batch had a
+    // newer assistant message or real user text overriding
+    // it; None = batch was silent on this axis.
+    if let Some(v) = last_user_interrupted {
+        evt.last_user_interrupted = v;
+    }
+    for e in events {
+        crate::events::push_event(evt, e);
+    }
+    // First successful tail of this workspace's JSONL.
+    // After this point the classifier sees the agent's
+    // real stop_reason, so the bell loop can start
+    // trusting activity transitions for this workspace.
+    g.workspace_events_scanned.insert(id);
+}
+
 /// Periodically check each live workspace's current git branch against
 /// the DB; if claude (or a user) renamed it, update name + branch in the
 /// store. Runs forever; cheap when nothing has drifted.
@@ -2988,7 +3177,6 @@ pub async fn branch_drift_poll(app: SharedApp) {
             String,
             String,
             Option<String>,
-            crate::pty::session::AgentKind,
         )> = {
             let g = app.lock().await;
             g.workspaces
@@ -3003,13 +3191,12 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         w.branch.clone(),
                         prefix,
                         repo.base_branch.clone(),
-                        w.agent,
                     ))
                 })
                 .collect()
         };
 
-        for (id, path, db_branch, prefix, base_branch, ws_agent) in snapshot {
+        for (id, path, db_branch, prefix, base_branch) in snapshot {
             if !path.exists() {
                 continue;
             }
@@ -3112,133 +3299,10 @@ pub async fn branch_drift_poll(app: SharedApp) {
             }
 
             // 4) Tail agent session JSONL for events.
-            //
-            // Lock-ordering: snapshot the previous offset and agent kind
-            // under the lock, do the file I/O without the lock held, then
-            // re-acquire to commit the new offset + events. This keeps the
-            // UI responsive even when sessions grow large.
-            //
-            // Branches on per-workspace agent kind.
-            let current_file = match ws_agent {
-                crate::pty::session::AgentKind::Claude => crate::events::locate_session_file(&path),
-                crate::pty::session::AgentKind::Pi => crate::pi_events::locate_session_file(&path),
-            };
-            let prev_offset = {
-                let g = app.lock().await;
-                match (g.workspace_events.get(&id), current_file.as_ref()) {
-                    (Some(evt), Some(f)) if evt.file_path.as_deref() == Some(f.as_path()) => {
-                        evt.byte_offset
-                    }
-                    _ => 0,
-                }
-            };
-            if let Some(file) = current_file {
-                let tail_result = match ws_agent {
-                    crate::pty::session::AgentKind::Claude => {
-                        crate::events::tail_session(&file, prev_offset)
-                    }
-                    crate::pty::session::AgentKind::Pi => {
-                        crate::pi_events::tail_session(&file, prev_offset)
-                    }
-                };
-                if let Ok(update) = tail_result {
-                    let crate::events::TailUpdate {
-                        new_offset,
-                        events,
-                        tool_use_starts,
-                        tool_use_resolves,
-                        last_stop_reason,
-                        human_replied_after_last_stop,
-                        reset_from_zero,
-                        last_assistant_text,
-                        last_user_interrupted,
-                        first_user_text,
-                        tool_use_counts,
-                        edited_file_paths,
-                    } = update;
-                    let mut g = app.lock().await;
-                    let evt = g.workspace_events.entry(id).or_default();
-                    // If the session file was replaced (different path) or
-                    // truncated/rewound (reset_from_zero), discard all
-                    // session-derived state before applying the new batch.
-                    // Otherwise stale tool_uses or stop_reasons from the
-                    // prior session keep the dashboard stuck on "awaiting".
-                    let file_changed = evt.file_path.as_deref() != Some(file.as_path());
-                    if file_changed || reset_from_zero {
-                        evt.reset_session_state();
-                    }
-                    if new_offset != prev_offset {
-                        // The log grew this iteration — stamp the activity
-                        // marker so is_stalled can compute time-since-last-write.
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as i64)
-                            .unwrap_or(0);
-                        evt.last_log_activity_ms = now_ms;
-                    }
-                    evt.file_path = Some(file);
-                    evt.byte_offset = new_offset;
-                    for (tu_id, tu_name, ts) in tool_use_starts {
-                        evt.pending_tool_uses.insert(tu_id, (tu_name, ts));
-                    }
-                    for tu_id in tool_use_resolves {
-                        evt.pending_tool_uses.remove(&tu_id);
-                    }
-                    // Update the "agent is waiting on user" tracking.
-                    // - A fresh assistant stop_reason replaces the prior one
-                    //   and resets the user-replied latch (the agent just
-                    //   produced a new stopping point).
-                    // - `human_replied_after_last_stop` from this batch
-                    //   already accounts for within-batch ordering: it's set
-                    //   only if real user text appears AFTER the last
-                    //   stop_reason in the batch (or anywhere in the batch
-                    //   if there's no new stop_reason).
-                    if let Some(sr) = last_stop_reason {
-                        evt.last_stop_reason = Some(sr);
-                        evt.user_replied_since_stop = false;
-                    }
-                    if human_replied_after_last_stop {
-                        evt.user_replied_since_stop = true;
-                    }
-                    if let Some(text) = last_assistant_text {
-                        evt.last_assistant_text = Some(text);
-                    }
-                    if evt.first_user_text.is_none() {
-                        if let Some(t) = first_user_text {
-                            evt.first_user_text = Some(t);
-                        }
-                    }
-                    evt.tool_use_counts.read =
-                        evt.tool_use_counts.read.saturating_add(tool_use_counts.read);
-                    evt.tool_use_counts.edit =
-                        evt.tool_use_counts.edit.saturating_add(tool_use_counts.edit);
-                    evt.tool_use_counts.write =
-                        evt.tool_use_counts.write.saturating_add(tool_use_counts.write);
-                    evt.tool_use_counts.bash =
-                        evt.tool_use_counts.bash.saturating_add(tool_use_counts.bash);
-                    evt.tool_use_counts.other =
-                        evt.tool_use_counts.other.saturating_add(tool_use_counts.other);
-                    for path in edited_file_paths {
-                        evt.push_recent_edited_file(path);
-                    }
-                    // Sticky between batches: only overwrite when the batch
-                    // had a definitive signal. Some(true) = batch ended on
-                    // the interrupt sentinel; Some(false) = batch had a
-                    // newer assistant message or real user text overriding
-                    // it; None = batch was silent on this axis.
-                    if let Some(v) = last_user_interrupted {
-                        evt.last_user_interrupted = v;
-                    }
-                    for e in events {
-                        crate::events::push_event(evt, e);
-                    }
-                    // First successful tail of this workspace's JSONL.
-                    // After this point the classifier sees the agent's
-                    // real stop_reason, so the bell loop can start
-                    // trusting activity transitions for this workspace.
-                    g.workspace_events_scanned.insert(id);
-                }
-            }
+            //    Extracted into `tail_workspace_events` so detach handlers
+            //    can trigger an immediate refresh on return-to-dashboard
+            //    without waiting for the next poll tick.
+            tail_workspace_events(app.clone(), id).await;
         }
 
         // 5) Per-workspace process scan. Throttled to once per 10 s globally —
@@ -4058,6 +4122,170 @@ mod pm_state_tests {
         .await
         .unwrap();
         assert!(matches!(app.view, crate::ui::View::Dashboard));
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_d_detach_schedules_refresh_for_attached_workspace() {
+        // The detail bar shows the workspace's events/diff/procs from
+        // app state, which is normally refreshed every 2s by the
+        // background poll. When the user detaches back to the
+        // dashboard, we want the bar to reflect work just done in the
+        // attached session immediately — so detach handlers must clear
+        // throttle stamps and queue the workspace for an out-of-band
+        // events-tail refresh.
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ws",
+                branch: "repo/ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-detach-refresh"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(id));
+        // Seed throttle stamps so we can prove the detach handler
+        // clears them (forcing the next poll tick to re-fetch).
+        app.diff_last_poll_ms.insert(id, 12_345);
+        app.pr_last_poll_ms.insert(id, 12_345);
+        app.last_proc_scan_ms = 12_345;
+
+        // Ctrl-x d on the last pane fully detaches.
+        handle_key_attached(
+            &mut app,
+            id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        assert!(
+            app.pending_workspace_refresh.contains(&id),
+            "detached workspace should be queued for events-tail refresh"
+        );
+        assert!(
+            !app.diff_last_poll_ms.contains_key(&id),
+            "diff throttle stamp should be cleared on detach"
+        );
+        assert!(
+            !app.pr_last_poll_ms.contains_key(&id),
+            "PR throttle stamp should be cleared on detach"
+        );
+        assert_eq!(
+            app.last_proc_scan_ms, 0,
+            "proc-scan throttle should be reset on detach"
+        );
+
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_esc_detach_schedules_refresh_for_attached_workspace() {
+        // Same as the d-path test above, for the Ctrl-X Esc detach.
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ws",
+                branch: "repo/ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-esc-refresh"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(id));
+
+        handle_key_attached(
+            &mut app,
+            id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            id,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        assert!(
+            app.pending_workspace_refresh.contains(&id),
+            "Esc-detached workspace should be queued for refresh"
+        );
+
         unsafe {
             std::env::remove_var("WSX_CLAUDE_BIN");
         }

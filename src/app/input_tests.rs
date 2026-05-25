@@ -1,1 +1,3103 @@
-// input_tests — extracted from src/app.rs (see docs/superpowers/specs/2026-05-25-app-rs-refactor-design.md)
+// Glob-import everything in the parent `input` module so each test
+// submodule's `use super::*;` cascades to input's items (App,
+// handle_key_*, crossterm types, etc.). Without this, the nested
+// `mod pm_state_tests` blocks would `use super::*;` on this empty
+// wrapper module.
+use super::*;
+
+#[cfg(test)]
+mod pm_state_tests {
+    use super::*;
+    use crate::store::Store;
+    use std::path::PathBuf;
+
+    #[test]
+    fn app_initializes_pm_state_off() {
+        let store = Store::open_in_memory().unwrap();
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(app.pm.is_none());
+        assert!(!app.pm_visible);
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn dashboard_renders_full_area_when_pm_hidden() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(!app.pm_visible);
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!rendered.contains("Project Manager"), "{rendered}");
+    }
+
+    #[test]
+    fn dashboard_renders_split_with_pm_title_when_visible_even_without_session() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.pm_visible = true; // No session yet — the pane shows a placeholder.
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Project Manager"),
+            "expected pane title in rendered buffer:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Tab to focus"),
+            "expected unfocused hint:\n{rendered}"
+        );
+    }
+
+    use crossterm::event::{KeyEvent, KeyModifiers};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tab_swaps_focus_when_pm_visible() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.pm_visible = true;
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn esc_returns_focus_to_dashboard() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tab_no_op_when_pm_hidden() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(!app.pm_visible);
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(crossterm::event::KeyCode::Tab, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_down_at_last_entry_wraps_to_first() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![
+            SelectionTarget::Repo(crate::store::RepoId(1)),
+            SelectionTarget::Repo(crate::store::RepoId(2)),
+            SelectionTarget::Repo(crate::store::RepoId(3)),
+        ];
+        app.dashboard.selected = 2;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(
+            app.dashboard.selected, 0,
+            "Down at last should wrap to first"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_up_at_first_entry_wraps_to_last() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![
+            SelectionTarget::Repo(crate::store::RepoId(1)),
+            SelectionTarget::Repo(crate::store::RepoId(2)),
+            SelectionTarget::Repo(crate::store::RepoId(3)),
+        ];
+        app.dashboard.selected = 0;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.selected, 2, "Up at first should wrap to last");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_down_in_middle_advances_normally() {
+        // Sanity check that wrap-around didn't break the non-edge case.
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![
+            SelectionTarget::Repo(crate::store::RepoId(1)),
+            SelectionTarget::Repo(crate::store::RepoId(2)),
+            SelectionTarget::Repo(crate::store::RepoId(3)),
+        ];
+        app.dashboard.selected = 1;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.dashboard.selected, 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_esc_closes() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "Esc should close UpdatesPanel");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_down_advances_selection() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        // Two workspaces so Down has somewhere to go.
+        for (name, branch, path) in [
+            ("alpha", "repo/alpha", "/tmp/wsx-test/alpha"),
+            ("beta", "repo/beta", "/tmp/wsx-test/beta"),
+        ] {
+            let id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name,
+                    branch,
+                    worktree_path: std::path::Path::new(path),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                })
+                .unwrap();
+            store
+                .set_workspace_state(id, WorkspaceState::Ready)
+                .unwrap();
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+                assert_eq!(selected, 1, "Down should advance to index 1");
+            }
+            other => panic!("unexpected modal state: {other:?}"),
+        }
+        // Down again clamps at the last index.
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+                assert_eq!(selected, 1, "Down past last clamps at max");
+            }
+            other => panic!("unexpected modal state: {other:?}"),
+        }
+        // Up returns to 0.
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Up, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+                assert_eq!(selected, 0, "Up should retreat to 0");
+            }
+            other => panic!("unexpected modal state: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_j_k_aliases_down_up() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        for (name, branch, path) in [
+            ("alpha", "repo/alpha", "/tmp/wsx-test/alpha"),
+            ("beta", "repo/beta", "/tmp/wsx-test/beta"),
+        ] {
+            let id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name,
+                    branch,
+                    worktree_path: std::path::Path::new(path),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                })
+                .unwrap();
+            store
+                .set_workspace_state(id, WorkspaceState::Ready)
+                .unwrap();
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 1 })
+            ),
+            "j should advance like Down; got {:?}",
+            app.modal
+        );
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })
+            ),
+            "k should retreat like Up; got {:?}",
+            app.modal
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn repo_settings_modal_j_k_aliases_down_up() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::RepoSettings {
+            repo_id,
+            selected: 0,
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::RepoSettings { selected: 1, .. })
+            ),
+            "j should advance in RepoSettings; got {:?}",
+            app.modal
+        );
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::RepoSettings { selected: 0, .. })
+            ),
+            "k should retreat in RepoSettings; got {:?}",
+            app.modal
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_enter_switches_view_and_clears_attention() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "blocked",
+                branch: "repo/blocked",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.workspace_needs_attention.insert(ws_id);
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "Enter should close the modal");
+        assert!(
+            matches!(&app.view, crate::ui::View::Attached(s) if s.focused_id() == Some(ws_id)),
+            "Enter should switch view to the selected workspace; got {:?}",
+            app.view
+        );
+        assert!(
+            !app.workspace_needs_attention.contains(&ws_id),
+            "attention flag should clear on Enter"
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_v_splits_attached_view_vertically() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("/tmp/wsx-split-1"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new("/tmp/wsx-split-2"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Pre-spawn the "first" workspace and attach to it. Use `.` for the
+        // spawn cwd so the PTY actually starts; the store-level
+        // worktree_path is just a unique key for the row.
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                first_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        let second_mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                second_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                second_mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(first_id));
+
+        // Open Updates panel, point at the second workspace, press 'v'.
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        // The renderer's order is grouped/sorted; in this minimal setup both
+        // workspaces are in `repo`. Find the index of `second_id` from the
+        // module's ordering helper.
+        let order = crate::ui::modal::ordered_workspaces_for_panel(
+            &app.repos,
+            &app.workspaces,
+            &app.workspace_events,
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+        let target_idx = order.iter().position(|id| *id == second_id).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: target_idx,
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "v should close the modal");
+        match &app.view {
+            crate::ui::View::Attached(state) => {
+                assert_eq!(state.leaf_count(), 2, "v should produce a 2-pane split");
+                assert!(state.leaves().contains(&first_id));
+                assert!(state.leaves().contains(&second_id));
+                // Focus should be on the newly added pane.
+                assert_eq!(state.focused_id(), Some(second_id));
+            }
+            other => panic!("expected Attached view; got {other:?}"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_d_closes_focused_pane_when_split() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("/tmp/wsx-close-1"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new("/tmp/wsx-close-2"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        for id in [first_id, second_id] {
+            let mode = crate::pty::session::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            app.sessions
+                .spawn(
+                    id,
+                    std::path::Path::new("."),
+                    80,
+                    24,
+                    mode,
+                    crate::remote_control::RemoteOpts::disabled(),
+                    crate::pty::session::AgentKind::Claude,
+                )
+                .unwrap();
+        }
+        // Start in a 2-pane split with `second` focused.
+        let mut state = AttachedState::single(first_id);
+        state.split(SplitDirection::Vertical, second_id);
+        app.view = crate::ui::View::Attached(state);
+
+        // Ctrl-x d closes JUST the focused pane; should leave `first` alone.
+        handle_key_attached(
+            &mut app,
+            second_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+        handle_key_attached(
+            &mut app,
+            second_id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(state) => {
+                assert_eq!(state.leaf_count(), 1, "should drop down to 1 pane");
+                assert_eq!(state.focused_id(), Some(first_id));
+            }
+            other => panic!("expected Attached view; got {other:?}"),
+        }
+
+        // Ctrl-x d on the last pane detaches fully.
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_d_detach_schedules_refresh_for_attached_workspace() {
+        // The detail bar shows the workspace's events/diff/procs from
+        // app state, which is normally refreshed every 2s by the
+        // background poll. When the user detaches back to the
+        // dashboard, we want the bar to reflect work just done in the
+        // attached session immediately — so detach handlers must clear
+        // throttle stamps and queue the workspace for an out-of-band
+        // events-tail refresh.
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ws",
+                branch: "repo/ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-detach-refresh"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(id));
+        // Seed throttle stamps so we can prove the detach handler
+        // clears them (forcing the next poll tick to re-fetch).
+        app.diff_last_poll_ms.insert(id, 12_345);
+        app.pr_last_poll_ms.insert(id, 12_345);
+        app.last_proc_scan_ms = 12_345;
+
+        // Ctrl-x d on the last pane fully detaches.
+        handle_key_attached(
+            &mut app,
+            id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        assert!(
+            app.pending_workspace_refresh.contains(&id),
+            "detached workspace should be queued for events-tail refresh"
+        );
+        assert!(
+            !app.diff_last_poll_ms.contains_key(&id),
+            "diff throttle stamp should be cleared on detach"
+        );
+        assert!(
+            !app.pr_last_poll_ms.contains_key(&id),
+            "PR throttle stamp should be cleared on detach"
+        );
+        assert_eq!(
+            app.last_proc_scan_ms, 0,
+            "proc-scan throttle should be reset on detach"
+        );
+
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_esc_detach_schedules_refresh_for_attached_workspace() {
+        // Same as the d-path test above, for the Ctrl-X Esc detach.
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ws",
+                branch: "repo/ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-esc-refresh"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(id));
+
+        handle_key_attached(
+            &mut app,
+            id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            id,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        assert!(
+            app.pending_workspace_refresh.contains(&id),
+            "Esc-detached workspace should be queued for refresh"
+        );
+
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_arrow_moves_focus_in_split() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let mut ids = Vec::new();
+        for name in ["a", "b"] {
+            let id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name,
+                    branch: &format!("repo/{name}"),
+                    worktree_path: &std::path::PathBuf::from(format!("/tmp/wsx-arrow-{name}")),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                })
+                .unwrap();
+            store
+                .set_workspace_state(id, WorkspaceState::Ready)
+                .unwrap();
+            ids.push(id);
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        for id in &ids {
+            let mode = crate::pty::session::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            app.sessions
+                .spawn(
+                    *id,
+                    std::path::Path::new("."),
+                    80,
+                    24,
+                    mode,
+                    crate::remote_control::RemoteOpts::disabled(),
+                    crate::pty::session::AgentKind::Claude,
+                )
+                .unwrap();
+        }
+        let mut state = AttachedState::single(ids[0]);
+        state.split(SplitDirection::Vertical, ids[1]);
+        // Focus is on ids[1] post-split.
+        app.view = crate::ui::View::Attached(state);
+
+        handle_key_attached(
+            &mut app,
+            ids[1],
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            ids[1],
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(state) => {
+                assert_eq!(state.focused_id(), Some(ids[0]));
+            }
+            other => panic!("expected Attached view; got {other:?}"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_swallows_other_keys() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Char('q'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_some(), "q should not dismiss UpdatesPanel");
+        assert!(!app.quit, "q should not propagate to App::quit");
+    }
+
+    #[test]
+    fn updates_panel_render_shows_grouped_workspaces() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo1 = store
+            .add_repo(std::path::Path::new("/tmp/r1"), "repo-alpha", "")
+            .unwrap();
+        let ws1 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo1,
+                name: "alpha-ws",
+                branch: "repo-alpha/alpha-ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws1, WorkspaceState::Ready)
+            .unwrap();
+        let repo2 = store
+            .add_repo(std::path::Path::new("/tmp/r2"), "repo-beta", "")
+            .unwrap();
+        let ws2 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo2,
+                name: "beta-ws",
+                branch: "repo-beta/beta-ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/beta-ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws2, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Workspace updates"),
+            "missing panel title:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("repo-alpha"),
+            "missing repo header:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("alpha-ws"),
+            "missing workspace row:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("repo-beta"),
+            "missing repo header:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("beta-ws"),
+            "missing workspace row:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn updates_panel_render_scrolls_to_keep_selected_visible() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let store = Store::open_in_memory().unwrap();
+        // 5 repos × 8 workspaces = 40 ws rows + 5 headers + 5 blank
+        // separators = 50 visual lines. The panel clamps height to ≤25,
+        // so without scrolling the last workspaces are invisible.
+        for r in 0..5 {
+            let repo_path = format!("/tmp/scroll-test/r{r}");
+            let repo_name = format!("repo-{r}");
+            let repo_id = store
+                .add_repo(std::path::Path::new(&repo_path), &repo_name, "")
+                .unwrap();
+            for w in 0..8 {
+                let ws_name = format!("ws-{r}-{w}");
+                let branch = format!("{repo_name}/{ws_name}");
+                let worktree = format!("/tmp/scroll-test/{ws_name}");
+                let ws_id = store
+                    .insert_workspace(&NewWorkspace {
+                        repo_id,
+                        name: &ws_name,
+                        branch: &branch,
+                        worktree_path: std::path::Path::new(&worktree),
+                        yolo: false,
+                        agent: crate::pty::session::AgentKind::Claude,
+                    })
+                    .unwrap();
+                store
+                    .set_workspace_state(ws_id, WorkspaceState::Ready)
+                    .unwrap();
+            }
+        }
+
+        let mut app = App::new(store, PathBuf::from("/tmp/scroll-test")).unwrap();
+
+        // Build the same order the renderer uses, so we can select the
+        // very last workspace — the one that would be clipped without
+        // scroll support.
+        let activity_translated: std::collections::HashMap<
+            crate::store::WorkspaceId,
+            crate::ui::updates_bar::ActivityState,
+        > = app
+            .workspace_activity
+            .iter()
+            .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
+            .collect();
+        let order = crate::ui::modal::ordered_workspaces_for_panel(
+            &app.repos,
+            &app.workspaces,
+            &app.workspace_events,
+            &activity_translated,
+            &app.workspace_needs_attention,
+        );
+        assert!(
+            order.len() >= 40,
+            "expected ≥40 workspaces, got {}",
+            order.len()
+        );
+        let last_selected = order.len() - 1;
+        let last_ws_id = order[last_selected];
+        let last_ws_name = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == last_ws_id)
+            .expect("last workspace present")
+            .1
+            .name
+            .clone();
+
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: last_selected,
+        });
+
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains(&last_ws_name),
+            "selected workspace '{last_ws_name}' should be scrolled into \
+             view but is not present in rendered modal:\n{rendered}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attached_view_shows_status_row_for_other_workspace_needing_attention() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let attached_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "attached-here",
+                branch: "repo/attached-here",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/attached"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(attached_id, WorkspaceState::Ready)
+            .unwrap();
+        let other_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "the-other",
+                branch: "repo/the-other",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/other"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(other_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                attached_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
+        // The new status row exclusively surfaces workspaces with
+        // `needs_attention` set — recent activity alone no longer qualifies.
+        // In production both flags are set together when `alert_decision`
+        // fires; mirror that here so the V5 status glyph (`!` for stalled)
+        // is what the styled line renders.
+        app.workspace_needs_attention.insert(other_id);
+        app.workspace_activity
+            .insert(other_id, crate::app::ActivityState::Stalled);
+
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("the-other"),
+            "expected status row mention of the other workspace:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("! repo/the-other"),
+            "expected V5 stalled glyph next to workspace name on status row:\n{rendered}"
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attached_view_no_status_row_when_no_other_activity() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let attached_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "only-one",
+                branch: "repo/only-one",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/only"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(attached_id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                attached_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
+
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        // The bottom row is the footer with "Ctrl-x d detach". The second-
+        // to-last row should NOT contain a status indicator glyph.
+        let h = buf.area.height;
+        let second_to_last: String = (0..buf.area.width)
+            .map(|x| buf[(x, h - 2)].symbol())
+            .collect();
+        assert!(
+            !second_to_last.contains('⚠'),
+            "unexpected attention glyph in row {}: {second_to_last:?}",
+            h - 2
+        );
+        assert!(
+            !second_to_last.contains('●'),
+            "unexpected activity glyph in row {}: {second_to_last:?}",
+            h - 2
+        );
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leader_u_in_attached_pm_opens_updates_panel() {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Manually spawn a PM session so handle_key_attached_pm has one.
+        let cwd = PathBuf::from(".");
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let s = app
+            .sessions
+            .spawn_pm(
+                &cwd,
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.pm = Some(s);
+        app.view = crate::ui::View::AttachedPm;
+
+        // Send the leader (Ctrl-x) then 'u'.
+        handle_key_attached_pm(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+
+        handle_key_attached_pm(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending);
+        assert!(matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })
+        ));
+
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    fn mouse_event(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn spawn_pm_for_test(app: &mut App) {
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let cwd = PathBuf::from(".");
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let s = app
+            .sessions
+            .spawn_pm(
+                &cwd,
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.pm = Some(s);
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    fn spawn_attached_workspace(app: &mut App) -> crate::store::WorkspaceId {
+        use crate::store::NewWorkspace;
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "scrollback-test",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                ws_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.view = crate::ui::View::Attached(AttachedState::single(ws_id));
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+        ws_id
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_up_scrolls_attached_workspace() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        assert_eq!(
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3,
+            "one wheel notch = 3 rows"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_down_decreases_offset_saturating() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(5);
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollDown)).await;
+        assert_eq!(
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_targets_pm_when_pm_attached() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        spawn_pm_for_test(&mut app);
+        app.view = crate::ui::View::AttachedPm;
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        assert_eq!(
+            app.pm
+                .as_ref()
+                .unwrap()
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_targets_pm_in_dashboard_when_pm_focused() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        spawn_pm_for_test(&mut app);
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+        // view stays Dashboard.
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        assert_eq!(
+            app.pm
+                .as_ref()
+                .unwrap()
+                .scrollback_offset
+                .load(std::sync::atomic::Ordering::Relaxed),
+            3
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_noop_when_dashboard_focused_no_target() {
+        let store = Store::open_in_memory().unwrap();
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // No PM, no attached workspace; view is Dashboard.
+        // Just verify the call doesn't panic.
+        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn keystroke_to_pty_resets_scrollback() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        assert!(app.sessions.get(ws_id).unwrap().is_scrolled());
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !app.sessions.get(ws_id).unwrap().is_scrolled(),
+            "any keystroke flowing to PTY must snap to live"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leader_keystroke_does_not_reset_scrollback() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        // Ctrl-x is the leader. It's consumed by wsx and never reaches the PTY.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+        assert!(
+            app.sessions.get(ws_id).unwrap().is_scrolled(),
+            "leader key consumed by wsx; offset should be preserved"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn arrow_key_resets_scrollback_and_forwards_to_pty() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        // Up arrow flows to the PTY (Claude Code prompt history) — must
+        // also snap scrollback back to live.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.sessions.get(ws_id).unwrap().is_scrolled());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leader_digit_sends_pinned_command_to_pty() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // Populate the cache directly (Task 7's resolution path is tested
+        // separately via the resolve() unit tests).
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+
+        // Ctrl-x leader.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+
+        // '1' — fires chip 1, clears leader.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending);
+
+        // cat echoes input back. Verify the screen eventually contains
+        // the command text.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "expected '/pull-request' on screen; got: {screen_text:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn leader_digit_out_of_range_is_noop() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // Only one chip in the cache.
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+
+        // Ctrl-x leader.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+
+        // '5' — index 4, out of range for a 1-element cache.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending);
+
+        // No bytes should have been written; cat hasn't echoed anything.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            !screen_text.contains("/pull-request"),
+            "out-of-range digit must not fire any chip; got: {screen_text:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_in_chip_rect_fires_pinned_command() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let _ws_id = spawn_attached_workspace(&mut app);
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        // Place a 7-wide chip at (5, 30): "[1] PR " = 7 cols.
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&app, click).await;
+
+        // wait for PTY cat echo
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = active_session(&app).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "expected chip click to send /pull-request; got: {screen_text:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_outside_chip_rect_does_nothing() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let _ws_id = spawn_attached_workspace(&mut app);
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 50, // outside chip
+            row: 10,    // outside chip
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&app, click).await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let session = active_session(&app).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            !screen_text.contains("/pull-request"),
+            "click outside any chip must not fire; got: {screen_text:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_paste_bytes_wraps_with_bracketed_markers() {
+        let out = wrap_paste_bytes("hello world");
+        assert_eq!(out, b"\x1b[200~hello world\x1b[201~");
+    }
+
+    #[test]
+    fn wrap_paste_bytes_handles_empty_content() {
+        // Edge case: a paste of empty string still emits the markers so the
+        // far side sees a zero-length paste boundary rather than nothing.
+        let out = wrap_paste_bytes("");
+        assert_eq!(out, b"\x1b[200~\x1b[201~");
+    }
+
+    #[test]
+    fn wrap_paste_bytes_preserves_multiline_and_special_chars() {
+        let out = wrap_paste_bytes("line1\nline2\t  trailing");
+        assert_eq!(out, b"\x1b[200~line1\nline2\t  trailing\x1b[201~");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn paste_in_attached_view_sends_bracketed_payload_to_pty() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let _ws_id = spawn_attached_workspace(&mut app);
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+
+        handle_event(&mut app, &shared, CtEvent::Paste("hello paste".into()))
+            .await
+            .unwrap();
+
+        // cat echoes input back. The bracketed-paste markers are unknown
+        // CSI sequences to vt100 and get swallowed; the inner content
+        // appears on the screen verbatim.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = active_session(&app).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("hello paste"),
+            "paste content must reach the PTY; got: {screen_text:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn paste_in_dashboard_with_pm_focused_sends_bracketed_to_pm() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        spawn_pm_for_test(&mut app);
+        // Dashboard view + PM visible + PM focused — same condition that
+        // routes keystrokes to the PM session.
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+
+        handle_event(&mut app, &shared, CtEvent::Paste("hello pm".into()))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let pm = app.pm.as_ref().unwrap();
+        let parser = pm.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("hello pm"),
+            "PM-focused paste must reach the PM PTY; got: {screen_text:?}"
+        );
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_newline_to_enter() {
+        let k = paste_char_to_key('\n');
+        assert!(matches!(k.code, KeyCode::Enter));
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_cr_to_enter() {
+        let k = paste_char_to_key('\r');
+        assert!(matches!(k.code, KeyCode::Enter));
+    }
+
+    #[test]
+    fn paste_char_to_key_translates_tab() {
+        let k = paste_char_to_key('\t');
+        assert!(matches!(k.code, KeyCode::Tab));
+    }
+
+    #[test]
+    fn paste_char_to_key_passes_through_printable() {
+        let k = paste_char_to_key('a');
+        assert!(matches!(k.code, KeyCode::Char('a')));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_spawn_info_resolves_related_repos_to_additional_dirs() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let backend_id = store
+            .add_repo(std::path::Path::new("/work/backend"), "backend", "")
+            .unwrap();
+        let _frontend_id = store
+            .add_repo(std::path::Path::new("/work/frontend"), "frontend", "")
+            .unwrap();
+        store
+            .set_repo_related_repos(backend_id, Some("frontend"))
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: backend_id,
+                name: "test-ws",
+                branch: "backend/test-ws",
+                worktree_path: std::path::Path::new("/wt/test-ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let info = build_spawn_info(&app, ws_id);
+        assert!(info.is_some());
+        let (_id, _path, mode, _repo_path, _agent) = info.unwrap();
+        match mode {
+            crate::pty::session::SpawnMode::Fresh {
+                additional_dirs,
+                custom_instructions,
+                ..
+            } => {
+                assert_eq!(
+                    additional_dirs,
+                    vec![std::path::PathBuf::from("/work/frontend")],
+                    "additional_dirs should resolve to frontend's source path"
+                );
+                let prompt = custom_instructions.expect("read-only fragment must be folded in");
+                assert!(
+                    prompt.contains("/work/frontend"),
+                    "system prompt missing related path: {prompt}"
+                );
+                assert!(
+                    prompt.contains("MUST NOT edit"),
+                    "system prompt missing read-only directive: {prompt}"
+                );
+            }
+            other => panic!("expected Fresh mode; got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_spawn_info_filters_self_reference() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let backend_id = store
+            .add_repo(std::path::Path::new("/work/backend"), "backend", "")
+            .unwrap();
+        store
+            .set_repo_related_repos(backend_id, Some("backend"))
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: backend_id,
+                name: "test-ws",
+                branch: "backend/test-ws",
+                worktree_path: std::path::Path::new("/wt/test-ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let (_id, _path, mode, _repo_path, _agent) = build_spawn_info(&app, ws_id).unwrap();
+        match mode {
+            crate::pty::session::SpawnMode::Fresh {
+                additional_dirs,
+                custom_instructions,
+                ..
+            } => {
+                assert!(
+                    additional_dirs.is_empty(),
+                    "self-reference must be filtered"
+                );
+                assert!(
+                    custom_instructions.is_none(),
+                    "no related dirs => no fragment"
+                );
+            }
+            other => panic!("expected Fresh mode; got {other:?}"),
+        }
+    }
+
+    /// Test helper: create an App with N repos registered in the store
+    /// and loaded into app.repos. Uses a unique tmpdir per call so paths
+    /// don't collide.
+    fn make_app_with_n_repos(n: usize) -> (App, Vec<crate::store::RepoId>) {
+        let store = Store::open_in_memory().unwrap();
+        let mut ids = Vec::new();
+        for i in 0..n {
+            let path =
+                std::env::temp_dir().join(format!("wsx-fold-test-{}-{}", std::process::id(), i));
+            let id = store.add_repo(&path, &format!("repo-{i}"), "").unwrap();
+            ids.push(id);
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-fold-test")).unwrap();
+        app.refresh().unwrap();
+        (app, ids)
+    }
+
+    async fn press(app: &mut App, ch: char, mods: KeyModifiers) {
+        handle_key_dashboard(app, KeyEvent::new(KeyCode::Char(ch), mods))
+            .await
+            .unwrap();
+    }
+
+    async fn press_key(app: &mut App, code: KeyCode) {
+        handle_key_dashboard(app, KeyEvent::new(code, KeyModifiers::NONE))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn z_alone_arms_leader_without_action() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        assert!(app.z_leader_pending, "z should arm the leader");
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "z alone should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn zz_toggles_focused_repo_fold() {
+        let (mut app, ids) = make_app_with_n_repos(2);
+        app.dashboard.selected = 0;
+        let rid = ids[0];
+        let key = rid.0 as u64;
+        let before = app.dashboard.folded.get(&key).copied();
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zz");
+        let after = app.dashboard.folded.get(&key).copied();
+        assert_ne!(
+            before, after,
+            "zz should change the fold state for the focused repo"
+        );
+    }
+
+    #[tokio::test]
+    async fn za_expands_all_repos() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        // Pre-fold one repo explicitly so we can see the "expand all" override.
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'a', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after za");
+        for id in &ids {
+            let key = id.0 as u64;
+            assert_eq!(
+                app.dashboard.folded.get(&key).copied(),
+                Some(false),
+                "za should set repo {key} to expanded (false)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn z_shift_m_folds_all_repos() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        // Pre-expand one repo explicitly so we can see the "fold all" override.
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'M', KeyModifiers::SHIFT).await;
+        assert!(!app.z_leader_pending, "leader should clear after zM");
+        for id in &ids {
+            let key = id.0 as u64;
+            assert_eq!(
+                app.dashboard.folded.get(&key).copied(),
+                Some(true),
+                "zM should set repo {key} to folded (true)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn z_then_unknown_clears_leader_without_action() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let selected_before = app.dashboard.selected;
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'x', KeyModifiers::NONE).await;
+        assert!(
+            !app.z_leader_pending,
+            "leader should clear after unknown key"
+        );
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "unknown follow-up should leave fold state unchanged"
+        );
+        assert_eq!(
+            app.dashboard.selected, selected_before,
+            "unknown follow-up should be eaten, not pass through to selection"
+        );
+    }
+
+    #[tokio::test]
+    async fn z_then_esc_clears_leader() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press_key(&mut app, KeyCode::Esc).await;
+        assert!(!app.z_leader_pending, "Esc should clear the leader");
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "Esc should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn j_alias_advances_selection_like_down() {
+        let (mut app, _) = make_app_with_n_repos(3);
+        app.dashboard.selected = 0;
+        press(&mut app, 'j', KeyModifiers::NONE).await;
+        assert_eq!(app.dashboard.selected, 1, "j should advance like Down");
+    }
+
+    #[tokio::test]
+    async fn k_alias_retreats_selection_like_up() {
+        let (mut app, _) = make_app_with_n_repos(3);
+        app.dashboard.selected = 2;
+        press(&mut app, 'k', KeyModifiers::NONE).await;
+        assert_eq!(app.dashboard.selected, 1, "k should retreat like Up");
+    }
+
+    #[tokio::test]
+    async fn k_does_not_open_process_list_anymore() {
+        // `k` is now a nav alias for Up. Process list must be opened by `K`.
+        let (mut app, _) = make_app_with_n_repos(1);
+        app.dashboard.selected = 0;
+        press(&mut app, 'k', KeyModifiers::NONE).await;
+        assert!(
+            app.modal.is_none(),
+            "k must not open ProcessList; it's now a nav alias"
+        );
+    }
+
+    #[tokio::test]
+    async fn shift_k_opens_process_list_on_workspace() {
+        use crate::store::{NewWorkspace, WorkspaceState};
+        let (mut app, ids) = make_app_with_n_repos(1);
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id: ids[0],
+                name: "alpha",
+                branch: "repo-0/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        app.store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        app.refresh().unwrap();
+        // Find and select the workspace row.
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(id) if *id == ws_id))
+            .expect("workspace should appear in selectable list");
+        app.dashboard.selected = idx;
+        press(&mut app, 'K', KeyModifiers::SHIFT).await;
+        assert!(
+            matches!(app.modal, Some(Modal::ProcessList { workspace_id, .. }) if workspace_id == ws_id),
+            "K on a workspace row should open ProcessList"
+        );
+    }
+
+    #[tokio::test]
+    async fn i_alias_opens_new_workspace_modal_like_enter_on_repo() {
+        // On a repo header, Enter opens the New Workspace modal. `i` (vim
+        // insert) should do the same — it's the "enter this thing" verb.
+        let (mut app, _) = make_app_with_n_repos(1);
+        app.dashboard.selected = 0;
+        assert!(matches!(
+            app.selected_target(),
+            Some(SelectionTarget::Repo(_))
+        ));
+        press(&mut app, 'i', KeyModifiers::NONE).await;
+        assert!(
+            matches!(app.modal, Some(Modal::NewWorkspace { .. })),
+            "i on a repo row should open NewWorkspace like Enter; got {:?}",
+            app.modal
+        );
+    }
+
+    #[tokio::test]
+    async fn h_folds_focused_repo() {
+        let (mut app, ids) = make_app_with_n_repos(2);
+        app.dashboard.selected = 0;
+        // Start expanded so we can observe the fold.
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'h', KeyModifiers::NONE).await;
+        assert_eq!(
+            app.dashboard.folded.get(&(ids[0].0 as u64)).copied(),
+            Some(true),
+            "h should fold the focused repo"
+        );
+    }
+
+    #[tokio::test]
+    async fn l_unfolds_focused_repo() {
+        let (mut app, ids) = make_app_with_n_repos(2);
+        app.dashboard.selected = 0;
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'l', KeyModifiers::NONE).await;
+        assert_eq!(
+            app.dashboard.folded.get(&(ids[0].0 as u64)).copied(),
+            Some(false),
+            "l should unfold the focused repo"
+        );
+    }
+
+    #[tokio::test]
+    async fn h_is_idempotent_on_already_folded_repo() {
+        // Unlike `zz`, `h` should not toggle — pressing it twice keeps the
+        // repo folded. This is the behavior that lets you mash `h` while
+        // navigating without accidentally re-opening a row.
+        let (mut app, ids) = make_app_with_n_repos(2);
+        app.dashboard.selected = 0;
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'h', KeyModifiers::NONE).await;
+        press(&mut app, 'h', KeyModifiers::NONE).await;
+        assert_eq!(
+            app.dashboard.folded.get(&(ids[0].0 as u64)).copied(),
+            Some(true),
+            "h on an already-folded repo must stay folded"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_alone_is_no_op_on_dashboard() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'a', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "a alone should not arm the leader");
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "a alone should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn shift_m_alone_is_no_op_on_dashboard() {
+        let (mut app, _) = make_app_with_n_repos(2);
+        let folded_before = app.dashboard.folded.clone();
+        press(&mut app, 'M', KeyModifiers::SHIFT).await;
+        assert!(!app.z_leader_pending, "M alone should not arm the leader");
+        assert_eq!(
+            app.dashboard.folded, folded_before,
+            "M alone should not change fold state"
+        );
+    }
+
+    #[tokio::test]
+    async fn z_m_folds_all_repos_without_shift_modifier() {
+        // Some terminals (or CapsLock) report `Char('M')` without
+        // KeyModifiers::SHIFT. The chord should still fire — matches
+        // the codebase convention for capital-letter binds like `G`.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'M', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zM");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(true),
+                "zM (no SHIFT) should fold every repo"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn zm_folds_all_repos() {
+        // Vim `zm` (lowercase m) should fold all repos, same as `zM`.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, false);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'm', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zm");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(true),
+                "zm should set repo {id:?} to folded (true)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn zr_expands_all_repos() {
+        // Vim `zr` (lowercase r) should expand all repos, same as `za`.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'r', KeyModifiers::NONE).await;
+        assert!(!app.z_leader_pending, "leader should clear after zr");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(false),
+                "zr should set repo {id:?} to expanded (false)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn z_shift_r_expands_all_repos() {
+        // Vim `zR` (uppercase R) should also expand all repos.
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.folded.insert(ids[0].0 as u64, true);
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        press(&mut app, 'R', KeyModifiers::SHIFT).await;
+        assert!(!app.z_leader_pending, "leader should clear after zR");
+        for id in &ids {
+            assert_eq!(
+                app.dashboard.folded.get(&(id.0 as u64)).copied(),
+                Some(false),
+                "zR should set repo {id:?} to expanded (false)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tab_swap_clears_armed_z_leader() {
+        // If the user arms `z` then Tabs over to PM, the leader must
+        // clear — otherwise their next key after Tabbing back would
+        // be unexpectedly eaten by the z-leader dispatcher.
+        let (mut app, _) = make_app_with_n_repos(2);
+        // Tab swap path requires PM visible.
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::Dashboard;
+        press(&mut app, 'z', KeyModifiers::NONE).await;
+        assert!(app.z_leader_pending, "z should arm the leader");
+        press_key(&mut app, KeyCode::Tab).await;
+        assert!(
+            !app.z_leader_pending,
+            "Tab to PM should clear the armed leader"
+        );
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+    }
+
+    fn init_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let r = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        r(&["init", "-q", "-b", "main"]);
+        r(&["config", "user.email", "t@e"]);
+        r(&["config", "user.name", "t"]);
+        r(&["commit", "--allow-empty", "-q", "-m", "init"]);
+        dir
+    }
+
+    #[tokio::test]
+    async fn enter_in_new_workspace_modal_transitions_to_setup_running_and_spawns_task() {
+        use crate::ui::modal::Modal;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::NewWorkspace {
+                repo_id,
+                name_buffer: "alpha".to_string(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            });
+        }
+        // Send Enter.
+        let evt = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::empty(),
+        );
+        {
+            let mut g = app.lock().await;
+            handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
+            // Immediately after Enter, modal should be SetupRunning.
+            assert!(
+                matches!(g.modal, Some(Modal::SetupRunning { .. })),
+                "modal should transition to SetupRunning immediately; got {:?}",
+                g.modal
+            );
+            assert!(g.pending_create_gen.is_some());
+        }
+        // Yield so the spawned task gets a chance to complete. 1500ms gives
+        // slow CI runners headroom over git init + fetch + worktree create.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        // Eventually, modal should be None and a workspace should exist.
+        let g = app.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "modal should clear after create succeeds; got {:?}",
+            g.modal
+        );
+        assert!(g.pending_create_gen.is_none());
+        assert_eq!(g.workspaces.len(), 1);
+        let _ = repo_id; // suppress unused warning if not referenced above
+    }
+
+    #[tokio::test]
+    async fn esc_in_setup_running_cancels_and_closes_modal() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store
+            .set_repo_setup_script(repo_id, Some("sleep 5"))
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        // Open the modal and press Enter.
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::NewWorkspace {
+                repo_id,
+                name_buffer: "alpha".to_string(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            });
+            let enter = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
+            assert!(matches!(g.modal, Some(Modal::SetupRunning { .. })));
+        }
+        // Brief yield so the spawned task gets to start the setup script.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Press Esc.
+        {
+            let mut g = app.lock().await;
+            let esc = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
+            assert!(g.modal.is_none(), "modal should close immediately on Esc");
+            assert!(g.pending_create_gen.is_none());
+        }
+        // Wait for the spawned task to wind down.
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        let g = app.lock().await;
+        assert_eq!(g.workspaces.len(), 1);
+        assert_eq!(
+            g.workspaces[0].1.setup_status,
+            crate::store::SetupStatus::Cancelled
+        );
+        // Modal should still be None — the late reconcile must not pop an error.
+        assert!(g.modal.is_none());
+    }
+
+    #[tokio::test]
+    async fn enter_during_setup_running_is_a_noop() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store
+            .set_repo_setup_script(repo_id, Some("sleep 1"))
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::NewWorkspace {
+                repo_id,
+                name_buffer: "alpha".to_string(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            });
+            let enter = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
+            // Press Enter again — should not spawn a second create.
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
+        }
+        // Wait for the (single) setup to finish.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let g = app.lock().await;
+        assert_eq!(
+            g.workspaces.len(),
+            1,
+            "exactly one workspace should be created"
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_create_after_esc_does_not_show_error_modal() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        // No setup script — create is very fast.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::NewWorkspace {
+                repo_id,
+                name_buffer: "alpha".to_string(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            });
+            let enter = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
+            // Immediately Esc — race against the spawned create completing.
+            let esc = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let g = app.lock().await;
+        // Regardless of which side won the race, modal must not be Error.
+        assert!(
+            !matches!(g.modal, Some(Modal::Error { .. })),
+            "Esc race should never produce an error modal, got {:?}",
+            g.modal
+        );
+    }
+
+    fn seed_app_with_workspace() -> App {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Idle repos fold by default; force-expand so the workspace row is
+        // visible in `visible_targets` during draw.
+        app.dashboard.folded.insert(repo_id.0 as u64, false);
+        app
+    }
+
+    #[test]
+    fn detail_bar_renders_when_workspace_is_selected() {
+        let mut app = seed_app_with_workspace();
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(_)))
+            .expect("workspace target present");
+        app.dashboard.selected = idx;
+
+        let backend = TestBackend::new(120, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Reply to agent"),
+            "bar visible: {rendered}"
+        );
+    }
+
+    #[test]
+    fn detail_bar_absent_when_repo_header_is_selected() {
+        let mut app = seed_app_with_workspace();
+        let repo_idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Repo(_)))
+            .expect("repo target present");
+        app.dashboard.selected = repo_idx;
+
+        let backend = TestBackend::new(120, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !rendered.contains("Reply to agent"),
+            "bar absent on repo header: {rendered}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ctrl_x_esc_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_esc_saves_layout_and_returns_to_dashboard() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::ui::split::{AttachedState, SplitDirection};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("/tmp/wsx-esc-1"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new("/tmp/wsx-esc-2"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                first_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        let second_mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                second_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                second_mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+
+        let mut state = AttachedState::single(first_id);
+        state.split(SplitDirection::Vertical, second_id);
+        app.view = crate::ui::View::Attached(state);
+
+        // Send Ctrl-x then Esc.
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(app.view, crate::ui::View::Dashboard),
+            "should return to dashboard"
+        );
+        let saved = app.store.get_workspace_layout(first_id).unwrap();
+        assert!(saved.is_some(), "layout should be saved under first leaf");
+        let (tree, _focus) = saved.unwrap();
+        assert_eq!(tree.leaves(), vec![first_id, second_id]);
+        assert!(
+            app.workspaces_with_multi_pane_layouts.contains(&first_id),
+            "cache should refresh to include the new layout's anchor"
+        );
+
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+}
+
+#[cfg(test)]
+mod restore_layout_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn setup_two_workspaces_with_sessions(
+        slug: &str,
+    ) -> (App, crate::store::WorkspaceId, crate::store::WorkspaceId) {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        unsafe {
+            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new(&format!("/tmp/wsx-{slug}-1")),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new(&format!("/tmp/wsx-{slug}-2")),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        for id in [first_id, second_id] {
+            let mode = crate::pty::session::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            app.sessions
+                .spawn(
+                    id,
+                    std::path::Path::new("."),
+                    80,
+                    24,
+                    mode,
+                    crate::remote_control::RemoteOpts::disabled(),
+                    crate::pty::session::AgentKind::Claude,
+                )
+                .unwrap();
+        }
+        (app, first_id, second_id)
+    }
+
+    fn select_workspace_in_app(app: &mut App, id: crate::store::WorkspaceId) {
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(w) if *w == id))
+            .expect("workspace in selectable list");
+        app.dashboard.selected = idx;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_enter_restores_saved_layout() {
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("restore");
+        let mut tree = SplitTree::Leaf(first_id);
+        tree.split(&[], SplitDirection::Vertical, second_id);
+        app.store
+            .set_workspace_layout(first_id, &tree, &[1])
+            .unwrap();
+        app.refresh().unwrap();
+        select_workspace_in_app(&mut app, first_id);
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(s) => {
+                assert_eq!(s.leaves(), vec![first_id, second_id]);
+                assert_eq!(s.focus, vec![1]);
+            }
+            _ => panic!("expected attached view with restored layout"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_enter_falls_back_to_single_pane_when_no_layout() {
+        let (mut app, first_id, _second_id) = setup_two_workspaces_with_sessions("fallback");
+        select_workspace_in_app(&mut app, first_id);
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(s) => {
+                assert_eq!(s.leaves(), vec![first_id]);
+            }
+            _ => panic!("expected single-pane attached view"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn l_key_opens_workspace_like_enter() {
+        let (mut app, first_id, _second_id) = setup_two_workspaces_with_sessions("l-key");
+        select_workspace_in_app(&mut app, first_id);
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(s) => {
+                assert_eq!(s.leaves(), vec![first_id]);
+            }
+            _ => panic!("expected single-pane attached view after 'l' on workspace"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn restore_prunes_archived_side_panes() {
+        use crate::ui::split::{SplitDirection, SplitTree};
+        let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("prune");
+        let mut tree = SplitTree::Leaf(first_id);
+        tree.split(&[], SplitDirection::Vertical, second_id);
+        app.store
+            .set_workspace_layout(first_id, &tree, &[1])
+            .unwrap();
+        // Archive second_id directly and refresh so app.workspaces drops it.
+        app.store.delete_workspace(second_id).unwrap();
+        app.refresh().unwrap();
+        select_workspace_in_app(&mut app, first_id);
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        match &app.view {
+            crate::ui::View::Attached(s) => {
+                assert_eq!(s.leaves(), vec![first_id], "side pane pruned");
+            }
+            _ => panic!("expected attached view with pruned layout"),
+        }
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_d_does_not_modify_saved_layout() {
+        use crate::ui::split::{AttachedState, SplitDirection, SplitTree};
+        let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("ctrlxd");
+        let mut tree = SplitTree::Leaf(first_id);
+        tree.split(&[], SplitDirection::Vertical, second_id);
+        app.store
+            .set_workspace_layout(first_id, &tree, &[1])
+            .unwrap();
+        let mut state = AttachedState::single(first_id);
+        state.split(SplitDirection::Vertical, second_id);
+        app.view = crate::ui::View::Attached(state);
+        // Close second pane with Ctrl-x d (focus is on second_id from the split).
+        handle_key_attached(
+            &mut app,
+            second_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            second_id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        // Close last pane → dashboard.
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(
+            &mut app,
+            first_id,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        // The stored layout is unchanged.
+        let (saved, _) = app.store.get_workspace_layout(first_id).unwrap().unwrap();
+        assert_eq!(saved.leaves(), vec![first_id, second_id]);
+        unsafe {
+            std::env::remove_var("WSX_CLAUDE_BIN");
+        }
+    }
+}
+
+#[cfg(test)]
+mod detail_bar_focus_tests {
+    use super::*;
+    use crate::store::{NewWorkspace, Store, WorkspaceState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn make_app_with_workspace_selected() -> App {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Force-expand the repo so the workspace stays in `selectable`
+        // (idle repos default-fold).
+        app.dashboard.folded.insert(repo_id.0 as u64, false);
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(_)))
+            .unwrap();
+        app.dashboard.selected = idx;
+        app
+    }
+
+    #[tokio::test]
+    async fn tab_on_workspace_moves_focus_to_detail_bar_reply() {
+        let mut app = make_app_with_workspace_selected();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
+    }
+
+    #[tokio::test]
+    async fn tab_in_detail_bar_returns_focus_to_dashboard() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test]
+    async fn esc_in_detail_bar_clears_draft_and_returns_to_dashboard() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "half-typed message".to_string();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "");
+    }
+
+    #[tokio::test]
+    async fn char_in_detail_bar_appends_to_draft() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert_eq!(app.dashboard.reply_draft, "hi");
+        // Focus must NOT have changed (this is a regression guard
+        // against accidentally letting dashboard hotkeys fire).
+        assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
+    }
+
+    #[tokio::test]
+    async fn backspace_in_detail_bar_pops_last_char() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "abc".to_string();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert_eq!(app.dashboard.reply_draft, "ab");
+    }
+
+    #[tokio::test]
+    async fn arrow_down_while_focused_returns_to_dashboard_and_clears_draft() {
+        let mut app = make_app_with_workspace_selected();
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "draft".to_string();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "");
+    }
+
+    // Issue 2: Tab cycle should include PM when visible.
+    #[tokio::test]
+    async fn tab_in_detail_bar_routes_to_pm_when_visible() {
+        let mut app = make_app_with_workspace_selected();
+        app.pm_visible = true;
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+    }
+
+    // Issue 3: Arrow navigation in Dashboard focus must clear the reply draft
+    // so it cannot be sent to the wrong workspace.
+    #[tokio::test]
+    async fn arrow_down_in_dashboard_focus_clears_reply_draft() {
+        let mut app = make_app_with_workspace_selected();
+        // Compose a draft in DetailBarReply, then Tab back to Dashboard.
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert_eq!(app.dashboard.reply_draft, "hi");
+
+        // Now arrow-navigate. The draft should be discarded so it can't
+        // be sent to the wrong workspace.
+        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(
+            app.dashboard.reply_draft, "",
+            "draft must clear on navigation"
+        );
+    }
+}

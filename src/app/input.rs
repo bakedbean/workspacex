@@ -163,12 +163,11 @@ fn toggle_focused_fold(app: &mut App) {
     if let Some(rid) = target_rid {
         let id = rid.0 as u64;
         let counts = current_repo_counts(app, rid);
-        let currently_expanded = match app.dashboard.folded.get(&id).copied() {
+        let new_folded = match app.dashboard.folded.get(&id).copied() {
             Some(explicit) => !explicit,
             None => !crate::ui::dashboard::sort::default_fold(counts),
         };
-        // Store `true` = folded (i.e. !expanded).
-        app.dashboard.folded.insert(id, currently_expanded);
+        app.dashboard.folded.insert(id, new_folded);
     }
 }
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike

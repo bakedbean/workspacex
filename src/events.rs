@@ -1563,7 +1563,10 @@ mod tests {
         }
         assert_eq!(evt.recent_edited_files.len(), 7);
         // Newest at front, oldest dropped.
-        assert_eq!(evt.recent_edited_files.front().map(String::as_str), Some("f9.rs"));
+        assert_eq!(
+            evt.recent_edited_files.front().map(String::as_str),
+            Some("f9.rs")
+        );
         assert!(
             !evt.recent_edited_files.iter().any(|p| p == "f0.rs"),
             "oldest evicted"
@@ -1574,10 +1577,15 @@ mod tests {
     fn reset_session_state_clears_new_fields() {
         let mut evt = WorkspaceEvents {
             first_user_text: Some("hello".to_string()),
-            tool_use_counts: ToolUseCounts { read: 3, bash: 1, ..Default::default() },
+            tool_use_counts: ToolUseCounts {
+                read: 3,
+                bash: 1,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        evt.recent_edited_files.push_front("src/main.rs".to_string());
+        evt.recent_edited_files
+            .push_front("src/main.rs".to_string());
 
         evt.reset_session_state();
 
@@ -1610,7 +1618,10 @@ mod tests {
     fn parse_assistant_surfaces_edited_file_paths() {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/tmp/x/src/main.rs","old_string":"a","new_string":"b"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
         let parsed = parse_jsonl_line(line);
-        assert_eq!(parsed.edited_file_paths, vec!["/tmp/x/src/main.rs".to_string()]);
+        assert_eq!(
+            parsed.edited_file_paths,
+            vec!["/tmp/x/src/main.rs".to_string()]
+        );
     }
 
     #[test]

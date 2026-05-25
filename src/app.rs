@@ -46,10 +46,11 @@ pub enum RepoSettingField {
     ArchiveScript,
     PinnedCommands,
     RelatedRepos,
+    DetailBarConfig,
 }
 
 impl RepoSettingField {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::RepoName,
         Self::BranchPrefix,
         Self::BaseBranch,
@@ -58,6 +59,7 @@ impl RepoSettingField {
         Self::ArchiveScript,
         Self::PinnedCommands,
         Self::RelatedRepos,
+        Self::DetailBarConfig,
     ];
 
     pub fn label(self) -> &'static str {
@@ -70,6 +72,7 @@ impl RepoSettingField {
             Self::ArchiveScript => "archive_script",
             Self::PinnedCommands => "pinned_commands",
             Self::RelatedRepos => "related_repos",
+            Self::DetailBarConfig => "detail_bar_config",
         }
     }
 }
@@ -587,6 +590,13 @@ where
             RepoSettingField::RelatedRepos => {
                 (repo.related_repos.clone().unwrap_or_default(), "txt")
             }
+            RepoSettingField::DetailBarConfig => {
+                let raw = repo
+                    .detail_bar_config
+                    .clone()
+                    .unwrap_or_else(|| "{}\n".to_string());
+                (raw, "json")
+            }
         }
     };
 
@@ -610,8 +620,13 @@ where
     if let Ok(Some(new)) = result {
         if new.trim() != current.trim() {
             let mut g = app.lock().await;
-            let _ = apply_repo_setting(&mut g, edit.repo_id, edit.field, &new);
-            let _ = g.refresh();
+            if let Err(e) = apply_repo_setting(&mut g, edit.repo_id, edit.field, &new) {
+                g.modal = Some(crate::ui::modal::Modal::Error {
+                    message: e.to_string(),
+                });
+            } else {
+                let _ = g.refresh();
+            }
         }
     }
     Ok(())
@@ -2204,6 +2219,20 @@ fn apply_repo_setting(
         RepoSettingField::ArchiveScript => app.store.set_repo_archive_script(repo_id, opt),
         RepoSettingField::PinnedCommands => app.store.set_repo_pinned_commands(repo_id, opt),
         RepoSettingField::RelatedRepos => app.store.set_repo_related_repos(repo_id, opt),
+        RepoSettingField::DetailBarConfig => {
+            if trimmed.is_empty() {
+                app.store.set_repo_detail_bar_config(repo_id, None)
+            } else {
+                // Validate. Use DetailBarOverride (not DetailBarConfig)
+                // because per-repo entries are partial overrides.
+                match serde_json::from_str::<crate::detail_bar_config::DetailBarOverride>(trimmed) {
+                    Ok(_) => app.store.set_repo_detail_bar_config(repo_id, Some(trimmed)),
+                    Err(e) => Err(crate::error::Error::UserInput(format!(
+                        "detail_bar_config is not valid JSON: {e}"
+                    ))),
+                }
+            }
+        }
     }
 }
 

@@ -1298,11 +1298,13 @@ mod tests {
 
     #[test]
     fn enabled_columns_helper_returns_subset() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.sections = Sections {
-            session_summary: true,
-            recent_chat: false,
-            procs_and_files: true,
+        let cfg = DetailBarConfig {
+            sections: Sections {
+                session_summary: true,
+                recent_chat: false,
+                procs_and_files: true,
+            },
+            ..DetailBarConfig::default()
         };
         let cols = enabled_columns(&cfg);
         assert_eq!(cols, vec![Column::SessionSummary, Column::ProcsAndFiles]);
@@ -1310,11 +1312,13 @@ mod tests {
 
     #[test]
     fn enabled_columns_empty_when_all_disabled() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.sections = Sections {
-            session_summary: false,
-            recent_chat: false,
-            procs_and_files: false,
+        let cfg = DetailBarConfig {
+            sections: Sections {
+                session_summary: false,
+                recent_chat: false,
+                procs_and_files: false,
+            },
+            ..DetailBarConfig::default()
         };
         assert!(enabled_columns(&cfg).is_empty());
     }

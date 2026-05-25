@@ -275,22 +275,26 @@ mod tests {
 
     #[test]
     fn has_body_true_when_any_section_enabled() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.sections = Sections {
-            session_summary: false,
-            recent_chat: false,
-            procs_and_files: true,
+        let cfg = DetailBarConfig {
+            sections: Sections {
+                session_summary: false,
+                recent_chat: false,
+                procs_and_files: true,
+            },
+            ..DetailBarConfig::default()
         };
         assert!(cfg.has_body());
     }
 
     #[test]
     fn has_body_false_when_all_sections_disabled() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.sections = Sections {
-            session_summary: false,
-            recent_chat: false,
-            procs_and_files: false,
+        let cfg = DetailBarConfig {
+            sections: Sections {
+                session_summary: false,
+                recent_chat: false,
+                procs_and_files: false,
+            },
+            ..DetailBarConfig::default()
         };
         assert!(!cfg.has_body());
     }
@@ -315,11 +319,13 @@ mod tests {
 
     #[test]
     fn preferred_height_returns_chrome_when_no_sections_enabled() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.sections = Sections {
-            session_summary: false,
-            recent_chat: false,
-            procs_and_files: false,
+        let cfg = DetailBarConfig {
+            sections: Sections {
+                session_summary: false,
+                recent_chat: false,
+                procs_and_files: false,
+            },
+            ..DetailBarConfig::default()
         };
         // Independent of total or configured percent.
         assert_eq!(cfg.preferred_height(20), DetailBarConfig::CHROME_ROWS);
@@ -356,7 +362,7 @@ mod tests {
         // defensive swap treats lo=10, hi=20, so 15 sits in range and
         // is returned unchanged. The key assertion is "does not panic".
         let h = cfg.preferred_height(50);
-        assert!(h >= 10 && h <= 20);
+        assert!((10..=20).contains(&h));
     }
 
     #[test]

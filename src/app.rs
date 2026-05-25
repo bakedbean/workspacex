@@ -743,8 +743,18 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 app.selected_target(),
                 Some(SelectionTarget::Workspace(_))
             );
+            let detail_cfg = resolve_dashboard_detail_cfg(app);
             let detail_visible = selection_is_workspace
-                && area.height >= crate::ui::dashboard::detail::MIN_HEIGHT + 10;
+                && detail_cfg.visible
+                && area.height >= detail_cfg.height.min_rows + 10;
+            // If the bar is hidden but focus is on the reply input,
+            // bounce focus back to Dashboard and drop the draft.
+            if !detail_visible
+                && matches!(app.focus, crate::ui::PaneFocus::DetailBarReply)
+            {
+                app.focus = crate::ui::PaneFocus::Dashboard;
+                app.dashboard.reply_draft.clear();
+            }
             // Carve a 1-row footer off the bottom of the full area so the
             // spec order (list / detail / pm / footer) is respected. The
             // detail and PM regions are placed ABOVE the footer row.
@@ -759,7 +769,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 ..area
             };
             let (dashboard_area, detail_area, pm_area) =
-                dashboard_regions(inner_area, app.pm_visible, detail_visible);
+                dashboard_regions(inner_area, app.pm_visible, detail_visible, &detail_cfg);
             let notifications_on = notifications_enabled(&app.store);
             let nerd_fonts = nerd_fonts_enabled(&app.store);
 
@@ -1002,6 +1012,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                                 crate::ui::PaneFocus::DetailBarReply
                             ),
                             events_scanned: app.workspace_events_scanned.contains(&ws.id),
+                            config: &detail_cfg,
                         };
                         crate::ui::dashboard::detail::render(f, detail_area, &inputs, &app.theme);
                     }
@@ -1265,19 +1276,34 @@ pub fn draw_for_test(f: &mut ratatui::Frame, app: &mut App) {
     draw(f, app);
 }
 
+/// Resolve the detail-bar config for the current selection. When a
+/// workspace is selected, uses its repo's override; otherwise uses
+/// global-only (no repo override applies when no repo is in focus).
+fn resolve_dashboard_detail_cfg(app: &App) -> crate::detail_bar_config::DetailBarConfig {
+    if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+        if let Some((rid, _)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
+            if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
+                return crate::detail_bar_config::resolve(repo, &app.store);
+            }
+        }
+    }
+    crate::detail_bar_config::resolve_global_only(&app.store)
+}
+
 /// Carve the dashboard area into list / detail / pm regions based on
 /// whether PM is visible and whether a workspace is selected.
 fn dashboard_regions(
     area: ratatui::layout::Rect,
     pm_visible: bool,
     detail_visible: bool,
+    detail_cfg: &crate::detail_bar_config::DetailBarConfig,
 ) -> (
     ratatui::layout::Rect,
     Option<ratatui::layout::Rect>,
     Option<ratatui::layout::Rect>,
 ) {
     use ratatui::layout::{Constraint, Direction, Layout};
-    let detail_h = crate::ui::dashboard::detail::preferred_height(area.height);
+    let detail_h = detail_cfg.preferred_height(area.height);
     match (pm_visible, detail_visible) {
         (false, false) => (area, None, None),
         (false, true) => {
@@ -1722,7 +1748,12 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         // doesn't unexpectedly eat the next dashboard key after the
         // user Tabs back from PM.
         app.z_leader_pending = false;
-        if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+        let cfg = resolve_dashboard_detail_cfg(app);
+        let is_workspace = matches!(
+            app.selected_target(),
+            Some(SelectionTarget::Workspace(_))
+        );
+        if is_workspace && cfg.visible {
             app.focus = crate::ui::PaneFocus::DetailBarReply;
         } else if app.pm_visible {
             app.focus = crate::ui::PaneFocus::ProjectManager;

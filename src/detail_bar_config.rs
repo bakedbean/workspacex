@@ -182,11 +182,13 @@ pub struct SectionsOverride {
     pub procs_and_files: Option<bool>,
 }
 
-/// Resolve the effective `DetailBarConfig` for `repo`. Reads the
-/// global blob from `settings` and applies the per-repo override.
-/// Malformed JSON in either location logs a warning and is treated
-/// as unset.
-pub fn resolve(repo: &Repo, store: &Store) -> DetailBarConfig {
+/// Resolve the global-only `DetailBarConfig`. Reads the global blob
+/// from `settings` (no repo override). Malformed JSON logs a warning
+/// and falls back to defaults. Always returns a sanitized config.
+///
+/// Use this when no repo is in focus (e.g. selection is a repo header
+/// or nothing). When a workspace IS selected, call `resolve` instead.
+pub fn resolve_global_only(store: &Store) -> DetailBarConfig {
     let mut cfg = match store.get_setting("detail_bar_config") {
         Ok(Some(s)) => match serde_json::from_str::<DetailBarConfig>(&s) {
             Ok(parsed) => parsed,
@@ -200,6 +202,16 @@ pub fn resolve(repo: &Repo, store: &Store) -> DetailBarConfig {
         },
         _ => DetailBarConfig::default(),
     };
+    cfg.sanitize();
+    cfg
+}
+
+/// Resolve the effective `DetailBarConfig` for `repo`. Reads the
+/// global blob from `settings` and applies the per-repo override.
+/// Malformed JSON in either location logs a warning and is treated
+/// as unset.
+pub fn resolve(repo: &Repo, store: &Store) -> DetailBarConfig {
+    let mut cfg = resolve_global_only(store);
     if let Some(raw) = repo.detail_bar_config.as_deref() {
         match serde_json::from_str::<DetailBarOverride>(raw) {
             Ok(ovr) => cfg = cfg.with_override(&ovr),
@@ -523,6 +535,31 @@ mod tests {
             detail_bar_config: detail_bar_config.map(|s| s.to_string()),
             created_at: 0,
         }
+    }
+
+    #[test]
+    fn resolve_global_only_returns_default_when_unset() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(resolve_global_only(&store), DetailBarConfig::default());
+    }
+
+    #[test]
+    fn resolve_global_only_logs_and_defaults_on_malformed() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("detail_bar_config", "{not json")
+            .unwrap();
+        // Doesn't panic; returns default.
+        assert_eq!(resolve_global_only(&store), DetailBarConfig::default());
+    }
+
+    #[test]
+    fn resolve_global_only_clamps_via_sanitize() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"height": {"percent": 200}}"#)
+            .unwrap();
+        assert_eq!(resolve_global_only(&store).height.percent, 80);
     }
 
     #[test]

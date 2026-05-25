@@ -4,19 +4,7 @@
 //!
 //! See `docs/superpowers/specs/2026-05-24-dashboard-workspace-detail-design.md`.
 
-/// Minimum rows the bar needs to render usefully (1 header + 1 rule + 3
-/// body + 1 rule + 1 input + 1 spacing slack).
-pub const MIN_HEIGHT: u16 = 8;
-
-/// Compute the detail bar's preferred height given the total available
-/// height. Targets ~30% of the area, clamped to `[MIN_HEIGHT, 18]`.
-/// The ceiling stops very tall terminals from giving the bar an
-/// unreasonable share of the screen.
-pub fn preferred_height(total_height: u16) -> u16 {
-    let target = (u32::from(total_height) * 30 / 100) as u16;
-    target.clamp(MIN_HEIGHT, 18)
-}
-
+use crate::detail_bar_config::DetailBarConfig;
 use crate::events::{ToolUseCounts, WorkspaceEvents};
 use crate::forge::BranchLifecycle;
 use crate::git::DiffStats;
@@ -26,6 +14,47 @@ use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Column {
+    SessionSummary,
+    RecentChat,
+    ProcsAndFiles,
+}
+
+pub fn enabled_columns(cfg: &DetailBarConfig) -> Vec<Column> {
+    let mut out = Vec::with_capacity(3);
+    if cfg.sections.session_summary {
+        out.push(Column::SessionSummary);
+    }
+    if cfg.sections.recent_chat {
+        out.push(Column::RecentChat);
+    }
+    if cfg.sections.procs_and_files {
+        out.push(Column::ProcsAndFiles);
+    }
+    out
+}
+
+/// Width percentages for the enabled body columns. Preserves the
+/// legacy 30/40/30 ratio when all three are present; redistributes
+/// proportionally otherwise.
+pub fn column_widths(cols: &[Column]) -> Vec<u16> {
+    use Column::*;
+    match cols {
+        [] => vec![],
+        [_] => vec![100],
+        [SessionSummary, RecentChat] => vec![43, 57],
+        [SessionSummary, ProcsAndFiles] => vec![50, 50],
+        [RecentChat, ProcsAndFiles] => vec![57, 43],
+        [SessionSummary, RecentChat, ProcsAndFiles] => vec![30, 40, 30],
+        _ => {
+            let n = cols.len() as u16;
+            let each = 100 / n;
+            (0..n).map(|_| each).collect()
+        }
+    }
+}
 
 /// What `app.rs::draw` assembles for the detail bar. Borrowed for the
 /// duration of a single draw call.
@@ -51,13 +80,14 @@ pub struct DetailInputs<'a> {
     /// SUMMARY and RECENT CHAT show `loading…` placeholders instead
     /// of derived content.
     pub events_scanned: bool,
+    pub config: &'a DetailBarConfig,
 }
 
-/// Render the detail bar into `area`. No-op when `area.height < MIN_HEIGHT`
-/// (caller is expected to fall back to a condensed banner — see
-/// `app.rs::draw`).
+/// Render the detail bar into `area`. No-op when `area.height` is below
+/// the config's `min_rows` (caller is expected to fall back to a
+/// condensed banner — see `app.rs::draw`).
 pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
-    if area.height == 0 || area.height < MIN_HEIGHT {
+    if area.height == 0 || area.height < inputs.config.height.min_rows {
         return;
     }
     use ratatui::layout::{Constraint, Direction, Layout};
@@ -73,14 +103,6 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
             Constraint::Length(1), // reply row
         ])
         .split(area);
-
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // `Workspace.created_at` is epoch ms (see store.rs::now_ms).
-    let created_at_secs = (inputs.workspace.created_at.max(0) / 1000) as u64;
-    let created_secs = now_secs.saturating_sub(created_at_secs);
 
     let header = build_header_strip(
         &inputs.workspace.name,
@@ -102,52 +124,28 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
         chunks[1],
     );
 
-    // Body: 3 columns on wide terminals, single column on narrow.
-    if chunks[2].width >= 80 {
+    let cols = enabled_columns(inputs.config);
+    if chunks[2].width >= 80 && cols.len() > 1 {
+        let widths = column_widths(&cols);
         let body_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(30),
-                Constraint::Percentage(40),
-                Constraint::Percentage(30),
-            ])
+            .constraints(
+                widths
+                    .iter()
+                    .map(|w| Constraint::Percentage(*w))
+                    .collect::<Vec<_>>(),
+            )
             .split(chunks[2]);
-        let summary_lines = build_session_summary(
-            if inputs.events_scanned { inputs.events } else { None },
-            inputs.status,
-            theme,
-            body_chunks[0].width as usize,
-            created_secs,
-            inputs.ago_secs,
-        );
-        let chat_lines = build_recent_chat(
-            if inputs.events_scanned { inputs.events } else { None },
-            theme,
-            body_chunks[1].width as usize,
-            (chunks[2].height as usize).saturating_sub(1).max(1),
-        );
-        let procs_lines = build_procs_and_files(
-            inputs.procs,
-            inputs.events,
-            inputs.diff_per_file,
-            &inputs.workspace.worktree_path,
-            theme,
-            body_chunks[2].width as usize,
-        );
-        f.render_widget(Paragraph::new(summary_lines), body_chunks[0]);
-        f.render_widget(Paragraph::new(chat_lines), body_chunks[1]);
-        f.render_widget(Paragraph::new(procs_lines), body_chunks[2]);
-    } else {
-        let summary_lines = build_session_summary(
-            if inputs.events_scanned { inputs.events } else { None },
-            inputs.status,
-            theme,
-            chunks[2].width as usize,
-            created_secs,
-            inputs.ago_secs,
-        );
-        f.render_widget(Paragraph::new(summary_lines), chunks[2]);
+        for (idx, col) in cols.iter().enumerate() {
+            let col_area = body_chunks[idx];
+            render_column(f, col_area, *col, inputs, theme, chunks[2].height);
+        }
+    } else if let Some(only) = cols.first() {
+        // Narrow terminal OR single enabled column → render whichever
+        // column comes first in display order at full width.
+        render_column(f, chunks[2], *only, inputs, theme, chunks[2].height);
     }
+    // If `cols` is empty, body region is rendered as blank (no-op).
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -168,6 +166,65 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
     if inputs.reply_focused {
         let cx = reply_cursor_x(inputs.reply_draft, chunks[4].width as usize);
         f.set_cursor_position((chunks[4].x + cx, chunks[4].y));
+    }
+}
+
+fn render_column(
+    f: &mut Frame,
+    area: Rect,
+    col: Column,
+    inputs: &DetailInputs<'_>,
+    theme: &Theme,
+    body_height: u16,
+) {
+    use ratatui::widgets::Paragraph;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let created_at_secs = (inputs.workspace.created_at.max(0) / 1000) as u64;
+    let created_secs = now_secs.saturating_sub(created_at_secs);
+
+    match col {
+        Column::SessionSummary => {
+            let lines = build_session_summary(
+                if inputs.events_scanned {
+                    inputs.events
+                } else {
+                    None
+                },
+                inputs.status,
+                theme,
+                area.width as usize,
+                created_secs,
+                inputs.ago_secs,
+            );
+            f.render_widget(Paragraph::new(lines), area);
+        }
+        Column::RecentChat => {
+            let lines = build_recent_chat(
+                if inputs.events_scanned {
+                    inputs.events
+                } else {
+                    None
+                },
+                theme,
+                area.width as usize,
+                (body_height as usize).saturating_sub(1).max(1),
+            );
+            f.render_widget(Paragraph::new(lines), area);
+        }
+        Column::ProcsAndFiles => {
+            let lines = build_procs_and_files(
+                inputs.procs,
+                inputs.events,
+                inputs.diff_per_file,
+                &inputs.workspace.worktree_path,
+                theme,
+                area.width as usize,
+            );
+            f.render_widget(Paragraph::new(lines), area);
+        }
     }
 }
 
@@ -732,6 +789,7 @@ mod tests {
         let (_store, repo, ws) = seed_workspace();
         let result = terminal.draw(|f| {
             let theme = Theme::wsx();
+            let cfg = DetailBarConfig::default();
             let inputs = DetailInputs {
                 repo: &repo,
                 workspace: &ws,
@@ -747,34 +805,11 @@ mod tests {
                 reply_draft: "",
                 reply_focused: false,
                 events_scanned: false,
+                config: &cfg,
             };
             render(f, Rect::new(0, 0, 80, 0), &inputs, &theme);
         });
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn preferred_height_clamps_to_min_on_short_terminal() {
-        // 30% of 20 = 6 → clamps up to MIN_HEIGHT (8).
-        assert_eq!(preferred_height(20), MIN_HEIGHT);
-    }
-
-    #[test]
-    fn preferred_height_returns_30_percent_for_typical_terminal() {
-        // 30% of 50 = 15 → within range.
-        assert_eq!(preferred_height(50), 15);
-    }
-
-    #[test]
-    fn preferred_height_clamps_to_18_on_tall_terminal() {
-        // 30% of 100 = 30 → clamps down to 18.
-        assert_eq!(preferred_height(100), 18);
-    }
-
-    #[test]
-    fn preferred_height_handles_zero_height() {
-        // 30% of 0 = 0 → clamps up to MIN_HEIGHT.
-        assert_eq!(preferred_height(0), MIN_HEIGHT);
     }
 
     #[test]
@@ -1190,6 +1225,7 @@ mod tests {
             last_assistant_text: Some("Reading the repo now.".into()),
             ..Default::default()
         };
+        let cfg = DetailBarConfig::default();
         let inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1205,6 +1241,7 @@ mod tests {
             reply_draft: "",
             reply_focused: false,
             events_scanned: true,
+            config: &cfg,
         };
         let text = render_to_text(&inputs, 120, 10);
         assert!(text.contains("repo-overview") || text.contains("ws"), "header name: {text:?}");
@@ -1224,6 +1261,7 @@ mod tests {
             last_assistant_text: Some("ack".into()),
             ..Default::default()
         };
+        let cfg = DetailBarConfig::default();
         let inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1239,10 +1277,86 @@ mod tests {
             reply_draft: "",
             reply_focused: false,
             events_scanned: true,
+            config: &cfg,
         };
         let text = render_to_text(&inputs, 70, 10);
         assert!(text.contains("SESSION SUMMARY"), "summary kept: {text:?}");
         assert!(!text.contains("RECENT CHAT"), "chat dropped on narrow: {text:?}");
         assert!(!text.contains("PROCESSES"), "procs dropped on narrow: {text:?}");
+    }
+
+    use crate::detail_bar_config::{DetailBarConfig, Sections};
+
+    #[test]
+    fn renders_three_columns_with_default_config() {
+        let cfg = DetailBarConfig::default();
+        assert!(cfg.has_body());
+        assert!(cfg.sections.session_summary);
+        assert!(cfg.sections.recent_chat);
+        assert!(cfg.sections.procs_and_files);
+    }
+
+    #[test]
+    fn enabled_columns_helper_returns_subset() {
+        let mut cfg = DetailBarConfig::default();
+        cfg.sections = Sections {
+            session_summary: true,
+            recent_chat: false,
+            procs_and_files: true,
+        };
+        let cols = enabled_columns(&cfg);
+        assert_eq!(cols, vec![Column::SessionSummary, Column::ProcsAndFiles]);
+    }
+
+    #[test]
+    fn enabled_columns_empty_when_all_disabled() {
+        let mut cfg = DetailBarConfig::default();
+        cfg.sections = Sections {
+            session_summary: false,
+            recent_chat: false,
+            procs_and_files: false,
+        };
+        assert!(enabled_columns(&cfg).is_empty());
+    }
+
+    #[test]
+    fn column_widths_three_cols_match_legacy() {
+        assert_eq!(
+            column_widths(&[
+                Column::SessionSummary,
+                Column::RecentChat,
+                Column::ProcsAndFiles
+            ]),
+            vec![30u16, 40, 30]
+        );
+    }
+
+    #[test]
+    fn column_widths_two_cols_summary_chat() {
+        assert_eq!(
+            column_widths(&[Column::SessionSummary, Column::RecentChat]),
+            vec![43u16, 57]
+        );
+    }
+
+    #[test]
+    fn column_widths_two_cols_summary_procs() {
+        assert_eq!(
+            column_widths(&[Column::SessionSummary, Column::ProcsAndFiles]),
+            vec![50u16, 50]
+        );
+    }
+
+    #[test]
+    fn column_widths_two_cols_chat_procs() {
+        assert_eq!(
+            column_widths(&[Column::RecentChat, Column::ProcsAndFiles]),
+            vec![57u16, 43]
+        );
+    }
+
+    #[test]
+    fn column_widths_single_col_is_full() {
+        assert_eq!(column_widths(&[Column::RecentChat]), vec![100u16]);
     }
 }

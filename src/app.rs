@@ -759,7 +759,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let detail_cfg = resolve_dashboard_detail_cfg(app);
             let detail_visible = selection_is_workspace
                 && detail_cfg.visible
-                && area.height >= detail_cfg.height.min_rows + 10;
+                && area.height >= detail_cfg.minimum_height() + 10;
             // If the bar is hidden but focus is on the reply input,
             // bounce focus back to Dashboard and drop the draft.
             if !detail_visible && matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {

@@ -89,6 +89,18 @@ impl DetailBarConfig {
         self.sections.session_summary || self.sections.recent_chat || self.sections.procs_and_files
     }
 
+    /// Smallest terminal height at which the bar can render usefully.
+    /// `CHROME_ROWS` (4) when all sections are disabled — the bar
+    /// shrinks to just header + 2 rules + reply input. Otherwise the
+    /// configured `min_rows` floor applies.
+    pub fn minimum_height(&self) -> u16 {
+        if self.has_body() {
+            self.height.min_rows
+        } else {
+            Self::CHROME_ROWS
+        }
+    }
+
     /// Compute the bar's preferred height for the current terminal.
     /// When no sections are enabled, the bar shrinks to its chrome
     /// height (`CHROME_ROWS`) regardless of the configured percent.
@@ -328,6 +340,25 @@ mod tests {
         // Independent of total or configured percent.
         assert_eq!(cfg.preferred_height(20), DetailBarConfig::CHROME_ROWS);
         assert_eq!(cfg.preferred_height(100), DetailBarConfig::CHROME_ROWS);
+    }
+
+    #[test]
+    fn minimum_height_chrome_only_when_no_sections_enabled() {
+        let cfg = DetailBarConfig {
+            sections: Sections {
+                session_summary: false,
+                recent_chat: false,
+                procs_and_files: false,
+            },
+            ..DetailBarConfig::default()
+        };
+        assert_eq!(cfg.minimum_height(), DetailBarConfig::CHROME_ROWS);
+    }
+
+    #[test]
+    fn minimum_height_uses_min_rows_when_any_section_enabled() {
+        let cfg = DetailBarConfig::default();
+        assert_eq!(cfg.minimum_height(), cfg.height.min_rows);
     }
 
     #[test]

@@ -84,21 +84,31 @@ pub struct DetailInputs<'a> {
 }
 
 /// Render the detail bar into `area`. No-op when `area.height` is below
-/// the config's `min_rows` (caller is expected to fall back to a
-/// condensed banner — see `app.rs::draw`).
+/// the config's `minimum_height()` — which is `CHROME_ROWS` (4) when no
+/// sections are enabled, or `min_rows` otherwise (caller is expected to
+/// fall back to a condensed banner — see `app.rs::draw`).
 pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
-    if area.height == 0 || area.height < inputs.config.height.min_rows {
+    if area.height == 0 || area.height < inputs.config.minimum_height() {
         return;
     }
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
 
+    // Compute enabled columns first so an empty body collapses the
+    // body region to 0 rows (chrome-only mode), keeping the bar at
+    // exactly `CHROME_ROWS` total.
+    let cols = enabled_columns(inputs.config);
+    let body_constraint = if cols.is_empty() {
+        Constraint::Length(0)
+    } else {
+        Constraint::Min(1)
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // header strip
             Constraint::Length(1), // rule
-            Constraint::Min(1),    // body (3 columns)
+            body_constraint,       // body (3 columns, or 0 when empty)
             Constraint::Length(1), // rule
             Constraint::Length(1), // reply row
         ])
@@ -124,7 +134,6 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
         chunks[1],
     );
 
-    let cols = enabled_columns(inputs.config);
     if chunks[2].width >= 80 && cols.len() > 1 {
         let widths = column_widths(&cols);
         let body_chunks = Layout::default()
@@ -1505,6 +1514,57 @@ mod tests {
         assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
         assert!(text.contains("give me a tour"), "initial prompt: {text:?}");
         assert!(text.contains("Reading the repo"), "recent chat: {text:?}");
+    }
+
+    #[test]
+    fn chrome_only_mode_renders_header_and_reply_no_body_labels() {
+        use crate::detail_bar_config::{DetailBarConfig, Sections};
+        let (_store, repo, ws) = seed_workspace();
+        let evt = WorkspaceEvents {
+            first_user_text: Some("hi".into()),
+            last_assistant_text: Some("ack".into()),
+            ..Default::default()
+        };
+        // All three body sections disabled — bar should collapse to 4
+        // rows (header + 2 rules + reply input).
+        let cfg = DetailBarConfig {
+            sections: Sections {
+                session_summary: false,
+                recent_chat: false,
+                procs_and_files: false,
+            },
+            ..DetailBarConfig::default()
+        };
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: Some(&evt),
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+        };
+        // Width 100, height exactly CHROME_ROWS (4).
+        let text = render_to_text(&inputs, 100, DetailBarConfig::CHROME_ROWS);
+        assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
+        assert!(
+            !text.contains("SESSION SUMMARY"),
+            "no summary label: {text:?}"
+        );
+        assert!(!text.contains("RECENT CHAT"), "no chat label: {text:?}");
+        assert!(!text.contains("PROCESSES"), "no procs label: {text:?}");
+        assert!(
+            !text.contains("give me a tour"),
+            "no initial-prompt body: {text:?}"
+        );
     }
 
     #[test]

@@ -19,6 +19,12 @@ use tokio::sync::Mutex;
 /// `Ctrl-a` setup).
 const LEADER_KEY: crossterm::event::KeyCode = crossterm::event::KeyCode::Char('x');
 
+pub mod activity;
+pub mod bell;
+pub mod background;
+pub mod render;
+pub mod input;
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum AppEvent {

@@ -6,10 +6,9 @@
 //! handler (`handle_key_modal`) takes precedence when a modal is open.
 
 use crate::app::{
-    App, PendingEdit, RepoSettingField, SelectionTarget, SharedApp,
-    apply_repo_setting, attach_workspace, build_spawn_info, maybe_mirror_mcp,
-    reconcile_create_result, rescan_processes, restore_attached_state,
-    save_layout_for, schedule_detach_refresh,
+    App, PendingEdit, RepoSettingField, SelectionTarget, SharedApp, apply_repo_setting,
+    attach_workspace, build_spawn_info, maybe_mirror_mcp, reconcile_create_result,
+    rescan_processes, restore_attached_state, save_layout_for, schedule_detach_refresh,
 };
 use crate::error::Result;
 use crate::store::WorkspaceId;

@@ -536,7 +536,13 @@ pub async fn workspace_diff_per_file(
         let removed = parts.next().and_then(|s| s.parse::<u32>().ok());
         let path = parts.next();
         if let (Some(a), Some(r), Some(p)) = (added, removed, path) {
-            map.insert(p.to_string(), DiffStats { added: a, removed: r });
+            map.insert(
+                p.to_string(),
+                DiffStats {
+                    added: a,
+                    removed: r,
+                },
+            );
         }
     }
     Some(map)

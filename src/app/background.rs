@@ -1,9 +1,9 @@
 // background — extracted from src/app.rs (see docs/superpowers/specs/2026-05-25-app-rs-refactor-design.md)
 
-use crate::app::SharedApp;
-use crate::store::WorkspaceId;
 #[cfg(test)]
 use crate::app::App;
+use crate::app::SharedApp;
+use crate::store::WorkspaceId;
 
 /// Tail the agent session JSONL for `id` and merge any new events into
 /// `App::workspace_events`. Shared by `branch_drift_poll` (the periodic

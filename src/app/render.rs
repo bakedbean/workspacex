@@ -1,8 +1,8 @@
 // render — extracted from src/app.rs (see docs/superpowers/specs/2026-05-25-app-rs-refactor-design.md)
 
-use crate::app::{App, ActivityState, SelectionTarget};
-use crate::app::bell::{alert_decision, COLD_START_WINDOW};
 use crate::app::activity::classify_activity_with_events;
+use crate::app::bell::{COLD_START_WINDOW, alert_decision};
+use crate::app::{ActivityState, App, SelectionTarget};
 use crate::detail_bar_config::DetailBarConfig;
 use crate::store::Store;
 use crate::ui::dashboard::row::ColumnWidths;

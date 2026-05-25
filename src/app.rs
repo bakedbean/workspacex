@@ -11,13 +11,13 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub mod activity;
-pub mod bell;
 pub mod background;
-pub mod render;
+pub mod bell;
 pub mod input;
+pub mod render;
 pub use crate::app::activity::{ActivityState, classify_activity, classify_activity_with_events};
 pub use crate::app::background::{branch_drift_poll, tail_workspace_events};
-pub use crate::app::bell::{BellPattern, alert_decision, fire_bell, COLD_START_WINDOW};
+pub use crate::app::bell::{BellPattern, COLD_START_WINDOW, alert_decision, fire_bell};
 pub use crate::app::render::draw_for_test;
 
 #[allow(dead_code)]
@@ -96,7 +96,6 @@ pub enum StoppedKind {
     /// the "✓" dashboard glyph.
     Complete,
 }
-
 
 pub struct App {
     pub store: Store,

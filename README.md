@@ -161,6 +161,7 @@ Known keys:
 | `pinned_commands` | Newline-separated list of `Label=command` (or bare `command`) entries. Each becomes a chip in the attached view, fired via `Ctrl-x <digit>` or click. Max 9 visible/keyable. Per-repo override available via `wsx repo set-pinned-commands`. |
 | `dashboard_name_width` | Width (chars) of the workspace-name column on the dashboard. Default `24`. Clamped to `10..=60`. |
 | `dashboard_branch_width` | Width (chars) of the `⎇ branch` column on the dashboard. Default `28`. Clamped to `10..=80`. |
+| `detail_bar_config` | JSON blob controlling the per-workspace detail bar (visibility, height, which body columns render). See [Workspace detail bar](#workspace-detail-bar) for the schema, defaults, and per-repo override flow. Out-of-range values are clamped on save. |
 
 Value sources:
 
@@ -463,6 +464,126 @@ launches.
 
 Turn off both via `wsx config set notifications off`.
 
+## Workspace detail bar
+
+When a workspace is selected on the dashboard, wsx renders a multi-column
+detail bar across the bottom showing what's happening inside that
+workspace: a session summary (initial prompt + tool counts), the most
+recent chat exchange, and processes + recently-edited files. The bar's
+appearance is controlled by the `detail_bar_config` setting — globally via
+`wsx config`, with optional per-repo overrides.
+
+### Schema and defaults
+
+The global value is a full `DetailBarConfig` JSON blob. Every field is
+optional in nested objects; missing fields fall back to defaults. Out-of-
+range values are clamped on save (see below).
+
+```json
+{
+  "visible": true,
+  "height": {
+    "percent": 30,
+    "min_rows": 8,
+    "max_rows": 18
+  },
+  "sections": {
+    "session_summary": true,
+    "recent_chat": true,
+    "procs_and_files": true
+  }
+}
+```
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `visible` | bool | `true` | Master toggle. When `false`, the bar is hidden entirely and `Tab` skips the reply input. |
+| `height.percent` | u8 | `30` | Target height as a percent of the terminal's rows. Clamped to `[5, 80]`. |
+| `height.min_rows` | u16 | `8` | Floor on the bar's height. Clamped to `[4, 40]`. |
+| `height.max_rows` | u16 | `18` | Ceiling on the bar's height. Clamped to `[4, 60]`. If `min_rows > max_rows`, the two are swapped on save. |
+| `sections.session_summary` | bool | `true` | Render the left body column (initial prompt, tool-call counts). |
+| `sections.recent_chat` | bool | `true` | Render the middle body column (most recent user/assistant exchange). |
+| `sections.procs_and_files` | bool | `true` | Render the right body column (running processes + recently-edited files). |
+
+When all three section flags are `false`, the bar shrinks to its
+4-row chrome (header + two rules + reply input) regardless of
+`height.percent`. Disabling section columns is how you trim the
+bar to just the reply input.
+
+### Setting the global value
+
+```bash
+wsx config edit detail_bar_config     # opens $EDITOR; seeded with the pretty-printed default
+wsx config set  detail_bar_config '{"height": {"percent": 50}}'
+wsx config get  detail_bar_config
+wsx config set  detail_bar_config ""  # clear (reverts to baked-in defaults)
+```
+
+Partial JSON is fine — `{"visible": false}` is a complete, valid value.
+Missing fields are filled in from defaults. Malformed JSON is rejected
+with a non-zero exit and the previous value is preserved.
+
+Examples:
+
+```bash
+# Make the bar taller on big monitors.
+wsx config set detail_bar_config '{"height": {"percent": 45, "max_rows": 24}}'
+
+# Hide the chat column globally; keep summary + procs/files.
+wsx config set detail_bar_config '{"sections": {"recent_chat": false}}'
+
+# Reduce the bar to just the reply input.
+wsx config set detail_bar_config '{"sections": {"session_summary": false, "recent_chat": false, "procs_and_files": false}}'
+
+# Hide the bar entirely.
+wsx config set detail_bar_config '{"visible": false}'
+```
+
+### Per-repo override
+
+Each repo can override any subset of the global config. The per-repo
+value is a `DetailBarOverride` — every field is `Option<...>` and a
+missing field means "inherit from global." This means an empty `{}`
+inherits everything; you only specify what you want to change.
+
+Open the repo settings modal with `s` on the dashboard, select the
+`detail_bar_config` row, and press Enter. `$EDITOR` opens on `{}\n`
+(or the current override). Save to apply; press `d` on the row to
+clear the override and fall back to the global value.
+
+Override examples:
+
+Hide the bar entirely for this repo (global value can stay on):
+
+```json
+{"visible": false}
+```
+
+Drop the recent-chat column for this repo; keep everything else inherited from global:
+
+```json
+{"sections": {"recent_chat": false}}
+```
+
+Taller bar for a repo where the session-summary text is usually long
+(CLI tools with verbose tool-call traces):
+
+```json
+{"height": {"percent": 45, "max_rows": 28}}
+```
+
+Merge precedence: bake-in defaults → global `detail_bar_config` →
+per-repo override, applied per-field. So a repo that overrides
+`sections.recent_chat = false` still picks up any global `height`
+changes you make later.
+
+### Behavior on bad input
+
+- Malformed JSON at the global level — falls back to baked-in defaults at runtime, logged at `warn`.
+- Malformed JSON in a repo override — the override is ignored; the global value applies, logged at `warn` with the repo name.
+- Out-of-range `height.percent` / `min_rows` / `max_rows` — clamped to legal ranges on save (`wsx config set/edit`) and again at runtime as a defense-in-depth.
+- `min_rows > max_rows` — swapped on save so the lower bound is the floor and the higher is the ceiling.
+
 ## Workspace updates panel
 
 When you're attached to a workspace (full-screen claude session) or the
@@ -627,12 +748,17 @@ Each script is executed as `$SHELL -ilc "$value"` (interactive + login) with `cw
 ### Editing in the TUI
 
 Press `s` on any dashboard row to open the Repo settings modal for that
-row's repo. The modal lists the four per-repo fields:
+row's repo. The modal lists the per-repo fields:
 
+- `name`
 - `branch_prefix`
+- `base_branch`
 - `custom_instructions`
 - `setup_script`
 - `archive_script`
+- `pinned_commands`
+- `related_repos`
+- `detail_bar_config` (see [Workspace detail bar](#workspace-detail-bar))
 
 `↑/↓` selects a field. Press `Enter` to edit — wsx temporarily leaves
 the TUI, opens `$EDITOR` (or `vi` if unset) on a tempfile prepopulated

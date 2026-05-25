@@ -106,6 +106,68 @@ impl DetailBarConfig {
         let hi = self.height.min_rows.max(self.height.max_rows);
         target.clamp(lo, hi)
     }
+
+    /// Apply an override on top of self. Repo wins per-field.
+    pub fn with_override(mut self, ovr: &DetailBarOverride) -> Self {
+        if let Some(v) = ovr.visible {
+            self.visible = v;
+        }
+        if let Some(h) = &ovr.height {
+            if let Some(p) = h.percent {
+                self.height.percent = p;
+            }
+            if let Some(m) = h.min_rows {
+                self.height.min_rows = m;
+            }
+            if let Some(m) = h.max_rows {
+                self.height.max_rows = m;
+            }
+        }
+        if let Some(s) = &ovr.sections {
+            if let Some(b) = s.session_summary {
+                self.sections.session_summary = b;
+            }
+            if let Some(b) = s.recent_chat {
+                self.sections.recent_chat = b;
+            }
+            if let Some(b) = s.procs_and_files {
+                self.sections.procs_and_files = b;
+            }
+        }
+        self
+    }
+}
+
+/// Partial override of `DetailBarConfig`. Every field is optional —
+/// `None` means "inherit from base."
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetailBarOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<HeightOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<SectionsOverride>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeightOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rows: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rows: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectionsOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_summary: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent_chat: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub procs_and_files: Option<bool>,
 }
 
 #[cfg(test)]
@@ -237,5 +299,84 @@ mod tests {
         // is returned unchanged. The key assertion is "does not panic".
         let h = cfg.preferred_height(50);
         assert!(h >= 10 && h <= 20);
+    }
+
+    #[test]
+    fn with_override_none_returns_base() {
+        let cfg = DetailBarConfig::default();
+        let ovr = DetailBarOverride::default();
+        assert_eq!(cfg.clone().with_override(&ovr), cfg);
+    }
+
+    #[test]
+    fn with_override_replaces_visible() {
+        let cfg = DetailBarConfig::default();
+        let ovr = DetailBarOverride {
+            visible: Some(false),
+            ..Default::default()
+        };
+        assert!(!cfg.with_override(&ovr).visible);
+    }
+
+    #[test]
+    fn with_override_replaces_section_per_field() {
+        let cfg = DetailBarConfig::default();
+        let ovr = DetailBarOverride {
+            sections: Some(SectionsOverride {
+                recent_chat: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let merged = cfg.with_override(&ovr);
+        assert!(merged.sections.session_summary);
+        assert!(!merged.sections.recent_chat);
+        assert!(merged.sections.procs_and_files);
+    }
+
+    #[test]
+    fn with_override_replaces_height_per_field() {
+        let cfg = DetailBarConfig::default();
+        let ovr = DetailBarOverride {
+            height: Some(HeightOverride {
+                percent: Some(50),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let merged = cfg.with_override(&ovr);
+        assert_eq!(merged.height.percent, 50);
+        assert_eq!(merged.height.min_rows, 8);
+        assert_eq!(merged.height.max_rows, 18);
+    }
+
+    #[test]
+    fn override_round_trips_through_json() {
+        let ovr = DetailBarOverride {
+            visible: Some(false),
+            height: Some(HeightOverride {
+                percent: Some(20),
+                min_rows: None,
+                max_rows: None,
+            }),
+            sections: Some(SectionsOverride {
+                session_summary: None,
+                recent_chat: Some(false),
+                procs_and_files: None,
+            }),
+        };
+        let json = serde_json::to_string(&ovr).unwrap();
+        let parsed: DetailBarOverride = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.visible, Some(false));
+        assert_eq!(parsed.height.unwrap().percent, Some(20));
+        assert_eq!(parsed.sections.unwrap().recent_chat, Some(false));
+    }
+
+    #[test]
+    fn empty_override_object_parses() {
+        let parsed: DetailBarOverride = serde_json::from_str("{}").unwrap();
+        assert!(parsed.visible.is_none());
+        assert!(parsed.height.is_none());
+        assert!(parsed.sections.is_none());
     }
 }

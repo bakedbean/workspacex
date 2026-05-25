@@ -4,6 +4,7 @@
 //!
 //! See `docs/superpowers/specs/2026-05-25-detail-bar-config-design.md`.
 
+use crate::store::{Repo, Store};
 use serde::{Deserialize, Serialize};
 
 fn default_true() -> bool {
@@ -179,6 +180,40 @@ pub struct SectionsOverride {
     pub recent_chat: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub procs_and_files: Option<bool>,
+}
+
+/// Resolve the effective `DetailBarConfig` for `repo`. Reads the
+/// global blob from `settings` and applies the per-repo override.
+/// Malformed JSON in either location logs a warning and is treated
+/// as unset.
+pub fn resolve(repo: &Repo, store: &Store) -> DetailBarConfig {
+    let mut cfg = match store.get_setting("detail_bar_config") {
+        Ok(Some(s)) => match serde_json::from_str::<DetailBarConfig>(&s) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "detail_bar_config: global parse failed; using defaults"
+                );
+                DetailBarConfig::default()
+            }
+        },
+        _ => DetailBarConfig::default(),
+    };
+    if let Some(raw) = repo.detail_bar_config.as_deref() {
+        match serde_json::from_str::<DetailBarOverride>(raw) {
+            Ok(ovr) => cfg = cfg.with_override(&ovr),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    repo = %repo.name,
+                    "detail_bar_config: repo override parse failed; ignoring"
+                );
+            }
+        }
+    }
+    cfg.sanitize();
+    cfg
 }
 
 #[cfg(test)]
@@ -468,5 +503,85 @@ mod tests {
         let mut cfg = original.clone();
         cfg.sanitize();
         assert_eq!(cfg, original);
+    }
+
+    use crate::store::{Repo, RepoId, Store};
+    use std::path::PathBuf;
+
+    fn test_repo(detail_bar_config: Option<&str>) -> Repo {
+        Repo {
+            id: RepoId(1),
+            name: "demo".into(),
+            path: PathBuf::from("/r"),
+            branch_prefix: String::new(),
+            custom_instructions: None,
+            setup_script: None,
+            archive_script: None,
+            pinned_commands: None,
+            related_repos: None,
+            base_branch: None,
+            detail_bar_config: detail_bar_config.map(|s| s.to_string()),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn resolve_returns_default_when_nothing_set() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = test_repo(None);
+        assert_eq!(resolve(&repo, &store), DetailBarConfig::default());
+    }
+
+    #[test]
+    fn resolve_uses_global_when_only_global_set() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"visible": false}"#)
+            .unwrap();
+        let repo = test_repo(None);
+        assert!(!resolve(&repo, &store).visible);
+    }
+
+    #[test]
+    fn resolve_applies_repo_override_on_top_of_global() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"visible": false}"#)
+            .unwrap();
+        // Override re-enables visible.
+        let repo = test_repo(Some(r#"{"visible": true}"#));
+        assert!(resolve(&repo, &store).visible);
+    }
+
+    #[test]
+    fn resolve_falls_back_when_global_json_malformed() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("detail_bar_config", "{not json")
+            .unwrap();
+        let repo = test_repo(None);
+        // Doesn't panic; returns default.
+        assert_eq!(resolve(&repo, &store), DetailBarConfig::default());
+    }
+
+    #[test]
+    fn resolve_ignores_repo_override_when_malformed() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"visible": false}"#)
+            .unwrap();
+        let repo = test_repo(Some("not json"));
+        // Falls back to global, ignoring bad override.
+        assert!(!resolve(&repo, &store).visible);
+    }
+
+    #[test]
+    fn resolve_clamps_out_of_range_percent() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"height": {"percent": 200}}"#)
+            .unwrap();
+        let repo = test_repo(None);
+        assert_eq!(resolve(&repo, &store).height.percent, 80);
     }
 }

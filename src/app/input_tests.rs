@@ -9,6 +9,7 @@ use super::*;
 mod pm_state_tests {
     use super::*;
     use crate::store::Store;
+    use crate::test_support::cat_path;
     use std::path::PathBuf;
 
     #[test]
@@ -395,7 +396,7 @@ mod pm_state_tests {
     async fn updates_panel_modal_enter_switches_view_and_clears_attention() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -451,7 +452,7 @@ mod pm_state_tests {
     async fn updates_panel_v_splits_attached_view_vertically() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -574,7 +575,7 @@ mod pm_state_tests {
     async fn ctrl_x_d_closes_focused_pane_when_split() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -687,7 +688,7 @@ mod pm_state_tests {
         // events-tail refresh.
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -775,7 +776,7 @@ mod pm_state_tests {
         // Same as the d-path test above, for the Ctrl-X Esc detach.
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -844,7 +845,7 @@ mod pm_state_tests {
     async fn ctrl_x_arrow_moves_focus_in_split() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -1119,7 +1120,7 @@ mod pm_state_tests {
         use ratatui::backend::TestBackend;
 
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -1212,7 +1213,7 @@ mod pm_state_tests {
         use ratatui::backend::TestBackend;
 
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -1279,7 +1280,7 @@ mod pm_state_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn leader_u_in_attached_pm_opens_updates_panel() {
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
@@ -1342,7 +1343,7 @@ mod pm_state_tests {
 
     fn spawn_pm_for_test(app: &mut App) {
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let cwd = PathBuf::from(".");
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -1371,7 +1372,7 @@ mod pm_state_tests {
     fn spawn_attached_workspace(app: &mut App) -> crate::store::WorkspaceId {
         use crate::store::NewWorkspace;
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let repo_id = app
             .store
@@ -2600,6 +2601,7 @@ mod pm_state_tests {
 #[cfg(test)]
 mod ctrl_x_esc_tests {
     use super::*;
+    use crate::test_support::cat_path;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -2608,7 +2610,7 @@ mod ctrl_x_esc_tests {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         use crate::ui::split::{AttachedState, SplitDirection};
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -2719,6 +2721,7 @@ mod ctrl_x_esc_tests {
 #[cfg(test)]
 mod restore_layout_tests {
     use super::*;
+    use crate::test_support::cat_path;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -2727,7 +2730,7 @@ mod restore_layout_tests {
     ) -> (App, crate::store::WorkspaceId, crate::store::WorkspaceId) {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
+            std::env::set_var("WSX_CLAUDE_BIN", cat_path());
         }
         let store = Store::open_in_memory().unwrap();
         let repo_id = store

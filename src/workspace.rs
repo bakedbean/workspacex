@@ -639,7 +639,14 @@ mod tests {
             .await
             .unwrap();
         let found = discover_untracked(&repo, &store).await.unwrap();
-        assert!(found.iter().any(|w| w.path == wt));
+        // git worktree list reports canonical paths; macOS resolves $TMPDIR
+        // through a /private symlink, so compare canonicalized.
+        let wt_canon = std::fs::canonicalize(&wt).unwrap();
+        assert!(found.iter().any(|w| {
+            std::fs::canonicalize(&w.path)
+                .map(|p| p == wt_canon)
+                .unwrap_or(false)
+        }));
     }
 
     #[tokio::test]

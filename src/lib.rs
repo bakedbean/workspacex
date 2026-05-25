@@ -21,5 +21,6 @@ pub mod repo;
 pub mod setup;
 pub mod skill;
 pub mod store;
+pub mod test_support;
 pub mod ui;
 pub mod workspace;

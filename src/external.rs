@@ -207,6 +207,7 @@ fn detach_io(cmd: &mut std::process::Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{false_path, true_path};
 
     #[test]
     fn editor_fallback_uses_configured_first() {
@@ -266,9 +267,9 @@ mod tests {
     #[test]
     fn spawn_with_path_arg_runs_true_with_quoted_command() {
         let dir = std::env::temp_dir();
-        // /bin/true exists on Linux/macOS test runners; it exits immediately.
-        let r = spawn_with_path_arg("/bin/true", &dir);
-        assert!(r.is_ok(), "spawn /bin/true failed: {r:?}");
+        // `true` exits immediately — handy for spawn-success assertions.
+        let r = spawn_with_path_arg(true_path(), &dir);
+        assert!(r.is_ok(), "spawn true failed: {r:?}");
     }
 
     #[test]
@@ -281,21 +282,21 @@ mod tests {
     #[test]
     fn placeholder_substituted_when_present() {
         let dir = std::env::temp_dir();
-        let r = spawn_with_path_arg("/bin/true --dir={path}", &dir);
+        let r = spawn_with_path_arg(&format!("{} --dir={{path}}", true_path()), &dir);
         assert!(r.is_ok(), "spawn failed: {r:?}");
     }
 
     #[test]
     fn no_placeholder_appends_path_for_editor() {
         let dir = std::env::temp_dir();
-        let r = spawn_with_path_arg("/bin/true", &dir);
+        let r = spawn_with_path_arg(true_path(), &dir);
         assert!(r.is_ok());
     }
 
     #[test]
     fn no_placeholder_does_not_append_for_terminal() {
         let dir = std::env::temp_dir();
-        let r = spawn_with_cwd("/bin/true", &dir);
+        let r = spawn_with_cwd(true_path(), &dir);
         assert!(r.is_ok());
     }
 
@@ -359,7 +360,8 @@ mod tests {
     #[test]
     fn spawn_diff_substitutes_both_placeholders() {
         let dir = std::env::temp_dir();
-        let r = open_diff(&dir, "main", Some("/bin/true --path={path} --base={base}"));
+        let template = format!("{} --path={{path}} --base={{base}}", true_path());
+        let r = open_diff(&dir, "main", Some(&template));
         assert!(r.is_ok(), "open_diff failed: {r:?}");
     }
 
@@ -368,7 +370,7 @@ mod tests {
         // Save / restore EDITOR around the test.
         let saved = std::env::var_os("EDITOR");
         unsafe {
-            std::env::set_var("EDITOR", "/bin/true");
+            std::env::set_var("EDITOR", true_path());
         }
         let result = edit_in_editor("hello world", "txt");
         unsafe {
@@ -384,7 +386,7 @@ mod tests {
     fn edit_in_editor_returns_none_when_editor_exits_nonzero() {
         let saved = std::env::var_os("EDITOR");
         unsafe {
-            std::env::set_var("EDITOR", "/bin/false");
+            std::env::set_var("EDITOR", false_path());
         }
         let result = edit_in_editor("anything", "txt");
         unsafe {
@@ -412,7 +414,7 @@ mod tests {
     #[test]
     fn open_in_lazygit_spawns_configured_cmd() {
         let dir = std::env::temp_dir();
-        let r = open_in_lazygit(&dir, Some("/bin/true"));
+        let r = open_in_lazygit(&dir, Some(true_path()));
         assert!(r.is_ok(), "open_in_lazygit failed: {r:?}");
     }
 

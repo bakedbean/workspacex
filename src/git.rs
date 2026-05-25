@@ -563,11 +563,16 @@ mod worktree_tests {
             .await
             .unwrap();
         let listed = list_worktrees(repo.path()).await.unwrap();
-        assert!(
-            listed
-                .iter()
-                .any(|w| w.path == wt && w.branch.as_deref() == Some("feature"))
-        );
+        // macOS resolves $TMPDIR (`/var/folders/...`) to `/private/var/folders/...`,
+        // and `git worktree list` always reports the canonical path. Compare
+        // canonicalized paths so the assertion works on macOS and Linux.
+        let wt_canon = std::fs::canonicalize(&wt).unwrap();
+        assert!(listed.iter().any(|w| {
+            std::fs::canonicalize(&w.path)
+                .map(|p| p == wt_canon)
+                .unwrap_or(false)
+                && w.branch.as_deref() == Some("feature")
+        }));
     }
 
     #[tokio::test]

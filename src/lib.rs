@@ -1,6 +1,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod detail_bar_config;
 pub mod error;
 pub mod events;
 pub mod external;

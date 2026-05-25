@@ -40,6 +40,7 @@ pub struct Repo {
     pub pinned_commands: Option<String>,
     pub related_repos: Option<String>,
     pub base_branch: Option<String>,
+    pub detail_bar_config: Option<String>,
     pub created_at: i64,
 }
 
@@ -206,6 +207,18 @@ impl Store {
             self.conn.execute_batch(SCHEMA_V10_WORKSPACE_LAYOUTS)?;
             self.conn.execute("PRAGMA user_version = 10", [])?;
         }
+        if v < 11 {
+            let has_col: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'detail_bar_config'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_col == 0 {
+                self.conn
+                    .execute("ALTER TABLE repos ADD COLUMN detail_bar_config TEXT", [])?;
+            }
+            self.conn.execute("PRAGMA user_version = 11", [])?;
+        }
         Ok(())
     }
 
@@ -230,7 +243,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, path, branch_prefix, custom_instructions, \
                     setup_script, archive_script, pinned_commands, \
-                    related_repos, base_branch, created_at \
+                    related_repos, base_branch, detail_bar_config, created_at \
              FROM repos ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -245,7 +258,8 @@ impl Store {
                 pinned_commands: r.get(7)?,
                 related_repos: r.get(8)?,
                 base_branch: r.get(9)?,
-                created_at: r.get(10)?,
+                detail_bar_config: r.get(10)?,
+                created_at: r.get(11)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -378,6 +392,14 @@ impl Store {
     pub fn set_repo_base_branch(&self, id: RepoId, value: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE repos SET base_branch = ?1 WHERE id = ?2",
+            rusqlite::params![value, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_repo_detail_bar_config(&self, id: RepoId, value: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET detail_bar_config = ?1 WHERE id = ?2",
             rusqlite::params![value, id.0],
         )?;
         Ok(())
@@ -857,6 +879,46 @@ mod tests {
         store.set_repo_base_branch(id, None).unwrap();
         let repos = store.repos().unwrap();
         assert_eq!(repos[0].base_branch, None);
+    }
+
+    #[test]
+    fn detail_bar_config_column_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/some/repo"), "demo", "").unwrap();
+
+        // Default: column is NULL.
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert!(repo.detail_bar_config.is_none());
+
+        // Set a value, read it back.
+        store
+            .set_repo_detail_bar_config(id, Some(r#"{"visible":false}"#))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(
+            repo.detail_bar_config.as_deref(),
+            Some(r#"{"visible":false}"#)
+        );
+
+        // Clear it back to NULL.
+        store.set_repo_detail_bar_config(id, None).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert!(repo.detail_bar_config.is_none());
     }
 
     #[test]

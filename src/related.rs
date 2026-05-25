@@ -88,6 +88,7 @@ mod tests {
             pinned_commands: None,
             related_repos: None,
             base_branch: None,
+            detail_bar_config: None,
             created_at: 0,
         }
     }

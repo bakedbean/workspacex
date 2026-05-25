@@ -46,10 +46,11 @@ pub enum RepoSettingField {
     ArchiveScript,
     PinnedCommands,
     RelatedRepos,
+    DetailBarConfig,
 }
 
 impl RepoSettingField {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::RepoName,
         Self::BranchPrefix,
         Self::BaseBranch,
@@ -58,6 +59,7 @@ impl RepoSettingField {
         Self::ArchiveScript,
         Self::PinnedCommands,
         Self::RelatedRepos,
+        Self::DetailBarConfig,
     ];
 
     pub fn label(self) -> &'static str {
@@ -70,6 +72,7 @@ impl RepoSettingField {
             Self::ArchiveScript => "archive_script",
             Self::PinnedCommands => "pinned_commands",
             Self::RelatedRepos => "related_repos",
+            Self::DetailBarConfig => "detail_bar_config",
         }
     }
 }
@@ -587,6 +590,13 @@ where
             RepoSettingField::RelatedRepos => {
                 (repo.related_repos.clone().unwrap_or_default(), "txt")
             }
+            RepoSettingField::DetailBarConfig => {
+                let raw = repo
+                    .detail_bar_config
+                    .clone()
+                    .unwrap_or_else(|| "{}\n".to_string());
+                (raw, "json")
+            }
         }
     };
 
@@ -610,8 +620,13 @@ where
     if let Ok(Some(new)) = result {
         if new.trim() != current.trim() {
             let mut g = app.lock().await;
-            let _ = apply_repo_setting(&mut g, edit.repo_id, edit.field, &new);
-            let _ = g.refresh();
+            if let Err(e) = apply_repo_setting(&mut g, edit.repo_id, edit.field, &new) {
+                g.modal = Some(crate::ui::modal::Modal::Error {
+                    message: e.to_string(),
+                });
+            } else {
+                let _ = g.refresh();
+            }
         }
     }
     Ok(())
@@ -739,17 +754,26 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.pinned_commands_cache.clear();
     match &app.view {
         View::Dashboard => {
-            let selection_is_workspace = matches!(
-                app.selected_target(),
-                Some(SelectionTarget::Workspace(_))
-            );
+            let selection_is_workspace =
+                matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)));
+            let detail_cfg = resolve_dashboard_detail_cfg(app);
             let detail_visible = selection_is_workspace
-                && area.height >= crate::ui::dashboard::detail::MIN_HEIGHT + 10;
+                && detail_cfg.visible
+                && area.height >= detail_cfg.minimum_height() + 10;
+            // If the bar is hidden but focus is on the reply input,
+            // bounce focus back to Dashboard and drop the draft.
+            if !detail_visible && matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {
+                app.focus = crate::ui::PaneFocus::Dashboard;
+                app.dashboard.reply_draft.clear();
+            }
             // Carve a 1-row footer off the bottom of the full area so the
             // spec order (list / detail / pm / footer) is respected. The
             // detail and PM regions are placed ABOVE the footer row.
             let inner_area = if area.height > 1 {
-                ratatui::layout::Rect { height: area.height - 1, ..area }
+                ratatui::layout::Rect {
+                    height: area.height - 1,
+                    ..area
+                }
             } else {
                 area
             };
@@ -759,7 +783,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 ..area
             };
             let (dashboard_area, detail_area, pm_area) =
-                dashboard_regions(inner_area, app.pm_visible, detail_visible);
+                dashboard_regions(inner_area, app.pm_visible, detail_visible, &detail_cfg);
             let notifications_on = notifications_enabled(&app.store);
             let nerd_fonts = nerd_fonts_enabled(&app.store);
 
@@ -1002,6 +1026,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
                                 crate::ui::PaneFocus::DetailBarReply
                             ),
                             events_scanned: app.workspace_events_scanned.contains(&ws.id),
+                            config: &detail_cfg,
                         };
                         crate::ui::dashboard::detail::render(f, detail_area, &inputs, &app.theme);
                     }
@@ -1265,19 +1290,34 @@ pub fn draw_for_test(f: &mut ratatui::Frame, app: &mut App) {
     draw(f, app);
 }
 
+/// Resolve the detail-bar config for the current selection. When a
+/// workspace is selected, uses its repo's override; otherwise uses
+/// global-only (no repo override applies when no repo is in focus).
+fn resolve_dashboard_detail_cfg(app: &App) -> crate::detail_bar_config::DetailBarConfig {
+    if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+        if let Some((rid, _)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
+            if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
+                return crate::detail_bar_config::resolve(repo, &app.store);
+            }
+        }
+    }
+    crate::detail_bar_config::resolve_global_only(&app.store)
+}
+
 /// Carve the dashboard area into list / detail / pm regions based on
 /// whether PM is visible and whether a workspace is selected.
 fn dashboard_regions(
     area: ratatui::layout::Rect,
     pm_visible: bool,
     detail_visible: bool,
+    detail_cfg: &crate::detail_bar_config::DetailBarConfig,
 ) -> (
     ratatui::layout::Rect,
     Option<ratatui::layout::Rect>,
     Option<ratatui::layout::Rect>,
 ) {
     use ratatui::layout::{Constraint, Direction, Layout};
-    let detail_h = crate::ui::dashboard::detail::preferred_height(area.height);
+    let detail_h = detail_cfg.preferred_height(area.height);
     match (pm_visible, detail_visible) {
         (false, false) => (area, None, None),
         (false, true) => {
@@ -1604,10 +1644,7 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
 /// Returns `true` if the key was consumed (caller should early-return),
 /// or `false` if the key should fall through to the main dashboard handler
 /// (e.g. navigation keys that also move the selection).
-async fn handle_detail_bar_reply_key(
-    app: &mut App,
-    k: crossterm::event::KeyEvent,
-) -> bool {
+async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEvent) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
     match (k.code, k.modifiers) {
         (KeyCode::Tab, _) => {
@@ -1722,7 +1759,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         // doesn't unexpectedly eat the next dashboard key after the
         // user Tabs back from PM.
         app.z_leader_pending = false;
-        if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+        let cfg = resolve_dashboard_detail_cfg(app);
+        let is_workspace = matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)));
+        if is_workspace && cfg.visible {
             app.focus = crate::ui::PaneFocus::DetailBarReply;
         } else if app.pm_visible {
             app.focus = crate::ui::PaneFocus::ProjectManager;
@@ -2173,6 +2212,20 @@ fn apply_repo_setting(
         RepoSettingField::ArchiveScript => app.store.set_repo_archive_script(repo_id, opt),
         RepoSettingField::PinnedCommands => app.store.set_repo_pinned_commands(repo_id, opt),
         RepoSettingField::RelatedRepos => app.store.set_repo_related_repos(repo_id, opt),
+        RepoSettingField::DetailBarConfig => {
+            if trimmed.is_empty() {
+                app.store.set_repo_detail_bar_config(repo_id, None)
+            } else {
+                // Validate. Use DetailBarOverride (not DetailBarConfig)
+                // because per-repo entries are partial overrides.
+                match serde_json::from_str::<crate::detail_bar_config::DetailBarOverride>(trimmed) {
+                    Ok(_) => app.store.set_repo_detail_bar_config(repo_id, Some(trimmed)),
+                    Err(e) => Err(crate::error::Error::UserInput(format!(
+                        "detail_bar_config is not valid JSON: {e}"
+                    ))),
+                }
+            }
+        }
     }
 }
 
@@ -3078,9 +3131,7 @@ pub async fn tail_workspace_events(
         crate::pty::session::AgentKind::Claude => {
             crate::events::locate_session_file(&worktree_path)
         }
-        crate::pty::session::AgentKind::Pi => {
-            crate::pi_events::locate_session_file(&worktree_path)
-        }
+        crate::pty::session::AgentKind::Pi => crate::pi_events::locate_session_file(&worktree_path),
     };
     // Snapshot the FULL (file_path, byte_offset) pair so the commit can
     // detect a concurrent tail that landed between our snapshot and now.
@@ -3188,11 +3239,26 @@ pub async fn tail_workspace_events(
             evt.first_user_text = Some(t);
         }
     }
-    evt.tool_use_counts.read = evt.tool_use_counts.read.saturating_add(tool_use_counts.read);
-    evt.tool_use_counts.edit = evt.tool_use_counts.edit.saturating_add(tool_use_counts.edit);
-    evt.tool_use_counts.write = evt.tool_use_counts.write.saturating_add(tool_use_counts.write);
-    evt.tool_use_counts.bash = evt.tool_use_counts.bash.saturating_add(tool_use_counts.bash);
-    evt.tool_use_counts.other = evt.tool_use_counts.other.saturating_add(tool_use_counts.other);
+    evt.tool_use_counts.read = evt
+        .tool_use_counts
+        .read
+        .saturating_add(tool_use_counts.read);
+    evt.tool_use_counts.edit = evt
+        .tool_use_counts
+        .edit
+        .saturating_add(tool_use_counts.edit);
+    evt.tool_use_counts.write = evt
+        .tool_use_counts
+        .write
+        .saturating_add(tool_use_counts.write);
+    evt.tool_use_counts.bash = evt
+        .tool_use_counts
+        .bash
+        .saturating_add(tool_use_counts.bash);
+    evt.tool_use_counts.other = evt
+        .tool_use_counts
+        .other
+        .saturating_add(tool_use_counts.other);
     for path in edited_file_paths {
         evt.push_recent_edited_file(path);
     }
@@ -6067,7 +6133,10 @@ mod pm_state_tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Reply to agent"), "bar visible: {rendered}");
+        assert!(
+            rendered.contains("Reply to agent"),
+            "bar visible: {rendered}"
+        );
     }
 
     #[test]
@@ -6855,12 +6924,18 @@ mod detail_bar_focus_tests {
     async fn char_in_detail_bar_appends_to_draft() {
         let mut app = make_app_with_workspace_selected();
         app.focus = crate::ui::PaneFocus::DetailBarReply;
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
-            .await
-            .unwrap();
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         assert_eq!(app.dashboard.reply_draft, "hi");
         // Focus must NOT have changed (this is a regression guard
         // against accidentally letting dashboard hotkeys fire).
@@ -6872,9 +6947,12 @@ mod detail_bar_focus_tests {
         let mut app = make_app_with_workspace_selected();
         app.focus = crate::ui::PaneFocus::DetailBarReply;
         app.dashboard.reply_draft = "abc".to_string();
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         assert_eq!(app.dashboard.reply_draft, "ab");
     }
 
@@ -6909,12 +6987,18 @@ mod detail_bar_focus_tests {
         let mut app = make_app_with_workspace_selected();
         // Compose a draft in DetailBarReply, then Tab back to Dashboard.
         app.focus = crate::ui::PaneFocus::DetailBarReply;
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
-            .await
-            .unwrap();
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .await
             .unwrap();
@@ -6926,6 +7010,9 @@ mod detail_bar_focus_tests {
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
             .await
             .unwrap();
-        assert_eq!(app.dashboard.reply_draft, "", "draft must clear on navigation");
+        assert_eq!(
+            app.dashboard.reply_draft, "",
+            "draft must clear on navigation"
+        );
     }
 }

@@ -532,7 +532,7 @@ pub fn render_repo_settings(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let rows: [(crate::app::RepoSettingField, Option<&str>); 8] = [
+    let rows: [(crate::app::RepoSettingField, Option<&str>); 9] = [
         (
             crate::app::RepoSettingField::RepoName,
             Some(repo.name.as_str()),
@@ -568,6 +568,10 @@ pub fn render_repo_settings(
         (
             crate::app::RepoSettingField::RelatedRepos,
             repo.related_repos.as_deref(),
+        ),
+        (
+            crate::app::RepoSettingField::DetailBarConfig,
+            repo.detail_bar_config.as_deref(),
         ),
     ];
 

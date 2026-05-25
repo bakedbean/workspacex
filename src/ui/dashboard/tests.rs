@@ -22,6 +22,7 @@ fn fake_repo(id: i64, name: &str, path: &str) -> Repo {
         pinned_commands: None,
         related_repos: None,
         base_branch: None,
+        detail_bar_config: None,
         created_at: 0,
     }
 }

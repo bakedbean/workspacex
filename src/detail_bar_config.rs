@@ -86,9 +86,7 @@ impl DetailBarConfig {
 
     /// True when at least one body column is enabled.
     pub fn has_body(&self) -> bool {
-        self.sections.session_summary
-            || self.sections.recent_chat
-            || self.sections.procs_and_files
+        self.sections.session_summary || self.sections.recent_chat || self.sections.procs_and_files
     }
 
     /// Compute the bar's preferred height for the current terminal.
@@ -552,9 +550,7 @@ mod tests {
     #[test]
     fn resolve_global_only_logs_and_defaults_on_malformed() {
         let store = Store::open_in_memory().unwrap();
-        store
-            .set_setting("detail_bar_config", "{not json")
-            .unwrap();
+        store.set_setting("detail_bar_config", "{not json").unwrap();
         // Doesn't panic; returns default.
         assert_eq!(resolve_global_only(&store), DetailBarConfig::default());
     }
@@ -599,9 +595,7 @@ mod tests {
     #[test]
     fn resolve_falls_back_when_global_json_malformed() {
         let store = Store::open_in_memory().unwrap();
-        store
-            .set_setting("detail_bar_config", "{not json")
-            .unwrap();
+        store.set_setting("detail_bar_config", "{not json").unwrap();
         let repo = test_repo(None);
         // Doesn't panic; returns default.
         assert_eq!(resolve(&repo, &store), DetailBarConfig::default());

@@ -397,11 +397,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn set_repo_detail_bar_config(
-        &self,
-        id: RepoId,
-        value: Option<&str>,
-    ) -> Result<()> {
+    pub fn set_repo_detail_bar_config(&self, id: RepoId, value: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE repos SET detail_bar_config = ?1 WHERE id = ?2",
             rusqlite::params![value, id.0],
@@ -888,19 +884,27 @@ mod tests {
     #[test]
     fn detail_bar_config_column_round_trips() {
         let store = Store::open_in_memory().unwrap();
-        let id = store
-            .add_repo(Path::new("/some/repo"), "demo", "")
-            .unwrap();
+        let id = store.add_repo(Path::new("/some/repo"), "demo", "").unwrap();
 
         // Default: column is NULL.
-        let repo = store.repos().unwrap().into_iter().find(|r| r.id == id).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
         assert!(repo.detail_bar_config.is_none());
 
         // Set a value, read it back.
         store
             .set_repo_detail_bar_config(id, Some(r#"{"visible":false}"#))
             .unwrap();
-        let repo = store.repos().unwrap().into_iter().find(|r| r.id == id).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
         assert_eq!(
             repo.detail_bar_config.as_deref(),
             Some(r#"{"visible":false}"#)
@@ -908,7 +912,12 @@ mod tests {
 
         // Clear it back to NULL.
         store.set_repo_detail_bar_config(id, None).unwrap();
-        let repo = store.repos().unwrap().into_iter().find(|r| r.id == id).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
         assert!(repo.detail_bar_config.is_none());
     }
 

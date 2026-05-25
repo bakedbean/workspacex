@@ -936,9 +936,8 @@ fn detail_bar_config_seed_for_empty() -> String {
 /// Parse, sanitize, and re-serialize a global `detail_bar_config`
 /// blob. Returns the pretty-printed normalized JSON.
 fn detail_bar_config_validate_and_normalize(raw: &str) -> Result<String> {
-    let mut cfg: crate::detail_bar_config::DetailBarConfig =
-        serde_json::from_str(raw)
-            .map_err(|e| Error::UserInput(format!("detail_bar_config: invalid JSON: {e}")))?;
+    let mut cfg: crate::detail_bar_config::DetailBarConfig = serde_json::from_str(raw)
+        .map_err(|e| Error::UserInput(format!("detail_bar_config: invalid JSON: {e}")))?;
     cfg.sanitize();
     serde_json::to_string_pretty(&cfg)
         .map_err(|e| Error::UserInput(format!("detail_bar_config: serialize failed: {e}")))

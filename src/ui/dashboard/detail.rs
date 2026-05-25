@@ -261,7 +261,9 @@ pub(super) fn build_header_strip(
         let (glyph, label) = lifecycle_chip(lc);
         spans.push(Span::styled(
             format!("{glyph} {label}"),
-            theme.lifecycle_style(Some(lc)).unwrap_or_else(|| theme.dim_style()),
+            theme
+                .lifecycle_style(Some(lc))
+                .unwrap_or_else(|| theme.dim_style()),
         ));
     }
 
@@ -346,7 +348,10 @@ pub(super) fn build_session_summary(
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
-    out.push(Line::from(Span::styled("SESSION SUMMARY".to_string(), label_style)));
+    out.push(Line::from(Span::styled(
+        "SESSION SUMMARY".to_string(),
+        label_style,
+    )));
 
     // Bullet prefix takes the workspace's status color so the SESSION
     // SUMMARY column visually echoes the row's status gutter.
@@ -372,7 +377,11 @@ pub(super) fn build_session_summary(
                     let wrapped = wrap_lines(trimmed, inner_width);
                     let italic = Style::default().add_modifier(Modifier::ITALIC);
                     for (i, line_text) in wrapped.iter().enumerate() {
-                        let leader = if i == 0 { prefix.clone() } else { continuation.clone() };
+                        let leader = if i == 0 {
+                            prefix.clone()
+                        } else {
+                            continuation.clone()
+                        };
                         out.push(Line::from(vec![
                             leader,
                             Span::styled(line_text.clone(), italic),
@@ -419,7 +428,10 @@ pub(super) fn build_recent_chat(
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
-    out.push(Line::from(Span::styled("RECENT CHAT".to_string(), label_style)));
+    out.push(Line::from(Span::styled(
+        "RECENT CHAT".to_string(),
+        label_style,
+    )));
 
     let Some(evt) = events else {
         out.push(Line::from(Span::styled(
@@ -458,7 +470,10 @@ pub(super) fn build_procs_and_files(
     let mut out: Vec<Line<'static>> = Vec::new();
     let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
 
-    out.push(Line::from(Span::styled("PROCESSES".to_string(), label_style)));
+    out.push(Line::from(Span::styled(
+        "PROCESSES".to_string(),
+        label_style,
+    )));
     if procs.is_empty() {
         out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
     } else {
@@ -478,7 +493,10 @@ pub(super) fn build_procs_and_files(
         }
     }
 
-    out.push(Line::from(Span::styled("RECENT FILES".to_string(), label_style)));
+    out.push(Line::from(Span::styled(
+        "RECENT FILES".to_string(),
+        label_style,
+    )));
     let files: Vec<&String> = events
         .map(|e| e.recent_edited_files.iter().collect())
         .unwrap_or_default();
@@ -490,8 +508,7 @@ pub(super) fn build_procs_and_files(
             let suffix_width = match diff {
                 Some(d) if d.added > 0 || d.removed > 0 => {
                     // "  +A −R" — 2 leading spaces + sign + digits + sep + sign + digits.
-                    4 + d.added.to_string().chars().count()
-                        + d.removed.to_string().chars().count()
+                    4 + d.added.to_string().chars().count() + d.removed.to_string().chars().count()
                 }
                 _ => 0,
             };
@@ -540,7 +557,9 @@ fn lookup_file_diff(
     diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,
 ) -> Option<DiffStats> {
     let map = diff_per_file?;
-    let rel = std::path::Path::new(file).strip_prefix(worktree_path).ok()?;
+    let rel = std::path::Path::new(file)
+        .strip_prefix(worktree_path)
+        .ok()?;
     let key = rel.to_str()?;
     map.get(key).copied()
 }
@@ -566,7 +585,11 @@ pub(super) fn build_reply_row(
     spans.push(Span::styled(REPLY_CHIP.to_string(), chip_style));
     spans.push(Span::raw(" ".to_string()));
 
-    let hint_width = if focused { REPLY_HINT.chars().count() } else { 0 };
+    let hint_width = if focused {
+        REPLY_HINT.chars().count()
+    } else {
+        0
+    };
     let chip_width = REPLY_CHIP.chars().count() + 1; // chip + 1 trailing space
     let field_width = width
         .saturating_sub(chip_width)
@@ -662,16 +685,32 @@ fn wrap_lines(text: &str, width: usize) -> Vec<String> {
 fn format_tool_trace(counts: &ToolUseCounts) -> String {
     let mut parts: Vec<String> = Vec::new();
     if counts.read > 0 {
-        parts.push(format!("read {} {}", counts.read, plural("file", counts.read)));
+        parts.push(format!(
+            "read {} {}",
+            counts.read,
+            plural("file", counts.read)
+        ));
     }
     if counts.edit > 0 {
-        parts.push(format!("edited {} {}", counts.edit, plural("file", counts.edit)));
+        parts.push(format!(
+            "edited {} {}",
+            counts.edit,
+            plural("file", counts.edit)
+        ));
     }
     if counts.write > 0 {
-        parts.push(format!("wrote {} {}", counts.write, plural("file", counts.write)));
+        parts.push(format!(
+            "wrote {} {}",
+            counts.write,
+            plural("file", counts.write)
+        ));
     }
     if counts.bash > 0 {
-        parts.push(format!("ran {} {}", counts.bash, plural("command", counts.bash)));
+        parts.push(format!(
+            "ran {} {}",
+            counts.bash,
+            plural("command", counts.bash)
+        ));
     }
     if counts.other > 0 {
         parts.push(format!("+{} other actions", counts.other));
@@ -747,7 +786,11 @@ mod tests {
         s
     }
 
-    fn seed_workspace() -> (crate::store::Store, crate::store::Repo, crate::store::Workspace) {
+    fn seed_workspace() -> (
+        crate::store::Store,
+        crate::store::Repo,
+        crate::store::Workspace,
+    ) {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -819,7 +862,10 @@ mod tests {
             "repo-overview",
             "bakedbean/repo-overview",
             Some(BranchLifecycle::PrOpen),
-            Some(DiffStats { added: 12, removed: 3 }),
+            Some(DiffStats {
+                added: 12,
+                removed: 3,
+            }),
             2,
             Status::Question,
             Some(29),
@@ -828,9 +874,18 @@ mod tests {
         );
         let text = line_to_string(&line);
         assert!(text.contains("repo-overview"), "name missing: {text:?}");
-        assert!(text.contains("bakedbean/repo-overview"), "branch missing: {text:?}");
-        assert!(text.contains("+12") && text.contains("−3"), "diff missing: {text:?}");
-        assert!(text.contains("● 2") || text.contains("2 procs"), "procs missing: {text:?}");
+        assert!(
+            text.contains("bakedbean/repo-overview"),
+            "branch missing: {text:?}"
+        );
+        assert!(
+            text.contains("+12") && text.contains("−3"),
+            "diff missing: {text:?}"
+        );
+        assert!(
+            text.contains("● 2") || text.contains("2 procs"),
+            "procs missing: {text:?}"
+        );
         assert!(text.contains("?"), "status glyph missing: {text:?}");
         assert!(text.contains("29s"), "ago missing: {text:?}");
     }
@@ -838,9 +893,7 @@ mod tests {
     #[test]
     fn header_strip_omits_diff_when_none() {
         let theme = Theme::wsx();
-        let line = build_header_strip(
-            "ws", "br", None, None, 0, Status::Idle, None, &theme, 80,
-        );
+        let line = build_header_strip("ws", "br", None, None, 0, Status::Idle, None, &theme, 80);
         let text = line_to_string(&line);
         assert!(!text.contains("+"), "diff cell should be absent: {text:?}");
         assert!(!text.contains("−"), "diff cell should be absent: {text:?}");
@@ -849,9 +902,7 @@ mod tests {
     #[test]
     fn header_strip_omits_lifecycle_when_none() {
         let theme = Theme::wsx();
-        let line = build_header_strip(
-            "ws", "br", None, None, 0, Status::Idle, None, &theme, 80,
-        );
+        let line = build_header_strip("ws", "br", None, None, 0, Status::Idle, None, &theme, 80);
         let text = line_to_string(&line);
         // The PR lifecycle glyph set is { ⏺, ⏵, ⏷, ⏸ } (any specific
         // mapping in theme); none should appear when lifecycle is None.
@@ -879,29 +930,70 @@ mod tests {
         let theme = Theme::wsx();
         let evt = make_events_with(Some("summarize the repo"), ToolUseCounts::default(), None);
         let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, 0, None);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("summarize the repo"), "{joined:?}");
     }
 
     #[test]
     fn session_summary_tool_trace_omits_zero_counts() {
         let theme = Theme::wsx();
-        let evt = make_events_with(None, ToolUseCounts { read: 5, edit: 0, write: 0, bash: 2, other: 0 }, None);
+        let evt = make_events_with(
+            None,
+            ToolUseCounts {
+                read: 5,
+                edit: 0,
+                write: 0,
+                bash: 2,
+                other: 0,
+            },
+            None,
+        );
         let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, 0, None);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("read 5 files"), "{joined:?}");
         assert!(joined.contains("ran 2 commands"), "{joined:?}");
-        assert!(!joined.contains("edited"), "edit fragment should be omitted: {joined:?}");
-        assert!(!joined.contains("wrote"), "write fragment should be omitted: {joined:?}");
+        assert!(
+            !joined.contains("edited"),
+            "edit fragment should be omitted: {joined:?}"
+        );
+        assert!(
+            !joined.contains("wrote"),
+            "write fragment should be omitted: {joined:?}"
+        );
     }
 
     #[test]
     fn session_summary_singular_plural_forms() {
         let theme = Theme::wsx();
-        let evt = make_events_with(None, ToolUseCounts { read: 1, edit: 1, write: 1, bash: 1, other: 1 }, None);
+        let evt = make_events_with(
+            None,
+            ToolUseCounts {
+                read: 1,
+                edit: 1,
+                write: 1,
+                bash: 1,
+                other: 1,
+            },
+            None,
+        );
         let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 100, 0, None);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("read 1 file") && !joined.contains("read 1 files"), "{joined:?}");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("read 1 file") && !joined.contains("read 1 files"),
+            "{joined:?}"
+        );
         assert!(joined.contains("edited 1 file"), "{joined:?}");
         assert!(joined.contains("ran 1 command"), "{joined:?}");
     }
@@ -910,7 +1002,11 @@ mod tests {
     fn session_summary_shows_loading_when_events_none() {
         let theme = Theme::wsx();
         let lines = build_session_summary(None, Status::Idle, &theme, 50, 0, None);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("loading"), "{joined:?}");
     }
 
@@ -926,9 +1022,16 @@ mod tests {
             None,
         );
         let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 60, 0, None);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("first line"), "first paragraph: {joined:?}");
-        assert!(joined.contains("second line"), "second paragraph: {joined:?}");
+        assert!(
+            joined.contains("second line"),
+            "second paragraph: {joined:?}"
+        );
         assert!(joined.contains("third line"), "third paragraph: {joined:?}");
         // Label + 3 prompt lines + 1 tool-trace line = 5 lines minimum.
         assert!(lines.len() >= 5, "expected >=5 lines, got {}", lines.len());
@@ -943,9 +1046,19 @@ mod tests {
             "summarize the entire repository in extreme detail and list every public symbol";
         let evt = make_events_with(Some(long_prompt), ToolUseCounts::default(), None);
         let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 30, 0, None);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("summarize the entire"), "head visible: {joined:?}");
-        assert!(joined.contains("every public symbol"), "tail visible too: {joined:?}");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("summarize the entire"),
+            "head visible: {joined:?}"
+        );
+        assert!(
+            joined.contains("every public symbol"),
+            "tail visible too: {joined:?}"
+        );
     }
 
     #[test]
@@ -953,16 +1066,17 @@ mod tests {
         let theme = Theme::wsx();
         let evt = make_events_with(Some("hi"), ToolUseCounts::default(), None);
         // 2 hours since creation, 45 seconds since last activity.
-        let lines = build_session_summary(
-            Some(&evt),
-            Status::Idle,
-            &theme,
-            50,
-            2 * 60 * 60,
-            Some(45),
+        let lines =
+            build_session_summary(Some(&evt), Status::Idle, &theme, 50, 2 * 60 * 60, Some(45));
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("created 2h ago"),
+            "created line: {joined:?}"
         );
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("created 2h ago"), "created line: {joined:?}");
         assert!(joined.contains("active 45s ago"), "active line: {joined:?}");
     }
 
@@ -971,8 +1085,15 @@ mod tests {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
         let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, 60, None);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("active —"), "active dash when no session: {joined:?}");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("active —"),
+            "active dash when no session: {joined:?}"
+        );
     }
 
     #[test]
@@ -982,10 +1103,23 @@ mod tests {
         // events tail has scanned.
         let theme = Theme::wsx();
         let lines = build_session_summary(None, Status::Idle, &theme, 50, 300, Some(10));
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("loading"), "loading placeholder: {joined:?}");
-        assert!(joined.contains("created 5m ago"), "created visible: {joined:?}");
-        assert!(joined.contains("active 10s ago"), "active visible: {joined:?}");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("loading"),
+            "loading placeholder: {joined:?}"
+        );
+        assert!(
+            joined.contains("created 5m ago"),
+            "created visible: {joined:?}"
+        );
+        assert!(
+            joined.contains("active 10s ago"),
+            "active visible: {joined:?}"
+        );
     }
 
     #[test]
@@ -995,8 +1129,15 @@ mod tests {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
         let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, 0, None);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("—"), "expected em-dash placeholder: {joined:?}");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("—"),
+            "expected em-dash placeholder: {joined:?}"
+        );
     }
 
     #[test]
@@ -1011,7 +1152,10 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .find(|s| s.content.as_ref() == "▸ ")
             .expect("at least one prefix span");
-        assert_eq!(prefix_span.style.fg, expected_fg, "prefix not in status color");
+        assert_eq!(
+            prefix_span.style.fg, expected_fg,
+            "prefix not in status color"
+        );
     }
 
     #[test]
@@ -1019,7 +1163,11 @@ mod tests {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
         let lines = build_recent_chat(Some(&evt), &theme, 40, 6);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("—"), "{joined:?}");
     }
 
@@ -1029,20 +1177,37 @@ mod tests {
         let evt = make_events_with(
             None,
             ToolUseCounts::default(),
-            Some("This is a longer assistant message that should wrap across multiple lines when the column width is small."),
+            Some(
+                "This is a longer assistant message that should wrap across multiple lines when the column width is small.",
+            ),
         );
         let lines = build_recent_chat(Some(&evt), &theme, 30, 6);
         // Expect at least 2 lines (label + ≥1 content line); total ≤ 1 (label) + 6 (max).
-        assert!(lines.len() >= 2 && lines.len() <= 7, "got {} lines", lines.len());
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("longer assistant"), "content present: {joined:?}");
+        assert!(
+            lines.len() >= 2 && lines.len() <= 7,
+            "got {} lines",
+            lines.len()
+        );
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("longer assistant"),
+            "content present: {joined:?}"
+        );
     }
 
     #[test]
     fn recent_chat_shows_loading_when_events_none() {
         let theme = Theme::wsx();
         let lines = build_recent_chat(None, &theme, 40, 6);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("loading"), "{joined:?}");
     }
 
@@ -1059,9 +1224,23 @@ mod tests {
     fn procs_column_shows_dash_when_empty() {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_procs_and_files(&[], Some(&evt), None, std::path::Path::new("/tmp/r/ws"), &theme, 30);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("—"), "expected em-dash when no procs/files: {joined:?}");
+        let lines = build_procs_and_files(
+            &[],
+            Some(&evt),
+            None,
+            std::path::Path::new("/tmp/r/ws"),
+            &theme,
+            30,
+        );
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("—"),
+            "expected em-dash when no procs/files: {joined:?}"
+        );
     }
 
     #[test]
@@ -1069,8 +1248,19 @@ mod tests {
         let theme = Theme::wsx();
         let evt = make_events_with(None, ToolUseCounts::default(), None);
         let procs: Vec<ProcInfo> = (0..7).map(|i| proc(&format!("cmd{i}"))).collect();
-        let lines = build_procs_and_files(&procs, Some(&evt), None, std::path::Path::new("/tmp/r/ws"), &theme, 30);
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        let lines = build_procs_and_files(
+            &procs,
+            Some(&evt),
+            None,
+            std::path::Path::new("/tmp/r/ws"),
+            &theme,
+            30,
+        );
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("+2 more"), "expected +2 more: {joined:?}");
     }
 
@@ -1093,9 +1283,19 @@ mod tests {
             &theme,
             40,
         );
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("Cargo.toml"), "Cargo.toml visible: {joined:?}");
-        assert!(joined.contains("src/main.rs"), "src/main.rs visible: {joined:?}");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("Cargo.toml"),
+            "Cargo.toml visible: {joined:?}"
+        );
+        assert!(
+            joined.contains("src/main.rs"),
+            "src/main.rs visible: {joined:?}"
+        );
         assert!(
             !joined.contains("/tmp/wt"),
             "absolute prefix should be stripped: {joined:?}"
@@ -1119,8 +1319,15 @@ mod tests {
             &theme,
             40,
         );
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("/etc/passwd"), "absolute path kept: {joined:?}");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("/etc/passwd"),
+            "absolute path kept: {joined:?}"
+        );
     }
 
     #[test]
@@ -1137,8 +1344,20 @@ mod tests {
         evt.recent_edited_files
             .push_front("/tmp/wt/Cargo.toml".to_string());
         let mut diffs = std::collections::HashMap::new();
-        diffs.insert("src/main.rs".to_string(), DiffStats { added: 12, removed: 3 });
-        diffs.insert("Cargo.toml".to_string(), DiffStats { added: 1, removed: 0 });
+        diffs.insert(
+            "src/main.rs".to_string(),
+            DiffStats {
+                added: 12,
+                removed: 3,
+            },
+        );
+        diffs.insert(
+            "Cargo.toml".to_string(),
+            DiffStats {
+                added: 1,
+                removed: 0,
+            },
+        );
         let lines = build_procs_and_files(
             &[],
             Some(&evt),
@@ -1147,9 +1366,19 @@ mod tests {
             &theme,
             40,
         );
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
-        assert!(joined.contains("+12") && joined.contains("−3"), "main.rs delta: {joined:?}");
-        assert!(joined.contains("+1") && joined.contains("−0"), "Cargo.toml delta: {joined:?}");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("+12") && joined.contains("−3"),
+            "main.rs delta: {joined:?}"
+        );
+        assert!(
+            joined.contains("+1") && joined.contains("−0"),
+            "Cargo.toml delta: {joined:?}"
+        );
     }
 
     #[test]
@@ -1160,8 +1389,7 @@ mod tests {
         let mut evt = make_events_with(None, ToolUseCounts::default(), None);
         evt.recent_edited_files
             .push_front("/tmp/wt/some/untracked.txt".to_string());
-        let diffs: std::collections::HashMap<String, DiffStats> =
-            std::collections::HashMap::new();
+        let diffs: std::collections::HashMap<String, DiffStats> = std::collections::HashMap::new();
         let lines = build_procs_and_files(
             &[],
             Some(&evt),
@@ -1170,7 +1398,11 @@ mod tests {
             &theme,
             40,
         );
-        let joined: String = lines.iter().map(line_to_string).collect::<Vec<_>>().join("\n");
+        let joined: String = lines
+            .iter()
+            .map(line_to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(joined.contains("untracked.txt"), "path present: {joined:?}");
         assert!(!joined.contains("+0"), "no fake delta: {joined:?}");
         assert!(!joined.contains("−0"), "no fake delta: {joined:?}");
@@ -1190,8 +1422,14 @@ mod tests {
         let theme = Theme::wsx();
         let line = build_reply_row("", true, &theme, 80);
         let text = line_to_string(&line);
-        assert!(text.contains("send"), "send hint present when focused: {text:?}");
-        assert!(text.contains("cancel"), "cancel hint present when focused: {text:?}");
+        assert!(
+            text.contains("send"),
+            "send hint present when focused: {text:?}"
+        );
+        assert!(
+            text.contains("cancel"),
+            "cancel hint present when focused: {text:?}"
+        );
     }
 
     #[test]
@@ -1199,8 +1437,14 @@ mod tests {
         let theme = Theme::wsx();
         let line = build_reply_row("", false, &theme, 80);
         let text = line_to_string(&line);
-        assert!(!text.contains("send"), "send hint absent when unfocused: {text:?}");
-        assert!(!text.contains("cancel"), "cancel hint absent when unfocused: {text:?}");
+        assert!(
+            !text.contains("send"),
+            "send hint absent when unfocused: {text:?}"
+        );
+        assert!(
+            !text.contains("cancel"),
+            "cancel hint absent when unfocused: {text:?}"
+        );
     }
 
     #[test]
@@ -1221,7 +1465,11 @@ mod tests {
         let (_store, repo, ws) = seed_workspace();
         let evt = WorkspaceEvents {
             first_user_text: Some("give me a tour".into()),
-            tool_use_counts: ToolUseCounts { read: 14, bash: 2, ..Default::default() },
+            tool_use_counts: ToolUseCounts {
+                read: 14,
+                bash: 2,
+                ..Default::default()
+            },
             last_assistant_text: Some("Reading the repo now.".into()),
             ..Default::default()
         };
@@ -1231,7 +1479,10 @@ mod tests {
             workspace: &ws,
             events: Some(&evt),
             procs: &[],
-            diff: Some(DiffStats { added: 12, removed: 3 }),
+            diff: Some(DiffStats {
+                added: 12,
+                removed: 3,
+            }),
             diff_per_file: None,
             lifecycle: Some(BranchLifecycle::PrOpen),
             pr_title: None,
@@ -1244,7 +1495,10 @@ mod tests {
             config: &cfg,
         };
         let text = render_to_text(&inputs, 120, 10);
-        assert!(text.contains("repo-overview") || text.contains("ws"), "header name: {text:?}");
+        assert!(
+            text.contains("repo-overview") || text.contains("ws"),
+            "header name: {text:?}"
+        );
         assert!(text.contains("SESSION SUMMARY"), "summary label: {text:?}");
         assert!(text.contains("RECENT CHAT"), "chat label: {text:?}");
         assert!(text.contains("PROCESSES"), "procs label: {text:?}");
@@ -1281,8 +1535,14 @@ mod tests {
         };
         let text = render_to_text(&inputs, 70, 10);
         assert!(text.contains("SESSION SUMMARY"), "summary kept: {text:?}");
-        assert!(!text.contains("RECENT CHAT"), "chat dropped on narrow: {text:?}");
-        assert!(!text.contains("PROCESSES"), "procs dropped on narrow: {text:?}");
+        assert!(
+            !text.contains("RECENT CHAT"),
+            "chat dropped on narrow: {text:?}"
+        );
+        assert!(
+            !text.contains("PROCESSES"),
+            "procs dropped on narrow: {text:?}"
+        );
     }
 
     use crate::detail_bar_config::{DetailBarConfig, Sections};

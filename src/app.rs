@@ -754,19 +754,15 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.pinned_commands_cache.clear();
     match &app.view {
         View::Dashboard => {
-            let selection_is_workspace = matches!(
-                app.selected_target(),
-                Some(SelectionTarget::Workspace(_))
-            );
+            let selection_is_workspace =
+                matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)));
             let detail_cfg = resolve_dashboard_detail_cfg(app);
             let detail_visible = selection_is_workspace
                 && detail_cfg.visible
                 && area.height >= detail_cfg.height.min_rows + 10;
             // If the bar is hidden but focus is on the reply input,
             // bounce focus back to Dashboard and drop the draft.
-            if !detail_visible
-                && matches!(app.focus, crate::ui::PaneFocus::DetailBarReply)
-            {
+            if !detail_visible && matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {
                 app.focus = crate::ui::PaneFocus::Dashboard;
                 app.dashboard.reply_draft.clear();
             }
@@ -774,7 +770,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // spec order (list / detail / pm / footer) is respected. The
             // detail and PM regions are placed ABOVE the footer row.
             let inner_area = if area.height > 1 {
-                ratatui::layout::Rect { height: area.height - 1, ..area }
+                ratatui::layout::Rect {
+                    height: area.height - 1,
+                    ..area
+                }
             } else {
                 area
             };
@@ -1645,10 +1644,7 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
 /// Returns `true` if the key was consumed (caller should early-return),
 /// or `false` if the key should fall through to the main dashboard handler
 /// (e.g. navigation keys that also move the selection).
-async fn handle_detail_bar_reply_key(
-    app: &mut App,
-    k: crossterm::event::KeyEvent,
-) -> bool {
+async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEvent) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
     match (k.code, k.modifiers) {
         (KeyCode::Tab, _) => {
@@ -1764,10 +1760,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         // user Tabs back from PM.
         app.z_leader_pending = false;
         let cfg = resolve_dashboard_detail_cfg(app);
-        let is_workspace = matches!(
-            app.selected_target(),
-            Some(SelectionTarget::Workspace(_))
-        );
+        let is_workspace = matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)));
         if is_workspace && cfg.visible {
             app.focus = crate::ui::PaneFocus::DetailBarReply;
         } else if app.pm_visible {
@@ -3138,9 +3131,7 @@ pub async fn tail_workspace_events(
         crate::pty::session::AgentKind::Claude => {
             crate::events::locate_session_file(&worktree_path)
         }
-        crate::pty::session::AgentKind::Pi => {
-            crate::pi_events::locate_session_file(&worktree_path)
-        }
+        crate::pty::session::AgentKind::Pi => crate::pi_events::locate_session_file(&worktree_path),
     };
     // Snapshot the FULL (file_path, byte_offset) pair so the commit can
     // detect a concurrent tail that landed between our snapshot and now.
@@ -3248,11 +3239,26 @@ pub async fn tail_workspace_events(
             evt.first_user_text = Some(t);
         }
     }
-    evt.tool_use_counts.read = evt.tool_use_counts.read.saturating_add(tool_use_counts.read);
-    evt.tool_use_counts.edit = evt.tool_use_counts.edit.saturating_add(tool_use_counts.edit);
-    evt.tool_use_counts.write = evt.tool_use_counts.write.saturating_add(tool_use_counts.write);
-    evt.tool_use_counts.bash = evt.tool_use_counts.bash.saturating_add(tool_use_counts.bash);
-    evt.tool_use_counts.other = evt.tool_use_counts.other.saturating_add(tool_use_counts.other);
+    evt.tool_use_counts.read = evt
+        .tool_use_counts
+        .read
+        .saturating_add(tool_use_counts.read);
+    evt.tool_use_counts.edit = evt
+        .tool_use_counts
+        .edit
+        .saturating_add(tool_use_counts.edit);
+    evt.tool_use_counts.write = evt
+        .tool_use_counts
+        .write
+        .saturating_add(tool_use_counts.write);
+    evt.tool_use_counts.bash = evt
+        .tool_use_counts
+        .bash
+        .saturating_add(tool_use_counts.bash);
+    evt.tool_use_counts.other = evt
+        .tool_use_counts
+        .other
+        .saturating_add(tool_use_counts.other);
     for path in edited_file_paths {
         evt.push_recent_edited_file(path);
     }
@@ -6127,7 +6133,10 @@ mod pm_state_tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Reply to agent"), "bar visible: {rendered}");
+        assert!(
+            rendered.contains("Reply to agent"),
+            "bar visible: {rendered}"
+        );
     }
 
     #[test]
@@ -6915,12 +6924,18 @@ mod detail_bar_focus_tests {
     async fn char_in_detail_bar_appends_to_draft() {
         let mut app = make_app_with_workspace_selected();
         app.focus = crate::ui::PaneFocus::DetailBarReply;
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
-            .await
-            .unwrap();
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         assert_eq!(app.dashboard.reply_draft, "hi");
         // Focus must NOT have changed (this is a regression guard
         // against accidentally letting dashboard hotkeys fire).
@@ -6932,9 +6947,12 @@ mod detail_bar_focus_tests {
         let mut app = make_app_with_workspace_selected();
         app.focus = crate::ui::PaneFocus::DetailBarReply;
         app.dashboard.reply_draft = "abc".to_string();
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         assert_eq!(app.dashboard.reply_draft, "ab");
     }
 
@@ -6969,12 +6987,18 @@ mod detail_bar_focus_tests {
         let mut app = make_app_with_workspace_selected();
         // Compose a draft in DetailBarReply, then Tab back to Dashboard.
         app.focus = crate::ui::PaneFocus::DetailBarReply;
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE))
-            .await
-            .unwrap();
-        handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
-            .await
-            .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .await
             .unwrap();
@@ -6986,6 +7010,9 @@ mod detail_bar_focus_tests {
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
             .await
             .unwrap();
-        assert_eq!(app.dashboard.reply_draft, "", "draft must clear on navigation");
+        assert_eq!(
+            app.dashboard.reply_draft, "",
+            "draft must clear on navigation"
+        );
     }
 }

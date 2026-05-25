@@ -136,6 +136,17 @@ impl DetailBarConfig {
         }
         self
     }
+
+    /// Clamp height fields into legal ranges, swapping min/max when
+    /// inverted. Idempotent.
+    pub fn sanitize(&mut self) {
+        self.height.percent = self.height.percent.clamp(5, 80);
+        self.height.min_rows = self.height.min_rows.clamp(4, 40);
+        self.height.max_rows = self.height.max_rows.clamp(4, 60);
+        if self.height.min_rows > self.height.max_rows {
+            std::mem::swap(&mut self.height.min_rows, &mut self.height.max_rows);
+        }
+    }
 }
 
 /// Partial override of `DetailBarConfig`. Every field is optional —
@@ -378,5 +389,84 @@ mod tests {
         assert!(parsed.visible.is_none());
         assert!(parsed.height.is_none());
         assert!(parsed.sections.is_none());
+    }
+
+    #[test]
+    fn sanitize_clamps_percent_low() {
+        let mut cfg = DetailBarConfig {
+            height: Height {
+                percent: 0,
+                min_rows: 8,
+                max_rows: 18,
+            },
+            ..DetailBarConfig::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.height.percent, 5);
+    }
+
+    #[test]
+    fn sanitize_clamps_percent_high() {
+        let mut cfg = DetailBarConfig {
+            height: Height {
+                percent: 200,
+                min_rows: 8,
+                max_rows: 18,
+            },
+            ..DetailBarConfig::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.height.percent, 80);
+    }
+
+    #[test]
+    fn sanitize_clamps_min_rows() {
+        let mut cfg = DetailBarConfig {
+            height: Height {
+                percent: 30,
+                min_rows: 1,
+                max_rows: 18,
+            },
+            ..DetailBarConfig::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.height.min_rows, 4);
+    }
+
+    #[test]
+    fn sanitize_clamps_max_rows() {
+        let mut cfg = DetailBarConfig {
+            height: Height {
+                percent: 30,
+                min_rows: 8,
+                max_rows: 200,
+            },
+            ..DetailBarConfig::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.height.max_rows, 60);
+    }
+
+    #[test]
+    fn sanitize_swaps_inverted_min_max() {
+        let mut cfg = DetailBarConfig {
+            height: Height {
+                percent: 30,
+                min_rows: 20,
+                max_rows: 10,
+            },
+            ..DetailBarConfig::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.height.min_rows, 10);
+        assert_eq!(cfg.height.max_rows, 20);
+    }
+
+    #[test]
+    fn sanitize_leaves_legal_values_alone() {
+        let original = DetailBarConfig::default();
+        let mut cfg = original.clone();
+        cfg.sanitize();
+        assert_eq!(cfg, original);
     }
 }

@@ -464,6 +464,83 @@ pub(crate) fn build_recent_chat(
     out
 }
 
+/// Render the PROCESSES module body. Returns the label row plus one
+/// row per process (capped at 5, with a "+N more" suffix when over
+/// the cap), or a single "—" placeholder when empty.
+pub(crate) fn build_processes(
+    procs: &[ProcInfo],
+    theme: &Theme,
+    column_width: usize,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
+    out.push(Line::from(Span::styled("PROCESSES".to_string(), label_style)));
+    if procs.is_empty() {
+        out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
+    } else {
+        let visible = procs.iter().take(5);
+        for p in visible {
+            let cmd = truncate_to_chars(&p.command, column_width.saturating_sub(4));
+            out.push(Line::from(vec![
+                Span::styled("● ".to_string(), theme.status_style(Status::Thinking)),
+                Span::styled(cmd, theme.dim_style()),
+            ]));
+        }
+        if procs.len() > 5 {
+            out.push(Line::from(Span::styled(
+                format!("+{} more", procs.len() - 5),
+                theme.dim_style(),
+            )));
+        }
+    }
+    out
+}
+
+/// Render the RECENT FILES module body. Returns the label row plus
+/// one row per file (capped at 5), each annotated with per-file diff
+/// stats when available. Single "—" placeholder when empty.
+pub(crate) fn build_recent_files(
+    events: Option<&WorkspaceEvents>,
+    diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,
+    worktree_path: &std::path::Path,
+    theme: &Theme,
+    column_width: usize,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
+    out.push(Line::from(Span::styled("RECENT FILES".to_string(), label_style)));
+    let files: Vec<&String> = events
+        .map(|e| e.recent_edited_files.iter().collect())
+        .unwrap_or_default();
+    if files.is_empty() {
+        out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
+    } else {
+        for f in files.iter().take(5) {
+            let diff = lookup_file_diff(f, worktree_path, diff_per_file);
+            let suffix_width = match diff {
+                Some(d) if d.added > 0 || d.removed > 0 => {
+                    4 + d.added.to_string().chars().count() + d.removed.to_string().chars().count()
+                }
+                _ => 0,
+            };
+            let display = display_relative_path(f, worktree_path);
+            let path_width = column_width.saturating_sub(suffix_width);
+            let truncated = truncate_to_chars_left(&display, path_width);
+            let mut spans: Vec<Span<'static>> = vec![Span::styled(truncated, theme.dim_style())];
+            if let Some(d) = diff
+                && (d.added > 0 || d.removed > 0)
+            {
+                spans.push(Span::raw("  ".to_string()));
+                spans.push(Span::styled(format!("+{}", d.added), theme.ok_style()));
+                spans.push(Span::raw(" ".to_string()));
+                spans.push(Span::styled(format!("−{}", d.removed), theme.err_style()));
+            }
+            out.push(Line::from(spans));
+        }
+    }
+    out
+}
+
 /// Build the PROCESSES + RECENT FILES column. Procs go on top, recent
 /// files (from `WorkspaceEvents.recent_edited_files`) below, each
 /// annotated with a `+X −Y` delta when the per-file diff map has an
@@ -1682,5 +1759,48 @@ mod tests {
     #[test]
     fn column_widths_single_col_is_full() {
         assert_eq!(column_widths(&[Column::RecentChat]), vec![100u16]);
+    }
+
+    #[test]
+    fn build_processes_empty_emits_dash() {
+        let theme = Theme::default();
+        let lines = build_processes(&[], &theme, 40);
+        // First line is the label, second is the "—" placeholder.
+        assert_eq!(lines.len(), 2);
+        let label = line_to_string(&lines[0]);
+        assert_eq!(label, "PROCESSES");
+        let placeholder = line_to_string(&lines[1]);
+        assert_eq!(placeholder, "—");
+    }
+
+    #[test]
+    fn build_recent_files_empty_emits_dash() {
+        let theme = Theme::default();
+        let path = std::path::PathBuf::from("/wt");
+        let lines = build_recent_files(None, None, &path, &theme, 40);
+        assert_eq!(lines.len(), 2);
+        let label = line_to_string(&lines[0]);
+        assert_eq!(label, "RECENT FILES");
+        let placeholder = line_to_string(&lines[1]);
+        assert_eq!(placeholder, "—");
+    }
+
+    #[test]
+    fn build_procs_and_files_matches_split_builders_concatenated() {
+        // Back-compat sanity: the combined builder should equal the two
+        // split builders concatenated (when both are called with the same
+        // inputs). Used to verify the extraction is mechanical.
+        let theme = Theme::default();
+        let path = std::path::PathBuf::from("/wt");
+        let combined = build_procs_and_files(&[], None, None, &path, &theme, 40);
+        let mut split = build_processes(&[], &theme, 40);
+        split.extend(build_recent_files(None, None, &path, &theme, 40));
+        let combined_text: Vec<String> = combined.iter()
+            .map(|l| line_to_string(l))
+            .collect();
+        let split_text: Vec<String> = split.iter()
+            .map(|l| line_to_string(l))
+            .collect();
+        assert_eq!(combined_text, split_text);
     }
 }

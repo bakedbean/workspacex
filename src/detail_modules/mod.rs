@@ -1,0 +1,166 @@
+//! Detail-bar modules. Pluggable units that render into a container
+//! slot in the workspace detail bar. The host (chrome layer in
+//! `src/ui/dashboard/detail.rs`) iterates over configured container
+//! IDs, looks each up in the `Registry`, and dispatches `render`.
+//!
+//! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
+
+use crate::events::WorkspaceEvents;
+use crate::forge::BranchLifecycle;
+use crate::git::DiffStats;
+use crate::proc::ProcInfo;
+use crate::store::{Repo, Workspace};
+use crate::ui::dashboard::status::Status;
+use crate::ui::theme::Theme;
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Rect};
+use std::collections::HashMap;
+
+/// Borrowed snapshot of everything a module might need to render.
+/// Built once per draw by the chrome layer in
+/// `src/ui/dashboard/detail.rs` and passed by reference to each module.
+/// Zero allocations per draw — all fields are borrowed or `Copy`.
+pub struct DetailContext<'a> {
+    pub repo: &'a Repo,
+    pub workspace: &'a Workspace,
+    pub events: Option<&'a WorkspaceEvents>,
+    pub procs: &'a [ProcInfo],
+    pub diff: Option<DiffStats>,
+    pub diff_per_file: Option<&'a HashMap<String, DiffStats>>,
+    pub lifecycle: Option<BranchLifecycle>,
+    pub pr_title: Option<&'a str>,
+    pub pr_number: Option<u32>,
+    pub status: Status,
+    pub ago_secs: Option<u64>,
+    pub events_scanned: bool,
+    pub theme: &'a Theme,
+}
+
+pub trait DetailModule: Send + Sync {
+    /// Stable identifier used in config JSON. Lowercase snake_case.
+    fn id(&self) -> &'static str;
+
+    /// Heading drawn above the module's body by the host. Modules do
+    /// not render their own title.
+    fn title(&self) -> &'static str;
+
+    /// Vertical sizing hint when multiple modules stack in one
+    /// container. Fed directly to `Layout::vertical(...)`. Receives
+    /// the context so data-dependent modules (e.g. `Processes`) can
+    /// size to their current contents.
+    fn height_hint(&self, ctx: &DetailContext<'_>) -> Constraint;
+
+    /// Render the module's body into `area`. The host has already
+    /// drawn the title row above `area`.
+    fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>);
+}
+
+pub struct Registry {
+    modules: HashMap<&'static str, Box<dyn DetailModule>>,
+}
+
+impl Registry {
+    pub fn new() -> Self {
+        Self { modules: HashMap::new() }
+    }
+
+    pub fn register(&mut self, m: Box<dyn DetailModule>) {
+        let id = m.id();
+        self.modules.insert(id, m);
+    }
+
+    pub fn get(&self, id: &str) -> Option<&dyn DetailModule> {
+        self.modules.get(id).map(|b| b.as_ref())
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.modules.keys().copied()
+    }
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Populate `reg` with the built-in modules. Built-ins are added in
+/// subsequent tasks; this is currently a no-op.
+pub fn register_builtins(_reg: &mut Registry) {
+    // Built-ins land in Tasks 3–7.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Constraint;
+
+    struct MockModule {
+        id: &'static str,
+        title: &'static str,
+        hint: Constraint,
+    }
+    impl DetailModule for MockModule {
+        fn id(&self) -> &'static str { self.id }
+        fn title(&self) -> &'static str { self.title }
+        fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint { self.hint }
+        fn render(
+            &self,
+            _area: ratatui::layout::Rect,
+            _ctx: &DetailContext<'_>,
+            _frame: &mut ratatui::Frame<'_>,
+        ) {}
+    }
+
+    #[test]
+    fn empty_registry_returns_none() {
+        let reg = Registry::new();
+        assert!(reg.get("anything").is_none());
+    }
+
+    #[test]
+    fn register_and_get_round_trip() {
+        let mut reg = Registry::new();
+        reg.register(Box::new(MockModule {
+            id: "foo",
+            title: "FOO",
+            hint: Constraint::Length(3),
+        }));
+        let m = reg.get("foo").expect("module foo should be registered");
+        assert_eq!(m.id(), "foo");
+        assert_eq!(m.title(), "FOO");
+    }
+
+    #[test]
+    fn get_unknown_returns_none() {
+        let mut reg = Registry::new();
+        reg.register(Box::new(MockModule {
+            id: "foo", title: "FOO", hint: Constraint::Length(1),
+        }));
+        assert!(reg.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn ids_enumerates_all_registered() {
+        let mut reg = Registry::new();
+        reg.register(Box::new(MockModule {
+            id: "a", title: "A", hint: Constraint::Length(1),
+        }));
+        reg.register(Box::new(MockModule {
+            id: "b", title: "B", hint: Constraint::Length(1),
+        }));
+        let ids: std::collections::HashSet<_> = reg.ids().collect();
+        assert!(ids.contains("a"));
+        assert!(ids.contains("b"));
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn register_builtins_stub_does_nothing_initially() {
+        // Built-ins are populated in later tasks. For now the stub
+        // must compile and leave the registry empty.
+        let mut reg = Registry::new();
+        register_builtins(&mut reg);
+        assert_eq!(reg.ids().count(), 0);
+    }
+}

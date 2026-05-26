@@ -24,7 +24,9 @@ impl DetailModule for RecentChat {
         let events = if ctx.events_scanned { ctx.events } else { None };
         let theme = ctx.theme;
         let column_width = area.width as usize;
-        let max_body_lines = (area.height as usize).saturating_sub(1).max(1);
+        // Host draws the title row separately; the full `area` height
+        // is available for body content.
+        let max_body_lines = (area.height as usize).max(1);
 
         let mut out: Vec<Line<'static>> = Vec::new();
 

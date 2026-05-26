@@ -49,9 +49,13 @@ strip, rules, reply input) stays fixed.
   whole-bar toggle.
 - Per-workspace overrides. Per-repo is the deepest scope.
 - Backwards compatibility with the previous `{sections: {...}}` schema. wsx
-  has no users besides the author; legacy blobs fail to parse and fall back
-  to the new default (which reproduces today's content). One-time visible
-  regression on first launch with a custom config; user re-edits.
+  has no users besides the author. Serde silently ignores the unknown
+  `sections` field, so legacy blobs parse to their preserved scalars
+  (`visible`, `height`) plus the new default `containers`. Visible
+  regression on first launch with a `sections`-tuned config: the user's
+  column-toggle intent is dropped; the bar reverts to the default 3-container
+  layout for the dropped piece. User re-edits to express the same intent in
+  the new schema.
 - SQLite schema changes. The `detail_bar_config TEXT` column on `repos`
   already exists.
 
@@ -616,11 +620,17 @@ SUMMARY; the new behavior gives the user the lever.
 
 ### Migration / schema drift
 
-- **Existing global blob in old shape on first launch** → parse fails;
-  logged; default used. One-time visible regression for the author; re-edit
-  to the new shape.
-- **Existing per-repo override in old shape** → parse fails; logged;
-  override ignored; repo inherits global.
+- **Existing global blob in old shape on first launch** → parse *succeeds*
+  via serde's "ignore unknown fields" default; `visible` and `height` are
+  preserved, the dropped `sections` field is filled in with default
+  `containers`. One-time visible regression for the author's column-toggle
+  intent; user re-edits to express it in the new schema. Verified by
+  `resolve_legacy_blob_silently_ignores_sections` in
+  `src/detail_bar_config.rs`.
+- **Existing per-repo override in old shape** → same behavior: parse
+  succeeds, unknown `sections` field is dropped, scalar overrides
+  preserved. Repo inherits the global default `containers` unless the
+  override also sets the new `containers` field.
 - **Future schema additions** — `#[serde(default)]` on every field keeps
   old blobs parsing as new fields appear.
 - **No SQLite migration needed** — `detail_bar_config TEXT` column on

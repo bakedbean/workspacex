@@ -76,7 +76,7 @@ Select a workspace on the dashboard so the detail bar appears.
    Save. Observe `[unknown: seshun_summary]` placeholder in the left
    column; other columns render normally.
 
-7. **Per-repo override** — open the repo settings modal (`R`), navigate
+7. **Per-repo override** — open the repo settings modal (`s`), navigate
    to `detail_bar_config`, press Enter. Set:
 
    ```json

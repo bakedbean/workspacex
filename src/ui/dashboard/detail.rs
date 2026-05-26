@@ -46,8 +46,8 @@ pub struct DetailInputs<'a> {
 
 /// Render the detail bar into `area`. No-op when `area.height` is below
 /// the config's `minimum_height()` — which is `CHROME_ROWS` (4) when no
-/// sections are enabled, or `min_rows` otherwise (caller is expected to
-/// fall back to a condensed banner — see `app.rs::draw`).
+/// container has any modules, or `min_rows` otherwise (caller is expected
+/// to fall back to a condensed banner — see `app.rs::draw`).
 pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
     if area.height == 0 || area.height < inputs.config.minimum_height() {
         return;
@@ -232,7 +232,7 @@ fn render_container(
         match slot {
             Slot::Found(m) => {
                 f.render_widget(
-                    Paragraph::new(Line::from(Span::styled(m.title().to_string(), label_style))),
+                    Paragraph::new(Line::from(Span::styled(m.title(), label_style))),
                     title_area,
                 );
                 m.render(body_area, ctx, f);
@@ -358,9 +358,10 @@ fn format_ago_short(secs: Option<u64>) -> String {
     }
 }
 
-/// Render the PROCESSES module body. Returns the label row plus one
-/// row per process (capped at 5, with a "+N more" suffix when over
-/// the cap), or a single "—" placeholder when empty.
+/// Render the PROCESSES module body. Returns one row per process
+/// (capped at 5, with a "+N more" suffix when over the cap), or a
+/// single "—" placeholder when empty. The host (`render_container`)
+/// draws the title row separately.
 pub(crate) fn build_processes(
     procs: &[ProcInfo],
     theme: &Theme,
@@ -388,9 +389,10 @@ pub(crate) fn build_processes(
     out
 }
 
-/// Render the RECENT FILES module body. Returns the label row plus
-/// one row per file (capped at 5), each annotated with per-file diff
-/// stats when available. Single "—" placeholder when empty.
+/// Render the RECENT FILES module body. Returns one row per file
+/// (capped at 5), each annotated with per-file diff stats when
+/// available, or a single "—" placeholder when empty. The host
+/// (`render_container`) draws the title row separately.
 pub(crate) fn build_recent_files(
     events: Option<&WorkspaceEvents>,
     diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,

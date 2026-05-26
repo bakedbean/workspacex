@@ -2239,7 +2239,7 @@ Select a workspace on the dashboard so the detail bar appears.
    Save. Observe `[unknown: seshun_summary]` placeholder in the left
    column; other columns render normally.
 
-7. **Per-repo override** — open the repo settings modal (`R`), navigate
+7. **Per-repo override** — open the repo settings modal (`s`), navigate
    to `detail_bar_config`, press Enter. Set:
 
    ```json
@@ -2326,7 +2326,7 @@ and an optional per-repo override.
 - `processes` — running processes attached to the workspace.
 - `recent_files` — recently edited files with per-file diff stats.
 
-**Per-repo override** — in the repo settings modal (`R`), the
+**Per-repo override** — in the repo settings modal (`s`), the
 `detail_bar_config` row accepts a `DetailBarOverride`. Scalars
 (`visible`, `height.*`) merge per-field; `containers` whole-replaces.
 

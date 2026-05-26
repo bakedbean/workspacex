@@ -918,29 +918,24 @@ async fn handle_key_modal(
                         }
                     }
                 };
-                let result = crate::workspace::archive(
-                    &app.store,
-                    &repo,
-                    &ws,
-                    crate::workspace::ArchiveOpts {
-                        force_branch_delete: true,
-                        ..Default::default()
-                    },
-                    |_| {},
-                )
-                .await;
-                match result {
-                    Ok(_) => {
-                        app.modal = None;
-                        app.refresh()?;
-                    }
-                    Err(e) => {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
-                }
+                let archive_gen = app.alloc_archive_gen();
+                app.modal = Some(Modal::ArchiveRunning);
+                let shared_clone = shared.clone();
                 let _ = name;
+                tokio::spawn(async move {
+                    let result = crate::workspace::archive_with_app(
+                        shared_clone.clone(),
+                        repo,
+                        ws,
+                        crate::workspace::ArchiveOpts {
+                            force_branch_delete: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                    crate::app::reconcile_archive_result(shared_clone, archive_gen, result)
+                        .await;
+                });
             }
             KeyCode::Char('n') | KeyCode::Esc => {
                 app.modal = None;

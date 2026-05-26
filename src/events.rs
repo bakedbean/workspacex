@@ -176,6 +176,17 @@ pub struct WorkspaceEvents {
     /// duplicated, so repeated edits to the same file don't appear
     /// multiple times in the dashboard's RECENT FILES list.
     pub recent_edited_files: VecDeque<String>,
+    /// Per-turn accumulator: the longest assistant text block seen
+    /// since the last is-awaiting-user stop_reason. Updated by the
+    /// tail loop via `record_batch_longest_text`. Snapshotted into
+    /// `last_completed_turn_text` (after `clean_recap` filtering) at
+    /// the end of each turn. Cleared on session reset.
+    pub longest_text_this_turn: Option<String>,
+    /// Cleaned recap of the most-recently-completed agent turn. Pinned
+    /// (i.e. does not mutate mid-turn or wipe on filter rejection) so
+    /// the SESSION SUMMARY column has stable text to render between
+    /// turns. Cleared on session reset.
+    pub last_completed_turn_text: Option<String>,
 }
 
 impl Default for WorkspaceEvents {
@@ -194,6 +205,8 @@ impl Default for WorkspaceEvents {
             first_user_text: None,
             tool_use_counts: ToolUseCounts::default(),
             recent_edited_files: VecDeque::with_capacity(7),
+            longest_text_this_turn: None,
+            last_completed_turn_text: None,
         }
     }
 }
@@ -223,6 +236,37 @@ impl WorkspaceEvents {
         self.first_user_text = None;
         self.tool_use_counts = ToolUseCounts::default();
         self.recent_edited_files.clear();
+        self.longest_text_this_turn = None;
+        self.last_completed_turn_text = None;
+    }
+
+    /// Merge a batch's longest assistant text into the per-turn
+    /// accumulator. Keeps whichever candidate is longer (by character
+    /// count). Called once per tail batch by the background poller.
+    pub fn record_batch_longest_text(&mut self, batch_longest: &str) {
+        let new_len = batch_longest.chars().count();
+        let cur_len = self
+            .longest_text_this_turn
+            .as_ref()
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
+        if new_len > cur_len {
+            self.longest_text_this_turn = Some(batch_longest.to_string());
+        }
+    }
+
+    /// At the end of a turn (an "awaiting user" stop_reason), run
+    /// `clean_recap` over the accumulated longest text and pin the
+    /// result into `last_completed_turn_text`. Always clears the
+    /// accumulator. If the candidate fails the filter the prior
+    /// recap survives — the user keeps seeing the most recent valid
+    /// recap rather than blanking on a noisy turn.
+    pub fn snapshot_recap_at_turn_end(&mut self) {
+        if let Some(text) = self.longest_text_this_turn.take()
+            && let Some(cleaned) = clean_recap(&text)
+        {
+            self.last_completed_turn_text = Some(cleaned);
+        }
     }
 
     /// The agent is stopped and the human hasn't replied yet.
@@ -329,6 +373,13 @@ pub struct TailUpdate {
     /// any. The caller stores this on WorkspaceEvents for the classifier.
     /// None means "no new text in this batch" — keep the prior value.
     pub last_assistant_text: Option<String>,
+    /// The longest assistant text block observed in this batch, by
+    /// character count. The caller merges this into a per-turn
+    /// accumulator and snapshots it at end-of-turn for the SESSION
+    /// SUMMARY recap line. Tracking the *longest* (not the latest)
+    /// block is a heuristic that filters out short pre-tool narration
+    /// in favor of substantive end-of-turn recaps.
+    pub longest_assistant_text_in_batch: Option<String>,
     /// Final interrupt-sentinel state at the end of the batch.
     /// `Some(true)`  — batch ended with an interrupt sentinel,
     /// `Some(false)` — batch saw something that overrides the sentinel
@@ -467,6 +518,21 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
         if parsed.user_interrupt_sentinel {
             update.last_user_interrupted = Some(true);
         }
+        // Track the longest text block seen in this batch from each
+        // message's longest-in-message (NOT its last text). This avoids
+        // missing a substantive recap when the agent emitted a terse
+        // closing block ("Done.") last in the same message.
+        if let Some(longest) = parsed.longest_text_in_message {
+            let len = longest.chars().count();
+            let beats = update
+                .longest_assistant_text_in_batch
+                .as_ref()
+                .map(|cur| cur.chars().count() < len)
+                .unwrap_or(true);
+            if beats {
+                update.longest_assistant_text_in_batch = Some(longest);
+            }
+        }
         if let Some(text) = parsed.last_assistant_text {
             update.last_assistant_text = Some(text);
         }
@@ -493,6 +559,12 @@ pub struct ParsedLine {
     /// `WorkspaceEvents::last_text_ends_with_question`. None for any
     /// non-assistant line, or for assistant messages with no text blocks.
     pub last_assistant_text: Option<String>,
+    /// The longest `text` content block (by char count) in this assistant
+    /// message. Distinct from `last_assistant_text`: when a message has
+    /// multiple text blocks (e.g. a long recap followed by a terse
+    /// "Done."), this surfaces the substantive one. Forwarded to the
+    /// recap pipeline via `TailUpdate.longest_assistant_text_in_batch`.
+    pub longest_text_in_message: Option<String>,
     /// True if this user line is the Claude Code "[Request interrupted by
     /// user for tool use]" sentinel. Doesn't set `is_user_text`: the
     /// sentinel is system-generated, not a real human reply, so the
@@ -603,6 +675,7 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     // Prefer tool_use over text — tool use is the most concrete signal of
     // "what's happening right now". Fall back to assistant text.
     let mut last_text: Option<&str> = None;
+    let mut longest_text: Option<&str> = None;
     let mut last_tool: Option<(&str, &serde_json::Value)> = None;
     for block in blocks {
         let Some(bt) = block.get("type").and_then(|t| t.as_str()) else {
@@ -612,6 +685,13 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
             "text" => {
                 if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
                     last_text = Some(t);
+                    let new_len = t.chars().count();
+                    let beats = longest_text
+                        .map(|cur| cur.chars().count() < new_len)
+                        .unwrap_or(true);
+                    if beats {
+                        longest_text = Some(t);
+                    }
                 }
             }
             "tool_use" => {
@@ -643,6 +723,9 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     // unchanged; we just also remember the text for downstream classification.
     if let Some(t) = last_text {
         out.last_assistant_text = Some(t.to_string());
+    }
+    if let Some(t) = longest_text {
+        out.longest_text_in_message = Some(t.to_string());
     }
     if let Some((name, input)) = last_tool {
         let body = if name == "Bash" {
@@ -777,6 +860,146 @@ pub fn push_event(store: &mut WorkspaceEvents, event: EventSnapshot) {
     }
     store.latest = Some(event.clone());
     store.log.push_back(event);
+}
+
+/// Clean a raw assistant text block into a recap candidate suitable
+/// for the SESSION SUMMARY column. Returns `None` if the text looks
+/// like pre-tool narration, a pure short closing question, or pure
+/// decoration with no prose content.
+///
+/// Conservative — when in doubt, return `Some`. Steps:
+/// 1. Skip leading blank lines.
+/// 2. If the first content line opens a `★ Insight` block, skip past
+///    its closing horizontal-rule banner.
+/// 3. If the first content line opens a fenced code block (```), skip
+///    past its closing fence.
+/// 4. Strip residual decoration lines (horizontal rules, orphan
+///    fences, blank lines).
+/// 5. Reject when the first remaining content line starts with a
+///    narration prefix (`Let me `, `I'll `, `I'm going to `, `Let's `).
+/// 6. Reject when the entire cleaned content is a single short
+///    trailing question (≤50 chars, ends with `?`, no internal `.` or
+///    `!`). 50-char cap excludes substantive questions like "Want me
+///    to audit every callsite that touches that field too?" while
+///    still catching closers like "Want me to update the tests?".
+pub fn clean_recap(raw: &str) -> Option<String> {
+    let lines: Vec<&str> = raw.lines().collect();
+    let mut idx = 0;
+
+    let skip_blanks = |lines: &[&str], mut i: usize| {
+        while i < lines.len() && lines[i].trim().is_empty() {
+            i += 1;
+        }
+        i
+    };
+
+    idx = skip_blanks(&lines, idx);
+    idx = skip_insight_block(&lines, idx);
+    idx = skip_blanks(&lines, idx);
+    idx = skip_code_fence(&lines, idx);
+    idx = skip_blanks(&lines, idx);
+    while idx < lines.len() && is_decoration_line(lines[idx]) {
+        idx += 1;
+    }
+
+    if idx >= lines.len() {
+        return None;
+    }
+
+    let first = lines[idx].trim_start();
+    const NARRATION_PREFIXES: &[&str] = &[
+        "Let me ",
+        "let me ",
+        "I'll ",
+        "i'll ",
+        "I'm going to ",
+        "i'm going to ",
+        "Let's ",
+        "let's ",
+    ];
+    if NARRATION_PREFIXES.iter().any(|p| first.starts_with(p)) {
+        return None;
+    }
+
+    let cleaned = lines[idx..].join("\n").trim_end().to_string();
+    if cleaned.trim().is_empty() {
+        return None;
+    }
+    if is_pure_short_question(&cleaned) {
+        return None;
+    }
+    Some(cleaned)
+}
+
+fn is_decoration_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return true;
+    }
+    // Lone code-fence marker (``` or ```rust). `skip_code_fence`
+    // already paired-stripped leading fences; this catches orphans.
+    if t.starts_with("```") {
+        return true;
+    }
+    let inner = t.trim_matches('`').trim();
+    !inner.is_empty()
+        && inner
+            .chars()
+            .all(|c| c == '─' || c == '-' || c.is_whitespace())
+}
+
+fn skip_insight_block(lines: &[&str], start: usize) -> usize {
+    let Some(line) = lines.get(start) else {
+        return start;
+    };
+    let inner = line.trim().trim_matches('`').trim();
+    let is_opener = inner.starts_with('★') && inner.contains('─');
+    if !is_opener {
+        return start;
+    }
+    let window_end = (start + 1 + 20).min(lines.len());
+    for i in (start + 1)..window_end {
+        let candidate = lines[i].trim().trim_matches('`').trim();
+        if !candidate.is_empty()
+            && candidate
+                .chars()
+                .all(|c| c == '─' || c == '-' || c.is_whitespace())
+        {
+            return i + 1;
+        }
+    }
+    // Unbalanced opener — fall back to skipping just the opener line.
+    start + 1
+}
+
+fn skip_code_fence(lines: &[&str], start: usize) -> usize {
+    if !lines
+        .get(start)
+        .map(|l| l.trim().starts_with("```"))
+        .unwrap_or(false)
+    {
+        return start;
+    }
+    for i in (start + 1)..lines.len() {
+        if lines[i].trim().starts_with("```") {
+            return i + 1;
+        }
+    }
+    // Unbalanced fence — fall back to skipping just the opener.
+    start + 1
+}
+
+fn is_pure_short_question(s: &str) -> bool {
+    let t = s.trim();
+    // Character count, not byte count — non-ASCII trailing questions
+    // would otherwise sneak past the threshold.
+    if t.chars().count() > 50 || !t.ends_with('?') {
+        return false;
+    }
+    // "Statement. Question?" carries signal in the statement — keep.
+    // `?` is single-byte ASCII so `t.len() - 1` is a safe boundary.
+    let body = &t[..t.len() - 1];
+    !body.contains(['.', '!'])
 }
 
 #[cfg(test)]
@@ -1660,5 +1883,287 @@ mod tests {
         assert_eq!(upd.tool_use_counts.bash, 1);
         // Only Edit contributes to edited_file_paths — Read does not.
         assert_eq!(upd.edited_file_paths, vec!["/b.rs".to_string()]);
+    }
+
+    // clean_recap: cleans a raw assistant text block into a recap candidate
+    // suitable for the SESSION SUMMARY column. See module-level helper.
+
+    #[test]
+    fn clean_recap_keeps_simple_prose() {
+        let s = "Here's the sketch. Three small pieces — no plumbing changes.";
+        assert_eq!(clean_recap(s).as_deref(), Some(s));
+    }
+
+    #[test]
+    fn clean_recap_rejects_let_me_narration() {
+        assert!(clean_recap("Let me check the events module.").is_none());
+        assert!(clean_recap("let me grep for that next.").is_none());
+    }
+
+    #[test]
+    fn clean_recap_rejects_ill_narration() {
+        assert!(clean_recap("I'll grep for that next.").is_none());
+        assert!(clean_recap("I'm going to read the parser first.").is_none());
+        assert!(clean_recap("Let's check the test fixtures.").is_none());
+    }
+
+    #[test]
+    fn clean_recap_rejects_empty_or_whitespace() {
+        assert!(clean_recap("").is_none());
+        assert!(clean_recap("   \n\n  ").is_none());
+    }
+
+    #[test]
+    fn clean_recap_rejects_pure_decoration() {
+        assert!(clean_recap("`─────────────`").is_none());
+        assert!(clean_recap("```rust").is_none());
+        assert!(clean_recap("───\n\n```").is_none());
+    }
+
+    #[test]
+    fn clean_recap_strips_leading_blank_and_rule_lines() {
+        let s = "\n\n`───`\nHere is the recap.";
+        assert_eq!(clean_recap(s).as_deref(), Some("Here is the recap."));
+    }
+
+    #[test]
+    fn clean_recap_skips_entire_insight_block() {
+        // Opening `★ Insight ─` banner, bullets inside, closing `─` rule,
+        // then the real recap prose. Filter should land on the prose.
+        let s =
+            "`★ Insight ─────`\n- meta point 1\n- meta point 2\n`─────`\n\nHere's what I did: X.";
+        assert_eq!(clean_recap(s).as_deref(), Some("Here's what I did: X."));
+    }
+
+    #[test]
+    fn clean_recap_insight_block_without_closing_banner_falls_back() {
+        // Unbalanced banner: skip just the opener, accept whatever's next.
+        let s = "`★ Insight ─────`\nThis is the body.";
+        let got = clean_recap(s);
+        assert!(got.is_some(), "should not reject unbalanced banner");
+        assert!(
+            got.as_deref().unwrap().contains("This is the body."),
+            "got: {got:?}"
+        );
+    }
+
+    #[test]
+    fn clean_recap_skips_leading_code_fence_to_post_code_prose() {
+        let s = "```rust\nlet x = 1;\nlet y = 2;\n```\n\nThis adds two constants.";
+        assert_eq!(clean_recap(s).as_deref(), Some("This adds two constants."));
+    }
+
+    #[test]
+    fn clean_recap_unbalanced_code_fence_falls_back() {
+        // Missing closing fence: skip just the opener.
+        let s = "```\nstill content here";
+        let got = clean_recap(s);
+        assert!(got.is_some(), "should not reject unbalanced fence");
+    }
+
+    #[test]
+    fn clean_recap_rejects_pure_short_trailing_question() {
+        assert!(clean_recap("Want me to update the tests?").is_none());
+        assert!(clean_recap("What should I do next?").is_none());
+    }
+
+    #[test]
+    fn clean_recap_keeps_statement_then_question() {
+        let s = "I made the changes. Want me to update the tests?";
+        assert_eq!(clean_recap(s).as_deref(), Some(s));
+    }
+
+    #[test]
+    fn clean_recap_rejects_short_non_ascii_trailing_question() {
+        // 21 chars, ~61 bytes — short by character count but long by
+        // byte count. The 50-char cap must compare characters, not
+        // bytes, so this short non-ASCII closing question gets
+        // rejected like its ASCII counterparts.
+        let s = "漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字?";
+        assert!(
+            clean_recap(s).is_none(),
+            "expected short non-ASCII question to be rejected; got {:?}",
+            clean_recap(s)
+        );
+    }
+
+    #[test]
+    fn clean_recap_keeps_long_trailing_question() {
+        // Above the 50-char short-question cap, accept even though it
+        // ends with `?` — long questions carry substantive content.
+        let s = "Want me to do a thorough audit of every callsite that touches that field too?";
+        assert!(clean_recap(s).is_some());
+    }
+
+    #[test]
+    fn clean_recap_preserves_paragraph_structure() {
+        // Body with multi-line paragraphs survives intact (wrap happens
+        // downstream in the renderer, not here).
+        let s = "Done.\n\nNext: address the lint warning in foo.rs.";
+        assert_eq!(clean_recap(s).as_deref(), Some(s));
+    }
+
+    #[test]
+    fn clean_recap_real_hyacinth_turn_4() {
+        // Regression: real recap from the dusty-hyacinth session that
+        // motivated this feature. Should pass through clean.
+        let s = "Here's the sketch. Three small pieces — no plumbing changes, no new dependencies.";
+        assert_eq!(clean_recap(s).as_deref(), Some(s));
+    }
+
+    #[test]
+    fn record_batch_longest_text_replaces_when_longer() {
+        let mut evt = WorkspaceEvents::default();
+        evt.record_batch_longest_text("short");
+        evt.record_batch_longest_text("a much longer recap candidate");
+        assert_eq!(
+            evt.longest_text_this_turn.as_deref(),
+            Some("a much longer recap candidate")
+        );
+    }
+
+    #[test]
+    fn record_batch_longest_text_keeps_when_shorter() {
+        let mut evt = WorkspaceEvents::default();
+        evt.record_batch_longest_text("a much longer recap candidate");
+        evt.record_batch_longest_text("short");
+        assert_eq!(
+            evt.longest_text_this_turn.as_deref(),
+            Some("a much longer recap candidate")
+        );
+    }
+
+    #[test]
+    fn record_batch_longest_text_initializes_from_empty() {
+        let mut evt = WorkspaceEvents::default();
+        assert!(evt.longest_text_this_turn.is_none());
+        evt.record_batch_longest_text("first text");
+        assert_eq!(evt.longest_text_this_turn.as_deref(), Some("first text"));
+    }
+
+    #[test]
+    fn snapshot_recap_at_turn_end_writes_cleaned_text_and_clears_accumulator() {
+        let mut evt = WorkspaceEvents::default();
+        evt.record_batch_longest_text("Here's the recap. Done.");
+        evt.snapshot_recap_at_turn_end();
+        assert_eq!(
+            evt.last_completed_turn_text.as_deref(),
+            Some("Here's the recap. Done.")
+        );
+        assert!(evt.longest_text_this_turn.is_none());
+    }
+
+    #[test]
+    fn snapshot_recap_at_turn_end_strips_insight_banner() {
+        let mut evt = WorkspaceEvents::default();
+        evt.record_batch_longest_text("`★ Insight ─────`\n- meta\n`─────`\n\nHere is the recap.");
+        evt.snapshot_recap_at_turn_end();
+        assert_eq!(
+            evt.last_completed_turn_text.as_deref(),
+            Some("Here is the recap.")
+        );
+    }
+
+    #[test]
+    fn snapshot_recap_at_turn_end_preserves_prior_when_candidate_is_narration() {
+        let mut evt = WorkspaceEvents {
+            last_completed_turn_text: Some("Prior good recap.".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        evt.record_batch_longest_text("Let me check the parser.");
+        evt.snapshot_recap_at_turn_end();
+        // Prior recap survives because the new candidate was narration.
+        assert_eq!(
+            evt.last_completed_turn_text.as_deref(),
+            Some("Prior good recap.")
+        );
+        // Accumulator still cleared — next turn starts fresh.
+        assert!(evt.longest_text_this_turn.is_none());
+    }
+
+    #[test]
+    fn snapshot_recap_at_turn_end_with_empty_accumulator_does_nothing() {
+        let mut evt = WorkspaceEvents {
+            last_completed_turn_text: Some("Prior recap.".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        evt.snapshot_recap_at_turn_end();
+        assert_eq!(
+            evt.last_completed_turn_text.as_deref(),
+            Some("Prior recap.")
+        );
+    }
+
+    #[test]
+    fn reset_session_state_clears_recap_fields() {
+        let mut evt = WorkspaceEvents {
+            longest_text_this_turn: Some("foo".to_string()),
+            last_completed_turn_text: Some("bar".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        evt.reset_session_state();
+        assert!(evt.longest_text_this_turn.is_none());
+        assert!(evt.last_completed_turn_text.is_none());
+    }
+
+    #[test]
+    fn tail_session_captures_longest_text_in_batch() {
+        // The recap pipeline cares about the *longest* assistant text
+        // in a turn, not the last — narration is short, recaps are
+        // long. tail_session should expose the batch's longest text
+        // alongside the existing last-text field.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let short = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me look."}]},"timestamp":"2026-05-14T17:32:02.000Z"}"#;
+        let long = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here is the substantial recap of what got done in this turn including details."}]},"timestamp":"2026-05-14T17:32:03.000Z"}"#;
+        let final_short = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]},"timestamp":"2026-05-14T17:32:04.000Z"}"#;
+        std::fs::write(&path, format!("{short}\n{long}\n{final_short}\n")).unwrap();
+        let upd = tail_session(&path, 0).unwrap();
+        // last_assistant_text remains the final one (existing behavior).
+        assert_eq!(upd.last_assistant_text.as_deref(), Some("Done."));
+        // longest captures the middle, long block.
+        assert_eq!(
+            upd.longest_assistant_text_in_batch.as_deref(),
+            Some("Here is the substantial recap of what got done in this turn including details.")
+        );
+    }
+
+    #[test]
+    fn tail_session_longest_picks_longest_block_within_one_message() {
+        // A single assistant message containing multiple text blocks —
+        // long recap first, terse "Done." last. The batch-longest must
+        // be the long block. Catches the bug where the parser only
+        // surfaces the last text block to the tail loop.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here is a substantial recap that summarises the turn at length."},{"type":"text","text":"Done."}]},"timestamp":"2026-05-14T17:32:02.000Z"}"#;
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let upd = tail_session(&path, 0).unwrap();
+        assert_eq!(
+            upd.longest_assistant_text_in_batch.as_deref(),
+            Some("Here is a substantial recap that summarises the turn at length.")
+        );
+    }
+
+    #[test]
+    fn tail_session_longest_text_is_none_when_no_text() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        // Only a tool_use line — no assistant text.
+        let only_tool = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"x"}}]},"timestamp":"2026-05-14T17:32:02.000Z"}"#;
+        std::fs::write(&path, format!("{only_tool}\n")).unwrap();
+        let upd = tail_session(&path, 0).unwrap();
+        assert!(upd.longest_assistant_text_in_batch.is_none());
+    }
+
+    #[test]
+    fn clean_recap_real_hibiscus_turn_2() {
+        // Regression: insight banner + bullets + closing banner + prose.
+        let s = "`★ Insight ─────`\n- DetailContext is a borrowed snapshot — zero allocations per draw.\n- The four current modules each tap a different layer.\n`─────`\n\nHere are ideas grouped by layer.";
+        let got = clean_recap(s).expect("should keep content");
+        assert!(
+            got.starts_with("Here are ideas grouped by layer."),
+            "expected post-banner prose, got: {got:?}"
+        );
     }
 }

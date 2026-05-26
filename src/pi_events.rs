@@ -137,6 +137,19 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
             update.human_replied_after_last_stop = true;
             update.last_user_interrupted = Some(false);
         }
+        // Track batch-longest from each message's longest-in-message
+        // (NOT its last text). See events.rs for rationale.
+        if let Some(longest) = parsed.longest_text_in_message {
+            let len = longest.chars().count();
+            let beats = update
+                .longest_assistant_text_in_batch
+                .as_ref()
+                .map(|cur| cur.chars().count() < len)
+                .unwrap_or(true);
+            if beats {
+                update.longest_assistant_text_in_batch = Some(longest);
+            }
+        }
         if let Some(text) = parsed.last_assistant_text {
             update.last_assistant_text = Some(text);
         }
@@ -154,6 +167,9 @@ pub struct ParsedLine {
     pub stop_reason: Option<StopReason>,
     pub is_user_text: bool,
     pub last_assistant_text: Option<String>,
+    /// Longest `text` content block (by char count) in this message.
+    /// See `crate::events::ParsedLine::longest_text_in_message`.
+    pub longest_text_in_message: Option<String>,
 }
 
 /// Parse a single pi session JSONL line into a [`ParsedLine`].
@@ -281,6 +297,7 @@ fn parse_pi_assistant(msg: &serde_json::Value, timestamp_ms: i64) -> ParsedLine 
     };
 
     let mut last_text: Option<&str> = None;
+    let mut longest_text: Option<&str> = None;
     let mut last_tool: Option<(&str, &serde_json::Value)> = None;
     for block in blocks {
         let Some(bt) = block.get("type").and_then(|t| t.as_str()) else {
@@ -290,6 +307,13 @@ fn parse_pi_assistant(msg: &serde_json::Value, timestamp_ms: i64) -> ParsedLine 
             "text" => {
                 if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
                     last_text = Some(t);
+                    let new_len = t.chars().count();
+                    let beats = longest_text
+                        .map(|cur| cur.chars().count() < new_len)
+                        .unwrap_or(true);
+                    if beats {
+                        longest_text = Some(t);
+                    }
                 }
             }
             "toolCall" => {
@@ -308,6 +332,9 @@ fn parse_pi_assistant(msg: &serde_json::Value, timestamp_ms: i64) -> ParsedLine 
     // Capture the final text block for the question-vs-complete classifier.
     if let Some(t) = last_text {
         out.last_assistant_text = Some(t.to_string());
+    }
+    if let Some(t) = longest_text {
+        out.longest_text_in_message = Some(t.to_string());
     }
 
     // Display: prefer tool_use over text.

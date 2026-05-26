@@ -14,8 +14,26 @@ impl DetailModule for SessionSummary {
     fn title(&self) -> &'static str {
         "SESSION SUMMARY"
     }
-    fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
-        Constraint::Min(3)
+    fn height_hint(&self, ctx: &DetailContext<'_>) -> Constraint {
+        // When a recap is pinned, request enough rows for prompt (1) +
+        // trace (1) + a 3-line recap minimum + footer (2). Without a
+        // recap the original 3-row minimum is plenty.
+        //
+        // Gate on `events_scanned` so the hint matches what `render`
+        // will actually draw — pre-first-scan `render` shows a
+        // "loading…" placeholder and shouldn't be reserving rows for
+        // a recap that won't yet be visible.
+        let has_recap = ctx.events_scanned
+            && ctx
+                .events
+                .and_then(|e| e.last_completed_turn_text.as_deref())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+        if has_recap {
+            Constraint::Min(7)
+        } else {
+            Constraint::Min(3)
+        }
     }
     fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
         use ratatui::style::{Modifier, Style};
@@ -81,6 +99,46 @@ impl DetailModule for SessionSummary {
                     Span::raw(truncate_to_chars(&trace, column_width.saturating_sub(2)))
                 };
                 out.push(Line::from(vec![prefix.clone(), trace_body]));
+
+                // Recap: pinned at the previous turn's end; cleaned and
+                // budgeted to whatever vertical room remains after the
+                // prompt and trace, reserving 2 lines for the
+                // created/active footer. When there's no room left, the
+                // recap is skipped entirely — losing the activity line
+                // at the bottom of the footer would be worse than
+                // losing supplementary recap text.
+                if let Some(recap) = evt.last_completed_turn_text.as_deref() {
+                    let trimmed = recap.trim();
+                    if !trimmed.is_empty() {
+                        let max_lines = (area.height as usize)
+                            .saturating_sub(out.len())
+                            .saturating_sub(2);
+                        if max_lines > 0 {
+                            let inner_width = column_width.saturating_sub(2).max(1);
+                            let wrapped = wrap_lines(trimmed, inner_width);
+                            let truncated = wrapped.len() > max_lines;
+                            for (i, line_text) in wrapped.iter().take(max_lines).enumerate() {
+                                let leader = if i == 0 {
+                                    prefix.clone()
+                                } else {
+                                    continuation.clone()
+                                };
+                                let body_text = if truncated && i == max_lines - 1 {
+                                    let mut s =
+                                        truncate_to_chars(line_text, inner_width.saturating_sub(1));
+                                    s.push('…');
+                                    s
+                                } else {
+                                    line_text.clone()
+                                };
+                                out.push(Line::from(vec![
+                                    leader,
+                                    Span::styled(body_text, theme.dim_style()),
+                                ]));
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -224,6 +282,29 @@ fn wrap_lines(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::detail_modules::tests_helpers::stub_context;
+    use crate::events::WorkspaceEvents;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn render_to_text(ctx: &DetailContext<'_>, w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, w, h);
+                SessionSummary.render(area, ctx, f);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut s = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s.push('\n');
+        }
+        s
+    }
 
     #[test]
     fn id_is_session_summary() {
@@ -239,5 +320,150 @@ mod tests {
     fn height_hint_is_min_three() {
         let ctx = stub_context();
         assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(3));
+    }
+
+    #[test]
+    fn height_hint_grows_when_recap_is_present() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            last_completed_turn_text: Some("a recap".into()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        // The recap module signals it wants more vertical room so the
+        // host layout reserves enough rows for prompt + trace + recap +
+        // footer.
+        assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(7));
+    }
+
+    #[test]
+    fn height_hint_does_not_grow_before_first_scan_completes() {
+        // Between WorkspaceEvents creation and the first tail completion
+        // there's a brief window where `events` is Some but
+        // `events_scanned` is false. During that window `render` shows
+        // "loading…" — so `height_hint` shouldn't be reserving extra
+        // rows for a recap that won't be drawn yet.
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            last_completed_turn_text: Some("a recap".into()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        // events_scanned intentionally left false.
+        assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(3));
+    }
+
+    #[test]
+    fn render_includes_recap_text_when_set() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            first_user_text: Some("prompt".into()),
+            last_completed_turn_text: Some("RECAPMARKER rendered out.".into()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(
+            text.contains("RECAPMARKER"),
+            "expected recap text in rendered output, got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_recap_uses_available_height_beyond_three_lines() {
+        // Recap that wraps to many lines; area has plenty of vertical
+        // room. The render should expand the recap budget to use
+        // available height rather than always trimming to 3 lines.
+        //
+        // With width 20 / inner_width 18, the wrap groups four 3-char
+        // tokens per line: line1=A-D, line2=E-H, line3=I-L, line4=M-P,
+        // line5=Q-T, line6=U-X, line7=Y-Z. "MMM" lands on line 4 and
+        // is excluded by any 3-line cap.
+        let long_recap = "AAA BBB CCC DDD EEE FFF GGG HHH III JJJ KKK LLL MMM NNN OOO PPP \
+                          QQQ RRR SSS TTT UUU VVV WWW XXX YYY ZZZ";
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            first_user_text: Some("prompt".into()),
+            last_completed_turn_text: Some(long_recap.into()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 20, 20);
+        assert!(
+            text.contains("MMM"),
+            "expected wrapped recap to extend past line 3 (look for 'MMM'); got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_recap_yields_to_footer_when_no_room_left() {
+        // area.height too small to fit prompt + trace + recap + footer
+        // simultaneously. Recap must yield so the "active —" line at
+        // the bottom of the footer survives — losing the timing info is
+        // worse than losing the recap.
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            first_user_text: Some("prompt".into()),
+            last_completed_turn_text: Some(
+                "RECAPSACRIFICED some prose that should be dropped.".into(),
+            ),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 30, 4);
+        assert!(
+            text.contains("active"),
+            "footer 'active' line missing:\n{text}"
+        );
+        assert!(
+            !text.contains("RECAPSACRIFICED"),
+            "recap should be skipped to preserve footer:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_recap_truncates_when_no_room_for_more_lines() {
+        // Recap that wraps to many lines but area is small enough that
+        // we can't fit everything plus the created/active footer.
+        // The recap should clip and the footer should still appear.
+        let long_recap = "AAA BBB CCC DDD EEE FFF GGG HHH III JJJ KKK LLL MMM NNN OOO";
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            first_user_text: Some("prompt".into()),
+            last_completed_turn_text: Some(long_recap.into()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 20, 7);
+        // Footer survives: "created" is the prefix on the created line.
+        assert!(text.contains("created"), "footer missing:\n{text}");
+    }
+
+    #[test]
+    fn render_omits_recap_block_when_unset() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            first_user_text: Some("prompt".into()),
+            // last_completed_turn_text intentionally None.
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(text.contains("prompt"), "prompt missing:\n{text}");
+        assert!(
+            !text.contains("RECAPMARKER"),
+            "unexpected recap text:\n{text}"
+        );
     }
 }

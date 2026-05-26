@@ -108,6 +108,11 @@ pub struct App {
     /// Used by the reconcile step to detect stale completions (user cancelled,
     /// new create started, etc.).
     pub pending_create_gen: Option<u64>,
+    /// Monotonic counter handed out to in-flight workspace archive tasks.
+    pub next_archive_gen: u64,
+    /// Generation id of the currently in-flight workspace archive, if any.
+    /// Used by the reconcile step to detect stale completions.
+    pub pending_archive_gen: Option<u64>,
     pub dashboard: DashboardState,
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::store::RepoId, Workspace)>,
@@ -253,6 +258,8 @@ impl App {
             pm_auto_summary_sent: false,
             next_create_gen: 0,
             pending_create_gen: None,
+            next_archive_gen: 0,
+            pending_archive_gen: None,
             chip_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
@@ -331,6 +338,14 @@ impl App {
         let g = self.next_create_gen;
         self.next_create_gen = self.next_create_gen.wrapping_add(1);
         self.pending_create_gen = Some(g);
+        g
+    }
+
+    /// Allocate a fresh generation id for a new workspace-archive task.
+    pub fn alloc_archive_gen(&mut self) -> u64 {
+        let g = self.next_archive_gen;
+        self.next_archive_gen = self.next_archive_gen.wrapping_add(1);
+        self.pending_archive_gen = Some(g);
         g
     }
 
@@ -944,6 +959,122 @@ pub(crate) async fn reconcile_create_result(
         }
     }
 }
+
+/// Reconcile the outcome of a spawned `workspace::archive` task.
+/// Locks the app briefly; if the modal is still `ArchiveRunning` AND the
+/// generation matches ours, applies the outcome (close modal on success,
+/// switch to `Modal::Error` on failure). Otherwise — user dismissed or
+/// some other flow replaced the modal — leaves the modal alone but still
+/// calls `refresh()` so the dashboard reflects the store mutation.
+pub(crate) async fn reconcile_archive_result(
+    app: SharedApp,
+    my_gen: u64,
+    result: Result<crate::setup::SetupResult>,
+) {
+    let mut g = app.lock().await;
+    let is_mine = g.pending_archive_gen == Some(my_gen);
+    if is_mine {
+        g.pending_archive_gen = None;
+    }
+    match result {
+        Ok(_) => {
+            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::ArchiveRunning)) {
+                g.modal = None;
+            }
+            let _ = g.refresh();
+        }
+        Err(e) => {
+            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::ArchiveRunning)) {
+                g.modal = Some(crate::ui::modal::Modal::Error {
+                    message: e.to_string(),
+                });
+            }
+            let _ = g.refresh();
+        }
+    }
+}
+
+#[cfg(test)]
+mod reconcile_archive_tests {
+    use super::*;
+    use crate::error::Error;
+    use crate::setup::SetupResult;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::Mutex;
+
+    fn make_app() -> (App, TempDir) {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        (app, tmp)
+    }
+
+    #[tokio::test]
+    async fn reconcile_ok_closes_archive_running_modal() {
+        let (mut app, _tmp) = make_app();
+        app.modal = Some(crate::ui::modal::Modal::ArchiveRunning);
+        app.pending_archive_gen = Some(7);
+        app.next_archive_gen = 8;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_archive_result(shared.clone(), 7, Ok(SetupResult::Ok)).await;
+        let g = shared.lock().await;
+        assert!(g.modal.is_none(), "modal should clear on Ok; got {:?}", g.modal);
+        assert!(g.pending_archive_gen.is_none(), "pending_archive_gen should clear after matching reconcile");
+    }
+
+    #[tokio::test]
+    async fn reconcile_err_sets_error_modal() {
+        let (mut app, _tmp) = make_app();
+        app.modal = Some(crate::ui::modal::Modal::ArchiveRunning);
+        app.pending_archive_gen = Some(7);
+        app.next_archive_gen = 8;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_archive_result(
+            shared.clone(),
+            7,
+            Err(Error::Setup("boom".into())),
+        )
+        .await;
+        let g = shared.lock().await;
+        match &g.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert!(message.contains("boom"), "error message should contain failure detail; got {message:?}");
+            }
+            other => panic!("expected Modal::Error, got {other:?}"),
+        }
+        assert!(g.pending_archive_gen.is_none(), "pending_archive_gen should clear after matching reconcile");
+    }
+
+    #[tokio::test]
+    async fn reconcile_skips_modal_mutation_when_gen_mismatch() {
+        let (mut app, _tmp) = make_app();
+        // Simulate: a different modal is already showing (e.g. an Error
+        // popped by another flow) and pending_archive_gen advanced past
+        // the value our stale task carries.
+        app.modal = Some(crate::ui::modal::Modal::Error {
+            message: "untouched".into(),
+        });
+        app.pending_archive_gen = Some(99);
+        app.next_archive_gen = 100;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_archive_result(
+            shared.clone(),
+            7, // stale — does not match pending_archive_gen
+            Err(Error::Setup("ignored".into())),
+        )
+        .await;
+        let g = shared.lock().await;
+        match &g.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert_eq!(message, "untouched", "stale reconcile must not overwrite modal");
+            }
+            other => panic!("expected the pre-existing Error modal to survive, got {other:?}"),
+        }
+        assert_eq!(g.pending_archive_gen, Some(99), "stale reconcile must not clear pending_archive_gen");
+    }
+}
+
 #[cfg(test)]
 mod derive_stopped_kind_tests {
     use super::*;

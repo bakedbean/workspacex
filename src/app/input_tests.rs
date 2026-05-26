@@ -2372,6 +2372,165 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
+    async fn y_in_confirm_archive_transitions_to_archive_running_and_spawns_task() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Create the workspace BEFORE wrapping the store in the App, since
+        // App::new takes the store by value.
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == repo_id)
+            .unwrap();
+        let created = crate::workspace::create(
+            &store,
+            &repo,
+            Some("doomed"),
+            tmp.path(),
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let ws_id = created.workspace.id;
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        // Open the ConfirmArchive modal.
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::ConfirmArchive {
+                workspace_id: ws_id,
+                name: created.workspace.name.clone(),
+            });
+        }
+        // Send 'y'.
+        let evt = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('y'),
+            crossterm::event::KeyModifiers::empty(),
+        );
+        {
+            let mut g = app.lock().await;
+            handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
+            // Immediately after 'y', modal should be ArchiveRunning.
+            assert!(
+                matches!(g.modal, Some(Modal::ArchiveRunning)),
+                "modal should transition to ArchiveRunning immediately; got {:?}",
+                g.modal
+            );
+            assert!(g.pending_archive_gen.is_some());
+        }
+        // Yield so the spawned archive task can complete.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        // Eventually, modal should be None and the workspace should be gone.
+        let g = app.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "modal should clear after archive succeeds; got {:?}",
+            g.modal
+        );
+        assert!(g.pending_archive_gen.is_none());
+        assert!(
+            g.workspaces.iter().all(|(_, w)| w.id != ws_id),
+            "archived workspace should be removed from app.workspaces"
+        );
+    }
+
+    #[tokio::test]
+    async fn esc_in_archive_running_is_noop() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        // Give the archive a slow archive-script so it's still running
+        // when we press Esc.
+        store
+            .set_repo_archive_script(repo_id, Some("sleep 1"))
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Create the workspace before moving the store into the App.
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == repo_id)
+            .unwrap();
+        let created = crate::workspace::create(
+            &store,
+            &repo,
+            Some("doomed"),
+            tmp.path(),
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let ws_id = created.workspace.id;
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::ConfirmArchive {
+                workspace_id: ws_id,
+                name: created.workspace.name.clone(),
+            });
+        }
+        // Press 'y' to start archiving.
+        {
+            let mut g = app.lock().await;
+            let y = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('y'),
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(y)).await.unwrap();
+            assert!(matches!(g.modal, Some(Modal::ArchiveRunning)));
+        }
+        // Yield briefly so the archive script kicks off but is still
+        // running (sleep 1 gives us a 1s window).
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Press Esc — should be a no-op.
+        {
+            let mut g = app.lock().await;
+            let esc = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
+            assert!(
+                matches!(g.modal, Some(Modal::ArchiveRunning)),
+                "Esc must not close ArchiveRunning; got {:?}",
+                g.modal
+            );
+            assert!(g.pending_archive_gen.is_some());
+        }
+        // Wait for the archive to actually finish.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        let g = app.lock().await;
+        assert!(g.modal.is_none(), "modal should clear once archive finishes");
+        assert!(
+            g.workspaces.iter().all(|(_, w)| w.id != ws_id),
+            "workspace should be archived"
+        );
+    }
+
+    #[tokio::test]
     async fn enter_during_setup_running_is_a_noop() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;

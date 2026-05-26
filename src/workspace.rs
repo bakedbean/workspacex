@@ -277,6 +277,50 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     Ok(archive_result)
 }
 
+/// TUI-friendly variant of `archive` that interleaves App lock acquisition
+/// with the long-running async git/script phases. Unlike `archive`, this
+/// function never holds the App lock across `.await` boundaries on the
+/// archive script or `git worktree remove`, so the event loop can continue
+/// to tick and redraw.
+pub async fn archive_with_app(
+    app: crate::app::SharedApp,
+    repo: Repo,
+    ws: Workspace,
+    opts: ArchiveOpts,
+) -> Result<SetupResult> {
+    // --- Phase 1 (unlocked, async): run the archive script if any. ---
+    let archive_result = setup::run_archive(
+        repo.archive_script.as_deref(),
+        &repo.path,
+        &ws.worktree_path,
+        tokio_util::sync::CancellationToken::new(),
+        |_| {},
+    )
+    .await?;
+
+    // --- Phase 2 (unlocked, async): remove the worktree from disk. ---
+    if !opts.keep_worktree && ws.worktree_path.exists() {
+        git::remove_worktree(&repo.path, &ws.worktree_path).await?;
+    }
+
+    // --- Phase 3 (unlocked, async): delete the branch. Failures here
+    //     are non-fatal and intentionally swallowed, matching `archive`. ---
+    let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
+
+    // --- Phase 4 (short, locked): delete the store row + clean up MCP. ---
+    {
+        let g = app.lock().await;
+        g.store.delete_workspace(ws.id)?;
+        if crate::mcp::enabled(&g.store)
+            && let Err(e) = crate::mcp::remove_worktree_entry(&ws.worktree_path)
+        {
+            tracing::warn!(error = %e, "failed to remove worktree entry from ~/.claude.json");
+        }
+    }
+
+    Ok(archive_result)
+}
+
 /// Untracked worktrees discovered on disk that the store doesn't know about.
 pub async fn discover_untracked(repo: &Repo, store: &Store) -> Result<Vec<git::WorktreeInfo>> {
     let live = git::list_worktrees(&repo.path).await?;
@@ -732,6 +776,61 @@ mod tests {
         .await
         .unwrap();
         assert!(marker.exists(), "archive script did not run");
+    }
+
+    #[tokio::test]
+    async fn archive_with_app_removes_workspace_and_worktree() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("doomed"),
+            base.path(),
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let worktree_path = created.workspace.worktree_path.clone();
+        let ws_id = created.workspace.id;
+        // Build a minimal App wrapping the populated store so we can pass
+        // it as SharedApp.
+        let app = crate::app::App::new(store, base.path().to_path_buf()).unwrap();
+        let shared = Arc::new(Mutex::new(app));
+        let result = archive_with_app(
+            shared.clone(),
+            repo.clone(),
+            created.workspace.clone(),
+            ArchiveOpts {
+                force_branch_delete: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(result.is_ok(), "archive_with_app failed: {result:?}");
+        // Worktree is gone from disk.
+        assert!(!worktree_path.exists(), "worktree still present after archive");
+        // Workspace row is gone from the store.
+        let g = shared.lock().await;
+        assert!(
+            g.store.workspaces(repo.id).unwrap().iter().all(|w| w.id != ws_id),
+            "workspace row still present after archive"
+        );
     }
 
     #[tokio::test]

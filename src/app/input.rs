@@ -899,7 +899,10 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        Modal::ConfirmArchive { workspace_id, name } => match k.code {
+        Modal::ConfirmArchive {
+            workspace_id,
+            name: _,
+        } => match k.code {
             KeyCode::Char('y') => {
                 let (repo, ws) = {
                     let ws = app
@@ -918,29 +921,23 @@ async fn handle_key_modal(
                         }
                     }
                 };
-                let result = crate::workspace::archive(
-                    &app.store,
-                    &repo,
-                    &ws,
-                    crate::workspace::ArchiveOpts {
-                        force_branch_delete: true,
-                        ..Default::default()
-                    },
-                    |_| {},
-                )
-                .await;
-                match result {
-                    Ok(_) => {
-                        app.modal = None;
-                        app.refresh()?;
-                    }
-                    Err(e) => {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
-                }
-                let _ = name;
+                let archive_gen = app.alloc_archive_gen();
+                app.modal = Some(Modal::ArchiveRunning);
+                let shared_clone = shared.clone();
+                tokio::spawn(async move {
+                    let result = crate::workspace::archive_with_app(
+                        shared_clone.clone(),
+                        repo,
+                        ws,
+                        crate::workspace::ArchiveOpts {
+                            force_branch_delete: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                    crate::app::reconcile_archive_result(shared_clone, archive_gen, result)
+                        .await;
+                });
             }
             KeyCode::Char('n') | KeyCode::Esc => {
                 app.modal = None;
@@ -955,6 +952,10 @@ async fn handle_key_modal(
                 app.modal = None;
                 app.pending_create_gen = None;
             }
+        }
+        Modal::ArchiveRunning => {
+            // Archive is non-cancellable. Swallow all keys until the
+            // spawned task completes and reconciles the modal.
         }
         Modal::Error { .. } => {
             if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {

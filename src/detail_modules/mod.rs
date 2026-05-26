@@ -59,9 +59,18 @@ pub struct Registry {
     modules: HashMap<&'static str, Box<dyn DetailModule>>,
 }
 
+impl std::fmt::Debug for Registry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ids: Vec<&str> = self.modules.keys().copied().collect();
+        f.debug_struct("Registry").field("modules", &ids).finish()
+    }
+}
+
 impl Registry {
     pub fn new() -> Self {
-        Self { modules: HashMap::new() }
+        Self {
+            modules: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, m: Box<dyn DetailModule>) {
@@ -84,10 +93,10 @@ impl Default for Registry {
     }
 }
 
-pub mod session_summary;
-pub mod recent_chat;
 pub mod processes;
+pub mod recent_chat;
 pub mod recent_files;
+pub mod session_summary;
 
 /// Populate `reg` with the built-in modules. Built-ins are added in
 /// subsequent tasks; this is currently a no-op.
@@ -164,15 +173,22 @@ mod tests {
         hint: Constraint,
     }
     impl DetailModule for MockModule {
-        fn id(&self) -> &'static str { self.id }
-        fn title(&self) -> &'static str { self.title }
-        fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint { self.hint }
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn title(&self) -> &'static str {
+            self.title
+        }
+        fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
+            self.hint
+        }
         fn render(
             &self,
             _area: ratatui::layout::Rect,
             _ctx: &DetailContext<'_>,
             _frame: &mut ratatui::Frame<'_>,
-        ) {}
+        ) {
+        }
     }
 
     #[test]
@@ -198,7 +214,9 @@ mod tests {
     fn get_unknown_returns_none() {
         let mut reg = Registry::new();
         reg.register(Box::new(MockModule {
-            id: "foo", title: "FOO", hint: Constraint::Length(1),
+            id: "foo",
+            title: "FOO",
+            hint: Constraint::Length(1),
         }));
         assert!(reg.get("nonexistent").is_none());
     }
@@ -207,10 +225,14 @@ mod tests {
     fn ids_enumerates_all_registered() {
         let mut reg = Registry::new();
         reg.register(Box::new(MockModule {
-            id: "a", title: "A", hint: Constraint::Length(1),
+            id: "a",
+            title: "A",
+            hint: Constraint::Length(1),
         }));
         reg.register(Box::new(MockModule {
-            id: "b", title: "B", hint: Constraint::Length(1),
+            id: "b",
+            title: "B",
+            hint: Constraint::Length(1),
         }));
         let ids: std::collections::HashSet<_> = reg.ids().collect();
         assert!(ids.contains("a"));

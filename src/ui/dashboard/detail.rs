@@ -923,6 +923,73 @@ mod tests {
     }
 
     #[test]
+    fn render_with_unknown_module_id_shows_placeholder() {
+        let (_store, repo, ws) = seed_workspace();
+        let mut cfg = DetailBarConfig::default();
+        cfg.containers = vec![vec!["seshun_summary".into()]];
+        let reg = make_registry();
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+        };
+        let text = render_to_text(&inputs, 120, 10);
+        assert!(
+            text.contains("[unknown: seshun_summary]"),
+            "expected unknown placeholder in: {text:?}",
+        );
+    }
+
+    #[test]
+    fn render_one_container_fills_full_width() {
+        let (_store, repo, ws) = seed_workspace();
+        let evt = crate::events::WorkspaceEvents {
+            last_assistant_text: Some("hello".into()),
+            ..Default::default()
+        };
+        let mut cfg = DetailBarConfig::default();
+        cfg.containers = vec![vec!["recent_chat".into()]];
+        let reg = make_registry();
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: Some(&evt),
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+        };
+        let text = render_to_text(&inputs, 120, 10);
+        assert!(text.contains("RECENT CHAT"), "chat title: {text:?}");
+        // Other module titles must NOT appear when only recent_chat is configured.
+        assert!(!text.contains("SESSION SUMMARY"), "summary leaked: {text:?}");
+        assert!(!text.contains("PROCESSES"), "procs leaked: {text:?}");
+        assert!(!text.contains("RECENT FILES"), "files leaked: {text:?}");
+    }
+
+    #[test]
     fn build_processes_empty_emits_dash() {
         // Builders return body lines only; the dispatcher draws titles
         // (see render_container). Empty case = single "—" placeholder.

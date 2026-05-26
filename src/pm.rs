@@ -274,49 +274,8 @@ pub async fn open_pm_with_refresh(
 mod tests {
     use super::*;
     use crate::store::{NewWorkspace, Store, WorkspaceState};
-    use crate::test_support::{ENV_LOCK, cat_path};
-    use std::ffi::{OsStr, OsString};
-    use std::sync::MutexGuard;
+    use crate::test_support::{EnvGuard, cat_path};
     use tempfile::TempDir;
-
-    /// RAII guard for env-mutating tests: acquires `ENV_LOCK`, stashes
-    /// the original value of any env var it sets, and restores them on
-    /// drop — even on panic. Replaces hand-rolled save/restore code so
-    /// a failed assertion can't leak stale env into subsequent tests.
-    struct EnvGuard {
-        _lock: MutexGuard<'static, ()>,
-        saved: Vec<(String, Option<OsString>)>,
-    }
-
-    impl EnvGuard {
-        fn new() -> Self {
-            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            Self {
-                _lock: lock,
-                saved: Vec::new(),
-            }
-        }
-
-        fn set(&mut self, key: &str, value: impl AsRef<OsStr>) {
-            self.saved.push((key.to_string(), std::env::var_os(key)));
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (key, prior) in self.saved.drain(..).rev() {
-                unsafe {
-                    match prior {
-                        Some(v) => std::env::set_var(&key, v),
-                        None => std::env::remove_var(&key),
-                    }
-                }
-            }
-        }
-    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[allow(clippy::await_holding_lock)]

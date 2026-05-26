@@ -21,6 +21,7 @@ pub mod repo;
 pub mod setup;
 pub mod skill;
 pub mod store;
+#[doc(hidden)]
 pub mod test_support;
 pub mod ui;
 pub mod workspace;

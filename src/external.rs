@@ -207,7 +207,7 @@ fn detach_io(cmd: &mut std::process::Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{false_path, true_path};
+    use crate::test_support::{EnvGuard, false_path, true_path};
 
     #[test]
     fn editor_fallback_uses_configured_first() {
@@ -218,49 +218,26 @@ mod tests {
 
     #[test]
     fn editor_falls_back_to_env() {
-        unsafe {
-            std::env::set_var("VISUAL", "fake-visual-editor");
-        }
+        let mut env = EnvGuard::new();
+        env.set("VISUAL", "fake-visual-editor");
         let r = resolve_editor_cmd(None).unwrap();
-        unsafe {
-            std::env::remove_var("VISUAL");
-        }
         assert_eq!(r, "fake-visual-editor");
     }
 
     #[test]
     fn editor_errors_when_unconfigured() {
-        // Ensure neither env var is set.
-        let saved_v = std::env::var_os("VISUAL");
-        let saved_e = std::env::var_os("EDITOR");
-        unsafe {
-            std::env::remove_var("VISUAL");
-            std::env::remove_var("EDITOR");
-        }
+        let mut env = EnvGuard::new();
+        env.remove("VISUAL");
+        env.remove("EDITOR");
         let r = resolve_editor_cmd(None);
-        unsafe {
-            if let Some(v) = saved_v {
-                std::env::set_var("VISUAL", v);
-            }
-            if let Some(v) = saved_e {
-                std::env::set_var("EDITOR", v);
-            }
-        }
         assert!(r.is_err());
     }
 
     #[test]
     fn terminal_errors_when_unconfigured() {
-        let saved = std::env::var_os("TERMINAL");
-        unsafe {
-            std::env::remove_var("TERMINAL");
-        }
+        let mut env = EnvGuard::new();
+        env.remove("TERMINAL");
         let r = resolve_terminal_cmd(None);
-        unsafe {
-            if let Some(v) = saved {
-                std::env::set_var("TERMINAL", v);
-            }
-        }
         assert!(r.is_err());
     }
 
@@ -367,34 +344,17 @@ mod tests {
 
     #[test]
     fn edit_in_editor_returns_unchanged_when_editor_doesnt_write() {
-        // Save / restore EDITOR around the test.
-        let saved = std::env::var_os("EDITOR");
-        unsafe {
-            std::env::set_var("EDITOR", true_path());
-        }
+        let mut env = EnvGuard::new();
+        env.set("EDITOR", true_path());
         let result = edit_in_editor("hello world", "txt");
-        unsafe {
-            match saved {
-                Some(v) => std::env::set_var("EDITOR", v),
-                None => std::env::remove_var("EDITOR"),
-            }
-        }
         assert_eq!(result.unwrap().as_deref(), Some("hello world"));
     }
 
     #[test]
     fn edit_in_editor_returns_none_when_editor_exits_nonzero() {
-        let saved = std::env::var_os("EDITOR");
-        unsafe {
-            std::env::set_var("EDITOR", false_path());
-        }
+        let mut env = EnvGuard::new();
+        env.set("EDITOR", false_path());
         let result = edit_in_editor("anything", "txt");
-        unsafe {
-            match saved {
-                Some(v) => std::env::set_var("EDITOR", v),
-                None => std::env::remove_var("EDITOR"),
-            }
-        }
         assert!(result.unwrap().is_none());
     }
 

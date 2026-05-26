@@ -98,8 +98,8 @@ pub mod recent_chat;
 pub mod recent_files;
 pub mod session_summary;
 
-/// Populate `reg` with the built-in modules. Built-ins are added in
-/// subsequent tasks; this is currently a no-op.
+/// Populate `reg` with the four built-in modules: session summary,
+/// recent chat, processes, and recent files.
 pub fn register_builtins(reg: &mut Registry) {
     reg.register(Box::new(session_summary::SessionSummary));
     reg.register(Box::new(recent_chat::RecentChat));

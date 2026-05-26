@@ -1,8 +1,9 @@
 //! Bottom-pinned detail bar shown when a workspace is selected on the
-//! dashboard. Renders header strip, three-column body, and an inline
-//! reply input.
+//! dashboard. Renders header strip, a 1–4 container body (each
+//! container holding one or more modules from `crate::detail_modules`),
+//! and an inline reply input.
 //!
-//! See `docs/superpowers/specs/2026-05-24-dashboard-workspace-detail-design.md`.
+//! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
 
 use crate::detail_bar_config::DetailBarConfig;
 use crate::events::WorkspaceEvents;

@@ -899,7 +899,10 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        Modal::ConfirmArchive { workspace_id, name } => match k.code {
+        Modal::ConfirmArchive {
+            workspace_id,
+            name: _,
+        } => match k.code {
             KeyCode::Char('y') => {
                 let (repo, ws) = {
                     let ws = app
@@ -921,7 +924,6 @@ async fn handle_key_modal(
                 let archive_gen = app.alloc_archive_gen();
                 app.modal = Some(Modal::ArchiveRunning);
                 let shared_clone = shared.clone();
-                let _ = name;
                 tokio::spawn(async move {
                     let result = crate::workspace::archive_with_app(
                         shared_clone.clone(),

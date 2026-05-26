@@ -956,6 +956,10 @@ async fn handle_key_modal(
                 app.pending_create_gen = None;
             }
         }
+        Modal::ArchiveRunning => {
+            // Archive is non-cancellable. Swallow all keys until the
+            // spawned task completes and reconciles the modal.
+        }
         Modal::Error { .. } => {
             if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
                 app.modal = None;

@@ -23,6 +23,7 @@ pub enum Modal {
     SetupRunning {
         cancel: tokio_util::sync::CancellationToken,
     },
+    ArchiveRunning,
     Error {
         message: String,
     },
@@ -103,6 +104,11 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             let frame = crate::ui::dashboard::spinner::frame(tick);
             let body = format!("  {frame} Creating workspace…\n\n  [esc] cancel",);
             ("new workspace", body)
+        }
+        Modal::ArchiveRunning => {
+            let frame = crate::ui::dashboard::spinner::frame(tick);
+            let body = format!("  {frame} Removing workspace…");
+            ("archive workspace", body)
         }
         Modal::Error { message } => ("error", message.clone()),
         // UpdatesPanel is handled by the early-return above; this arm is

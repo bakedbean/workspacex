@@ -18,7 +18,6 @@ impl DetailModule for RecentChat {
         Constraint::Min(3)
     }
     fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
-        use ratatui::style::Style;
         use ratatui::text::{Line, Span};
         use ratatui::widgets::Paragraph;
 
@@ -48,7 +47,7 @@ impl DetailModule for RecentChat {
         let wrapped = wrap_lines(text, column_width);
         let start = wrapped.len().saturating_sub(max_body_lines);
         for line in wrapped.iter().skip(start) {
-            out.push(Line::from(Span::styled(line.clone(), Style::default())));
+            out.push(Line::from(Span::styled(line.clone(), theme.dim_style())));
         }
         frame.render_widget(Paragraph::new(out), area);
     }

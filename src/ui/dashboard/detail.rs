@@ -244,7 +244,7 @@ const GUTTER: &str = "▍";
 
 /// One-line header strip at the top of the bar.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_header_strip(
+pub(crate) fn build_header_strip(
     name: &str,
     branch: &str,
     lifecycle: Option<BranchLifecycle>,
@@ -347,7 +347,7 @@ fn format_ago_short(secs: Option<u64>) -> String {
 /// The age + activity lines render regardless of whether `events` have
 /// been scanned yet, since they're session metadata sourced outside of
 /// the JSONL log.
-pub(super) fn build_session_summary(
+pub(crate) fn build_session_summary(
     events: Option<&WorkspaceEvents>,
     status: Status,
     theme: &Theme,
@@ -429,7 +429,7 @@ pub(super) fn build_session_summary(
 
 /// Build the RECENT CHAT column. `max_body_lines` caps how many content
 /// lines render below the column label.
-pub(super) fn build_recent_chat(
+pub(crate) fn build_recent_chat(
     events: Option<&WorkspaceEvents>,
     theme: &Theme,
     column_width: usize,
@@ -468,7 +468,7 @@ pub(super) fn build_recent_chat(
 /// files (from `WorkspaceEvents.recent_edited_files`) below, each
 /// annotated with a `+X −Y` delta when the per-file diff map has an
 /// entry for it.
-pub(super) fn build_procs_and_files(
+pub(crate) fn build_procs_and_files(
     procs: &[ProcInfo],
     events: Option<&WorkspaceEvents>,
     diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,
@@ -579,7 +579,7 @@ const REPLY_HINT: &str = "  ↵ send · Esc cancel";
 /// Reply input row. Returns a `Line` plus an optional cursor X-offset
 /// (within the line) that the caller passes to `f.set_cursor_position`
 /// when `focused == true`. The caller adds `area.x` and the row's `y`.
-pub(super) fn build_reply_row(
+pub(crate) fn build_reply_row(
     draft: &str,
     focused: bool,
     theme: &Theme,

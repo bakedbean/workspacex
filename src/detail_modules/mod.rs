@@ -84,10 +84,67 @@ impl Default for Registry {
     }
 }
 
+pub mod session_summary;
+
 /// Populate `reg` with the built-in modules. Built-ins are added in
 /// subsequent tasks; this is currently a no-op.
-pub fn register_builtins(_reg: &mut Registry) {
-    // Built-ins land in Tasks 3–7.
+pub fn register_builtins(reg: &mut Registry) {
+    reg.register(Box::new(session_summary::SessionSummary));
+}
+
+#[cfg(test)]
+pub(crate) mod tests_helpers {
+    use super::*;
+    use crate::store::{Repo, RepoId, SetupStatus, Workspace, WorkspaceId, WorkspaceState};
+    use std::path::PathBuf;
+
+    /// Build a minimal `DetailContext` backed by leaked allocations.
+    /// Sufficient for unit-testing module methods that don't need
+    /// realistic data. Test-only — leaks are fine.
+    pub fn stub_context() -> DetailContext<'static> {
+        let repo: &'static Repo = Box::leak(Box::new(Repo {
+            id: RepoId(1),
+            name: "demo".into(),
+            path: PathBuf::from("/r"),
+            branch_prefix: String::new(),
+            custom_instructions: None,
+            setup_script: None,
+            archive_script: None,
+            pinned_commands: None,
+            related_repos: None,
+            base_branch: None,
+            detail_bar_config: None,
+            created_at: 0,
+        }));
+        let workspace: &'static Workspace = Box::leak(Box::new(Workspace {
+            id: WorkspaceId(1),
+            repo_id: repo.id,
+            name: "ws".into(),
+            branch: "br".into(),
+            worktree_path: PathBuf::from("/wt"),
+            state: WorkspaceState::Ready,
+            setup_status: SetupStatus::Ok,
+            created_at: 0,
+            yolo: false,
+            agent: crate::pty::session::AgentKind::Claude,
+        }));
+        let theme: &'static Theme = Box::leak(Box::new(Theme::default()));
+        DetailContext {
+            repo,
+            workspace,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            events_scanned: false,
+            theme,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -156,11 +213,9 @@ mod tests {
     }
 
     #[test]
-    fn register_builtins_stub_does_nothing_initially() {
-        // Built-ins are populated in later tasks. For now the stub
-        // must compile and leave the registry empty.
+    fn register_builtins_includes_session_summary() {
         let mut reg = Registry::new();
         register_builtins(&mut reg);
-        assert_eq!(reg.ids().count(), 0);
+        assert!(reg.get("session_summary").is_some());
     }
 }

@@ -53,12 +53,24 @@ spinner label also differs ("Removing workspace…" vs "Creating workspace…").
 Two narrow variants read more clearly than one general-purpose variant
 with a `kind` field.
 
-### Why no `CancellationToken` on `workspace::archive`
+### Why no `CancellationToken` on archive functions
 
 The existing `archive` function at `src/workspace.rs:252` constructs a
 fresh token internally and passes it to `setup::run_archive`. Since this
-spec does not introduce cancellation, the signature does not need to
-change. The internal-token-per-call pattern stays.
+spec does not introduce cancellation, neither `archive` nor the new
+`archive_with_app` takes one. The internal-token-per-call pattern stays.
+
+### Why a separate `archive_with_app` (not reusing `archive`)
+
+`Store` owns a raw `rusqlite::Connection` and is **not** `Clone`. The
+spawned tokio task therefore cannot capture `&Store` from `App`; it can
+only access the store by locking the `Arc<Mutex<App>>`. If we called the
+existing `archive(&store, ...)` from inside that lock, the entire
+multi-second `git worktree remove` would happen while holding the App
+mutex — defeating the spinner. `archive_with_app` solves this by
+splitting the work into unlocked phases (script, git removal) and one
+short locked phase (store row delete + MCP entry cleanup), exactly
+mirroring the `create_with_app` pattern.
 
 ## Architecture
 
@@ -67,8 +79,9 @@ change. The internal-token-per-call pattern stays.
 | File | Change |
 |---|---|
 | `src/ui/modal.rs` | Add `Modal::ArchiveRunning` variant (no fields). Add a render branch that displays `"  {frame} Removing workspace…"` with title `"archive workspace"`. |
-| `src/app.rs` | Add `App` fields `next_archive_gen: u64` and `pending_archive_gen: Option<u64>`. Add `App::alloc_archive_gen(&mut self) -> u64`. Add free function `reconcile_archive_result(app: SharedApp, my_gen: u64, result: Result<crate::workspace::SetupResult>)`. |
-| `src/app/input.rs` | Rewrite the `'y'` branch of `Modal::ConfirmArchive` (currently lines ~902–944). Allocate `archive_gen`, clone `repo`/`ws`/`shared`, set `app.modal = Some(Modal::ArchiveRunning)`, `tokio::spawn` the archive + reconcile. Add a `Modal::ArchiveRunning` match arm that ignores all keys. |
+| `src/workspace.rs` | Add `archive_with_app(app: SharedApp, repo: Repo, ws: Workspace, opts: ArchiveOpts) -> Result<SetupResult>` — the TUI-path companion to existing `archive`. It runs the archive script, worktree removal, and branch delete unlocked (no store access needed), then locks briefly to delete the store row and clean up the MCP entry. Mirrors the `create_with_app` shape introduced for the create flow because `Store` is not `Clone` and the spawned task cannot hold the App lock across the long git/script awaits. Existing `archive` stays untouched for the CLI path. |
+| `src/app.rs` | Add `App` fields `next_archive_gen: u64` and `pending_archive_gen: Option<u64>`. Add `App::alloc_archive_gen(&mut self) -> u64`. Add free function `reconcile_archive_result(app: SharedApp, my_gen: u64, result: Result<crate::setup::SetupResult>)`. |
+| `src/app/input.rs` | Rewrite the `'y'` branch of `Modal::ConfirmArchive` (currently lines ~902–944). Allocate `archive_gen`, clone `repo`/`ws`/`shared`, set `app.modal = Some(Modal::ArchiveRunning)`, `tokio::spawn` calling `workspace::archive_with_app(...)` + reconcile. Add a `Modal::ArchiveRunning` match arm that ignores all keys. |
 | `src/app/input_tests.rs` | Add tests for the new transition, success reconcile, and failure reconcile (see Testing). |
 
 ### Runtime flow on `y` in `ConfirmArchive`
@@ -78,7 +91,7 @@ change. The internal-token-per-call pattern stays.
 2. `let archive_gen = app.alloc_archive_gen();`
 3. `let shared_clone = shared.clone();`
 4. `app.modal = Some(Modal::ArchiveRunning);`
-5. `tokio::spawn(async move { let result = crate::workspace::archive(...).await; reconcile_archive_result(shared_clone, archive_gen, result).await; });`
+5. `tokio::spawn(async move { let result = crate::workspace::archive_with_app(shared_clone.clone(), repo, ws, opts).await; reconcile_archive_result(shared_clone, archive_gen, result).await; });`
 6. Return from the key handler. The lock is released. The main loop's
    `select!` continues; the tick fires; the next draw renders
    `ArchiveRunning` with an animated spinner.

@@ -518,19 +518,22 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
         if parsed.user_interrupt_sentinel {
             update.last_user_interrupted = Some(true);
         }
-        if let Some(text) = parsed.last_assistant_text {
-            // Track the longest text block seen in this batch alongside
-            // the latest, for recap extraction. Narration is short;
-            // real recaps are long.
-            let len = text.chars().count();
-            let replace_longest = update
+        // Track the longest text block seen in this batch from each
+        // message's longest-in-message (NOT its last text). This avoids
+        // missing a substantive recap when the agent emitted a terse
+        // closing block ("Done.") last in the same message.
+        if let Some(longest) = parsed.longest_text_in_message {
+            let len = longest.chars().count();
+            let beats = update
                 .longest_assistant_text_in_batch
                 .as_ref()
                 .map(|cur| cur.chars().count() < len)
                 .unwrap_or(true);
-            if replace_longest {
-                update.longest_assistant_text_in_batch = Some(text.clone());
+            if beats {
+                update.longest_assistant_text_in_batch = Some(longest);
             }
+        }
+        if let Some(text) = parsed.last_assistant_text {
             update.last_assistant_text = Some(text);
         }
     }
@@ -556,6 +559,12 @@ pub struct ParsedLine {
     /// `WorkspaceEvents::last_text_ends_with_question`. None for any
     /// non-assistant line, or for assistant messages with no text blocks.
     pub last_assistant_text: Option<String>,
+    /// The longest `text` content block (by char count) in this assistant
+    /// message. Distinct from `last_assistant_text`: when a message has
+    /// multiple text blocks (e.g. a long recap followed by a terse
+    /// "Done."), this surfaces the substantive one. Forwarded to the
+    /// recap pipeline via `TailUpdate.longest_assistant_text_in_batch`.
+    pub longest_text_in_message: Option<String>,
     /// True if this user line is the Claude Code "[Request interrupted by
     /// user for tool use]" sentinel. Doesn't set `is_user_text`: the
     /// sentinel is system-generated, not a real human reply, so the
@@ -666,6 +675,7 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     // Prefer tool_use over text — tool use is the most concrete signal of
     // "what's happening right now". Fall back to assistant text.
     let mut last_text: Option<&str> = None;
+    let mut longest_text: Option<&str> = None;
     let mut last_tool: Option<(&str, &serde_json::Value)> = None;
     for block in blocks {
         let Some(bt) = block.get("type").and_then(|t| t.as_str()) else {
@@ -675,6 +685,13 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
             "text" => {
                 if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
                     last_text = Some(t);
+                    let new_len = t.chars().count();
+                    let beats = longest_text
+                        .map(|cur| cur.chars().count() < new_len)
+                        .unwrap_or(true);
+                    if beats {
+                        longest_text = Some(t);
+                    }
                 }
             }
             "tool_use" => {
@@ -706,6 +723,9 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     // unchanged; we just also remember the text for downstream classification.
     if let Some(t) = last_text {
         out.last_assistant_text = Some(t.to_string());
+    }
+    if let Some(t) = longest_text {
+        out.longest_text_in_message = Some(t.to_string());
     }
     if let Some((name, input)) = last_tool {
         let body = if name == "Bash" {
@@ -971,10 +991,13 @@ fn skip_code_fence(lines: &[&str], start: usize) -> usize {
 
 fn is_pure_short_question(s: &str) -> bool {
     let t = s.trim();
-    if t.len() > 50 || !t.ends_with('?') {
+    // Character count, not byte count — non-ASCII trailing questions
+    // would otherwise sneak past the threshold.
+    if t.chars().count() > 50 || !t.ends_with('?') {
         return false;
     }
     // "Statement. Question?" carries signal in the statement — keep.
+    // `?` is single-byte ASCII so `t.len() - 1` is a safe boundary.
     let body = &t[..t.len() - 1];
     !body.contains(['.', '!'])
 }
@@ -1951,6 +1974,20 @@ mod tests {
     }
 
     #[test]
+    fn clean_recap_rejects_short_non_ascii_trailing_question() {
+        // 21 chars, ~61 bytes — short by character count but long by
+        // byte count. The 50-char cap must compare characters, not
+        // bytes, so this short non-ASCII closing question gets
+        // rejected like its ASCII counterparts.
+        let s = "漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字?";
+        assert!(
+            clean_recap(s).is_none(),
+            "expected short non-ASCII question to be rejected; got {:?}",
+            clean_recap(s)
+        );
+    }
+
+    #[test]
     fn clean_recap_keeps_long_trailing_question() {
         // Above the 50-char short-question cap, accept even though it
         // ends with `?` — long questions carry substantive content.
@@ -2088,6 +2125,23 @@ mod tests {
         assert_eq!(
             upd.longest_assistant_text_in_batch.as_deref(),
             Some("Here is the substantial recap of what got done in this turn including details.")
+        );
+    }
+
+    #[test]
+    fn tail_session_longest_picks_longest_block_within_one_message() {
+        // A single assistant message containing multiple text blocks —
+        // long recap first, terse "Done." last. The batch-longest must
+        // be the long block. Catches the bug where the parser only
+        // surfaces the last text block to the tail loop.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Here is a substantial recap that summarises the turn at length."},{"type":"text","text":"Done."}]},"timestamp":"2026-05-14T17:32:02.000Z"}"#;
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let upd = tail_session(&path, 0).unwrap();
+        assert_eq!(
+            upd.longest_assistant_text_in_batch.as_deref(),
+            Some("Here is a substantial recap that summarises the turn at length.")
         );
     }
 

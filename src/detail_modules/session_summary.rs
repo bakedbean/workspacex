@@ -18,11 +18,17 @@ impl DetailModule for SessionSummary {
         // When a recap is pinned, request enough rows for prompt (1) +
         // trace (1) + a 3-line recap minimum + footer (2). Without a
         // recap the original 3-row minimum is plenty.
-        let has_recap = ctx
-            .events
-            .and_then(|e| e.last_completed_turn_text.as_deref())
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false);
+        //
+        // Gate on `events_scanned` so the hint matches what `render`
+        // will actually draw — pre-first-scan `render` shows a
+        // "loading…" placeholder and shouldn't be reserving rows for
+        // a recap that won't yet be visible.
+        let has_recap = ctx.events_scanned
+            && ctx
+                .events
+                .and_then(|e| e.last_completed_turn_text.as_deref())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
         if has_recap {
             Constraint::Min(7)
         } else {
@@ -97,35 +103,39 @@ impl DetailModule for SessionSummary {
                 // Recap: pinned at the previous turn's end; cleaned and
                 // budgeted to whatever vertical room remains after the
                 // prompt and trace, reserving 2 lines for the
-                // created/active footer.
+                // created/active footer. When there's no room left, the
+                // recap is skipped entirely — losing the activity line
+                // at the bottom of the footer would be worse than
+                // losing supplementary recap text.
                 if let Some(recap) = evt.last_completed_turn_text.as_deref() {
                     let trimmed = recap.trim();
                     if !trimmed.is_empty() {
-                        let inner_width = column_width.saturating_sub(2).max(1);
-                        let wrapped = wrap_lines(trimmed, inner_width);
                         let max_lines = (area.height as usize)
                             .saturating_sub(out.len())
-                            .saturating_sub(2)
-                            .max(1);
-                        let truncated = wrapped.len() > max_lines;
-                        for (i, line_text) in wrapped.iter().take(max_lines).enumerate() {
-                            let leader = if i == 0 {
-                                prefix.clone()
-                            } else {
-                                continuation.clone()
-                            };
-                            let body_text = if truncated && i == max_lines - 1 {
-                                let mut s =
-                                    truncate_to_chars(line_text, inner_width.saturating_sub(1));
-                                s.push('…');
-                                s
-                            } else {
-                                line_text.clone()
-                            };
-                            out.push(Line::from(vec![
-                                leader,
-                                Span::styled(body_text, theme.dim_style()),
-                            ]));
+                            .saturating_sub(2);
+                        if max_lines > 0 {
+                            let inner_width = column_width.saturating_sub(2).max(1);
+                            let wrapped = wrap_lines(trimmed, inner_width);
+                            let truncated = wrapped.len() > max_lines;
+                            for (i, line_text) in wrapped.iter().take(max_lines).enumerate() {
+                                let leader = if i == 0 {
+                                    prefix.clone()
+                                } else {
+                                    continuation.clone()
+                                };
+                                let body_text = if truncated && i == max_lines - 1 {
+                                    let mut s =
+                                        truncate_to_chars(line_text, inner_width.saturating_sub(1));
+                                    s.push('…');
+                                    s
+                                } else {
+                                    line_text.clone()
+                                };
+                                out.push(Line::from(vec![
+                                    leader,
+                                    Span::styled(body_text, theme.dim_style()),
+                                ]));
+                            }
                         }
                     }
                 }
@@ -320,10 +330,28 @@ mod tests {
         }));
         let mut ctx = stub_context();
         ctx.events = Some(evt);
+        ctx.events_scanned = true;
         // The recap module signals it wants more vertical room so the
         // host layout reserves enough rows for prompt + trace + recap +
         // footer.
         assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(7));
+    }
+
+    #[test]
+    fn height_hint_does_not_grow_before_first_scan_completes() {
+        // Between WorkspaceEvents creation and the first tail completion
+        // there's a brief window where `events` is Some but
+        // `events_scanned` is false. During that window `render` shows
+        // "loading…" — so `height_hint` shouldn't be reserving extra
+        // rows for a recap that won't be drawn yet.
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            last_completed_turn_text: Some("a recap".into()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        // events_scanned intentionally left false.
+        assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(3));
     }
 
     #[test]
@@ -369,6 +397,34 @@ mod tests {
         assert!(
             text.contains("MMM"),
             "expected wrapped recap to extend past line 3 (look for 'MMM'); got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_recap_yields_to_footer_when_no_room_left() {
+        // area.height too small to fit prompt + trace + recap + footer
+        // simultaneously. Recap must yield so the "active —" line at
+        // the bottom of the footer survives — losing the timing info is
+        // worse than losing the recap.
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            first_user_text: Some("prompt".into()),
+            last_completed_turn_text: Some(
+                "RECAPSACRIFICED some prose that should be dropped.".into(),
+            ),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 30, 4);
+        assert!(
+            text.contains("active"),
+            "footer 'active' line missing:\n{text}"
+        );
+        assert!(
+            !text.contains("RECAPSACRIFICED"),
+            "recap should be skipped to preserve footer:\n{text}"
         );
     }
 

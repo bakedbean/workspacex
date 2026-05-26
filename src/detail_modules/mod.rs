@@ -86,12 +86,14 @@ impl Default for Registry {
 
 pub mod session_summary;
 pub mod recent_chat;
+pub mod processes;
 
 /// Populate `reg` with the built-in modules. Built-ins are added in
 /// subsequent tasks; this is currently a no-op.
 pub fn register_builtins(reg: &mut Registry) {
     reg.register(Box::new(session_summary::SessionSummary));
     reg.register(Box::new(recent_chat::RecentChat));
+    reg.register(Box::new(processes::Processes));
 }
 
 #[cfg(test)]
@@ -226,5 +228,12 @@ mod tests {
         let mut reg = Registry::new();
         register_builtins(&mut reg);
         assert!(reg.get("recent_chat").is_some());
+    }
+
+    #[test]
+    fn register_builtins_includes_processes() {
+        let mut reg = Registry::new();
+        register_builtins(&mut reg);
+        assert!(reg.get("processes").is_some());
     }
 }

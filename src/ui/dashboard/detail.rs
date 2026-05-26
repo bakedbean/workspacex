@@ -984,7 +984,10 @@ mod tests {
         let text = render_to_text(&inputs, 120, 10);
         assert!(text.contains("RECENT CHAT"), "chat title: {text:?}");
         // Other module titles must NOT appear when only recent_chat is configured.
-        assert!(!text.contains("SESSION SUMMARY"), "summary leaked: {text:?}");
+        assert!(
+            !text.contains("SESSION SUMMARY"),
+            "summary leaked: {text:?}"
+        );
         assert!(!text.contains("PROCESSES"), "procs leaked: {text:?}");
         assert!(!text.contains("RECENT FILES"), "files leaked: {text:?}");
     }

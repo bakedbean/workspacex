@@ -366,11 +366,6 @@ pub(crate) fn build_processes(
     column_width: usize,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
-    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
-    out.push(Line::from(Span::styled(
-        "PROCESSES".to_string(),
-        label_style,
-    )));
     if procs.is_empty() {
         out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
     } else {
@@ -403,11 +398,6 @@ pub(crate) fn build_recent_files(
     column_width: usize,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
-    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
-    out.push(Line::from(Span::styled(
-        "RECENT FILES".to_string(),
-        label_style,
-    )));
     let files: Vec<&String> = events
         .map(|e| e.recent_edited_files.iter().collect())
         .unwrap_or_default();
@@ -934,13 +924,12 @@ mod tests {
 
     #[test]
     fn build_processes_empty_emits_dash() {
+        // Builders return body lines only; the dispatcher draws titles
+        // (see render_container). Empty case = single "—" placeholder.
         let theme = Theme::default();
         let lines = build_processes(&[], &theme, 40);
-        // First line is the label, second is the "—" placeholder.
-        assert_eq!(lines.len(), 2);
-        let label = line_to_string(&lines[0]);
-        assert_eq!(label, "PROCESSES");
-        let placeholder = line_to_string(&lines[1]);
+        assert_eq!(lines.len(), 1);
+        let placeholder = line_to_string(&lines[0]);
         assert_eq!(placeholder, "—");
     }
 
@@ -949,10 +938,8 @@ mod tests {
         let theme = Theme::default();
         let path = std::path::PathBuf::from("/wt");
         let lines = build_recent_files(None, None, &path, &theme, 40);
-        assert_eq!(lines.len(), 2);
-        let label = line_to_string(&lines[0]);
-        assert_eq!(label, "RECENT FILES");
-        let placeholder = line_to_string(&lines[1]);
+        assert_eq!(lines.len(), 1);
+        let placeholder = line_to_string(&lines[0]);
         assert_eq!(placeholder, "—");
     }
 

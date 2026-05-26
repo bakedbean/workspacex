@@ -138,6 +138,18 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
             update.last_user_interrupted = Some(false);
         }
         if let Some(text) = parsed.last_assistant_text {
+            // Track the longest text block seen in this batch alongside
+            // the latest, for recap extraction. Narration is short;
+            // real recaps are long.
+            let len = text.chars().count();
+            let replace_longest = update
+                .longest_assistant_text_in_batch
+                .as_ref()
+                .map(|cur| cur.chars().count() < len)
+                .unwrap_or(true);
+            if replace_longest {
+                update.longest_assistant_text_in_batch = Some(text.clone());
+            }
             update.last_assistant_text = Some(text);
         }
     }

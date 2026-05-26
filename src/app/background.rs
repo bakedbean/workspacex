@@ -76,6 +76,7 @@ pub async fn tail_workspace_events(
         human_replied_after_last_stop,
         reset_from_zero,
         last_assistant_text,
+        longest_assistant_text_in_batch,
         last_user_interrupted,
         first_user_text,
         tool_use_counts,
@@ -132,9 +133,22 @@ pub async fn tail_workspace_events(
     //   only if real user text appears AFTER the last
     //   stop_reason in the batch (or anywhere in the batch
     //   if there's no new stop_reason).
+    // Recap pipeline: record this batch's longest assistant text into
+    // the per-turn accumulator BEFORE handling stop_reason, so that if
+    // the same batch contains both the recap text and the end_turn
+    // marker, the snapshot sees the latest accumulator.
+    if let Some(text) = &longest_assistant_text_in_batch {
+        evt.record_batch_longest_text(text);
+    }
     if let Some(sr) = last_stop_reason {
+        let terminal = sr.is_awaiting_user();
         evt.last_stop_reason = Some(sr);
         evt.user_replied_since_stop = false;
+        if terminal {
+            // Snapshot the just-completed turn's recap through
+            // clean_recap; the SESSION SUMMARY column reads this field.
+            evt.snapshot_recap_at_turn_end();
+        }
     }
     if human_replied_after_last_stop {
         evt.user_replied_since_stop = true;

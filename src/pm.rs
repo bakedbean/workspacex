@@ -274,60 +274,14 @@ pub async fn open_pm_with_refresh(
 mod tests {
     use super::*;
     use crate::store::{NewWorkspace, Store, WorkspaceState};
-    use std::ffi::{OsStr, OsString};
-    use std::sync::{Mutex, MutexGuard};
+    use crate::test_support::{EnvGuard, cat_path};
     use tempfile::TempDir;
-
-    // Several tests mutate process-global env vars ($HOME so
-    // `has_prior_session` reads from a tempdir, and $WSX_CLAUDE_BIN so
-    // PM spawns a cat wrapper instead of real claude). Those tests must
-    // not run in parallel, or one's restore clobbers another's setup.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// RAII guard for env-mutating tests: acquires `ENV_LOCK`, stashes
-    /// the original value of any env var it sets, and restores them on
-    /// drop — even on panic. Replaces hand-rolled save/restore code so
-    /// a failed assertion can't leak stale env into subsequent tests.
-    struct EnvGuard {
-        _lock: MutexGuard<'static, ()>,
-        saved: Vec<(String, Option<OsString>)>,
-    }
-
-    impl EnvGuard {
-        fn new() -> Self {
-            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            Self {
-                _lock: lock,
-                saved: Vec::new(),
-            }
-        }
-
-        fn set(&mut self, key: &str, value: impl AsRef<OsStr>) {
-            self.saved.push((key.to_string(), std::env::var_os(key)));
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (key, prior) in self.saved.drain(..).rev() {
-                unsafe {
-                    match prior {
-                        Some(v) => std::env::set_var(&key, v),
-                        None => std::env::remove_var(&key),
-                    }
-                }
-            }
-        }
-    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[allow(clippy::await_holding_lock)]
     async fn open_pm_spawns_session_and_writes_workspaces_json() {
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", "/usr/bin/cat");
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let dir = TempDir::new().unwrap();
         let pm_root = dir.path().join("pm");
         let store = Store::open_in_memory().unwrap();
@@ -465,7 +419,7 @@ mod tests {
         let mut env = EnvGuard::new();
         let dir = TempDir::new().unwrap();
         let wrapper = dir.path().join("claude-stub.sh");
-        std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
+        std::fs::write(&wrapper, format!("#!/bin/sh\nexec {}\n", cat_path())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
         perm.set_mode(0o755);
@@ -503,13 +457,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[allow(clippy::await_holding_lock)]
     async fn open_pm_with_auto_summary_writes_message_after_settle() {
-        // /usr/bin/cat chokes on `--allowedTools` and other PM flags, so we
+        // `cat` chokes on `--allowedTools` and other PM flags, so we
         // wrap it in a tiny shell script that ignores its args and execs cat
         // reading stdin. The wrapper is a tempfile we drop after the test.
         let mut env = EnvGuard::new();
         let dir = TempDir::new().unwrap();
         let wrapper = dir.path().join("claude-stub.sh");
-        std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
+        std::fs::write(&wrapper, format!("#!/bin/sh\nexec {}\n", cat_path())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
         perm.set_mode(0o755);
@@ -545,7 +499,7 @@ mod tests {
         let mut env = EnvGuard::new();
         let dir = TempDir::new().unwrap();
         let wrapper = dir.path().join("claude-stub.sh");
-        std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
+        std::fs::write(&wrapper, format!("#!/bin/sh\nexec {}\n", cat_path())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
         perm.set_mode(0o755);
@@ -598,7 +552,7 @@ mod tests {
         let mut env = EnvGuard::new();
         let dir = TempDir::new().unwrap();
         let wrapper = dir.path().join("claude-stub.sh");
-        std::fs::write(&wrapper, "#!/bin/sh\nexec /usr/bin/cat\n").unwrap();
+        std::fs::write(&wrapper, format!("#!/bin/sh\nexec {}\n", cat_path())).unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perm = std::fs::metadata(&wrapper).unwrap().permissions();
         perm.set_mode(0o755);

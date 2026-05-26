@@ -10,9 +10,8 @@ use ratatui::backend::TestBackend;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dashboard_renders_with_one_repo_one_workspace() {
-    unsafe {
-        std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-    }
+    let mut env = wsx::test_support::EnvGuard::new();
+    env.set("WSX_CLAUDE_BIN", wsx::test_support::cat_path());
 
     let repo_dir = TempDir::new().unwrap();
     let r = |args: &[&str]| {
@@ -83,8 +82,4 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
         all_text.contains("demo") && all_text.contains("alpha"),
         "dashboard did not show demo and alpha:\n{all_text}"
     );
-
-    unsafe {
-        std::env::remove_var("WSX_CLAUDE_BIN");
-    }
 }

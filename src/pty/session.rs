@@ -773,77 +773,15 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{OsStr, OsString};
+    use crate::test_support::{EnvGuard, cat_path};
     use std::path::PathBuf;
-    use std::sync::{Mutex, MutexGuard};
     use std::time::Duration;
-
-    // Several tests in this module mutate process-global env vars
-    // (WSX_PI_MODEL, WSX_PI_PROVIDER, WSX_CLAUDE_BIN). They must not run in
-    // parallel, or one's restore clobbers another's setup. Mirrors the
-    // EnvGuard pattern in src/pm.rs::tests.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// RAII guard for env-mutating tests: acquires `ENV_LOCK`, stashes the
-    /// original value of any env var it sets/removes, and restores them on
-    /// drop — even on panic — so a failed assertion can't leak stale env
-    /// into subsequent tests.
-    struct EnvGuard {
-        _lock: MutexGuard<'static, ()>,
-        saved: Vec<(String, Option<OsString>)>,
-    }
-
-    impl EnvGuard {
-        fn new() -> Self {
-            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            Self {
-                _lock: lock,
-                saved: Vec::new(),
-            }
-        }
-
-        fn set(&mut self, key: &str, value: impl AsRef<OsStr>) {
-            self.saved.push((key.to_string(), std::env::var_os(key)));
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-
-        fn remove(&mut self, key: &str) {
-            self.saved.push((key.to_string(), std::env::var_os(key)));
-            unsafe {
-                std::env::remove_var(key);
-            }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (key, prior) in self.saved.drain(..).rev() {
-                unsafe {
-                    match prior {
-                        Some(v) => std::env::set_var(&key, v),
-                        None => std::env::remove_var(&key),
-                    }
-                }
-            }
-        }
-    }
-
-    fn echo_bin() -> &'static str {
-        if std::path::Path::new("/usr/bin/cat").exists() {
-            "/usr/bin/cat"
-        } else {
-            "cat"
-        }
-    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_echo() {
         // Substitute claude with `cat` via the env-var seam.
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", echo_bin());
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -864,9 +802,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("hello"), "screen contents: {screen:?}");
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     // `spawn_session` propagates `pty.spawn_command(...)` errors via `?`,
@@ -898,13 +833,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn kill_all_terminates_child() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "sleep");
-        }
-        // sleep needs an arg; we use sh as a wrapper instead.
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/bin/sh");
-        }
+        let mut env = EnvGuard::new();
+        // `sh` (with no args) reads stdin forever — the spawn stays alive
+        // so we can verify `kill_all` actually terminates it.
+        env.set("WSX_CLAUDE_BIN", "/bin/sh");
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
         let id = crate::store::WorkspaceId(1);
@@ -941,16 +873,12 @@ mod tests {
             "expected Exited after kill_all, got {:?}",
             *session.status.read().unwrap()
         );
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn empty_enter_does_not_latch_prompt_capture() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = std::path::PathBuf::from(".");
         let session = spawn_session(
             &cwd,
@@ -979,10 +907,6 @@ mod tests {
         // After a successful take, further calls latch correctly.
         session.capture_char('x');
         assert!(session.take_first_prompt().is_none());
-
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[test]
@@ -1146,21 +1070,9 @@ mod tests {
         std::fs::create_dir_all(&session_dir).unwrap();
         std::fs::write(session_dir.join("abc.jsonl"), "{}").unwrap();
 
-        // Override HOME for the duration of this test.
-        let original = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", home.path());
-        }
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
         let result = has_prior_session(work.path());
-        if let Some(h) = original {
-            unsafe {
-                std::env::set_var("HOME", h);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("HOME");
-            }
-        }
         assert!(
             result,
             "expected to find prior session at {}",
@@ -1172,28 +1084,16 @@ mod tests {
     fn has_prior_session_returns_false_for_empty_dir() {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
-        let original = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", home.path());
-        }
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
         let result = has_prior_session(work.path());
-        if let Some(h) = original {
-            unsafe {
-                std::env::set_var("HOME", h);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("HOME");
-            }
-        }
         assert!(!result);
     }
 
     #[test]
     fn project_manager_mode_adds_skip_permissions_and_system_prompt() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
@@ -1209,16 +1109,12 @@ mod tests {
         assert!(dbg.contains("--append-system-prompt"), "{dbg}");
         assert!(dbg.contains("project manager"), "{dbg}");
         assert!(!dbg.contains("--continue"), "should be Fresh-style: {dbg}");
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[test]
     fn project_manager_mode_resume_adds_continue() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::ProjectManager {
             workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
@@ -1230,9 +1126,6 @@ mod tests {
         let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--continue"), "{dbg}");
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[test]
@@ -1454,9 +1347,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_text_when_settled_writes_after_quiet_window() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -1481,16 +1373,12 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("AUTO_MSG"), "screen contents: {screen:?}");
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn session_manager_pm_spawn_get_kill() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let mut mgr = SessionManager::new();
         assert!(mgr.pm().is_none());
@@ -1539,18 +1427,14 @@ mod tests {
             SessionStatus::Exited { .. }
         ));
         assert!(mgr.pm().is_none(), "kill_all should clear pm slot");
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_text_when_settled_times_out_when_no_output() {
-        unsafe {
-            // cat with no input produces no spontaneous output, so activity_ms
-            // stays 0 and the quiet-window condition is never met.
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        // cat with no input produces no spontaneous output, so activity_ms
+        // stays 0 and the quiet-window condition is never met.
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -1573,19 +1457,18 @@ mod tests {
         assert!(elapsed >= Duration::from_millis(450), "{elapsed:?}");
         assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
         s.kill();
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     /// Construct a real PTY-backed Session for scrollback unit tests. Uses
     /// `cat` as the child so spawn succeeds without claude on the path.
+    /// The `EnvGuard` is only needed for the spawn syscall itself —
+    /// `WSX_CLAUDE_BIN` is read by the parent at command-build time, not by
+    /// the spawned cat — so dropping it before the test body returns is safe.
     fn spawn_for_test() -> Session {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", echo_bin());
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = PathBuf::from(".");
-        let s = spawn_session(
+        spawn_session(
             &cwd,
             80,
             24,
@@ -1598,11 +1481,7 @@ mod tests {
             crate::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
         )
-        .expect("spawn_session for scrollback test");
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
-        s
+        .expect("spawn_session for scrollback test")
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -9,6 +9,7 @@ use super::*;
 mod pm_state_tests {
     use super::*;
     use crate::store::Store;
+    use crate::test_support::{EnvGuard, cat_path};
     use std::path::PathBuf;
 
     #[test]
@@ -394,9 +395,8 @@ mod pm_state_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_modal_enter_switches_view_and_clears_attention() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -442,17 +442,13 @@ mod pm_state_tests {
             !app.workspace_needs_attention.contains(&ws_id),
             "attention flag should clear on Enter"
         );
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_v_splits_attached_view_vertically() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -565,17 +561,13 @@ mod pm_state_tests {
             }
             other => panic!("expected Attached view; got {other:?}"),
         }
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_d_closes_focused_pane_when_split() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -671,9 +663,6 @@ mod pm_state_tests {
         .await
         .unwrap();
         assert!(matches!(app.view, crate::ui::View::Dashboard));
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -686,9 +675,8 @@ mod pm_state_tests {
         // throttle stamps and queue the workspace for an out-of-band
         // events-tail refresh.
         use crate::store::{NewWorkspace, Store, WorkspaceState};
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -764,19 +752,14 @@ mod pm_state_tests {
             app.last_proc_scan_ms, 0,
             "proc-scan throttle should be reset on detach"
         );
-
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_esc_detach_schedules_refresh_for_attached_workspace() {
         // Same as the d-path test above, for the Ctrl-X Esc detach.
         use crate::store::{NewWorkspace, Store, WorkspaceState};
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -834,18 +817,13 @@ mod pm_state_tests {
             app.pending_workspace_refresh.contains(&id),
             "Esc-detached workspace should be queued for refresh"
         );
-
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_arrow_moves_focus_in_split() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -911,9 +889,6 @@ mod pm_state_tests {
                 assert_eq!(state.focused_id(), Some(ids[0]));
             }
             other => panic!("expected Attached view; got {other:?}"),
-        }
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
         }
     }
 
@@ -1118,9 +1093,8 @@ mod pm_state_tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -1200,9 +1174,6 @@ mod pm_state_tests {
             rendered.contains("! repo/the-other"),
             "expected V5 stalled glyph next to workspace name on status row:\n{rendered}"
         );
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1211,9 +1182,8 @@ mod pm_state_tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -1271,16 +1241,12 @@ mod pm_state_tests {
             "unexpected activity glyph in row {}: {second_to_last:?}",
             h - 2
         );
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn leader_u_in_attached_pm_opens_updates_panel() {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         // Manually spawn a PM session so handle_key_attached_pm has one.
@@ -1325,10 +1291,6 @@ mod pm_state_tests {
             app.modal,
             Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })
         ));
-
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     fn mouse_event(kind: MouseEventKind) -> MouseEvent {
@@ -1341,9 +1303,8 @@ mod pm_state_tests {
     }
 
     fn spawn_pm_for_test(app: &mut App) {
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
@@ -1363,16 +1324,12 @@ mod pm_state_tests {
             )
             .unwrap();
         app.pm = Some(s);
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     fn spawn_attached_workspace(app: &mut App) -> crate::store::WorkspaceId {
         use crate::store::NewWorkspace;
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let repo_id = app
             .store
             .add_repo(std::path::Path::new("."), "scratch", "test")
@@ -1406,9 +1363,6 @@ mod pm_state_tests {
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(ws_id));
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
         ws_id
     }
 
@@ -2600,6 +2554,7 @@ mod pm_state_tests {
 #[cfg(test)]
 mod ctrl_x_esc_tests {
     use super::*;
+    use crate::test_support::{EnvGuard, cat_path};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -2607,9 +2562,8 @@ mod ctrl_x_esc_tests {
     async fn ctrl_x_esc_saves_layout_and_returns_to_dashboard() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         use crate::ui::split::{AttachedState, SplitDirection};
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -2709,16 +2663,13 @@ mod ctrl_x_esc_tests {
             app.workspaces_with_multi_pane_layouts.contains(&first_id),
             "cache should refresh to include the new layout's anchor"
         );
-
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 }
 
 #[cfg(test)]
 mod restore_layout_tests {
     use super::*;
+    use crate::test_support::{EnvGuard, cat_path};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -2726,9 +2677,8 @@ mod restore_layout_tests {
         slug: &str,
     ) -> (App, crate::store::WorkspaceId, crate::store::WorkspaceId) {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
-        unsafe {
-            std::env::set_var("WSX_CLAUDE_BIN", "/usr/bin/cat");
-        }
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -2812,9 +2762,6 @@ mod restore_layout_tests {
             }
             _ => panic!("expected attached view with restored layout"),
         }
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2829,9 +2776,6 @@ mod restore_layout_tests {
                 assert_eq!(s.leaves(), vec![first_id]);
             }
             _ => panic!("expected single-pane attached view"),
-        }
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
         }
     }
 
@@ -2850,9 +2794,6 @@ mod restore_layout_tests {
                 assert_eq!(s.leaves(), vec![first_id]);
             }
             _ => panic!("expected single-pane attached view after 'l' on workspace"),
-        }
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
         }
     }
 
@@ -2877,9 +2818,6 @@ mod restore_layout_tests {
                 assert_eq!(s.leaves(), vec![first_id], "side pane pruned");
             }
             _ => panic!("expected attached view with pruned layout"),
-        }
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
         }
     }
 
@@ -2929,9 +2867,6 @@ mod restore_layout_tests {
         // The stored layout is unchanged.
         let (saved, _) = app.store.get_workspace_layout(first_id).unwrap().unwrap();
         assert_eq!(saved.leaves(), vec![first_id, second_id]);
-        unsafe {
-            std::env::remove_var("WSX_CLAUDE_BIN");
-        }
     }
 }
 

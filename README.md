@@ -161,7 +161,7 @@ Known keys:
 | `pinned_commands` | Newline-separated list of `Label=command` (or bare `command`) entries. Each becomes a chip in the attached view, fired via `Ctrl-x <digit>` or click. Max 9 visible/keyable. Per-repo override available via `wsx repo set-pinned-commands`. |
 | `dashboard_name_width` | Width (chars) of the workspace-name column on the dashboard. Default `24`. Clamped to `10..=60`. |
 | `dashboard_branch_width` | Width (chars) of the `⎇ branch` column on the dashboard. Default `28`. Clamped to `10..=80`. |
-| `detail_bar_config` | JSON blob controlling the per-workspace detail bar (visibility, height, which body columns render). See [Workspace detail bar](#workspace-detail-bar) for the schema, defaults, and per-repo override flow. Out-of-range values are clamped on save. |
+| `detail_bar_config` | JSON blob controlling the per-workspace detail bar (visibility, height, and the container/module layout). See [Workspace detail bar](#workspace-detail-bar) for the schema, defaults, and per-repo override flow. Out-of-range values are clamped on save. |
 
 Value sources:
 
@@ -467,17 +467,18 @@ Turn off both via `wsx config set notifications off`.
 ## Workspace detail bar
 
 When a workspace is selected on the dashboard, wsx renders a multi-column
-detail bar across the bottom showing what's happening inside that
-workspace: a session summary (initial prompt + tool counts), the most
-recent chat exchange, and processes + recently-edited files. The bar's
-appearance is controlled by the `detail_bar_config` setting — globally via
-`wsx config`, with optional per-repo overrides.
+detail bar across the bottom. The body is divided into 1–4 equal-width
+**containers**; each container holds one or more **modules** stacked
+vertically. Four built-in modules ship today: `session_summary`,
+`recent_chat`, `processes`, `recent_files`. The bar's appearance is
+controlled by the `detail_bar_config` setting — globally via `wsx config`,
+with optional per-repo overrides.
 
 ### Schema and defaults
 
 The global value is a full `DetailBarConfig` JSON blob. Every field is
-optional in nested objects; missing fields fall back to defaults. Out-of-
-range values are clamped on save (see below).
+optional; missing fields fall back to defaults. Out-of-range values are
+clamped on save (see below).
 
 ```json
 {
@@ -487,11 +488,11 @@ range values are clamped on save (see below).
     "min_rows": 8,
     "max_rows": 18
   },
-  "sections": {
-    "session_summary": true,
-    "recent_chat": true,
-    "procs_and_files": true
-  }
+  "containers": [
+    ["session_summary"],
+    ["recent_chat"],
+    ["processes", "recent_files"]
+  ]
 }
 ```
 
@@ -501,14 +502,15 @@ range values are clamped on save (see below).
 | `height.percent` | u8 | `30` | Target height as a percent of the terminal's rows. Clamped to `[5, 80]`. |
 | `height.min_rows` | u16 | `8` | Floor on the bar's height. Clamped to `[4, 40]`. |
 | `height.max_rows` | u16 | `18` | Ceiling on the bar's height. Clamped to `[4, 60]`. If `min_rows > max_rows`, the two are swapped on save. |
-| `sections.session_summary` | bool | `true` | Render the left body column (initial prompt, tool-call counts). |
-| `sections.recent_chat` | bool | `true` | Render the middle body column (most recent user/assistant exchange). |
-| `sections.procs_and_files` | bool | `true` | Render the right body column (running processes + recently-edited files). |
+| `containers` | list of lists | (see default above) | Outer length 1–4: one entry per equal-width column. Inner is a list of module IDs stacked vertically within the column. An empty inner list `[]` reserves an empty column. Empty outer list resets to default. Lengths > 4 are truncated to 4. |
 
-When all three section flags are `false`, the bar shrinks to its
+**Built-in module IDs:** `session_summary`, `recent_chat`, `processes`,
+`recent_files`. Unknown IDs render a `[unknown: <id>]` placeholder and
+log a warning, so typos are visible but don't break the dashboard.
+
+When every container is empty (`[[], [], []]`), the bar shrinks to its
 4-row chrome (header + two rules + reply input) regardless of
-`height.percent`. Disabling section columns is how you trim the
-bar to just the reply input.
+`height.percent`. That's how you trim the bar to just the reply input.
 
 ### Setting the global value
 
@@ -529,11 +531,11 @@ Examples:
 # Make the bar taller on big monitors.
 wsx config set detail_bar_config '{"height": {"percent": 45, "max_rows": 24}}'
 
-# Hide the chat column globally; keep summary + procs/files.
-wsx config set detail_bar_config '{"sections": {"recent_chat": false}}'
+# Single full-width chat column.
+wsx config set detail_bar_config '{"containers": [["recent_chat"]]}'
 
-# Reduce the bar to just the reply input.
-wsx config set detail_bar_config '{"sections": {"session_summary": false, "recent_chat": false, "procs_and_files": false}}'
+# Four columns, processes and files in separate slots.
+wsx config set detail_bar_config '{"containers": [["session_summary"], ["recent_chat"], ["processes"], ["recent_files"]]}'
 
 # Hide the bar entirely.
 wsx config set detail_bar_config '{"visible": false}'
@@ -542,9 +544,10 @@ wsx config set detail_bar_config '{"visible": false}'
 ### Per-repo override
 
 Each repo can override any subset of the global config. The per-repo
-value is a `DetailBarOverride` — every field is `Option<...>` and a
-missing field means "inherit from global." This means an empty `{}`
-inherits everything; you only specify what you want to change.
+value is a `DetailBarOverride` — `visible` and `height.*` merge
+per-field; `containers` is whole-replace when present, fully-inherited
+when absent. An empty `{}` inherits everything; you only specify what
+you want to change.
 
 Open the repo settings modal with `s` on the dashboard, select the
 `detail_bar_config` row, and press Enter. `$EDITOR` opens on `{}\n`
@@ -559,10 +562,10 @@ Hide the bar entirely for this repo (global value can stay on):
 {"visible": false}
 ```
 
-Drop the recent-chat column for this repo; keep everything else inherited from global:
+Single chat column for this repo; keep `visible` and `height` inherited from global:
 
 ```json
-{"sections": {"recent_chat": false}}
+{"containers": [["recent_chat"]]}
 ```
 
 Taller bar for a repo where the session-summary text is usually long
@@ -573,9 +576,10 @@ Taller bar for a repo where the session-summary text is usually long
 ```
 
 Merge precedence: bake-in defaults → global `detail_bar_config` →
-per-repo override, applied per-field. So a repo that overrides
-`sections.recent_chat = false` still picks up any global `height`
-changes you make later.
+per-repo override. `visible` and `height.*` apply per-field; `containers`
+whole-replaces when the override sets it. So a repo override that only
+sets `containers` still picks up any global `height` changes you make
+later.
 
 ### Behavior on bad input
 

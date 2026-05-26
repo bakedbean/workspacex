@@ -1409,4 +1409,34 @@ mod tests {
         assert!(!parsed.visible);
         assert_eq!(parsed.height.percent, 30);
     }
+
+    #[test]
+    fn detail_bar_config_default_seed_round_trips() {
+        use crate::detail_bar_config::DetailBarConfig;
+        let seed =
+            serde_json::to_string_pretty(&DetailBarConfig::default()).expect("serialize default");
+        let parsed: DetailBarConfig =
+            serde_json::from_str(&seed).expect("seed must parse with new schema");
+        assert_eq!(parsed, DetailBarConfig::default());
+        // Spot-check: the new shape uses `containers`, not `sections`.
+        assert!(seed.contains("\"containers\""));
+        assert!(!seed.contains("\"sections\""));
+    }
+
+    #[test]
+    fn detail_bar_config_validate_truncates_too_many_containers() {
+        let raw = serde_json::json!({
+            "containers": [
+                ["a"], ["b"], ["c"], ["d"], ["e"], ["f"]
+            ]
+        })
+        .to_string();
+        let normalized = super::detail_bar_config_validate_and_normalize(&raw)
+            .expect("valid JSON should normalize");
+        // Truncation happens inside sanitize(); the normalized blob
+        // should round-trip to exactly 4 containers.
+        let parsed: crate::detail_bar_config::DetailBarConfig =
+            serde_json::from_str(&normalized).expect("re-parse normalized");
+        assert_eq!(parsed.containers.len(), 4);
+    }
 }

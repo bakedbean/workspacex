@@ -1,11 +1,12 @@
 //! Bottom-pinned detail bar shown when a workspace is selected on the
-//! dashboard. Renders header strip, three-column body, and an inline
-//! reply input.
+//! dashboard. Renders header strip, a 1–4 container body (each
+//! container holding one or more modules from `crate::detail_modules`),
+//! and an inline reply input.
 //!
-//! See `docs/superpowers/specs/2026-05-24-dashboard-workspace-detail-design.md`.
+//! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
 
 use crate::detail_bar_config::DetailBarConfig;
-use crate::events::{ToolUseCounts, WorkspaceEvents};
+use crate::events::WorkspaceEvents;
 use crate::forge::BranchLifecycle;
 use crate::git::DiffStats;
 use crate::proc::ProcInfo;
@@ -14,47 +15,6 @@ use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Column {
-    SessionSummary,
-    RecentChat,
-    ProcsAndFiles,
-}
-
-pub fn enabled_columns(cfg: &DetailBarConfig) -> Vec<Column> {
-    let mut out = Vec::with_capacity(3);
-    if cfg.sections.session_summary {
-        out.push(Column::SessionSummary);
-    }
-    if cfg.sections.recent_chat {
-        out.push(Column::RecentChat);
-    }
-    if cfg.sections.procs_and_files {
-        out.push(Column::ProcsAndFiles);
-    }
-    out
-}
-
-/// Width percentages for the enabled body columns. Preserves the
-/// legacy 30/40/30 ratio when all three are present; redistributes
-/// proportionally otherwise.
-pub fn column_widths(cols: &[Column]) -> Vec<u16> {
-    use Column::*;
-    match cols {
-        [] => vec![],
-        [_] => vec![100],
-        [SessionSummary, RecentChat] => vec![43, 57],
-        [SessionSummary, ProcsAndFiles] => vec![50, 50],
-        [RecentChat, ProcsAndFiles] => vec![57, 43],
-        [SessionSummary, RecentChat, ProcsAndFiles] => vec![30, 40, 30],
-        _ => {
-            let n = cols.len() as u16;
-            let each = 100 / n;
-            (0..n).map(|_| each).collect()
-        }
-    }
-}
 
 /// What `app.rs::draw` assembles for the detail bar. Borrowed for the
 /// duration of a single draw call.
@@ -69,7 +29,7 @@ pub struct DetailInputs<'a> {
     /// root. Used to annotate RECENT FILES entries with `+X −Y`.
     pub diff_per_file: Option<&'a std::collections::HashMap<String, DiffStats>>,
     pub lifecycle: Option<BranchLifecycle>,
-    pub pr_title: Option<String>,
+    pub pr_title: Option<&'a str>,
     pub pr_number: Option<u32>,
     pub status: Status,
     pub ago_secs: Option<u64>,
@@ -81,12 +41,13 @@ pub struct DetailInputs<'a> {
     /// of derived content.
     pub events_scanned: bool,
     pub config: &'a DetailBarConfig,
+    pub registry: &'a crate::detail_modules::Registry,
 }
 
 /// Render the detail bar into `area`. No-op when `area.height` is below
 /// the config's `minimum_height()` — which is `CHROME_ROWS` (4) when no
-/// sections are enabled, or `min_rows` otherwise (caller is expected to
-/// fall back to a condensed banner — see `app.rs::draw`).
+/// container has any modules, or `min_rows` otherwise (caller is expected
+/// to fall back to a condensed banner — see `app.rs::draw`).
 pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
     if area.height == 0 || area.height < inputs.config.minimum_height() {
         return;
@@ -94,21 +55,17 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
 
-    // Compute enabled columns first so an empty body collapses the
-    // body region to 0 rows (chrome-only mode), keeping the bar at
-    // exactly `CHROME_ROWS` total.
-    let cols = enabled_columns(inputs.config);
-    let body_constraint = if cols.is_empty() {
-        Constraint::Length(0)
-    } else {
+    let body_constraint = if inputs.config.has_body() {
         Constraint::Min(1)
+    } else {
+        Constraint::Length(0)
     };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // header strip
             Constraint::Length(1), // rule
-            body_constraint,       // body (3 columns, or 0 when empty)
+            body_constraint,       // body (N containers, or 0 when empty)
             Constraint::Length(1), // rule
             Constraint::Length(1), // reply row
         ])
@@ -134,27 +91,7 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
         chunks[1],
     );
 
-    if chunks[2].width >= 80 && cols.len() > 1 {
-        let widths = column_widths(&cols);
-        let body_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(
-                widths
-                    .iter()
-                    .map(|w| Constraint::Percentage(*w))
-                    .collect::<Vec<_>>(),
-            )
-            .split(chunks[2]);
-        for (idx, col) in cols.iter().enumerate() {
-            let col_area = body_chunks[idx];
-            render_column(f, col_area, *col, inputs, theme, chunks[2].height);
-        }
-    } else if let Some(only) = cols.first() {
-        // Narrow terminal OR single enabled column → render whichever
-        // column comes first in display order at full width.
-        render_column(f, chunks[2], *only, inputs, theme, chunks[2].height);
-    }
-    // If `cols` is empty, body region is rendered as blank (no-op).
+    render_body(f, chunks[2], inputs, theme);
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -178,62 +115,149 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
     }
 }
 
-fn render_column(
+fn render_body(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
+    use ratatui::layout::{Constraint, Direction, Layout};
+
+    let cfg = inputs.config;
+    if !cfg.has_body() || area.height == 0 {
+        return;
+    }
+
+    // Narrow-terminal collapse: < 80 cols → first non-empty container only.
+    let containers: Vec<&Vec<String>> = if area.width < 80 {
+        cfg.containers
+            .iter()
+            .find(|c| !c.is_empty())
+            .into_iter()
+            .collect()
+    } else {
+        cfg.containers.iter().collect()
+    };
+
+    let widths = equal_widths(containers.len());
+    let column_areas = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            widths
+                .iter()
+                .map(|w| Constraint::Percentage(*w))
+                .collect::<Vec<_>>(),
+        )
+        .split(area);
+
+    let ctx = crate::detail_modules::DetailContext {
+        repo: inputs.repo,
+        workspace: inputs.workspace,
+        events: inputs.events,
+        procs: inputs.procs,
+        diff: inputs.diff,
+        diff_per_file: inputs.diff_per_file,
+        lifecycle: inputs.lifecycle,
+        pr_title: inputs.pr_title,
+        pr_number: inputs.pr_number,
+        status: inputs.status,
+        ago_secs: inputs.ago_secs,
+        events_scanned: inputs.events_scanned,
+        theme,
+    };
+
+    for (col_area, ids) in column_areas.iter().zip(containers.iter()) {
+        render_container(f, *col_area, ids, &ctx, inputs.registry, theme);
+    }
+}
+
+fn render_container(
     f: &mut Frame,
     area: Rect,
-    col: Column,
-    inputs: &DetailInputs<'_>,
+    module_ids: &[String],
+    ctx: &crate::detail_modules::DetailContext<'_>,
+    reg: &crate::detail_modules::Registry,
     theme: &Theme,
-    body_height: u16,
 ) {
+    use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let created_at_secs = (inputs.workspace.created_at.max(0) / 1000) as u64;
-    let created_secs = now_secs.saturating_sub(created_at_secs);
 
-    match col {
-        Column::SessionSummary => {
-            let lines = build_session_summary(
-                if inputs.events_scanned {
-                    inputs.events
-                } else {
-                    None
-                },
-                inputs.status,
-                theme,
-                area.width as usize,
-                created_secs,
-                inputs.ago_secs,
-            );
-            f.render_widget(Paragraph::new(lines), area);
+    if module_ids.is_empty() || area.height == 0 {
+        return;
+    }
+
+    enum Slot<'a> {
+        Found(&'a dyn crate::detail_modules::DetailModule),
+        Unknown(&'a str),
+    }
+    let slots: Vec<Slot<'_>> = module_ids
+        .iter()
+        .map(|id| match reg.get(id) {
+            Some(m) => Slot::Found(m),
+            None => {
+                tracing::warn!(id = %id, "detail_bar: unknown module id in container");
+                Slot::Unknown(id.as_str())
+            }
+        })
+        .collect();
+
+    // Per slot: [title row, body, gap row]. Last slot's gap is Length(0).
+    // Unknown placeholder body = Length(0); only the title row renders.
+    let constraints: Vec<Constraint> = slots
+        .iter()
+        .enumerate()
+        .flat_map(|(i, slot)| {
+            let last = i == slots.len() - 1;
+            let body = match slot {
+                Slot::Found(m) => m.height_hint(ctx),
+                Slot::Unknown(_) => Constraint::Length(0),
+            };
+            let title = Constraint::Length(1);
+            let gap = if last {
+                Constraint::Length(0)
+            } else {
+                Constraint::Length(1)
+            };
+            [title, body, gap]
+        })
+        .collect();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    let label_style = Style::default()
+        .fg(ctx.theme.path)
+        .add_modifier(Modifier::BOLD);
+
+    for (i, slot) in slots.iter().enumerate() {
+        let title_area = chunks[i * 3];
+        let body_area = chunks[i * 3 + 1];
+        match slot {
+            Slot::Found(m) => {
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(m.title(), label_style))),
+                    title_area,
+                );
+                m.render(body_area, ctx, f);
+            }
+            Slot::Unknown(id) => {
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!("[unknown: {id}]"),
+                        theme.dim_style(),
+                    ))),
+                    title_area,
+                );
+            }
         }
-        Column::RecentChat => {
-            let lines = build_recent_chat(
-                if inputs.events_scanned {
-                    inputs.events
-                } else {
-                    None
-                },
-                theme,
-                area.width as usize,
-                (body_height as usize).saturating_sub(1).max(1),
-            );
-            f.render_widget(Paragraph::new(lines), area);
-        }
-        Column::ProcsAndFiles => {
-            let lines = build_procs_and_files(
-                inputs.procs,
-                inputs.events,
-                inputs.diff_per_file,
-                &inputs.workspace.worktree_path,
-                theme,
-                area.width as usize,
-            );
-            f.render_widget(Paragraph::new(lines), area);
-        }
+    }
+}
+
+fn equal_widths(n: usize) -> Vec<u16> {
+    match n {
+        0 => vec![],
+        1 => vec![100],
+        2 => vec![50, 50],
+        3 => vec![33, 33, 34],
+        4 => vec![25, 25, 25, 25],
+        _ => unreachable!("sanitize() guarantees containers.len() in 1..=4"),
     }
 }
 
@@ -244,7 +268,7 @@ const GUTTER: &str = "▍";
 
 /// One-line header strip at the top of the bar.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_header_strip(
+pub(crate) fn build_header_strip(
     name: &str,
     branch: &str,
     lifecycle: Option<BranchLifecycle>,
@@ -334,155 +358,16 @@ fn format_ago_short(secs: Option<u64>) -> String {
     }
 }
 
-/// Build the lines that make up the SESSION SUMMARY column.
-///
-/// Renders four pieces:
-/// 1. The session's initial user prompt (multi-line, respects `\n`),
-///    italicized.
-/// 2. The action trace synthesized from `tool_use_counts`.
-/// 3. The session age — `created Xs/m/h ago`, from `workspace.created_at`.
-/// 4. Time since the agent's last PTY activity — `active Xs/m/h ago`,
-///    or `active —` when there's no live session.
-///
-/// The age + activity lines render regardless of whether `events` have
-/// been scanned yet, since they're session metadata sourced outside of
-/// the JSONL log.
-pub(super) fn build_session_summary(
-    events: Option<&WorkspaceEvents>,
-    status: Status,
-    theme: &Theme,
-    column_width: usize,
-    created_secs: u64,
-    ago_secs: Option<u64>,
-) -> Vec<Line<'static>> {
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
-    out.push(Line::from(Span::styled(
-        "SESSION SUMMARY".to_string(),
-        label_style,
-    )));
-
-    // Bullet prefix takes the workspace's status color so the SESSION
-    // SUMMARY column visually echoes the row's status gutter.
-    let prefix = Span::styled("▸ ".to_string(), theme.status_style(status));
-    // Continuation indent for wrapped/multi-line prompts: 2 cells, so
-    // wrapped lines align with the first character of the prompt text.
-    let continuation = Span::raw("  ".to_string());
-
-    match events {
-        None => {
-            out.push(Line::from(Span::styled(
-                "  loading…".to_string(),
-                theme.dim_style(),
-            )));
-        }
-        Some(evt) => {
-            if let Some(prompt) = evt.first_user_text.as_deref() {
-                let trimmed = prompt.trim();
-                if !trimmed.is_empty() {
-                    // Respect `\n` from the original prompt AND wrap long lines
-                    // to the column width so the prompt is fully readable.
-                    let inner_width = column_width.saturating_sub(2).max(1);
-                    let wrapped = wrap_lines(trimmed, inner_width);
-                    let italic = Style::default().add_modifier(Modifier::ITALIC);
-                    for (i, line_text) in wrapped.iter().enumerate() {
-                        let leader = if i == 0 {
-                            prefix.clone()
-                        } else {
-                            continuation.clone()
-                        };
-                        out.push(Line::from(vec![
-                            leader,
-                            Span::styled(line_text.clone(), italic),
-                        ]));
-                    }
-                }
-            }
-
-            let trace = format_tool_trace(&evt.tool_use_counts);
-            let trace_body = if trace.is_empty() {
-                Span::styled("—".to_string(), theme.dim_style())
-            } else {
-                Span::raw(truncate_to_chars(&trace, column_width.saturating_sub(2)))
-            };
-            out.push(Line::from(vec![prefix.clone(), trace_body]));
-        }
-    }
-
-    let created_text = format!("created {} ago", format_ago_short(Some(created_secs)));
-    out.push(Line::from(vec![
-        prefix.clone(),
-        Span::styled(created_text, theme.dim_style()),
-    ]));
-
-    let active_text = match ago_secs {
-        Some(s) => format!("active {} ago", format_ago_short(Some(s))),
-        None => "active —".to_string(),
-    };
-    out.push(Line::from(vec![
-        prefix.clone(),
-        Span::styled(active_text, theme.dim_style()),
-    ]));
-
-    out
-}
-
-/// Build the RECENT CHAT column. `max_body_lines` caps how many content
-/// lines render below the column label.
-pub(super) fn build_recent_chat(
-    events: Option<&WorkspaceEvents>,
-    theme: &Theme,
-    column_width: usize,
-    max_body_lines: usize,
-) -> Vec<Line<'static>> {
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
-    out.push(Line::from(Span::styled(
-        "RECENT CHAT".to_string(),
-        label_style,
-    )));
-
-    let Some(evt) = events else {
-        out.push(Line::from(Span::styled(
-            "  loading…".to_string(),
-            theme.dim_style(),
-        )));
-        return out;
-    };
-
-    let Some(text) = evt.last_assistant_text.as_deref() else {
-        out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
-        return out;
-    };
-
-    // Word-wrap to column_width. Take the last `max_body_lines` after wrapping.
-    let wrapped = wrap_lines(text, column_width);
-    let start = wrapped.len().saturating_sub(max_body_lines);
-    for line in wrapped.iter().skip(start) {
-        out.push(Line::from(Span::styled(line.clone(), theme.dim_style())));
-    }
-    out
-}
-
-/// Build the PROCESSES + RECENT FILES column. Procs go on top, recent
-/// files (from `WorkspaceEvents.recent_edited_files`) below, each
-/// annotated with a `+X −Y` delta when the per-file diff map has an
-/// entry for it.
-pub(super) fn build_procs_and_files(
+/// Render the PROCESSES module body. Returns one row per process
+/// (capped at 5, with a "+N more" suffix when over the cap), or a
+/// single "—" placeholder when empty. The host (`render_container`)
+/// draws the title row separately.
+pub(crate) fn build_processes(
     procs: &[ProcInfo],
-    events: Option<&WorkspaceEvents>,
-    diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,
-    worktree_path: &std::path::Path,
     theme: &Theme,
     column_width: usize,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
-    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
-
-    out.push(Line::from(Span::styled(
-        "PROCESSES".to_string(),
-        label_style,
-    )));
     if procs.is_empty() {
         out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
     } else {
@@ -501,11 +386,21 @@ pub(super) fn build_procs_and_files(
             )));
         }
     }
+    out
+}
 
-    out.push(Line::from(Span::styled(
-        "RECENT FILES".to_string(),
-        label_style,
-    )));
+/// Render the RECENT FILES module body. Returns one row per file
+/// (capped at 5), each annotated with per-file diff stats when
+/// available, or a single "—" placeholder when empty. The host
+/// (`render_container`) draws the title row separately.
+pub(crate) fn build_recent_files(
+    events: Option<&WorkspaceEvents>,
+    diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,
+    worktree_path: &std::path::Path,
+    theme: &Theme,
+    column_width: usize,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
     let files: Vec<&String> = events
         .map(|e| e.recent_edited_files.iter().collect())
         .unwrap_or_default();
@@ -516,15 +411,10 @@ pub(super) fn build_procs_and_files(
             let diff = lookup_file_diff(f, worktree_path, diff_per_file);
             let suffix_width = match diff {
                 Some(d) if d.added > 0 || d.removed > 0 => {
-                    // "  +A −R" — 2 leading spaces + sign + digits + sep + sign + digits.
                     4 + d.added.to_string().chars().count() + d.removed.to_string().chars().count()
                 }
                 _ => 0,
             };
-            // Show the path relative to the worktree root so the column
-            // isn't dominated by the shared `/Users/.../worktrees/...`
-            // prefix. Falls back to the absolute path if the file isn't
-            // inside the worktree.
             let display = display_relative_path(f, worktree_path);
             let path_width = column_width.saturating_sub(suffix_width);
             let truncated = truncate_to_chars_left(&display, path_width);
@@ -579,7 +469,7 @@ const REPLY_HINT: &str = "  ↵ send · Esc cancel";
 /// Reply input row. Returns a `Line` plus an optional cursor X-offset
 /// (within the line) that the caller passes to `f.set_cursor_position`
 /// when `focused == true`. The caller adds `area.x` and the row's `y`.
-pub(super) fn build_reply_row(
+pub(crate) fn build_reply_row(
     draft: &str,
     focused: bool,
     theme: &Theme,
@@ -641,100 +531,6 @@ pub(super) fn reply_cursor_x(draft: &str, width: usize) -> u16 {
     (chip_width + visible_count) as u16
 }
 
-/// Greedy word-wrap. Splits long words at the column boundary.
-fn wrap_lines(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![text.to_string()];
-    }
-    let mut out: Vec<String> = Vec::new();
-    for paragraph in text.split('\n') {
-        let mut current = String::new();
-        for word in paragraph.split_whitespace() {
-            if word.chars().count() > width {
-                if !current.is_empty() {
-                    out.push(std::mem::take(&mut current));
-                }
-                let mut buf: String = String::new();
-                for ch in word.chars() {
-                    if buf.chars().count() == width {
-                        out.push(std::mem::take(&mut buf));
-                    }
-                    buf.push(ch);
-                }
-                if !buf.is_empty() {
-                    current = buf;
-                }
-                continue;
-            }
-            let projected = if current.is_empty() {
-                word.chars().count()
-            } else {
-                current.chars().count() + 1 + word.chars().count()
-            };
-            if projected > width {
-                out.push(std::mem::take(&mut current));
-                current.push_str(word);
-            } else {
-                if !current.is_empty() {
-                    current.push(' ');
-                }
-                current.push_str(word);
-            }
-        }
-        if !current.is_empty() {
-            out.push(current);
-        }
-    }
-    if out.is_empty() {
-        out.push(String::new());
-    }
-    out
-}
-
-fn format_tool_trace(counts: &ToolUseCounts) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if counts.read > 0 {
-        parts.push(format!(
-            "read {} {}",
-            counts.read,
-            plural("file", counts.read)
-        ));
-    }
-    if counts.edit > 0 {
-        parts.push(format!(
-            "edited {} {}",
-            counts.edit,
-            plural("file", counts.edit)
-        ));
-    }
-    if counts.write > 0 {
-        parts.push(format!(
-            "wrote {} {}",
-            counts.write,
-            plural("file", counts.write)
-        ));
-    }
-    if counts.bash > 0 {
-        parts.push(format!(
-            "ran {} {}",
-            counts.bash,
-            plural("command", counts.bash)
-        ));
-    }
-    if counts.other > 0 {
-        parts.push(format!("+{} other actions", counts.other));
-    }
-    parts.join(", ")
-}
-
-fn plural(noun: &str, n: u32) -> String {
-    if n == 1 {
-        noun.to_string()
-    } else {
-        format!("{noun}s")
-    }
-}
-
 fn truncate_to_chars(s: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
@@ -773,6 +569,12 @@ mod tests {
 
     fn line_to_string(line: &ratatui::text::Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn make_registry() -> crate::detail_modules::Registry {
+        let mut reg = crate::detail_modules::Registry::new();
+        crate::detail_modules::register_builtins(&mut reg);
+        reg
     }
 
     fn render_to_text(inputs: &DetailInputs<'_>, w: u16, h: u16) -> String {
@@ -839,6 +641,7 @@ mod tests {
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         let (_store, repo, ws) = seed_workspace();
+        let reg = make_registry();
         let result = terminal.draw(|f| {
             let theme = Theme::wsx();
             let cfg = DetailBarConfig::default();
@@ -858,6 +661,7 @@ mod tests {
                 reply_focused: false,
                 events_scanned: false,
                 config: &cfg,
+                registry: &reg,
             };
             render(f, Rect::new(0, 0, 80, 0), &inputs, &theme);
         });
@@ -921,502 +725,6 @@ mod tests {
         assert!(!lower.contains("merged"), "no pr label: {text:?}");
     }
 
-    fn make_events_with(
-        first: Option<&str>,
-        counts: ToolUseCounts,
-        last_assistant: Option<&str>,
-    ) -> WorkspaceEvents {
-        WorkspaceEvents {
-            first_user_text: first.map(str::to_string),
-            tool_use_counts: counts,
-            last_assistant_text: last_assistant.map(str::to_string),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn session_summary_renders_initial_prompt_when_present() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(Some("summarize the repo"), ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, 0, None);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("summarize the repo"), "{joined:?}");
-    }
-
-    #[test]
-    fn session_summary_tool_trace_omits_zero_counts() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(
-            None,
-            ToolUseCounts {
-                read: 5,
-                edit: 0,
-                write: 0,
-                bash: 2,
-                other: 0,
-            },
-            None,
-        );
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, 0, None);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("read 5 files"), "{joined:?}");
-        assert!(joined.contains("ran 2 commands"), "{joined:?}");
-        assert!(
-            !joined.contains("edited"),
-            "edit fragment should be omitted: {joined:?}"
-        );
-        assert!(
-            !joined.contains("wrote"),
-            "write fragment should be omitted: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn session_summary_singular_plural_forms() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(
-            None,
-            ToolUseCounts {
-                read: 1,
-                edit: 1,
-                write: 1,
-                bash: 1,
-                other: 1,
-            },
-            None,
-        );
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 100, 0, None);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("read 1 file") && !joined.contains("read 1 files"),
-            "{joined:?}"
-        );
-        assert!(joined.contains("edited 1 file"), "{joined:?}");
-        assert!(joined.contains("ran 1 command"), "{joined:?}");
-    }
-
-    #[test]
-    fn session_summary_shows_loading_when_events_none() {
-        let theme = Theme::wsx();
-        let lines = build_session_summary(None, Status::Idle, &theme, 50, 0, None);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("loading"), "{joined:?}");
-    }
-
-    #[test]
-    fn session_summary_respects_newlines_in_initial_prompt() {
-        // A prompt with embedded newlines should render across multiple
-        // lines (one per paragraph), with continuation lines indented
-        // to align with the first character after the bullet prefix.
-        let theme = Theme::wsx();
-        let evt = make_events_with(
-            Some("first line\nsecond line\nthird line"),
-            ToolUseCounts::default(),
-            None,
-        );
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 60, 0, None);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("first line"), "first paragraph: {joined:?}");
-        assert!(
-            joined.contains("second line"),
-            "second paragraph: {joined:?}"
-        );
-        assert!(joined.contains("third line"), "third paragraph: {joined:?}");
-        // Label + 3 prompt lines + 1 tool-trace line = 5 lines minimum.
-        assert!(lines.len() >= 5, "expected >=5 lines, got {}", lines.len());
-    }
-
-    #[test]
-    fn session_summary_wraps_long_single_line_prompts() {
-        // A single-line prompt longer than the column should wrap so
-        // the user can see the whole prompt instead of an ellipsis.
-        let theme = Theme::wsx();
-        let long_prompt =
-            "summarize the entire repository in extreme detail and list every public symbol";
-        let evt = make_events_with(Some(long_prompt), ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 30, 0, None);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("summarize the entire"),
-            "head visible: {joined:?}"
-        );
-        assert!(
-            joined.contains("every public symbol"),
-            "tail visible too: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn session_summary_renders_created_and_active_ages() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(Some("hi"), ToolUseCounts::default(), None);
-        // 2 hours since creation, 45 seconds since last activity.
-        let lines =
-            build_session_summary(Some(&evt), Status::Idle, &theme, 50, 2 * 60 * 60, Some(45));
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("created 2h ago"),
-            "created line: {joined:?}"
-        );
-        assert!(joined.contains("active 45s ago"), "active line: {joined:?}");
-    }
-
-    #[test]
-    fn session_summary_active_dash_when_no_session() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, 60, None);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("active —"),
-            "active dash when no session: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn session_summary_age_lines_render_even_while_loading() {
-        // The created/active lines come from workspace + session data,
-        // not from JSONL events, so they should render before the
-        // events tail has scanned.
-        let theme = Theme::wsx();
-        let lines = build_session_summary(None, Status::Idle, &theme, 50, 300, Some(10));
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("loading"),
-            "loading placeholder: {joined:?}"
-        );
-        assert!(
-            joined.contains("created 5m ago"),
-            "created visible: {joined:?}"
-        );
-        assert!(
-            joined.contains("active 10s ago"),
-            "active visible: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn session_summary_empty_tool_counts_renders_em_dash() {
-        // Per spec: empty tool_use_counts shows a faint `—` so the
-        // column structure stays consistent across workspace ages.
-        let theme = Theme::wsx();
-        let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Idle, &theme, 50, 0, None);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("—"),
-            "expected em-dash placeholder: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn session_summary_prefix_uses_workspace_status_color() {
-        // Per spec: `▸` prefix lines render in the workspace's status color.
-        let theme = Theme::wsx();
-        let evt = make_events_with(Some("hello"), ToolUseCounts::default(), None);
-        let lines = build_session_summary(Some(&evt), Status::Question, &theme, 50, 0, None);
-        let expected_fg = theme.status_style(Status::Question).fg;
-        let prefix_span = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .find(|s| s.content.as_ref() == "▸ ")
-            .expect("at least one prefix span");
-        assert_eq!(
-            prefix_span.style.fg, expected_fg,
-            "prefix not in status color"
-        );
-    }
-
-    #[test]
-    fn recent_chat_renders_em_dash_when_no_assistant_text() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_recent_chat(Some(&evt), &theme, 40, 6);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("—"), "{joined:?}");
-    }
-
-    #[test]
-    fn recent_chat_renders_assistant_text_wrapped() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(
-            None,
-            ToolUseCounts::default(),
-            Some(
-                "This is a longer assistant message that should wrap across multiple lines when the column width is small.",
-            ),
-        );
-        let lines = build_recent_chat(Some(&evt), &theme, 30, 6);
-        // Expect at least 2 lines (label + ≥1 content line); total ≤ 1 (label) + 6 (max).
-        assert!(
-            lines.len() >= 2 && lines.len() <= 7,
-            "got {} lines",
-            lines.len()
-        );
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("longer assistant"),
-            "content present: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn recent_chat_shows_loading_when_events_none() {
-        let theme = Theme::wsx();
-        let lines = build_recent_chat(None, &theme, 40, 6);
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("loading"), "{joined:?}");
-    }
-
-    fn proc(cmd: &str) -> ProcInfo {
-        ProcInfo {
-            pid: 1234,
-            ppid: 1,
-            command: cmd.into(),
-            cwd: std::path::PathBuf::from("/tmp"),
-        }
-    }
-
-    #[test]
-    fn procs_column_shows_dash_when_empty() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let lines = build_procs_and_files(
-            &[],
-            Some(&evt),
-            None,
-            std::path::Path::new("/tmp/r/ws"),
-            &theme,
-            30,
-        );
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("—"),
-            "expected em-dash when no procs/files: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn procs_column_truncates_with_plus_n_more() {
-        let theme = Theme::wsx();
-        let evt = make_events_with(None, ToolUseCounts::default(), None);
-        let procs: Vec<ProcInfo> = (0..7).map(|i| proc(&format!("cmd{i}"))).collect();
-        let lines = build_procs_and_files(
-            &procs,
-            Some(&evt),
-            None,
-            std::path::Path::new("/tmp/r/ws"),
-            &theme,
-            30,
-        );
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("+2 more"), "expected +2 more: {joined:?}");
-    }
-
-    #[test]
-    fn recent_files_section_renders_paths_relative_to_worktree() {
-        // Paths inside the worktree render relative to its root —
-        // not as absolute paths with the shared prefix duplicated on
-        // every line.
-        let theme = Theme::wsx();
-        let mut evt = make_events_with(None, ToolUseCounts::default(), None);
-        evt.recent_edited_files
-            .push_front("/tmp/wt/src/main.rs".to_string());
-        evt.recent_edited_files
-            .push_front("/tmp/wt/Cargo.toml".to_string());
-        let lines = build_procs_and_files(
-            &[],
-            Some(&evt),
-            None,
-            std::path::Path::new("/tmp/wt"),
-            &theme,
-            40,
-        );
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("Cargo.toml"),
-            "Cargo.toml visible: {joined:?}"
-        );
-        assert!(
-            joined.contains("src/main.rs"),
-            "src/main.rs visible: {joined:?}"
-        );
-        assert!(
-            !joined.contains("/tmp/wt"),
-            "absolute prefix should be stripped: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn recent_files_section_keeps_absolute_path_when_outside_worktree() {
-        // Defensive: if claude somehow logged a path outside the
-        // worktree, fall back to the original string instead of
-        // hiding it.
-        let theme = Theme::wsx();
-        let mut evt = make_events_with(None, ToolUseCounts::default(), None);
-        evt.recent_edited_files
-            .push_front("/etc/passwd".to_string());
-        let lines = build_procs_and_files(
-            &[],
-            Some(&evt),
-            None,
-            std::path::Path::new("/tmp/wt"),
-            &theme,
-            40,
-        );
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("/etc/passwd"),
-            "absolute path kept: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn recent_files_section_annotates_with_diff_counts() {
-        // RECENT FILES entries get a `+A −R` suffix when the per-file
-        // diff map has a matching entry (keyed by path relative to
-        // the worktree root).
-        let theme = Theme::wsx();
-        let mut evt = make_events_with(None, ToolUseCounts::default(), None);
-        // Absolute paths inside the worktree, matching how the JSONL
-        // `file_path` field stores them.
-        evt.recent_edited_files
-            .push_front("/tmp/wt/src/main.rs".to_string());
-        evt.recent_edited_files
-            .push_front("/tmp/wt/Cargo.toml".to_string());
-        let mut diffs = std::collections::HashMap::new();
-        diffs.insert(
-            "src/main.rs".to_string(),
-            DiffStats {
-                added: 12,
-                removed: 3,
-            },
-        );
-        diffs.insert(
-            "Cargo.toml".to_string(),
-            DiffStats {
-                added: 1,
-                removed: 0,
-            },
-        );
-        let lines = build_procs_and_files(
-            &[],
-            Some(&evt),
-            Some(&diffs),
-            std::path::Path::new("/tmp/wt"),
-            &theme,
-            40,
-        );
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("+12") && joined.contains("−3"),
-            "main.rs delta: {joined:?}"
-        );
-        assert!(
-            joined.contains("+1") && joined.contains("−0"),
-            "Cargo.toml delta: {joined:?}"
-        );
-    }
-
-    #[test]
-    fn recent_files_section_omits_diff_when_no_match() {
-        // A file not in the per-file map renders without a delta
-        // suffix (no fake +0 −0).
-        let theme = Theme::wsx();
-        let mut evt = make_events_with(None, ToolUseCounts::default(), None);
-        evt.recent_edited_files
-            .push_front("/tmp/wt/some/untracked.txt".to_string());
-        let diffs: std::collections::HashMap<String, DiffStats> = std::collections::HashMap::new();
-        let lines = build_procs_and_files(
-            &[],
-            Some(&evt),
-            Some(&diffs),
-            std::path::Path::new("/tmp/wt"),
-            &theme,
-            40,
-        );
-        let joined: String = lines
-            .iter()
-            .map(line_to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(joined.contains("untracked.txt"), "path present: {joined:?}");
-        assert!(!joined.contains("+0"), "no fake delta: {joined:?}");
-        assert!(!joined.contains("−0"), "no fake delta: {joined:?}");
-    }
-
     #[test]
     fn reply_input_row_shows_chip_and_draft() {
         let theme = Theme::wsx();
@@ -1472,9 +780,9 @@ mod tests {
     #[test]
     fn full_render_paints_header_body_and_reply_row() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = WorkspaceEvents {
+        let evt = crate::events::WorkspaceEvents {
             first_user_text: Some("give me a tour".into()),
-            tool_use_counts: ToolUseCounts {
+            tool_use_counts: crate::events::ToolUseCounts {
                 read: 14,
                 bash: 2,
                 ..Default::default()
@@ -1483,6 +791,7 @@ mod tests {
             ..Default::default()
         };
         let cfg = DetailBarConfig::default();
+        let reg = make_registry();
         let inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1502,6 +811,7 @@ mod tests {
             reply_focused: false,
             events_scanned: true,
             config: &cfg,
+            registry: &reg,
         };
         let text = render_to_text(&inputs, 120, 10);
         assert!(
@@ -1512,29 +822,25 @@ mod tests {
         assert!(text.contains("RECENT CHAT"), "chat label: {text:?}");
         assert!(text.contains("PROCESSES"), "procs label: {text:?}");
         assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
-        assert!(text.contains("give me a tour"), "initial prompt: {text:?}");
-        assert!(text.contains("Reading the repo"), "recent chat: {text:?}");
     }
 
     #[test]
     fn chrome_only_mode_renders_header_and_reply_no_body_labels() {
-        use crate::detail_bar_config::{DetailBarConfig, Sections};
         let (_store, repo, ws) = seed_workspace();
-        let evt = WorkspaceEvents {
+        let evt = crate::events::WorkspaceEvents {
             first_user_text: Some("hi".into()),
             last_assistant_text: Some("ack".into()),
             ..Default::default()
         };
-        // All three body sections disabled — bar should collapse to 4
-        // rows (header + 2 rules + reply input).
+        // All containers empty — bar should collapse to 4
+        // rows (header + 2 rules + reply input). Use all-empty inner
+        // lists (sanitize resets an empty outer vec to defaults, but
+        // empty inner lists are preserved as-is).
         let cfg = DetailBarConfig {
-            sections: Sections {
-                session_summary: false,
-                recent_chat: false,
-                procs_and_files: false,
-            },
+            containers: vec![vec![], vec![], vec![]],
             ..DetailBarConfig::default()
         };
+        let reg = make_registry();
         let inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1551,6 +857,7 @@ mod tests {
             reply_focused: false,
             events_scanned: true,
             config: &cfg,
+            registry: &reg,
         };
         // Width 100, height exactly CHROME_ROWS (4).
         let text = render_to_text(&inputs, 100, DetailBarConfig::CHROME_ROWS);
@@ -1570,12 +877,13 @@ mod tests {
     #[test]
     fn narrow_terminal_drops_chat_and_procs_columns() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = WorkspaceEvents {
+        let evt = crate::events::WorkspaceEvents {
             first_user_text: Some("hi".into()),
             last_assistant_text: Some("ack".into()),
             ..Default::default()
         };
         let cfg = DetailBarConfig::default();
+        let reg = make_registry();
         let inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1592,6 +900,7 @@ mod tests {
             reply_focused: false,
             events_scanned: true,
             config: &cfg,
+            registry: &reg,
         };
         let text = render_to_text(&inputs, 70, 10);
         assert!(text.contains("SESSION SUMMARY"), "summary kept: {text:?}");
@@ -1605,82 +914,118 @@ mod tests {
         );
     }
 
-    use crate::detail_bar_config::{DetailBarConfig, Sections};
-
     #[test]
     fn renders_three_columns_with_default_config() {
         let cfg = DetailBarConfig::default();
         assert!(cfg.has_body());
-        assert!(cfg.sections.session_summary);
-        assert!(cfg.sections.recent_chat);
-        assert!(cfg.sections.procs_and_files);
+        // Default containers: session_summary, recent_chat, processes+recent_files
+        assert_eq!(cfg.containers.len(), 3);
+        assert!(cfg.containers[0].contains(&"session_summary".to_string()));
+        assert!(cfg.containers[1].contains(&"recent_chat".to_string()));
+        assert!(cfg.containers[2].contains(&"processes".to_string()));
     }
 
     #[test]
-    fn enabled_columns_helper_returns_subset() {
-        let cfg = DetailBarConfig {
-            sections: Sections {
-                session_summary: true,
-                recent_chat: false,
-                procs_and_files: true,
-            },
-            ..DetailBarConfig::default()
+    fn render_with_unknown_module_id_shows_placeholder() {
+        let (_store, repo, ws) = seed_workspace();
+        let mut cfg = DetailBarConfig::default();
+        cfg.containers = vec![vec!["seshun_summary".into()]];
+        let reg = make_registry();
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
         };
-        let cols = enabled_columns(&cfg);
-        assert_eq!(cols, vec![Column::SessionSummary, Column::ProcsAndFiles]);
+        let text = render_to_text(&inputs, 120, 10);
+        assert!(
+            text.contains("[unknown: seshun_summary]"),
+            "expected unknown placeholder in: {text:?}",
+        );
     }
 
     #[test]
-    fn enabled_columns_empty_when_all_disabled() {
-        let cfg = DetailBarConfig {
-            sections: Sections {
-                session_summary: false,
-                recent_chat: false,
-                procs_and_files: false,
-            },
-            ..DetailBarConfig::default()
+    fn render_one_container_fills_full_width() {
+        let (_store, repo, ws) = seed_workspace();
+        let evt = crate::events::WorkspaceEvents {
+            last_assistant_text: Some("hello".into()),
+            ..Default::default()
         };
-        assert!(enabled_columns(&cfg).is_empty());
-    }
-
-    #[test]
-    fn column_widths_three_cols_match_legacy() {
-        assert_eq!(
-            column_widths(&[
-                Column::SessionSummary,
-                Column::RecentChat,
-                Column::ProcsAndFiles
-            ]),
-            vec![30u16, 40, 30]
+        let mut cfg = DetailBarConfig::default();
+        cfg.containers = vec![vec!["recent_chat".into()]];
+        let reg = make_registry();
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: Some(&evt),
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+        };
+        let text = render_to_text(&inputs, 120, 10);
+        assert!(text.contains("RECENT CHAT"), "chat title: {text:?}");
+        // Other module titles must NOT appear when only recent_chat is configured.
+        assert!(
+            !text.contains("SESSION SUMMARY"),
+            "summary leaked: {text:?}"
         );
+        assert!(!text.contains("PROCESSES"), "procs leaked: {text:?}");
+        assert!(!text.contains("RECENT FILES"), "files leaked: {text:?}");
     }
 
     #[test]
-    fn column_widths_two_cols_summary_chat() {
-        assert_eq!(
-            column_widths(&[Column::SessionSummary, Column::RecentChat]),
-            vec![43u16, 57]
-        );
+    fn build_processes_empty_emits_dash() {
+        // Builders return body lines only; the dispatcher draws titles
+        // (see render_container). Empty case = single "—" placeholder.
+        let theme = Theme::default();
+        let lines = build_processes(&[], &theme, 40);
+        assert_eq!(lines.len(), 1);
+        let placeholder = line_to_string(&lines[0]);
+        assert_eq!(placeholder, "—");
     }
 
     #[test]
-    fn column_widths_two_cols_summary_procs() {
-        assert_eq!(
-            column_widths(&[Column::SessionSummary, Column::ProcsAndFiles]),
-            vec![50u16, 50]
-        );
+    fn build_recent_files_empty_emits_dash() {
+        let theme = Theme::default();
+        let path = std::path::PathBuf::from("/wt");
+        let lines = build_recent_files(None, None, &path, &theme, 40);
+        assert_eq!(lines.len(), 1);
+        let placeholder = line_to_string(&lines[0]);
+        assert_eq!(placeholder, "—");
     }
 
     #[test]
-    fn column_widths_two_cols_chat_procs() {
-        assert_eq!(
-            column_widths(&[Column::RecentChat, Column::ProcsAndFiles]),
-            vec![57u16, 43]
-        );
+    fn equal_widths_one_through_four() {
+        assert_eq!(equal_widths(1), vec![100]);
+        assert_eq!(equal_widths(2), vec![50, 50]);
+        assert_eq!(equal_widths(3), vec![33, 33, 34]);
+        assert_eq!(equal_widths(4), vec![25, 25, 25, 25]);
     }
 
     #[test]
-    fn column_widths_single_col_is_full() {
-        assert_eq!(column_widths(&[Column::RecentChat]), vec![100u16]);
+    fn equal_widths_zero_is_empty() {
+        assert_eq!(equal_widths(0), Vec::<u16>::new());
     }
 }

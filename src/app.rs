@@ -203,6 +203,7 @@ pub struct App {
     /// from attached view instead of waiting for the next 2s poll.
     /// Drained by `run_loop` after each handled event.
     pub pending_workspace_refresh: std::collections::HashSet<crate::store::WorkspaceId>,
+    pub registry: crate::detail_modules::Registry,
 }
 
 impl App {
@@ -213,6 +214,8 @@ impl App {
             .flatten()
             .unwrap_or_default();
         let theme = crate::ui::theme::Theme::by_name(&theme_name);
+        let mut registry = crate::detail_modules::Registry::new();
+        crate::detail_modules::register_builtins(&mut registry);
         let mut app = Self {
             store,
             sessions: SessionManager::new(),
@@ -255,6 +258,7 @@ impl App {
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),
             last_data_version: 0,
+            registry,
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app

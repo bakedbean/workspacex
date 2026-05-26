@@ -276,12 +276,14 @@ mod tests {
 
     #[test]
     fn parsing_containers_list_of_lists() {
-        let parsed: DetailBarConfig = serde_json::from_str(
-            r#"{"containers": [["a", "b"], ["c"]]}"#,
-        ).unwrap();
+        let parsed: DetailBarConfig =
+            serde_json::from_str(r#"{"containers": [["a", "b"], ["c"]]}"#).unwrap();
         assert_eq!(
             parsed.containers,
-            vec![vec!["a".to_string(), "b".to_string()], vec!["c".to_string()]]
+            vec![
+                vec!["a".to_string(), "b".to_string()],
+                vec!["c".to_string()]
+            ]
         );
     }
 
@@ -396,8 +398,12 @@ mod tests {
     fn sanitize_truncates_containers_to_four() {
         let mut cfg = DetailBarConfig::default();
         cfg.containers = vec![
-            vec!["a".into()], vec!["b".into()], vec!["c".into()],
-            vec!["d".into()], vec!["e".into()], vec!["f".into()],
+            vec!["a".into()],
+            vec!["b".into()],
+            vec!["c".into()],
+            vec!["d".into()],
+            vec!["e".into()],
+            vec!["f".into()],
         ];
         cfg.sanitize();
         assert_eq!(cfg.containers.len(), 4);
@@ -424,7 +430,10 @@ mod tests {
     #[test]
     fn with_override_replaces_visible() {
         let cfg = DetailBarConfig::default();
-        let ovr = DetailBarOverride { visible: Some(false), ..Default::default() };
+        let ovr = DetailBarOverride {
+            visible: Some(false),
+            ..Default::default()
+        };
         assert!(!cfg.with_override(&ovr).visible);
     }
 
@@ -432,7 +441,10 @@ mod tests {
     fn with_override_replaces_height_per_field() {
         let cfg = DetailBarConfig::default();
         let ovr = DetailBarOverride {
-            height: Some(HeightOverride { percent: Some(50), ..Default::default() }),
+            height: Some(HeightOverride {
+                percent: Some(50),
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let merged = cfg.with_override(&ovr);
@@ -455,7 +467,10 @@ mod tests {
     #[test]
     fn with_override_leaves_containers_when_none() {
         let cfg = DetailBarConfig::default();
-        let ovr = DetailBarOverride { containers: None, ..Default::default() };
+        let ovr = DetailBarOverride {
+            containers: None,
+            ..Default::default()
+        };
         let merged = cfg.clone().with_override(&ovr);
         assert_eq!(merged.containers, cfg.containers);
     }
@@ -464,14 +479,21 @@ mod tests {
     fn override_round_trips_through_json() {
         let ovr = DetailBarOverride {
             visible: Some(false),
-            height: Some(HeightOverride { percent: Some(20), min_rows: None, max_rows: None }),
+            height: Some(HeightOverride {
+                percent: Some(20),
+                min_rows: None,
+                max_rows: None,
+            }),
             containers: Some(vec![vec!["recent_chat".into()]]),
         };
         let json = serde_json::to_string(&ovr).unwrap();
         let parsed: DetailBarOverride = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.visible, Some(false));
         assert_eq!(parsed.height.unwrap().percent, Some(20));
-        assert_eq!(parsed.containers.unwrap(), vec![vec!["recent_chat".to_string()]]);
+        assert_eq!(
+            parsed.containers.unwrap(),
+            vec![vec!["recent_chat".to_string()]]
+        );
     }
 
     #[test]
@@ -514,7 +536,9 @@ mod tests {
     #[test]
     fn resolve_uses_global_when_only_global_set() {
         let store = Store::open_in_memory().unwrap();
-        store.set_setting("detail_bar_config", r#"{"visible": false}"#).unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"visible": false}"#)
+            .unwrap();
         let repo = test_repo(None);
         assert!(!resolve(&repo, &store).visible);
     }
@@ -522,7 +546,9 @@ mod tests {
     #[test]
     fn resolve_applies_repo_override_on_top_of_global() {
         let store = Store::open_in_memory().unwrap();
-        store.set_setting("detail_bar_config", r#"{"visible": false}"#).unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"visible": false}"#)
+            .unwrap();
         let repo = test_repo(Some(r#"{"visible": true}"#));
         assert!(resolve(&repo, &store).visible);
     }
@@ -538,7 +564,9 @@ mod tests {
     #[test]
     fn resolve_ignores_repo_override_when_malformed() {
         let store = Store::open_in_memory().unwrap();
-        store.set_setting("detail_bar_config", r#"{"visible": false}"#).unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"visible": false}"#)
+            .unwrap();
         let repo = test_repo(Some("not json"));
         assert!(!resolve(&repo, &store).visible);
     }
@@ -546,7 +574,9 @@ mod tests {
     #[test]
     fn resolve_clamps_out_of_range_percent() {
         let store = Store::open_in_memory().unwrap();
-        store.set_setting("detail_bar_config", r#"{"height": {"percent": 200}}"#).unwrap();
+        store
+            .set_setting("detail_bar_config", r#"{"height": {"percent": 200}}"#)
+            .unwrap();
         let repo = test_repo(None);
         assert_eq!(resolve(&repo, &store).height.percent, 80);
     }
@@ -555,7 +585,10 @@ mod tests {
     fn resolve_repo_override_whole_replaces_containers() {
         let store = Store::open_in_memory().unwrap();
         let repo = test_repo(Some(r#"{"containers": [["recent_chat"]]}"#));
-        assert_eq!(resolve(&repo, &store).containers, vec![vec!["recent_chat".to_string()]]);
+        assert_eq!(
+            resolve(&repo, &store).containers,
+            vec![vec!["recent_chat".to_string()]]
+        );
     }
 
     #[test]

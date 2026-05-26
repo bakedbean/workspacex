@@ -8,8 +8,12 @@ use ratatui::layout::{Constraint, Rect};
 pub struct RecentFiles;
 
 impl DetailModule for RecentFiles {
-    fn id(&self) -> &'static str { "recent_files" }
-    fn title(&self) -> &'static str { "RECENT FILES" }
+    fn id(&self) -> &'static str {
+        "recent_files"
+    }
+    fn title(&self) -> &'static str {
+        "RECENT FILES"
+    }
     fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
         Constraint::Min(3)
     }

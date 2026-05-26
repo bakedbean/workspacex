@@ -8,8 +8,12 @@ use ratatui::layout::{Constraint, Rect};
 pub struct Processes;
 
 impl DetailModule for Processes {
-    fn id(&self) -> &'static str { "processes" }
-    fn title(&self) -> &'static str { "PROCESSES" }
+    fn id(&self) -> &'static str {
+        "processes"
+    }
+    fn title(&self) -> &'static str {
+        "PROCESSES"
+    }
     fn height_hint(&self, ctx: &DetailContext<'_>) -> Constraint {
         Constraint::Length(ctx.procs.len().clamp(1, 6) as u16)
     }

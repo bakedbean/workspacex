@@ -978,13 +978,13 @@ pub(crate) async fn reconcile_archive_result(
     }
     match result {
         Ok(_) => {
-            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::ArchiveRunning)) {
+            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::ArchiveRunning { .. })) {
                 g.modal = None;
             }
             let _ = g.refresh();
         }
         Err(e) => {
-            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::ArchiveRunning)) {
+            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::ArchiveRunning { .. })) {
                 g.modal = Some(crate::ui::modal::Modal::Error {
                     message: e.to_string(),
                 });
@@ -1013,7 +1013,10 @@ mod reconcile_archive_tests {
     #[tokio::test]
     async fn reconcile_ok_closes_archive_running_modal() {
         let (mut app, _tmp) = make_app();
-        app.modal = Some(crate::ui::modal::Modal::ArchiveRunning);
+        app.modal = Some(crate::ui::modal::Modal::ArchiveRunning {
+            step: crate::ui::modal::ArchiveStep::RemoveWorktree,
+            script_present: false,
+        });
         app.pending_archive_gen = Some(7);
         app.next_archive_gen = 8;
         let shared = Arc::new(Mutex::new(app));
@@ -1026,7 +1029,10 @@ mod reconcile_archive_tests {
     #[tokio::test]
     async fn reconcile_err_sets_error_modal() {
         let (mut app, _tmp) = make_app();
-        app.modal = Some(crate::ui::modal::Modal::ArchiveRunning);
+        app.modal = Some(crate::ui::modal::Modal::ArchiveRunning {
+            step: crate::ui::modal::ArchiveStep::RemoveWorktree,
+            script_present: false,
+        });
         app.pending_archive_gen = Some(7);
         app.next_archive_gen = 8;
         let shared = Arc::new(Mutex::new(app));

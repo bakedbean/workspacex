@@ -159,6 +159,7 @@ Known keys:
 | `remote_control` | Pass `--remote-control` to claude on every spawn so the session is reachable via [claude.ai/code](https://claude.ai/code) and the Claude mobile app (see [Remote control](#remote-control)). Default ON; set to `off` / `false` / `0` / `no` to disable. |
 | `remote_control_sandbox` | When `remote_control` is on, also pass `--sandbox` for an extra safety wrapper on remote-issued commands. Default OFF; set to `on` / `true` / `1` / `yes` to enable. |
 | `pinned_commands` | Newline-separated list of `Label=command` (or bare `command`) entries. Each becomes a chip in the attached view, fired via `Ctrl-x <digit>` or click. Max 9 visible/keyable. Per-repo override available via `wsx repo set-pinned-commands`. |
+| `remotes` | Newline-separated list of `name=command` entries — named shell commands run by `wsx remote <name>`, typically `ssh -t host '…tmux attach…'` for reattaching a wsx session running on another machine. List with `wsx remote`; add or edit with `wsx config edit remotes`. See [Named remote shortcuts](#named-remote-shortcuts). |
 | `dashboard_name_width` | Width (chars) of the workspace-name column on the dashboard. Default `24`. Clamped to `10..=60`. |
 | `dashboard_branch_width` | Width (chars) of the `⎇ branch` column on the dashboard. Default `28`. Clamped to `10..=80`. |
 | `detail_bar_config` | JSON blob controlling the per-workspace detail bar (visibility, height, and the container/module layout). See [Workspace detail bar](#workspace-detail-bar) for the schema, defaults, and per-repo override flow. Out-of-range values are clamped on save. |
@@ -170,6 +171,27 @@ Value sources:
 - Empty (clears): `wsx config set custom_instructions ""`
 
 `wsx config edit <key>` opens `$EDITOR` on a tempfile prepopulated with the current value; saving updates the setting. Useful for multi-line `custom_instructions`.
+
+### Named remote shortcuts
+
+```
+wsx remote                 # list configured names (alphabetized), one per line
+wsx remote <name>          # exec the stored command — process-replaces wsx
+wsx config edit remotes    # opens $EDITOR on the blob
+```
+
+Stores frequently-used remote shell commands — typically `ssh -t host '…tmux attach…'` for reattaching a wsx session running on another machine (see [Remote access](#remote-access)) — under short names. The value is an arbitrary shell command run through `sh -c`, so nested quoting works as you'd type it at a terminal.
+
+The `remotes` setting is a newline-separated blob, one `name=command` per line. **There is no `wsx remote add`** — `wsx config edit remotes` opens the existing blob in `$EDITOR`, and you add a remote by appending a new line. Clearing the buffer and typing only the new line replaces every other remote, so always keep the existing lines unless you mean to drop them. Example:
+
+```
+ebenmini=ssh -4 -t ebenmini.local "zsh -lc 'tmux attach'"
+gpu=ssh gpu-box -t 'tmux -u attach -t main || tmux -u new -s main'
+```
+
+Parser rules: only the **first** `=` separates name from command (so `=` inside the command, e.g. an inline env-var, is preserved); whitespace around `=` is trimmed; blank lines are skipped; lines with an empty name or command are dropped; duplicate names take the last value.
+
+`wsx remote <name>` `exec`-replaces the wsx process with `sh -c <command>`, so signals and TTY state flow straight through to the remote session; when it exits you're back at your local shell with no wsx parent process. Unknown names error out with the list of available names.
 
 ## Keybindings
 
@@ -354,6 +376,8 @@ Workspaces — and the claude sessions running inside them — keep running whil
 - wsx's leader key is `Ctrl-x`, chosen specifically to not collide with tmux's default `Ctrl-b` prefix (or anyone's `Ctrl-a` customization). No tmux config needed.
 - **Mosh** drops in cleanly if your network is flaky: `mosh desktop -- tmux attach -t wsx`.
 - **Tailscale** (or any VPN) makes the host reachable from anywhere by a stable name without port-forwarding.
+
+**Saving the invocation**: once you've settled on a working `ssh … tmux attach …` command, save it as a named remote so reconnecting is just `wsx remote <name>`. See [Named remote shortcuts](#named-remote-shortcuts).
 
 ## Process tracking
 

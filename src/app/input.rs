@@ -1209,6 +1209,21 @@ async fn handle_key_modal(
 /// (e.g. navigation keys that also move the selection).
 async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEvent) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
+
+    // If the leader is already armed (Ctrl-X from a previous tick), yield to
+    // the dashboard dispatcher so the chord can complete (digit → fire chip).
+    if app.leader_pending {
+        return false;
+    }
+
+    // Arm the leader on Ctrl-X without inserting '^X' into the draft.
+    // The next key will arrive here again; the check above then yields it to
+    // the dashboard handler which has the chord-completion block.
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
+        return true;
+    }
+
     match (k.code, k.modifiers) {
         (KeyCode::Tab, _) => {
             // Spec: Dashboard → DetailBarReply → ProjectManager (when visible)

@@ -3403,4 +3403,121 @@ mod detail_bar_focus_tests {
             "draft must clear on navigation"
         );
     }
+
+    /// Ctrl-X + digit fires a pinned chip even when focus is on
+    /// DetailBarReply. The draft must be preserved across Ctrl-X (the leader
+    /// arm) and cleared once the chip fires.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_digit_works_while_reply_focused() {
+        use crate::store::NewWorkspace;
+        use crate::test_support::{EnvGuard, cat_path};
+
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        // Spawn a workspace with a live PTY session (uses `cat` as the binary
+        // so any bytes we write are echoed back to the screen).
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "reply-chord-test",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                ws_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "half-typed message".to_string();
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        // Drive Ctrl-X through the real dispatcher (handle_key_dashboard),
+        // which first gives handle_detail_bar_reply_key a crack at it
+        // because focus == DetailBarReply.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+
+        // Leader must be armed.
+        assert!(
+            app.leader_pending,
+            "Ctrl-X while reply is focused must arm leader_pending"
+        );
+        // Draft must be intact — Ctrl-X must NOT insert '^X'.
+        assert_eq!(
+            app.dashboard.reply_draft, "half-typed message",
+            "Ctrl-X must not mutate the reply draft"
+        );
+
+        // Drive '1' through the same dispatcher.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        // After chip fires: draft cleared, focus back to Dashboard.
+        assert_eq!(
+            app.dashboard.reply_draft, "",
+            "firing a chip must clear the reply draft"
+        );
+        assert!(
+            matches!(app.focus, crate::ui::PaneFocus::Dashboard),
+            "firing a chip must return focus to Dashboard"
+        );
+
+        // Wait for the cat PTY to echo the command back.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "Ctrl-X+1 while reply focused must dispatch /pull-request to PTY; got: {screen_text:?}"
+        );
+    }
 }

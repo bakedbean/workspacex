@@ -854,6 +854,76 @@ mod tests {
         );
     }
 
+    /// Regression test for the `advance_archive_step` wiring inside
+    /// `archive_with_app`. The three calls between phases are easy to
+    /// drop accidentally in a refactor; this test catches that. We
+    /// seed the modal as `ArchiveRunning { Script }`, drive the full
+    /// archive, and assert the modal ends on `Cleanup` (the last step
+    /// advanced to, just before phase 4 begins). This test calls
+    /// `archive_with_app` directly, so `reconcile_archive_result`
+    /// never runs and the modal is left in its final advanced state.
+    #[tokio::test]
+    async fn archive_with_app_advances_modal_step_through_phases() {
+        use crate::ui::modal::{ArchiveStep, Modal};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("doomed"),
+            base.path(),
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let app = crate::app::App::new(store, base.path().to_path_buf()).unwrap();
+        let shared = Arc::new(Mutex::new(app));
+        {
+            let mut g = shared.lock().await;
+            g.modal = Some(Modal::ArchiveRunning {
+                step: ArchiveStep::Script,
+                script_present: false,
+            });
+        }
+        let result = archive_with_app(
+            shared.clone(),
+            repo.clone(),
+            created.workspace.clone(),
+            ArchiveOpts {
+                force_branch_delete: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(result.is_ok(), "archive_with_app failed: {result:?}");
+        let g = shared.lock().await;
+        match &g.modal {
+            Some(Modal::ArchiveRunning { step, .. }) => {
+                assert_eq!(
+                    *step,
+                    ArchiveStep::Cleanup,
+                    "modal step should have advanced to Cleanup (the last step set before phase 4)"
+                );
+            }
+            other => panic!("expected ArchiveRunning, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn create_returns_cancelled_when_token_cancelled_before_start() {
         use tokio_util::sync::CancellationToken;

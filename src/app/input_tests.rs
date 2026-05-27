@@ -1895,6 +1895,100 @@ mod pm_state_tests {
         );
     }
 
+    /// A second Ctrl-X while the leader is armed must clear it (cancel the
+    /// chord), not silently re-arm. Matches the attached-view leader
+    /// behavior where the follow-up key always clears the leader.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_double_ctrl_x_clears_leader() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        // First Ctrl-X: arms.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "first Ctrl-X must arm leader");
+
+        // Second Ctrl-X: must cancel (clear) the leader, not stay armed.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !app.leader_pending,
+            "second Ctrl-X must cancel the chord, not re-arm"
+        );
+    }
+
+    /// A chip click in the attached view dispatches the command but must
+    /// NOT clear the dashboard reply draft or overwrite the dashboard
+    /// pane focus — those state slots aren't visible from the attached
+    /// view and trampling them would leak across the view boundary.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attached_chip_click_preserves_dashboard_draft_and_focus() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // We're in View::Attached (set by spawn_attached_workspace).
+        assert!(matches!(app.view, crate::ui::View::Attached(_)));
+
+        // Seed dashboard-scoped state the user can't see from here.
+        app.dashboard.reply_draft = "hello agent".into();
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        // Command still dispatched.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "attached-view chip click must still dispatch the command; got: {screen_text:?}"
+        );
+        drop(parser);
+
+        // But dashboard state must be unchanged.
+        assert_eq!(
+            app.dashboard.reply_draft, "hello agent",
+            "attached-view chip click must not clear the dashboard reply draft"
+        );
+        assert!(
+            matches!(app.focus, crate::ui::PaneFocus::ProjectManager),
+            "attached-view chip click must not overwrite the dashboard pane focus"
+        );
+    }
+
     #[test]
     fn wrap_paste_bytes_wraps_with_bracketed_markers() {
         let out = wrap_paste_bytes("hello world");

@@ -151,8 +151,11 @@ fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::
 ///     have truncated some chips at narrow widths),
 ///   - the cache has no command at `idx` (defensive),
 ///   - no chip target can be resolved.
-/// On dispatch, clears any in-flight reply draft and returns focus to
-/// the dashboard so the reply input loses focus.
+/// When dispatched from `View::Dashboard`, also clears any in-flight
+/// reply draft and returns focus to the dashboard. In other views
+/// (attached, attached-PM) the dispatch is byte-only so it matches the
+/// attached-view keyboard chord and doesn't trample dashboard state the
+/// user can't see.
 async fn fire_chip(app: &mut App, idx: usize) {
     if idx >= app.chip_rects.len() {
         return;
@@ -169,8 +172,10 @@ async fn fire_chip(app: &mut App, idx: usize) {
     bytes.push(b'\r');
     session.scroll_to_live();
     let _ = session.writer.send(bytes).await;
-    app.dashboard.reply_draft.clear();
-    app.focus = crate::ui::PaneFocus::Dashboard;
+    if matches!(app.view, View::Dashboard) {
+        app.dashboard.reply_draft.clear();
+        app.focus = crate::ui::PaneFocus::Dashboard;
+    }
 }
 /// Aggregate the current `StatusCounts` for one repo by classifying each
 /// of its live workspaces. Used by the `z` (fold) keybinding so we can
@@ -363,17 +368,19 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     }
     // Ctrl-X leader for pinned-command chord (mirrors the attached
     // view's binding). The next 1..9 fires the matching chip; any
-    // other follow-up just clears the leader.
-    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
-        app.leader_pending = true;
-        return Ok(());
-    }
+    // other follow-up — including a second Ctrl-X — just clears the
+    // leader. Completion is checked BEFORE re-arming so a double
+    // Ctrl-X cancels the chord instead of getting stuck armed.
     if app.leader_pending {
         app.leader_pending = false;
         if let KeyCode::Char(c @ '1'..='9') = k.code {
             let idx = (c as u8 - b'1') as usize;
             fire_chip(app, idx).await;
         }
+        return Ok(());
+    }
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
         return Ok(());
     }
     match (k.code, k.modifiers) {

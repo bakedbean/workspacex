@@ -583,6 +583,18 @@ pub async fn run<B: Backend + std::io::Write>(
             _ = tick.tick() => {
                 let mut g = app.lock().await;
                 g.tick = g.tick.wrapping_add(1);
+                // Expire any ephemeral chip-dispatch echo in the reply
+                // input. Set by `fire_chip` so the user briefly sees
+                // which command was sent; wiped here once the deadline
+                // is reached.
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                if matches!(g.dashboard.reply_draft_clear_at_ms, Some(t) if now_ms >= t) {
+                    g.dashboard.reply_draft.clear();
+                    g.dashboard.reply_draft_clear_at_ms = None;
+                }
                 // Pick up workspaces/repos written by sibling `wsx` CLI
                 // processes (e.g. `wsx workspace create` invoked by Claude
                 // during a related-repos flow). Cheap: PRAGMA data_version

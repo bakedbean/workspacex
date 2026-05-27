@@ -61,6 +61,13 @@ pub struct DashboardState {
     /// workspace is selected at the time keystrokes arrived; cleared on
     /// selection change, Enter (send), or Esc (cancel).
     pub reply_draft: String,
+    /// Wall-clock deadline (epoch ms) at which `reply_draft` should
+    /// auto-clear. Set by chip dispatch so the dispatched command is
+    /// briefly echoed into the reply input as visual confirmation, then
+    /// wiped. `None` when no auto-clear is pending. Any user
+    /// interaction with the draft (typing, Backspace) clears the
+    /// deadline so it doesn't wipe their fresh input mid-edit.
+    pub reply_draft_clear_at_ms: Option<u64>,
 }
 
 impl Default for GroupMode {

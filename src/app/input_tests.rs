@@ -1895,6 +1895,114 @@ mod pm_state_tests {
         );
     }
 
+    /// A chip click from the dashboard echoes the dispatched command
+    /// into the reply input as visual confirmation, and sets a
+    /// wall-clock deadline (`reply_draft_clear_at_ms`) so the tick
+    /// handler wipes it shortly afterward.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chip_dispatch_echoes_command_into_reply_input() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+        // No pre-existing draft.
+        assert_eq!(app.dashboard.reply_draft, "");
+        assert!(app.dashboard.reply_draft_clear_at_ms.is_none());
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let now_before_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 6,
+                row: 30,
+                modifiers: KeyModifiers::NONE,
+            },
+        )
+        .await;
+
+        // Draft echoes the dispatched command.
+        assert_eq!(
+            app.dashboard.reply_draft, "/pull-request",
+            "chip dispatch must echo the command into reply_draft"
+        );
+        // Deadline is set in the future (sanity bound: within 5 seconds).
+        let deadline = app
+            .dashboard
+            .reply_draft_clear_at_ms
+            .expect("deadline must be set");
+        assert!(
+            deadline > now_before_ms && deadline < now_before_ms + 5_000,
+            "deadline {deadline} should be slightly after {now_before_ms}"
+        );
+    }
+
+    /// Backspace and Char keystrokes in the reply input cancel any
+    /// pending chip-echo auto-clear so the user's edits aren't wiped
+    /// by the tick handler mid-typing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn user_typing_in_reply_cancels_chip_echo_deadline() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        // Simulate state right after a chip dispatch: draft echoes the
+        // command, deadline is set.
+        app.dashboard.reply_draft = "/pull-request".to_string();
+        app.dashboard.reply_draft_clear_at_ms = Some(u64::MAX);
+
+        // User types a char.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        // Deadline is cleared so the tick handler won't wipe their edits.
+        assert!(
+            app.dashboard.reply_draft_clear_at_ms.is_none(),
+            "Char keystroke must cancel the chip-echo auto-clear deadline"
+        );
+
+        // Reset and try Backspace.
+        app.dashboard.reply_draft_clear_at_ms = Some(u64::MAX);
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            app.dashboard.reply_draft_clear_at_ms.is_none(),
+            "Backspace keystroke must cancel the chip-echo auto-clear deadline"
+        );
+    }
+
     /// A chip click from the dashboard on a workspace with NO live
     /// session must auto-spawn one so the chip command isn't silently
     /// dropped. Mirrors the production fix for the inline-reply gap.
@@ -3687,10 +3795,16 @@ mod detail_bar_focus_tests {
         .await
         .unwrap();
 
-        // After chip fires: draft cleared, focus back to Dashboard.
+        // After chip fires: draft echoes the dispatched command (cleared
+        // by the tick handler when reply_draft_clear_at_ms expires);
+        // focus back to Dashboard.
         assert_eq!(
-            app.dashboard.reply_draft, "",
-            "firing a chip must clear the reply draft"
+            app.dashboard.reply_draft, "/pull-request",
+            "firing a chip must echo the command into the reply draft"
+        );
+        assert!(
+            app.dashboard.reply_draft_clear_at_ms.is_some(),
+            "firing a chip must set the reply_draft auto-clear deadline"
         );
         assert!(
             matches!(app.focus, crate::ui::PaneFocus::Dashboard),

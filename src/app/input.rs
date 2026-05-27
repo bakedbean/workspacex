@@ -177,12 +177,22 @@ async fn fire_chip(app: &mut App, idx: usize) {
         Some(s) => s,
         None => return,
     };
+    let command_text = cmd.command.clone();
     let mut bytes = cmd.command.into_bytes();
     bytes.push(b'\r');
     session.scroll_to_live();
     let _ = session.writer.send(bytes).await;
     if matches!(app.view, View::Dashboard) {
-        app.dashboard.reply_draft.clear();
+        // Echo the dispatched command into the reply input so the user
+        // sees what was sent. The tick handler clears it after the
+        // deadline elapses (or earlier if the user interacts with the
+        // input directly).
+        app.dashboard.reply_draft = command_text;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        app.dashboard.reply_draft_clear_at_ms = Some(now_ms + 600);
         app.focus = crate::ui::PaneFocus::Dashboard;
     }
 }
@@ -1276,10 +1286,16 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
             true
         }
         (KeyCode::Backspace, _) => {
+            // The user is editing the draft directly; cancel any
+            // pending chip-echo auto-clear so it doesn't wipe their edit.
+            app.dashboard.reply_draft_clear_at_ms = None;
             app.dashboard.reply_draft.pop();
             true
         }
         (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+            // The user is editing the draft directly; cancel any
+            // pending chip-echo auto-clear so it doesn't wipe their edit.
+            app.dashboard.reply_draft_clear_at_ms = None;
             app.dashboard.reply_draft.push(c);
             true
         }

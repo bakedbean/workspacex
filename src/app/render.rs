@@ -272,10 +272,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .map(Vec::as_slice)
                             .unwrap_or(&[]);
                         let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
-                        let repo_pinned = repo.pinned_commands.clone();
                         let pinned = crate::pinned::resolve(
                             global_pinned.as_deref(),
-                            repo_pinned.as_deref(),
+                            repo.pinned_commands.as_deref(),
                         );
                         let inputs = crate::ui::dashboard::detail::DetailInputs {
                             repo,
@@ -325,12 +324,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .iter()
                 .any(|id| app.sessions.get(*id).is_none())
             {
+                app.leader_pending = false;
                 app.view = crate::ui::View::Dashboard;
                 return;
             }
             let focused_id = match state.focused_id() {
                 Some(id) => id,
                 None => {
+                    app.leader_pending = false;
                     app.view = crate::ui::View::Dashboard;
                     return;
                 }
@@ -476,6 +477,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 );
             } else {
                 // PM session went away; bounce to dashboard on next event.
+                app.leader_pending = false;
                 app.view = crate::ui::View::Dashboard;
             }
         }

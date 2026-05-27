@@ -57,18 +57,32 @@ pub fn render(
     inputs: &DetailInputs<'_>,
     theme: &Theme,
 ) -> Vec<ratatui::layout::Rect> {
-    if area.height == 0 || area.height < inputs.config.minimum_height() {
-        return Vec::new();
-    }
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
 
-    let body_constraint = if inputs.config.has_body() {
+    let chip_present = !inputs.pinned.is_empty();
+    let has_body = inputs.config.has_body();
+    // Rows that absolutely must be present at full height to avoid
+    // ratatui silently collapsing a `Length(1)` chunk to zero — which
+    // would leak an invisible-but-clickable chip rect or hide the
+    // reply input. Order matches the layout below: header + top rule
+    // + (body min 1 when has_body) + bottom rule + (chips when
+    // present) + reply.
+    let min_rows: u16 = 2 // header + top rule
+        + if has_body { 1 } else { 0 } // at least one body row
+        + 1 // bottom rule
+        + if chip_present { 1 } else { 0 } // chip slot
+        + 1; // reply
+    let needed = inputs.config.minimum_height().max(min_rows);
+    if area.height == 0 || area.height < needed {
+        return Vec::new();
+    }
+
+    let body_constraint = if has_body {
         Constraint::Min(1)
     } else {
         Constraint::Length(0)
     };
-    let chip_present = !inputs.pinned.is_empty();
     let constraints: Vec<Constraint> = if chip_present {
         vec![
             Constraint::Length(1), // header
@@ -1135,6 +1149,59 @@ mod tests {
             })
             .unwrap();
         assert!(returned.is_empty(), "no chip rects when pinned empty");
+    }
+
+    #[test]
+    fn render_returns_empty_rects_when_area_too_short_for_chip_row() {
+        // Regression guard for the latent cliff flagged in PR #104 review:
+        // with chips configured but a chrome-only DetailBarConfig
+        // (`minimum_height()` returns CHROME_ROWS == 4), if the available
+        // area is 4 rows the layout doesn't fit chrome (5 rows including
+        // chip slot). The early-return must bail so we don't return
+        // invisible-but-clickable chip rects from a 0-height chunk.
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig {
+            containers: vec![vec![], vec![], vec![]], // all empty → no body
+            ..DetailBarConfig::default()
+        };
+        let reg = make_registry();
+        let pinned = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pr".into(),
+        }];
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &pinned,
+        };
+        // Area height exactly CHROME_ROWS (4). With chips present we need 5.
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 4)).unwrap();
+        let mut returned: Vec<ratatui::layout::Rect> = Vec::new();
+        terminal
+            .draw(|f| {
+                let theme = Theme::wsx();
+                returned = render(f, Rect::new(0, 0, 80, 4), &inputs, &theme);
+            })
+            .unwrap();
+        assert!(
+            returned.is_empty(),
+            "no chip rects when area is too short to fit chip row + chrome"
+        );
     }
 
     #[test]

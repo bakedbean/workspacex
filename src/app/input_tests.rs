@@ -1371,7 +1371,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
-        handle_mouse(&mut app,mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.sessions
                 .get(ws_id)
@@ -1389,7 +1389,7 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         app.sessions.get(ws_id).unwrap().scroll_up(5);
-        handle_mouse(&mut app,mouse_event(MouseEventKind::ScrollDown)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollDown)).await;
         assert_eq!(
             app.sessions
                 .get(ws_id)
@@ -1406,7 +1406,7 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         spawn_pm_for_test(&mut app);
         app.view = crate::ui::View::AttachedPm;
-        handle_mouse(&mut app,mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.pm
                 .as_ref()
@@ -1425,7 +1425,7 @@ mod pm_state_tests {
         app.pm_visible = true;
         app.focus = crate::ui::PaneFocus::ProjectManager;
         // view stays Dashboard.
-        handle_mouse(&mut app,mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.pm
                 .as_ref()
@@ -1621,7 +1621,7 @@ mod pm_state_tests {
             row: 30,
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&mut app,click).await;
+        handle_mouse(&mut app, click).await;
 
         // wait for PTY cat echo
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1658,7 +1658,7 @@ mod pm_state_tests {
             row: 10,    // outside chip
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&mut app,click).await;
+        handle_mouse(&mut app, click).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let session = active_session(&app).unwrap();
@@ -1756,7 +1756,10 @@ mod pm_state_tests {
         )
         .await
         .unwrap();
-        assert!(!app.leader_pending, "leader must clear after digit follow-up");
+        assert!(
+            !app.leader_pending,
+            "leader must clear after digit follow-up"
+        );
 
         // cat echoes input back; verify the command reached the PTY.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1808,7 +1811,10 @@ mod pm_state_tests {
         )
         .await
         .unwrap();
-        assert!(!app.leader_pending, "leader must clear after non-digit follow-up");
+        assert!(
+            !app.leader_pending,
+            "leader must clear after non-digit follow-up"
+        );
 
         // No chip command should have been dispatched.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1850,8 +1856,18 @@ mod pm_state_tests {
             },
         ];
         app.chip_rects = vec![
-            ratatui::layout::Rect { x: 5, y: 30, width: 7, height: 1 },
-            ratatui::layout::Rect { x: 13, y: 30, width: 5, height: 1 },
+            ratatui::layout::Rect {
+                x: 5,
+                y: 30,
+                width: 7,
+                height: 1,
+            },
+            ratatui::layout::Rect {
+                x: 13,
+                y: 30,
+                width: 5,
+                height: 1,
+            },
         ];
 
         // Ctrl-X then '3' — index 2, beyond chip_rects.len() == 2.
@@ -2732,7 +2748,10 @@ mod pm_state_tests {
         // Wait for the archive to actually finish.
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         let g = app.lock().await;
-        assert!(g.modal.is_none(), "modal should clear once archive finishes");
+        assert!(
+            g.modal.is_none(),
+            "modal should clear once archive finishes"
+        );
         assert!(
             g.workspaces.iter().all(|(_, w)| w.id != ws_id),
             "workspace should be archived"
@@ -3553,9 +3572,7 @@ mod leader_view_transition_tests {
 
         // Place the app in Attached view — but do NOT spawn a session, so
         // handle_key_attached will immediately bounce back to Dashboard.
-        app.view = crate::ui::View::Attached(
-            crate::ui::split::AttachedState::single(ws_id),
-        );
+        app.view = crate::ui::View::Attached(crate::ui::split::AttachedState::single(ws_id));
         // Arm the leader as if the user had pressed Ctrl-X while attached.
         app.leader_pending = true;
 

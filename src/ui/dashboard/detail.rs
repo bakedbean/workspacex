@@ -1079,12 +1079,24 @@ mod tests {
         // (we only inserted a row, didn't remove the reply row).
         assert!(text.contains("PR"), "chip label PR present: {text:?}");
         assert!(text.contains("FB"), "chip label FB present: {text:?}");
-        assert!(text.contains("Reply to agent"), "reply chip still present: {text:?}");
+        assert!(
+            text.contains("Reply to agent"),
+            "reply chip still present: {text:?}"
+        );
 
         // Chip row must sit ABOVE the reply row.
-        let pr_line = text.lines().position(|l| l.contains(" PR ")).expect("PR line");
-        let reply_line = text.lines().position(|l| l.contains("Reply to agent")).expect("reply line");
-        assert!(pr_line < reply_line, "chip row above reply: pr={pr_line} reply={reply_line}");
+        let pr_line = text
+            .lines()
+            .position(|l| l.contains(" PR "))
+            .expect("PR line");
+        let reply_line = text
+            .lines()
+            .position(|l| l.contains("Reply to agent"))
+            .expect("reply line");
+        assert!(
+            pr_line < reply_line,
+            "chip row above reply: pr={pr_line} reply={reply_line}"
+        );
     }
 
     #[test]
@@ -1113,10 +1125,8 @@ mod tests {
         };
         // Capture render's returned rects via a closure-bound outer mut
         // (Terminal::draw can't propagate values out of its closure).
-        let mut terminal = ratatui::Terminal::new(
-            ratatui::backend::TestBackend::new(120, 12),
-        )
-        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 12)).unwrap();
         let mut returned: Vec<ratatui::layout::Rect> = Vec::new();
         terminal
             .draw(|f| {

@@ -271,8 +271,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .get(&ws.id)
                             .map(Vec::as_slice)
                             .unwrap_or(&[]);
-                        let global_pinned =
-                            app.store.get_setting("pinned_commands").ok().flatten();
+                        let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
                         let repo_pinned = repo.pinned_commands.clone();
                         let pinned = crate::pinned::resolve(
                             global_pinned.as_deref(),
@@ -301,7 +300,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             pinned: &pinned,
                         };
                         let rects = crate::ui::dashboard::detail::render(
-                            f, detail_area, &inputs, &app.theme,
+                            f,
+                            detail_area,
+                            &inputs,
+                            &app.theme,
                         );
                         if !rects.is_empty() {
                             app.chip_rects = rects;

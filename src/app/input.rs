@@ -135,9 +135,7 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
 /// Resolve the session that should receive a pinned-command dispatch.
 /// In the attached view this is the focused pane; on the dashboard it
 /// is the currently selected workspace.
-fn chip_target_session(
-    app: &App,
-) -> Option<std::sync::Arc<crate::pty::session::Session>> {
+fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Session>> {
     match &app.view {
         View::Attached(state) => state.focused_id().and_then(|id| app.sessions.get(id)),
         View::Dashboard => match app.selected_target() {
@@ -995,8 +993,7 @@ async fn handle_key_modal(
                         },
                     )
                     .await;
-                    crate::app::reconcile_archive_result(shared_clone, archive_gen, result)
-                        .await;
+                    crate::app::reconcile_archive_result(shared_clone, archive_gen, result).await;
                 });
             }
             KeyCode::Char('n') | KeyCode::Esc => {

@@ -313,7 +313,6 @@ pub async fn archive_with_app(
     )
     .await?;
 
-    // NEW: advance modal to RemoveWorktree before starting phase 2.
     advance_archive_step(&app, crate::ui::modal::ArchiveStep::RemoveWorktree).await;
 
     // --- Phase 2 (unlocked, async): remove the worktree from disk. ---
@@ -321,14 +320,12 @@ pub async fn archive_with_app(
         git::remove_worktree(&repo.path, &ws.worktree_path).await?;
     }
 
-    // NEW: advance modal to DeleteBranch before starting phase 3.
     advance_archive_step(&app, crate::ui::modal::ArchiveStep::DeleteBranch).await;
 
     // --- Phase 3 (unlocked, async): delete the branch. Failures here
     //     are non-fatal and intentionally swallowed, matching `archive`. ---
     let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
 
-    // NEW: advance modal to Cleanup before starting phase 4.
     advance_archive_step(&app, crate::ui::modal::ArchiveStep::Cleanup).await;
 
     // --- Phase 4 (short, locked): delete the store row + clean up MCP. ---

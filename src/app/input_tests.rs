@@ -2531,6 +2531,99 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
+    async fn archive_step_advances_past_script_phase() {
+        use crate::ui::modal::{ArchiveStep, Modal};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        // sleep 0.5 keeps phase 1 running long enough that we can
+        // witness the initial Script step before it advances.
+        store
+            .set_repo_archive_script(repo_id, Some("sleep 0.5"))
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == repo_id)
+            .unwrap();
+        let created = crate::workspace::create(
+            &store,
+            &repo,
+            Some("doomed"),
+            tmp.path(),
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let ws_id = created.workspace.id;
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::ConfirmArchive {
+                workspace_id: ws_id,
+                name: created.workspace.name.clone(),
+            });
+        }
+        // Press 'y'. Initial step should be Script.
+        {
+            let mut g = app.lock().await;
+            let y = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('y'),
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(y)).await.unwrap();
+            match &g.modal {
+                Some(Modal::ArchiveRunning { step, script_present }) => {
+                    assert_eq!(*step, ArchiveStep::Script, "initial step should be Script");
+                    assert!(*script_present, "fixture configured an archive script");
+                }
+                other => panic!("expected ArchiveRunning, got {other:?}"),
+            }
+        }
+        // Wait long enough for phase 1 to finish (sleep 0.5) and step
+        // to advance to at least RemoveWorktree. We don't pin to a
+        // specific later step because phases 2/3/4 are fast and any
+        // of them is acceptable.
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        {
+            let g = app.lock().await;
+            match &g.modal {
+                Some(Modal::ArchiveRunning { step, .. }) => {
+                    assert_ne!(
+                        *step,
+                        ArchiveStep::Script,
+                        "step should have advanced past Script after sleep 0.5 archive script"
+                    );
+                }
+                None => {
+                    // Archive already finished — also acceptable. The
+                    // important behavior is that step is no longer Script.
+                }
+                other => panic!("unexpected modal: {other:?}"),
+            }
+        }
+        // Let the archive complete.
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        let g = app.lock().await;
+        assert!(g.modal.is_none(), "modal should clear once archive finishes");
+        assert!(
+            g.workspaces.iter().all(|(_, w)| w.id != ws_id),
+            "workspace should be archived"
+        );
+    }
+
+    #[tokio::test]
     async fn enter_during_setup_running_is_a_noop() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;

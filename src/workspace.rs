@@ -277,6 +277,21 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     Ok(archive_result)
 }
 
+/// Advance the `step` field of the `ArchiveRunning` modal, if the
+/// modal still belongs to this archive flow. Called between phases of
+/// `archive_with_app`. The check guards against a stale archive task
+/// updating a modal that was replaced (e.g. by `Modal::Error` or by a
+/// second archive flow).
+async fn advance_archive_step(
+    app: &crate::app::SharedApp,
+    next: crate::ui::modal::ArchiveStep,
+) {
+    let mut g = app.lock().await;
+    if let Some(crate::ui::modal::Modal::ArchiveRunning { step, .. }) = &mut g.modal {
+        *step = next;
+    }
+}
+
 /// TUI-friendly variant of `archive` that interleaves App lock acquisition
 /// with the long-running async git/script phases. Unlike `archive`, this
 /// function never holds the App lock across `.await` boundaries on the
@@ -298,14 +313,23 @@ pub async fn archive_with_app(
     )
     .await?;
 
+    // NEW: advance modal to RemoveWorktree before starting phase 2.
+    advance_archive_step(&app, crate::ui::modal::ArchiveStep::RemoveWorktree).await;
+
     // --- Phase 2 (unlocked, async): remove the worktree from disk. ---
     if !opts.keep_worktree && ws.worktree_path.exists() {
         git::remove_worktree(&repo.path, &ws.worktree_path).await?;
     }
 
+    // NEW: advance modal to DeleteBranch before starting phase 3.
+    advance_archive_step(&app, crate::ui::modal::ArchiveStep::DeleteBranch).await;
+
     // --- Phase 3 (unlocked, async): delete the branch. Failures here
     //     are non-fatal and intentionally swallowed, matching `archive`. ---
     let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
+
+    // NEW: advance modal to Cleanup before starting phase 4.
+    advance_archive_step(&app, crate::ui::modal::ArchiveStep::Cleanup).await;
 
     // --- Phase 4 (short, locked): delete the store row + clean up MCP. ---
     {

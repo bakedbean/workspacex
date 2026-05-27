@@ -1273,7 +1273,7 @@ async fn handle_paste(app: &mut App, shared: &SharedApp, content: String) -> Res
     }
     Ok(())
 }
-async fn handle_mouse(app: &App, m: MouseEvent) {
+async fn handle_mouse(app: &mut App, m: MouseEvent) {
     match m.kind {
         MouseEventKind::ScrollUp => scroll_active(app, 3, true),
         MouseEventKind::ScrollDown => scroll_active(app, 3, false),
@@ -1284,14 +1284,7 @@ async fn handle_mouse(app: &App, m: MouseEvent) {
                     && m.row >= r.y
                     && m.row < r.y.saturating_add(r.height)
             }) {
-                if let Some(cmd) = app.pinned_commands_cache.get(idx) {
-                    if let Some(session) = active_session(app) {
-                        let mut bytes = cmd.command.as_bytes().to_vec();
-                        bytes.push(b'\r');
-                        session.scroll_to_live();
-                        let _ = session.writer.send(bytes).await;
-                    }
-                }
+                fire_chip(app, idx).await;
             }
         }
         _ => {}

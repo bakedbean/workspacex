@@ -1371,7 +1371,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app,mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.sessions
                 .get(ws_id)
@@ -1389,7 +1389,7 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         app.sessions.get(ws_id).unwrap().scroll_up(5);
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollDown)).await;
+        handle_mouse(&mut app,mouse_event(MouseEventKind::ScrollDown)).await;
         assert_eq!(
             app.sessions
                 .get(ws_id)
@@ -1406,7 +1406,7 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         spawn_pm_for_test(&mut app);
         app.view = crate::ui::View::AttachedPm;
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app,mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.pm
                 .as_ref()
@@ -1425,7 +1425,7 @@ mod pm_state_tests {
         app.pm_visible = true;
         app.focus = crate::ui::PaneFocus::ProjectManager;
         // view stays Dashboard.
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app,mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.pm
                 .as_ref()
@@ -1439,10 +1439,10 @@ mod pm_state_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wheel_noop_when_dashboard_focused_no_target() {
         let store = Store::open_in_memory().unwrap();
-        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         // No PM, no attached workspace; view is Dashboard.
         // Just verify the call doesn't panic.
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1621,7 +1621,7 @@ mod pm_state_tests {
             row: 30,
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&app, click).await;
+        handle_mouse(&mut app,click).await;
 
         // wait for PTY cat echo
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1658,7 +1658,7 @@ mod pm_state_tests {
             row: 10,    // outside chip
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&app, click).await;
+        handle_mouse(&mut app,click).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let session = active_session(&app).unwrap();
@@ -1667,6 +1667,52 @@ mod pm_state_tests {
         assert!(
             !screen_text.contains("/pull-request"),
             "click outside any chip must not fire; got: {screen_text:?}"
+        );
+    }
+
+    /// Chip click from `View::Dashboard` dispatches the command to the selected
+    /// workspace's session, not `active_session` (which returns `None` in the
+    /// dashboard view).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_chip_in_dashboard_view_fires_pinned_command() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // Switch to dashboard view — active_session() now returns None.
+        app.view = crate::ui::View::Dashboard;
+        // Point selectable at the workspace so selected_target() returns it.
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        // Wait for PTY cat echo.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "dashboard chip click must dispatch /pull-request to the workspace session; got: {screen_text:?}"
         );
     }
 

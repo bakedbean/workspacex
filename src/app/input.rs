@@ -132,6 +132,48 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
         _ => None,
     }
 }
+/// Resolve the session that should receive a pinned-command dispatch.
+/// In the attached view this is the focused pane; on the dashboard it
+/// is the currently selected workspace.
+fn chip_target_session(
+    app: &App,
+) -> Option<std::sync::Arc<crate::pty::session::Session>> {
+    match &app.view {
+        View::Attached(state) => state.focused_id().and_then(|id| app.sessions.get(id)),
+        View::Dashboard => match app.selected_target() {
+            Some(SelectionTarget::Workspace(id)) => app.sessions.get(id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+/// Dispatch the pinned command at `idx` to the chip-target session.
+/// No-op when:
+///   - `idx` exceeds the number of *visible* chip rects (the row may
+///     have truncated some chips at narrow widths),
+///   - the cache has no command at `idx` (defensive),
+///   - no chip target can be resolved.
+/// On dispatch, clears any in-flight reply draft and returns focus to
+/// the dashboard so the reply input loses focus.
+async fn fire_chip(app: &mut App, idx: usize) {
+    if idx >= app.chip_rects.len() {
+        return;
+    }
+    let cmd = match app.pinned_commands_cache.get(idx) {
+        Some(c) => c.clone(),
+        None => return,
+    };
+    let session = match chip_target_session(app) {
+        Some(s) => s,
+        None => return,
+    };
+    let mut bytes = cmd.command.into_bytes();
+    bytes.push(b'\r');
+    session.scroll_to_live();
+    let _ = session.writer.send(bytes).await;
+    app.dashboard.reply_draft.clear();
+    app.focus = crate::ui::PaneFocus::Dashboard;
+}
 /// Aggregate the current `StatusCounts` for one repo by classifying each
 /// of its live workspaces. Used by the `z` (fold) keybinding so we can
 /// look up the same default-fold state the renderer would compute.

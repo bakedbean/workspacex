@@ -2423,11 +2423,25 @@ mod pm_state_tests {
             let mut g = app.lock().await;
             handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
             // Immediately after 'y', modal should be ArchiveRunning.
-            assert!(
-                matches!(g.modal, Some(Modal::ArchiveRunning { .. })),
-                "modal should transition to ArchiveRunning immediately; got {:?}",
-                g.modal
-            );
+            match &g.modal {
+                Some(Modal::ArchiveRunning { step, script_present }) => {
+                    assert_eq!(
+                        *step,
+                        crate::ui::modal::ArchiveStep::Script,
+                        "initial step should be Script"
+                    );
+                    // The fixture repo at this test site has no
+                    // archive script configured, so script_present
+                    // must be false.
+                    assert!(
+                        !*script_present,
+                        "fixture has no archive script; script_present should be false"
+                    );
+                }
+                other => panic!(
+                    "modal should transition to ArchiveRunning immediately; got {other:?}"
+                ),
+            }
             assert!(g.pending_archive_gen.is_some());
         }
         // Yield so the spawned archive task can complete.

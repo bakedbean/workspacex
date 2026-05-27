@@ -583,6 +583,18 @@ pub async fn run<B: Backend + std::io::Write>(
             _ = tick.tick() => {
                 let mut g = app.lock().await;
                 g.tick = g.tick.wrapping_add(1);
+                // Expire any ephemeral chip-dispatch echo in the reply
+                // input. Set by `fire_chip` so the user briefly sees
+                // which command was sent; wiped here once the deadline
+                // is reached.
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                if matches!(g.dashboard.reply_draft_clear_at_ms, Some(t) if now_ms >= t) {
+                    g.dashboard.reply_draft.clear();
+                    g.dashboard.reply_draft_clear_at_ms = None;
+                }
                 // Pick up workspaces/repos written by sibling `wsx` CLI
                 // processes (e.g. `wsx workspace create` invoked by Claude
                 // during a related-repos flow). Cheap: PRAGMA data_version
@@ -867,15 +879,34 @@ pub(crate) fn restore_attached_state(
     }
 }
 
-/// Attach to a workspace: spawn a session, restore layout, and switch to
-/// attached view. Shared by the `Enter` / `i` / `l` key handlers.
-pub(crate) fn attach_workspace(app: &mut App, ws_id: crate::store::WorkspaceId) -> Result<()> {
-    app.workspace_needs_attention.remove(&ws_id);
+/// Ensure a workspace has a live PTY session, spawning one in place if
+/// missing. Used by `attach_workspace` and by inline-dispatch paths
+/// (chip click / chord / reply Enter) so writes from the dashboard
+/// don't silently drop on workspaces the user hasn't attached to.
+/// No-op when the workspace already has a session, or when
+/// `build_spawn_info` returns `None` (e.g., setup hasn't completed).
+pub(crate) fn ensure_workspace_session(
+    app: &mut App,
+    ws_id: crate::store::WorkspaceId,
+) -> Result<()> {
+    if app.sessions.get(ws_id).is_some() {
+        return Ok(());
+    }
     if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
         let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
-        let restored = restore_attached_state(app, id);
+    }
+    Ok(())
+}
+
+/// Attach to a workspace: ensure a session, restore layout, and switch
+/// to attached view. Shared by the `Enter` / `i` / `l` key handlers.
+pub(crate) fn attach_workspace(app: &mut App, ws_id: crate::store::WorkspaceId) -> Result<()> {
+    app.workspace_needs_attention.remove(&ws_id);
+    ensure_workspace_session(app, ws_id)?;
+    if app.sessions.get(ws_id).is_some() {
+        let restored = restore_attached_state(app, ws_id);
         app.view = View::Attached(restored);
     }
     Ok(())

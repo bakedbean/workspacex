@@ -132,6 +132,70 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
         _ => None,
     }
 }
+/// Resolve the session that should receive a pinned-command dispatch.
+/// In the attached view this is the focused pane; on the dashboard it
+/// is the currently selected workspace.
+fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Session>> {
+    match &app.view {
+        View::Attached(state) => state.focused_id().and_then(|id| app.sessions.get(id)),
+        View::Dashboard => match app.selected_target() {
+            Some(SelectionTarget::Workspace(id)) => app.sessions.get(id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+/// Dispatch the pinned command at `idx` to the chip-target session.
+/// No-op when:
+///   - `idx` exceeds the number of *visible* chip rects (the row may
+///     have truncated some chips at narrow widths),
+///   - the cache has no command at `idx` (defensive),
+///   - no chip target can be resolved.
+/// When dispatched from `View::Dashboard`, also clears any in-flight
+/// reply draft and returns focus to the dashboard. In other views
+/// (attached, attached-PM) the dispatch is byte-only so it matches the
+/// attached-view keyboard chord and doesn't trample dashboard state the
+/// user can't see.
+async fn fire_chip(app: &mut App, idx: usize) {
+    if idx >= app.chip_rects.len() {
+        return;
+    }
+    let cmd = match app.pinned_commands_cache.get(idx) {
+        Some(c) => c.clone(),
+        None => return,
+    };
+    // On the dashboard the selected workspace may not have a live
+    // session yet (the user hasn't attached). Auto-spawn one in place
+    // so the chip command isn't silently dropped. In the attached
+    // view the session already exists by definition.
+    if matches!(app.view, View::Dashboard) {
+        if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+            let _ = crate::app::ensure_workspace_session(app, ws_id);
+        }
+    }
+    let session = match chip_target_session(app) {
+        Some(s) => s,
+        None => return,
+    };
+    let command_text = cmd.command.clone();
+    let mut bytes = cmd.command.into_bytes();
+    bytes.push(b'\r');
+    session.scroll_to_live();
+    let _ = session.writer.send(bytes).await;
+    if matches!(app.view, View::Dashboard) {
+        // Echo the dispatched command into the reply input so the user
+        // sees what was sent. The tick handler clears it after the
+        // deadline elapses (or earlier if the user interacts with the
+        // input directly).
+        app.dashboard.reply_draft = command_text;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        app.dashboard.reply_draft_clear_at_ms = Some(now_ms + 600);
+        app.focus = crate::ui::PaneFocus::Dashboard;
+    }
+}
 /// Aggregate the current `StatusCounts` for one repo by classifying each
 /// of its live workspaces. Used by the `z` (fold) keybinding so we can
 /// look up the same default-fold state the renderer would compute.
@@ -222,6 +286,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 // Ctrl-O: expand PM to a full-screen attached view so the
                 // user can scroll through claude's history naturally.
                 if app.pm.is_some() {
+                    app.leader_pending = false;
                     app.view = View::AttachedPm;
                 }
                 return Ok(());
@@ -318,6 +383,23 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             (KeyCode::Char('M'), _) | (KeyCode::Char('m'), _) => fold_all_repos(app),
             _ => {} // Esc, unknown key, anything else: just clear.
         }
+        return Ok(());
+    }
+    // Ctrl-X leader for pinned-command chord (mirrors the attached
+    // view's binding). The next 1..9 fires the matching chip; any
+    // other follow-up — including a second Ctrl-X — just clears the
+    // leader. Completion is checked BEFORE re-arming so a double
+    // Ctrl-X cancels the chord instead of getting stuck armed.
+    if app.leader_pending {
+        app.leader_pending = false;
+        if let KeyCode::Char(c @ '1'..='9') = k.code {
+            let idx = (c as u8 - b'1') as usize;
+            fire_chip(app, idx).await;
+        }
+        return Ok(());
+    }
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
         return Ok(());
     }
     match (k.code, k.modifiers) {
@@ -577,6 +659,7 @@ async fn handle_key_attached(
     let session = match app.sessions.get(id) {
         Some(s) => s,
         None => {
+            app.leader_pending = false;
             app.view = View::Dashboard;
             return Ok(());
         }
@@ -788,6 +871,7 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
     let session = match app.pm.clone() {
         Some(s) => s,
         None => {
+            app.leader_pending = false;
             app.view = View::Dashboard;
             return Ok(());
         }
@@ -943,8 +1027,7 @@ async fn handle_key_modal(
                         },
                     )
                     .await;
-                    crate::app::reconcile_archive_result(shared_clone, archive_gen, result)
-                        .await;
+                    crate::app::reconcile_archive_result(shared_clone, archive_gen, result).await;
                 });
             }
             KeyCode::Char('n') | KeyCode::Esc => {
@@ -1014,6 +1097,7 @@ async fn handle_key_modal(
                             let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
                             let restored = restore_attached_state(app, id);
+                            app.leader_pending = false;
                             app.view = View::Attached(restored);
                         }
                     }
@@ -1061,6 +1145,7 @@ async fn handle_key_modal(
                                 _ => {
                                     // No attached pane yet — restore saved layout or attach plainly.
                                     let restored = restore_attached_state(app, id);
+                                    app.leader_pending = false;
                                     app.view = View::Attached(restored);
                                 }
                             }
@@ -1160,6 +1245,21 @@ async fn handle_key_modal(
 /// (e.g. navigation keys that also move the selection).
 async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEvent) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
+
+    // If the leader is already armed (Ctrl-X from a previous tick), yield to
+    // the dashboard dispatcher so the chord can complete (digit → fire chip).
+    if app.leader_pending {
+        return false;
+    }
+
+    // Arm the leader on Ctrl-X without inserting '^X' into the draft.
+    // The next key will arrive here again; the check above then yields it to
+    // the dashboard handler which has the chord-completion block.
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
+        return true;
+    }
+
     match (k.code, k.modifiers) {
         (KeyCode::Tab, _) => {
             // Spec: Dashboard → DetailBarReply → ProjectManager (when visible)
@@ -1179,6 +1279,10 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
         (KeyCode::Enter, _) => {
             let draft = std::mem::take(&mut app.dashboard.reply_draft);
             if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                // Auto-spawn the workspace's session if it isn't running
+                // yet — otherwise an inline reply on an unattached
+                // workspace silently drops.
+                let _ = crate::app::ensure_workspace_session(app, ws_id);
                 if let Some(session) = app.sessions.get(ws_id) {
                     let mut bytes = draft.into_bytes();
                     bytes.push(b'\r');
@@ -1190,10 +1294,16 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
             true
         }
         (KeyCode::Backspace, _) => {
+            // The user is editing the draft directly; cancel any
+            // pending chip-echo auto-clear so it doesn't wipe their edit.
+            app.dashboard.reply_draft_clear_at_ms = None;
             app.dashboard.reply_draft.pop();
             true
         }
         (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+            // The user is editing the draft directly; cancel any
+            // pending chip-echo auto-clear so it doesn't wipe their edit.
+            app.dashboard.reply_draft_clear_at_ms = None;
             app.dashboard.reply_draft.push(c);
             true
         }
@@ -1239,7 +1349,7 @@ async fn handle_paste(app: &mut App, shared: &SharedApp, content: String) -> Res
     }
     Ok(())
 }
-async fn handle_mouse(app: &App, m: MouseEvent) {
+async fn handle_mouse(app: &mut App, m: MouseEvent) {
     match m.kind {
         MouseEventKind::ScrollUp => scroll_active(app, 3, true),
         MouseEventKind::ScrollDown => scroll_active(app, 3, false),
@@ -1250,14 +1360,7 @@ async fn handle_mouse(app: &App, m: MouseEvent) {
                     && m.row >= r.y
                     && m.row < r.y.saturating_add(r.height)
             }) {
-                if let Some(cmd) = app.pinned_commands_cache.get(idx) {
-                    if let Some(session) = active_session(app) {
-                        let mut bytes = cmd.command.as_bytes().to_vec();
-                        bytes.push(b'\r');
-                        session.scroll_to_live();
-                        let _ = session.writer.send(bytes).await;
-                    }
-                }
+                fire_chip(app, idx).await;
             }
         }
         _ => {}
@@ -1277,6 +1380,7 @@ async fn dispatch_key(
                 let id = match state.focused_id() {
                     Some(id) => id,
                     None => {
+                        app.leader_pending = false;
                         app.view = View::Dashboard;
                         return Ok(());
                     }

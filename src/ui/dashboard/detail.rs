@@ -42,34 +42,79 @@ pub struct DetailInputs<'a> {
     pub events_scanned: bool,
     pub config: &'a DetailBarConfig,
     pub registry: &'a crate::detail_modules::Registry,
+    /// Pinned commands resolved for the selected workspace's repo. When
+    /// empty, no chip row is rendered.
+    pub pinned: &'a [crate::pinned::PinnedCommand],
 }
 
 /// Render the detail bar into `area`. No-op when `area.height` is below
 /// the config's `minimum_height()` — which is `CHROME_ROWS` (4) when no
 /// container has any modules, or `min_rows` otherwise (caller is expected
 /// to fall back to a condensed banner — see `app.rs::draw`).
-pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
-    if area.height == 0 || area.height < inputs.config.minimum_height() {
-        return;
-    }
+pub fn render(
+    f: &mut Frame,
+    area: Rect,
+    inputs: &DetailInputs<'_>,
+    theme: &Theme,
+) -> Vec<ratatui::layout::Rect> {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
 
-    let body_constraint = if inputs.config.has_body() {
+    let chip_present = !inputs.pinned.is_empty();
+    let has_body = inputs.config.has_body();
+    // Rows that absolutely must be present at full height to avoid
+    // ratatui silently collapsing a `Length(1)` chunk to zero — which
+    // would leak an invisible-but-clickable chip rect or hide the
+    // reply input. Order matches the layout below: header + top rule
+    // + (body min 1 when has_body) + bottom rule + (chips when
+    // present) + reply.
+    let min_rows: u16 = 2 // header + top rule
+        + if has_body { 1 } else { 0 } // at least one body row
+        + 1 // bottom rule
+        + if chip_present { 1 } else { 0 } // chip slot
+        + 1; // reply
+    let needed = inputs.config.minimum_height().max(min_rows);
+    if area.height == 0 || area.height < needed {
+        return Vec::new();
+    }
+
+    let body_constraint = if has_body {
         Constraint::Min(1)
     } else {
         Constraint::Length(0)
     };
+    let constraints: Vec<Constraint> = if chip_present {
+        vec![
+            Constraint::Length(1), // header
+            Constraint::Length(1), // rule
+            body_constraint,
+            Constraint::Length(1), // rule
+            Constraint::Length(1), // chips
+            Constraint::Length(1), // reply
+        ]
+    } else {
+        vec![
+            Constraint::Length(1), // header
+            Constraint::Length(1), // rule
+            body_constraint,
+            Constraint::Length(1), // rule
+            Constraint::Length(1), // reply
+        ]
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // header strip
-            Constraint::Length(1), // rule
-            body_constraint,       // body (N containers, or 0 when empty)
-            Constraint::Length(1), // rule
-            Constraint::Length(1), // reply row
-        ])
+        .constraints(constraints)
         .split(area);
+
+    let header_area = chunks[0];
+    let top_rule_area = chunks[1];
+    let body_area = chunks[2];
+    let bottom_rule_area = chunks[3];
+    let (chip_area, reply_area) = if chip_present {
+        (Some(chunks[4]), chunks[5])
+    } else {
+        (None, chunks[4])
+    };
 
     let header = build_header_strip(
         &inputs.workspace.name,
@@ -80,39 +125,47 @@ pub fn render(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Them
         inputs.status,
         inputs.ago_secs,
         theme,
-        chunks[0].width as usize,
+        header_area.width as usize,
     );
-    f.render_widget(Paragraph::new(header), chunks[0]);
+    f.render_widget(Paragraph::new(header), header_area);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "─".repeat(chunks[1].width as usize),
+            "─".repeat(top_rule_area.width as usize),
             theme.dim_style(),
         ))),
-        chunks[1],
+        top_rule_area,
     );
 
-    render_body(f, chunks[2], inputs, theme);
+    render_body(f, body_area, inputs, theme);
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "─".repeat(chunks[3].width as usize),
+            "─".repeat(bottom_rule_area.width as usize),
             theme.dim_style(),
         ))),
-        chunks[3],
+        bottom_rule_area,
     );
+
+    let chip_rects = if let Some(area) = chip_area {
+        crate::ui::attached::render_chip_row(f, area, inputs.pinned, theme)
+    } else {
+        Vec::new()
+    };
 
     let reply = build_reply_row(
         inputs.reply_draft,
         inputs.reply_focused,
         theme,
-        chunks[4].width as usize,
+        reply_area.width as usize,
     );
-    f.render_widget(Paragraph::new(reply), chunks[4]);
+    f.render_widget(Paragraph::new(reply), reply_area);
 
     if inputs.reply_focused {
-        let cx = reply_cursor_x(inputs.reply_draft, chunks[4].width as usize);
-        f.set_cursor_position((chunks[4].x + cx, chunks[4].y));
+        let cx = reply_cursor_x(inputs.reply_draft, reply_area.width as usize);
+        f.set_cursor_position((reply_area.x + cx, reply_area.y));
     }
+
+    chip_rects
 }
 
 fn render_body(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
@@ -662,6 +715,7 @@ mod tests {
                 events_scanned: false,
                 config: &cfg,
                 registry: &reg,
+                pinned: &[],
             };
             render(f, Rect::new(0, 0, 80, 0), &inputs, &theme);
         });
@@ -812,6 +866,7 @@ mod tests {
             events_scanned: true,
             config: &cfg,
             registry: &reg,
+            pinned: &[],
         };
         let text = render_to_text(&inputs, 120, 10);
         assert!(
@@ -858,6 +913,7 @@ mod tests {
             events_scanned: true,
             config: &cfg,
             registry: &reg,
+            pinned: &[],
         };
         // Width 100, height exactly CHROME_ROWS (4).
         let text = render_to_text(&inputs, 100, DetailBarConfig::CHROME_ROWS);
@@ -901,6 +957,7 @@ mod tests {
             events_scanned: true,
             config: &cfg,
             registry: &reg,
+            pinned: &[],
         };
         let text = render_to_text(&inputs, 70, 10);
         assert!(text.contains("SESSION SUMMARY"), "summary kept: {text:?}");
@@ -948,6 +1005,7 @@ mod tests {
             events_scanned: true,
             config: &cfg,
             registry: &reg,
+            pinned: &[],
         };
         let text = render_to_text(&inputs, 120, 10);
         assert!(
@@ -983,6 +1041,7 @@ mod tests {
             events_scanned: true,
             config: &cfg,
             registry: &reg,
+            pinned: &[],
         };
         let text = render_to_text(&inputs, 120, 10);
         assert!(text.contains("RECENT CHAT"), "chat title: {text:?}");
@@ -993,6 +1052,156 @@ mod tests {
         );
         assert!(!text.contains("PROCESSES"), "procs leaked: {text:?}");
         assert!(!text.contains("RECENT FILES"), "files leaked: {text:?}");
+    }
+
+    #[test]
+    fn render_with_pinned_includes_chip_row_above_reply() {
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig::default();
+        let reg = make_registry();
+        let pinned = vec![
+            crate::pinned::PinnedCommand {
+                label: "PR".into(),
+                command: "/pull-request".into(),
+            },
+            crate::pinned::PinnedCommand {
+                label: "FB".into(),
+                command: "/feedback".into(),
+            },
+        ];
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &pinned,
+        };
+        let text = render_to_text(&inputs, 120, 12);
+        // Chip labels must appear, and "Reply to agent" must still appear
+        // (we only inserted a row, didn't remove the reply row).
+        assert!(text.contains("PR"), "chip label PR present: {text:?}");
+        assert!(text.contains("FB"), "chip label FB present: {text:?}");
+        assert!(
+            text.contains("Reply to agent"),
+            "reply chip still present: {text:?}"
+        );
+
+        // Chip row must sit ABOVE the reply row.
+        let pr_line = text
+            .lines()
+            .position(|l| l.contains(" PR "))
+            .expect("PR line");
+        let reply_line = text
+            .lines()
+            .position(|l| l.contains("Reply to agent"))
+            .expect("reply line");
+        assert!(
+            pr_line < reply_line,
+            "chip row above reply: pr={pr_line} reply={reply_line}"
+        );
+    }
+
+    #[test]
+    fn render_without_pinned_omits_chip_row() {
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig::default();
+        let reg = make_registry();
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &[],
+        };
+        // Capture render's returned rects via a closure-bound outer mut
+        // (Terminal::draw can't propagate values out of its closure).
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 12)).unwrap();
+        let mut returned: Vec<ratatui::layout::Rect> = Vec::new();
+        terminal
+            .draw(|f| {
+                let theme = Theme::wsx();
+                returned = render(f, Rect::new(0, 0, 120, 12), &inputs, &theme);
+            })
+            .unwrap();
+        assert!(returned.is_empty(), "no chip rects when pinned empty");
+    }
+
+    #[test]
+    fn render_returns_empty_rects_when_area_too_short_for_chip_row() {
+        // Regression guard for the latent cliff flagged in PR #104 review:
+        // with chips configured but a chrome-only DetailBarConfig
+        // (`minimum_height()` returns CHROME_ROWS == 4), if the available
+        // area is 4 rows the layout doesn't fit chrome (5 rows including
+        // chip slot). The early-return must bail so we don't return
+        // invisible-but-clickable chip rects from a 0-height chunk.
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig {
+            containers: vec![vec![], vec![], vec![]], // all empty → no body
+            ..DetailBarConfig::default()
+        };
+        let reg = make_registry();
+        let pinned = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pr".into(),
+        }];
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &pinned,
+        };
+        // Area height exactly CHROME_ROWS (4). With chips present we need 5.
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 4)).unwrap();
+        let mut returned: Vec<ratatui::layout::Rect> = Vec::new();
+        terminal
+            .draw(|f| {
+                let theme = Theme::wsx();
+                returned = render(f, Rect::new(0, 0, 80, 4), &inputs, &theme);
+            })
+            .unwrap();
+        assert!(
+            returned.is_empty(),
+            "no chip rects when area is too short to fit chip row + chrome"
+        );
     }
 
     #[test]

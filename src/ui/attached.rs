@@ -286,7 +286,7 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     rects
 }
 
-fn render_chip_row(
+pub(crate) fn render_chip_row(
     f: &mut Frame,
     area: Rect,
     pinned: &[PinnedCommand],

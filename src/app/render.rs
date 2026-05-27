@@ -11,8 +11,8 @@ use ratatui::layout::{Constraint, Direction, Layout};
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     use crate::ui::{attached, dashboard, modal};
     let area = f.area();
-    // Clear chip state at the start of every frame; only View::Attached
-    // overwrites these with live values.
+    // Clear chip state at the start of every frame; View::Attached and the
+    // dashboard detail branch overwrite these with live values when chips render.
     app.chip_rects.clear();
     app.pinned_commands_cache.clear();
     match &app.view {
@@ -271,6 +271,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .get(&ws.id)
                             .map(Vec::as_slice)
                             .unwrap_or(&[]);
+                        let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
+                        let pinned = crate::pinned::resolve(
+                            global_pinned.as_deref(),
+                            repo.pinned_commands.as_deref(),
+                        );
                         let inputs = crate::ui::dashboard::detail::DetailInputs {
                             repo,
                             workspace: ws,
@@ -291,8 +296,18 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             events_scanned: app.workspace_events_scanned.contains(&ws.id),
                             config: &detail_cfg,
                             registry: &app.registry,
+                            pinned: &pinned,
                         };
-                        crate::ui::dashboard::detail::render(f, detail_area, &inputs, &app.theme);
+                        let rects = crate::ui::dashboard::detail::render(
+                            f,
+                            detail_area,
+                            &inputs,
+                            &app.theme,
+                        );
+                        if !rects.is_empty() {
+                            app.chip_rects = rects;
+                            app.pinned_commands_cache = pinned;
+                        }
                     }
                 }
             }
@@ -309,12 +324,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .iter()
                 .any(|id| app.sessions.get(*id).is_none())
             {
+                app.leader_pending = false;
                 app.view = crate::ui::View::Dashboard;
                 return;
             }
             let focused_id = match state.focused_id() {
                 Some(id) => id,
                 None => {
+                    app.leader_pending = false;
                     app.view = crate::ui::View::Dashboard;
                     return;
                 }
@@ -460,6 +477,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 );
             } else {
                 // PM session went away; bounce to dashboard on next event.
+                app.leader_pending = false;
                 app.view = crate::ui::View::Dashboard;
             }
         }

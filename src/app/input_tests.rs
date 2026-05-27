@@ -1371,7 +1371,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.sessions
                 .get(ws_id)
@@ -1389,7 +1389,7 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         app.sessions.get(ws_id).unwrap().scroll_up(5);
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollDown)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollDown)).await;
         assert_eq!(
             app.sessions
                 .get(ws_id)
@@ -1406,7 +1406,7 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         spawn_pm_for_test(&mut app);
         app.view = crate::ui::View::AttachedPm;
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.pm
                 .as_ref()
@@ -1425,7 +1425,7 @@ mod pm_state_tests {
         app.pm_visible = true;
         app.focus = crate::ui::PaneFocus::ProjectManager;
         // view stays Dashboard.
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.pm
                 .as_ref()
@@ -1439,10 +1439,10 @@ mod pm_state_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wheel_noop_when_dashboard_focused_no_target() {
         let store = Store::open_in_memory().unwrap();
-        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         // No PM, no attached workspace; view is Dashboard.
         // Just verify the call doesn't panic.
-        handle_mouse(&app, mouse_event(MouseEventKind::ScrollUp)).await;
+        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1621,7 +1621,7 @@ mod pm_state_tests {
             row: 30,
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&app, click).await;
+        handle_mouse(&mut app, click).await;
 
         // wait for PTY cat echo
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1658,7 +1658,7 @@ mod pm_state_tests {
             row: 10,    // outside chip
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&app, click).await;
+        handle_mouse(&mut app, click).await;
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let session = active_session(&app).unwrap();
@@ -1667,6 +1667,508 @@ mod pm_state_tests {
         assert!(
             !screen_text.contains("/pull-request"),
             "click outside any chip must not fire; got: {screen_text:?}"
+        );
+    }
+
+    /// Chip click from `View::Dashboard` dispatches the command to the selected
+    /// workspace's session, not `active_session` (which returns `None` in the
+    /// dashboard view).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_chip_in_dashboard_view_fires_pinned_command() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // Switch to dashboard view — active_session() now returns None.
+        app.view = crate::ui::View::Dashboard;
+        // Point selectable at the workspace so selected_target() returns it.
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        // Wait for PTY cat echo.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "dashboard chip click must dispatch /pull-request to the workspace session; got: {screen_text:?}"
+        );
+    }
+
+    /// Ctrl-X arms `leader_pending`; a subsequent digit fires the chip command
+    /// to the selected workspace's session.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_ctrl_x_then_digit_fires_pinned_chip() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        // Ctrl-X — arms the leader.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "Ctrl-X must arm leader_pending");
+
+        // '1' — fires chip 0, clears leader.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !app.leader_pending,
+            "leader must clear after digit follow-up"
+        );
+
+        // cat echoes input back; verify the command reached the PTY.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "dashboard Ctrl-X+1 must dispatch /pull-request to the workspace PTY; got: {screen_text:?}"
+        );
+    }
+
+    /// Ctrl-X then a non-digit key clears the leader without firing any chip.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_ctrl_x_then_non_digit_clears_leader_no_fire() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        // Ctrl-X — arms the leader.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+
+        // 'a' — non-digit, clears leader without firing.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !app.leader_pending,
+            "leader must clear after non-digit follow-up"
+        );
+
+        // No chip command should have been dispatched.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            !screen_text.contains("/pull-request"),
+            "non-digit follow-up must not fire any chip; got: {screen_text:?}"
+        );
+    }
+
+    /// Ctrl-X + a digit whose index exceeds the number of visible chip_rects
+    /// is a no-op (fire_chip guards on idx >= chip_rects.len()).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_ctrl_x_digit_beyond_visible_chips_is_noop() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        // Three commands in cache but only two chip_rects rendered.
+        app.pinned_commands_cache = vec![
+            crate::pinned::PinnedCommand {
+                label: "PR".into(),
+                command: "/pull-request".into(),
+            },
+            crate::pinned::PinnedCommand {
+                label: "B".into(),
+                command: "/build".into(),
+            },
+            crate::pinned::PinnedCommand {
+                label: "T".into(),
+                command: "/test".into(),
+            },
+        ];
+        app.chip_rects = vec![
+            ratatui::layout::Rect {
+                x: 5,
+                y: 30,
+                width: 7,
+                height: 1,
+            },
+            ratatui::layout::Rect {
+                x: 13,
+                y: 30,
+                width: 5,
+                height: 1,
+            },
+        ];
+
+        // Ctrl-X then '3' — index 2, beyond chip_rects.len() == 2.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            !screen_text.contains("/test"),
+            "digit beyond visible chips must not dispatch any command; got: {screen_text:?}"
+        );
+    }
+
+    /// A chip click from the dashboard echoes the dispatched command
+    /// into the reply input as visual confirmation, and sets a
+    /// wall-clock deadline (`reply_draft_clear_at_ms`) so the tick
+    /// handler wipes it shortly afterward.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chip_dispatch_echoes_command_into_reply_input() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+        // No pre-existing draft.
+        assert_eq!(app.dashboard.reply_draft, "");
+        assert!(app.dashboard.reply_draft_clear_at_ms.is_none());
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let now_before_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 6,
+                row: 30,
+                modifiers: KeyModifiers::NONE,
+            },
+        )
+        .await;
+
+        // Draft echoes the dispatched command.
+        assert_eq!(
+            app.dashboard.reply_draft, "/pull-request",
+            "chip dispatch must echo the command into reply_draft"
+        );
+        // Deadline is set in the future (sanity bound: within 5 seconds).
+        let deadline = app
+            .dashboard
+            .reply_draft_clear_at_ms
+            .expect("deadline must be set");
+        assert!(
+            deadline > now_before_ms && deadline < now_before_ms + 5_000,
+            "deadline {deadline} should be slightly after {now_before_ms}"
+        );
+    }
+
+    /// Backspace and Char keystrokes in the reply input cancel any
+    /// pending chip-echo auto-clear so the user's edits aren't wiped
+    /// by the tick handler mid-typing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn user_typing_in_reply_cancels_chip_echo_deadline() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        // Simulate state right after a chip dispatch: draft echoes the
+        // command, deadline is set.
+        app.dashboard.reply_draft = "/pull-request".to_string();
+        app.dashboard.reply_draft_clear_at_ms = Some(u64::MAX);
+
+        // User types a char.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        // Deadline is cleared so the tick handler won't wipe their edits.
+        assert!(
+            app.dashboard.reply_draft_clear_at_ms.is_none(),
+            "Char keystroke must cancel the chip-echo auto-clear deadline"
+        );
+
+        // Reset and try Backspace.
+        app.dashboard.reply_draft_clear_at_ms = Some(u64::MAX);
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            app.dashboard.reply_draft_clear_at_ms.is_none(),
+            "Backspace keystroke must cancel the chip-echo auto-clear deadline"
+        );
+    }
+
+    /// A chip click from the dashboard on a workspace with NO live
+    /// session must auto-spawn one so the chip command isn't silently
+    /// dropped. Mirrors the production fix for the inline-reply gap.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_chip_auto_spawns_session_when_missing() {
+        use crate::store::NewWorkspace;
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "auto-spawn-test",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        app.refresh().unwrap();
+
+        // Critical precondition: NO session spawned for this workspace.
+        assert!(
+            app.sessions.get(ws_id).is_none(),
+            "precondition: workspace must not have a session yet"
+        );
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        // The session must have been auto-spawned by fire_chip.
+        assert!(
+            app.sessions.get(ws_id).is_some(),
+            "fire_chip must auto-spawn a session for the selected workspace"
+        );
+
+        // And the command must have reached the new session's PTY.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "chip command must dispatch to the auto-spawned session; got: {screen_text:?}"
+        );
+    }
+
+    /// A second Ctrl-X while the leader is armed must clear it (cancel the
+    /// chord), not silently re-arm. Matches the attached-view leader
+    /// behavior where the follow-up key always clears the leader.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_double_ctrl_x_clears_leader() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        // First Ctrl-X: arms.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "first Ctrl-X must arm leader");
+
+        // Second Ctrl-X: must cancel (clear) the leader, not stay armed.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !app.leader_pending,
+            "second Ctrl-X must cancel the chord, not re-arm"
+        );
+    }
+
+    /// A chip click in the attached view dispatches the command but must
+    /// NOT clear the dashboard reply draft or overwrite the dashboard
+    /// pane focus — those state slots aren't visible from the attached
+    /// view and trampling them would leak across the view boundary.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attached_chip_click_preserves_dashboard_draft_and_focus() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // We're in View::Attached (set by spawn_attached_workspace).
+        assert!(matches!(app.view, crate::ui::View::Attached(_)));
+
+        // Seed dashboard-scoped state the user can't see from here.
+        app.dashboard.reply_draft = "hello agent".into();
+        app.focus = crate::ui::PaneFocus::ProjectManager;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        // Command still dispatched.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "attached-view chip click must still dispatch the command; got: {screen_text:?}"
+        );
+        drop(parser);
+
+        // But dashboard state must be unchanged.
+        assert_eq!(
+            app.dashboard.reply_draft, "hello agent",
+            "attached-view chip click must not clear the dashboard reply draft"
+        );
+        assert!(
+            matches!(app.focus, crate::ui::PaneFocus::ProjectManager),
+            "attached-view chip click must not overwrite the dashboard pane focus"
         );
     }
 
@@ -2537,7 +3039,10 @@ mod pm_state_tests {
         // Wait for the archive to actually finish.
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
         let g = app.lock().await;
-        assert!(g.modal.is_none(), "modal should clear once archive finishes");
+        assert!(
+            g.modal.is_none(),
+            "modal should clear once archive finishes"
+        );
         assert!(
             g.workspaces.iter().all(|(_, w)| w.id != ws_id),
             "workspace should be archived"
@@ -3206,6 +3711,216 @@ mod detail_bar_focus_tests {
         assert_eq!(
             app.dashboard.reply_draft, "",
             "draft must clear on navigation"
+        );
+    }
+
+    /// Ctrl-X + digit fires a pinned chip even when focus is on
+    /// DetailBarReply. The draft must be preserved across Ctrl-X (the leader
+    /// arm) and cleared once the chip fires.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_digit_works_while_reply_focused() {
+        use crate::store::NewWorkspace;
+        use crate::test_support::{EnvGuard, cat_path};
+
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        // Spawn a workspace with a live PTY session (uses `cat` as the binary
+        // so any bytes we write are echoed back to the screen).
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "reply-chord-test",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                ws_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        app.dashboard.reply_draft = "half-typed message".to_string();
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        // Drive Ctrl-X through the real dispatcher (handle_key_dashboard),
+        // which first gives handle_detail_bar_reply_key a crack at it
+        // because focus == DetailBarReply.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+
+        // Leader must be armed.
+        assert!(
+            app.leader_pending,
+            "Ctrl-X while reply is focused must arm leader_pending"
+        );
+        // Draft must be intact — Ctrl-X must NOT insert '^X'.
+        assert_eq!(
+            app.dashboard.reply_draft, "half-typed message",
+            "Ctrl-X must not mutate the reply draft"
+        );
+
+        // Drive '1' through the same dispatcher.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        // After chip fires: draft echoes the dispatched command (cleared
+        // by the tick handler when reply_draft_clear_at_ms expires);
+        // focus back to Dashboard.
+        assert_eq!(
+            app.dashboard.reply_draft, "/pull-request",
+            "firing a chip must echo the command into the reply draft"
+        );
+        assert!(
+            app.dashboard.reply_draft_clear_at_ms.is_some(),
+            "firing a chip must set the reply_draft auto-clear deadline"
+        );
+        assert!(
+            matches!(app.focus, crate::ui::PaneFocus::Dashboard),
+            "firing a chip must return focus to Dashboard"
+        );
+
+        // Wait for the cat PTY to echo the command back.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "Ctrl-X+1 while reply focused must dispatch /pull-request to PTY; got: {screen_text:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod leader_view_transition_tests {
+    use super::*;
+    use crate::store::{NewWorkspace, Store};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    /// Armed Ctrl-X leader must be cleared when the attached view bounces back
+    /// to Dashboard because the session is gone.  Before the fix, leader_pending
+    /// would survive the transition and fire against whatever workspace happened
+    /// to be selected on the dashboard next.
+    #[tokio::test]
+    async fn leader_cleared_when_attached_bounces_to_dashboard_on_missing_session() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        // Place the app in Attached view — but do NOT spawn a session, so
+        // handle_key_attached will immediately bounce back to Dashboard.
+        app.view = crate::ui::View::Attached(crate::ui::split::AttachedState::single(ws_id));
+        // Arm the leader as if the user had pressed Ctrl-X while attached.
+        app.leader_pending = true;
+
+        // Drive any key through handle_key_attached.  With no live session
+        // it will assign app.view = View::Dashboard and return.
+        handle_key_attached(
+            &mut app,
+            ws_id,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(app.view, crate::ui::View::Dashboard),
+            "view must transition to Dashboard"
+        );
+        assert!(
+            !app.leader_pending,
+            "leader_pending must be cleared on view transition (was still true after bounce)"
+        );
+    }
+
+    /// Armed Ctrl-X leader must be cleared when the attached-PM view bounces
+    /// back to Dashboard because the PM session is gone.
+    #[tokio::test]
+    async fn leader_cleared_when_attached_pm_bounces_to_dashboard_on_missing_session() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        // Place the app in AttachedPm — but do NOT set app.pm, so
+        // handle_key_attached_pm will immediately bounce back to Dashboard.
+        app.view = crate::ui::View::AttachedPm;
+        app.pm = None;
+        // Arm the leader as if the user had pressed Ctrl-X while in AttachedPm.
+        app.leader_pending = true;
+
+        handle_key_attached_pm(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(app.view, crate::ui::View::Dashboard),
+            "view must transition to Dashboard"
+        );
+        assert!(
+            !app.leader_pending,
+            "leader_pending must be cleared on view transition (was still true after PM bounce)"
         );
     }
 }

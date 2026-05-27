@@ -291,6 +291,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             events_scanned: app.workspace_events_scanned.contains(&ws.id),
                             config: &detail_cfg,
                             registry: &app.registry,
+                            pinned: &[], // TODO(Task 3): wire up resolved pinned commands
                         };
                         crate::ui::dashboard::detail::render(f, detail_area, &inputs, &app.theme);
                     }

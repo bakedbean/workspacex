@@ -977,6 +977,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn advance_archive_step_updates_step_when_modal_is_archive_running() {
+        use crate::ui::modal::{ArchiveStep, Modal};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = Store::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            crate::app::App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::ArchiveRunning {
+                step: ArchiveStep::Script,
+                script_present: true,
+            });
+        }
+        super::advance_archive_step(&app, ArchiveStep::RemoveWorktree).await;
+        let g = app.lock().await;
+        match &g.modal {
+            Some(Modal::ArchiveRunning { step, script_present }) => {
+                assert_eq!(*step, ArchiveStep::RemoveWorktree, "step should be advanced");
+                assert!(*script_present, "script_present should not change");
+            }
+            other => panic!("expected ArchiveRunning, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn advance_archive_step_is_noop_when_modal_is_different_variant() {
+        use crate::ui::modal::{ArchiveStep, Modal};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = Store::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            crate::app::App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            g.modal = Some(Modal::Error {
+                message: "boom".to_string(),
+            });
+        }
+        super::advance_archive_step(&app, ArchiveStep::RemoveWorktree).await;
+        let g = app.lock().await;
+        match &g.modal {
+            Some(Modal::Error { message }) => {
+                assert_eq!(message, "boom", "Error modal should be untouched");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn advance_archive_step_is_noop_when_modal_is_none() {
+        use crate::ui::modal::ArchiveStep;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = Store::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            crate::app::App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        // modal starts as None.
+        super::advance_archive_step(&app, ArchiveStep::RemoveWorktree).await;
+        let g = app.lock().await;
+        assert!(g.modal.is_none(), "modal should remain None");
+    }
+
+    #[tokio::test]
     async fn create_branches_off_configured_base() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();

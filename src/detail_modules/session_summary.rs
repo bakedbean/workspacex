@@ -15,10 +15,13 @@ impl DetailModule for SessionSummary {
         "SESSION SUMMARY"
     }
     fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
-        // Prompt (1) + trace (1) + state (1) + files (1) + footer (2).
-        // Prompt and files may be absent or wrap, but Min(5) covers
-        // the typical case while letting the layout collapse when
-        // space is tight.
+        // Full layout is 6 rows (prompt + trace + state + files +
+        // 2-row footer), but `Min` is a floor, not a ceiling — the
+        // layout engine can grow past it when neighboring modules have
+        // slack. We request 5: enough for the common no-prompt case
+        // (trace + state + files + footer) and one row of headroom
+        // for a short single-line prompt; longer prompts (and their
+        // wraps) just expand the column when room is available.
         Constraint::Min(5)
     }
     fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
@@ -26,11 +29,17 @@ impl DetailModule for SessionSummary {
         use ratatui::text::{Line, Span};
         use ratatui::widgets::Paragraph;
 
-        let now_secs = std::time::SystemTime::now()
+        // Pull `Duration` once so `now_ms` and `now_secs` share the
+        // same time base. The rest of the codebase uses
+        // `as_millis() as i64` for epoch-ms (see `app.rs`,
+        // `app/background.rs`); deriving `now_ms` from `as_secs() * 1000`
+        // would truncate sub-second precision and skew the 3s threshold
+        // in `pending_permission_tool`.
+        let now_duration = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let now_ms = (now_secs as i64).saturating_mul(1000);
+            .unwrap_or_default();
+        let now_ms = now_duration.as_millis() as i64;
+        let now_secs = now_duration.as_secs();
         let created_at_secs = (ctx.workspace.created_at.max(0) / 1000) as u64;
         let created_secs = now_secs.saturating_sub(created_at_secs);
 
@@ -317,7 +326,6 @@ mod tests {
     use crate::ui::dashboard::status::Status;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use std::collections::VecDeque;
 
     fn render_to_text(ctx: &DetailContext<'_>, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
@@ -377,10 +385,10 @@ mod tests {
     #[test]
     fn render_state_line_appends_pending_permission_tool_when_question() {
         // pending_permission_tool requires the tool_use to be ≥3s old.
-        // last_log_activity_ms drives the time base used in render() via
-        // SystemTime::now(); we can't easily inject "now" without a
-        // refactor, so seed the pending_tool_uses timestamp far enough
-        // in the past that any plausible `now_ms` returns it.
+        // render() derives `now_ms` from SystemTime::now(); we can't
+        // easily inject "now" without a refactor, so seed the
+        // pending_tool_uses timestamp at epoch 0 to guarantee
+        // (now_ms - timestamp) far exceeds the 3s threshold.
         let mut pending = std::collections::HashMap::new();
         pending.insert("tu_1".to_string(), ("Bash".to_string(), 0_i64));
         let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
@@ -450,14 +458,17 @@ mod tests {
 
     #[test]
     fn render_lists_recent_files_as_basenames() {
-        let mut ring = VecDeque::new();
-        ring.push_back("/abs/path/to/alpha.rs".to_string());
-        ring.push_back("relative/beta.rs".to_string());
-        ring.push_back("gamma.rs".to_string());
-        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            recent_edited_files: ring,
-            ..WorkspaceEvents::default()
-        }));
+        // Use the production helper so the ring's most-recent-first
+        // ordering matches what real edits produce.
+        let mut evt = WorkspaceEvents::default();
+        for path in [
+            "/abs/path/to/alpha.rs",
+            "relative/beta.rs",
+            "gamma.rs",
+        ] {
+            evt.push_recent_edited_file(path.to_string());
+        }
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(evt));
         let mut ctx = stub_context();
         ctx.events = Some(evt);
         ctx.events_scanned = true;
@@ -474,25 +485,31 @@ mod tests {
     }
 
     #[test]
-    fn render_files_line_caps_at_three_entries() {
-        let mut ring = VecDeque::new();
+    fn render_files_line_caps_at_three_most_recent() {
+        // Use the production helper so the ring is most-recent-first
+        // (push_front). With 5 push-fronts in this order, the front
+        // ends up: five, four, three, two, one. The cap takes the
+        // front 3 → the 3 most-recently-edited files.
+        let mut evt = WorkspaceEvents::default();
         for name in ["one.rs", "two.rs", "three.rs", "four.rs", "five.rs"] {
-            ring.push_back(name.to_string());
+            evt.push_recent_edited_file(name.to_string());
         }
-        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            recent_edited_files: ring,
-            ..WorkspaceEvents::default()
-        }));
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(evt));
         let mut ctx = stub_context();
         ctx.events = Some(evt);
         ctx.events_scanned = true;
 
         let text = render_to_text(&ctx, 60, 10);
-        assert!(text.contains("one.rs"), "missing 1st file:\n{text}");
-        assert!(text.contains("three.rs"), "missing 3rd file:\n{text}");
+        assert!(text.contains("five.rs"), "missing most-recent file:\n{text}");
+        assert!(text.contains("four.rs"), "missing 2nd-most-recent:\n{text}");
+        assert!(text.contains("three.rs"), "missing 3rd-most-recent:\n{text}");
         assert!(
-            !text.contains("four.rs"),
-            "expected files list capped at 3, found 4th:\n{text}"
+            !text.contains("two.rs"),
+            "expected list capped at 3 most-recent; found older entry:\n{text}"
+        );
+        assert!(
+            !text.contains("one.rs"),
+            "expected list capped at 3 most-recent; found oldest entry:\n{text}"
         );
     }
 

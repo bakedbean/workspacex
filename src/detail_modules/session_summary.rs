@@ -14,26 +14,12 @@ impl DetailModule for SessionSummary {
     fn title(&self) -> &'static str {
         "SESSION SUMMARY"
     }
-    fn height_hint(&self, ctx: &DetailContext<'_>) -> Constraint {
-        // When a recap is pinned, request enough rows for prompt (1) +
-        // trace (1) + a 3-line recap minimum + footer (2). Without a
-        // recap the original 3-row minimum is plenty.
-        //
-        // Gate on `events_scanned` so the hint matches what `render`
-        // will actually draw — pre-first-scan `render` shows a
-        // "loading…" placeholder and shouldn't be reserving rows for
-        // a recap that won't yet be visible.
-        let has_recap = ctx.events_scanned
-            && ctx
-                .events
-                .and_then(|e| e.last_completed_turn_text.as_deref())
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-        if has_recap {
-            Constraint::Min(7)
-        } else {
-            Constraint::Min(3)
-        }
+    fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
+        // Prompt (1) + trace (1) + state (1) + files (1) + footer (2).
+        // Prompt and files may be absent or wrap, but Min(5) covers
+        // the typical case while letting the layout collapse when
+        // space is tight.
+        Constraint::Min(5)
     }
     fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
         use ratatui::style::{Modifier, Style};
@@ -44,6 +30,7 @@ impl DetailModule for SessionSummary {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        let now_ms = (now_secs as i64).saturating_mul(1000);
         let created_at_secs = (ctx.workspace.created_at.max(0) / 1000) as u64;
         let created_secs = now_secs.saturating_sub(created_at_secs);
 
@@ -51,6 +38,7 @@ impl DetailModule for SessionSummary {
         let theme = ctx.theme;
         let status = ctx.status;
         let column_width = area.width as usize;
+        let inner_width = column_width.saturating_sub(2).max(1);
         let ago_secs = ctx.ago_secs;
 
         let mut out: Vec<Line<'static>> = Vec::new();
@@ -75,7 +63,6 @@ impl DetailModule for SessionSummary {
                     if !trimmed.is_empty() {
                         // Respect `\n` from the original prompt AND wrap long lines
                         // to the column width so the prompt is fully readable.
-                        let inner_width = column_width.saturating_sub(2).max(1);
                         let wrapped = wrap_lines(trimmed, inner_width);
                         let italic = Style::default().add_modifier(Modifier::ITALIC);
                         for (i, line_text) in wrapped.iter().enumerate() {
@@ -96,48 +83,28 @@ impl DetailModule for SessionSummary {
                 let trace_body = if trace.is_empty() {
                     Span::styled("—".to_string(), theme.dim_style())
                 } else {
-                    Span::raw(truncate_to_chars(&trace, column_width.saturating_sub(2)))
+                    Span::raw(truncate_to_chars(&trace, inner_width))
                 };
                 out.push(Line::from(vec![prefix.clone(), trace_body]));
 
-                // Recap: pinned at the previous turn's end; cleaned and
-                // budgeted to whatever vertical room remains after the
-                // prompt and trace, reserving 2 lines for the
-                // created/active footer. When there's no room left, the
-                // recap is skipped entirely — losing the activity line
-                // at the bottom of the footer would be worse than
-                // losing supplementary recap text.
-                if let Some(recap) = evt.last_completed_turn_text.as_deref() {
-                    let trimmed = recap.trim();
-                    if !trimmed.is_empty() {
-                        let max_lines = (area.height as usize)
-                            .saturating_sub(out.len())
-                            .saturating_sub(2);
-                        if max_lines > 0 {
-                            let inner_width = column_width.saturating_sub(2).max(1);
-                            let wrapped = wrap_lines(trimmed, inner_width);
-                            let truncated = wrapped.len() > max_lines;
-                            for (i, line_text) in wrapped.iter().take(max_lines).enumerate() {
-                                let leader = if i == 0 {
-                                    prefix.clone()
-                                } else {
-                                    continuation.clone()
-                                };
-                                let body_text = if truncated && i == max_lines - 1 {
-                                    let mut s =
-                                        truncate_to_chars(line_text, inner_width.saturating_sub(1));
-                                    s.push('…');
-                                    s
-                                } else {
-                                    line_text.clone()
-                                };
-                                out.push(Line::from(vec![
-                                    leader,
-                                    Span::styled(body_text, theme.dim_style()),
-                                ]));
-                            }
-                        }
-                    }
+                // State line: canonical status label, optionally enriched
+                // with a why-detail (pending tool, stall duration) that
+                // RECENT CHAT can't surface.
+                let state_text = format_state_line(status, evt, now_ms);
+                out.push(Line::from(vec![
+                    prefix.clone(),
+                    Span::styled(truncate_to_chars(&state_text, inner_width), theme.dim_style()),
+                ]));
+
+                // Recent files: 1–3 basenames from the edited-files ring.
+                // Omitted when the ring is empty so we don't reserve a row
+                // for a meaningless dash.
+                if let Some(files_text) = format_recent_files(&evt.recent_edited_files, inner_width)
+                {
+                    out.push(Line::from(vec![
+                        prefix.clone(),
+                        Span::styled(files_text, theme.dim_style()),
+                    ]));
                 }
             }
         }
@@ -159,6 +126,70 @@ impl DetailModule for SessionSummary {
 
         frame.render_widget(Paragraph::new(out), area);
     }
+}
+
+/// Canonical status label, optionally enriched with a why-detail. The
+/// suffix is drawn from evt fields that explain the current state —
+/// pending question/permission tool for `Question`, quiet duration for
+/// `Stalled`. Other states use the bare label.
+fn format_state_line(
+    status: crate::ui::dashboard::status::Status,
+    evt: &crate::events::WorkspaceEvents,
+    now_ms: i64,
+) -> String {
+    use crate::ui::dashboard::status::Status;
+    let base = status.label();
+    let detail: Option<String> = match status {
+        Status::Question => evt
+            .pending_question_tool()
+            .map(|n| n.to_string())
+            .or_else(|| {
+                evt.pending_permission_tool(now_ms, 3_000)
+                    .map(|(name, _)| name)
+            }),
+        Status::Stalled => {
+            if evt.last_log_activity_ms > 0 {
+                let quiet_secs = now_ms
+                    .saturating_sub(evt.last_log_activity_ms)
+                    .max(0) as u64
+                    / 1000;
+                Some(format!("{} quiet", format_ago_short(Some(quiet_secs))))
+            } else {
+                None
+            }
+        }
+        Status::Waiting | Status::Thinking | Status::Complete | Status::Idle => None,
+    };
+    match detail {
+        Some(d) => format!("{base} · {d}"),
+        None => base.to_string(),
+    }
+}
+
+/// Render the most-recently-edited files as up to 3 basenames, joined
+/// with commas under a "files:" label. Returns None when the ring is
+/// empty so the caller can skip the line entirely.
+fn format_recent_files(
+    files: &std::collections::VecDeque<String>,
+    max_width: usize,
+) -> Option<String> {
+    if files.is_empty() {
+        return None;
+    }
+    let basenames: Vec<String> = files
+        .iter()
+        .take(3)
+        .map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.clone())
+        })
+        .collect();
+    Some(truncate_to_chars(
+        &format!("files: {}", basenames.join(", ")),
+        max_width,
+    ))
 }
 
 fn format_ago_short(secs: Option<u64>) -> String {
@@ -282,9 +313,11 @@ fn wrap_lines(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::detail_modules::tests_helpers::stub_context;
-    use crate::events::WorkspaceEvents;
+    use crate::events::{StopReason, WorkspaceEvents};
+    use crate::ui::dashboard::status::Status;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::collections::VecDeque;
 
     fn render_to_text(ctx: &DetailContext<'_>, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
@@ -317,48 +350,112 @@ mod tests {
     }
 
     #[test]
-    fn height_hint_is_min_three() {
+    fn height_hint_is_min_five() {
+        // Prompt + trace + state + files + footer (bottom row) → 5.
         let ctx = stub_context();
-        assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(3));
+        assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(5));
+    }
+
+    // -- state line + recent files ----------------------------------
+
+    #[test]
+    fn render_shows_status_label() {
+        let evt: &'static WorkspaceEvents =
+            Box::leak(Box::new(WorkspaceEvents::default()));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        ctx.status = Status::Thinking;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(
+            text.contains("thinking"),
+            "expected status label in output:\n{text}"
+        );
     }
 
     #[test]
-    fn height_hint_grows_when_recap_is_present() {
+    fn render_state_line_appends_pending_permission_tool_when_question() {
+        // pending_permission_tool requires the tool_use to be ≥3s old.
+        // last_log_activity_ms drives the time base used in render() via
+        // SystemTime::now(); we can't easily inject "now" without a
+        // refactor, so seed the pending_tool_uses timestamp far enough
+        // in the past that any plausible `now_ms` returns it.
+        let mut pending = std::collections::HashMap::new();
+        pending.insert("tu_1".to_string(), ("Bash".to_string(), 0_i64));
         let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            last_completed_turn_text: Some("a recap".into()),
+            pending_tool_uses: pending,
             ..WorkspaceEvents::default()
         }));
         let mut ctx = stub_context();
         ctx.events = Some(evt);
         ctx.events_scanned = true;
-        // The recap module signals it wants more vertical room so the
-        // host layout reserves enough rows for prompt + trace + recap +
-        // footer.
-        assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(7));
+        ctx.status = Status::Question;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(text.contains("question"), "missing label:\n{text}");
+        assert!(text.contains("Bash"), "missing pending tool:\n{text}");
     }
 
     #[test]
-    fn height_hint_does_not_grow_before_first_scan_completes() {
-        // Between WorkspaceEvents creation and the first tail completion
-        // there's a brief window where `events` is Some but
-        // `events_scanned` is false. During that window `render` shows
-        // "loading…" — so `height_hint` shouldn't be reserving extra
-        // rows for a recap that won't be drawn yet.
+    fn render_state_line_prefers_question_tool_over_permission_tool() {
+        // Both an AskUserQuestion and a generic permission-prompt tool
+        // are pending. The state line must surface the question tool
+        // (it's the more specific signal).
+        let mut pending = std::collections::HashMap::new();
+        pending.insert("tu_q".to_string(), ("AskUserQuestion".to_string(), 0_i64));
+        pending.insert("tu_b".to_string(), ("Bash".to_string(), 0_i64));
         let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            last_completed_turn_text: Some("a recap".into()),
+            pending_tool_uses: pending,
             ..WorkspaceEvents::default()
         }));
         let mut ctx = stub_context();
         ctx.events = Some(evt);
-        // events_scanned intentionally left false.
-        assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(3));
+        ctx.events_scanned = true;
+        ctx.status = Status::Question;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(
+            text.contains("AskUserQuestion"),
+            "expected question tool to win over permission tool:\n{text}"
+        );
     }
 
     #[test]
-    fn render_includes_recap_text_when_set() {
+    fn render_state_line_shows_stall_duration() {
+        // For Stalled, the state line should append a "quiet" duration
+        // derived from now_ms - last_log_activity_ms. We can't fix
+        // wall-clock now here, so just assert that the line gets a
+        // " · " suffix beyond the bare "stalled" label — proves the
+        // duration branch ran.
         let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            first_user_text: Some("prompt".into()),
-            last_completed_turn_text: Some("RECAPMARKER rendered out.".into()),
+            last_stop_reason: Some(StopReason::EndTurn),
+            // 1ms after epoch — far enough in the past that any plausible
+            // `now_ms` produces a non-zero quiet duration.
+            last_log_activity_ms: 1,
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        ctx.status = Status::Stalled;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(text.contains("stalled"), "missing stalled label:\n{text}");
+        assert!(
+            text.contains(" · "),
+            "expected ' · <duration>' suffix on stalled line:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_lists_recent_files_as_basenames() {
+        let mut ring = VecDeque::new();
+        ring.push_back("/abs/path/to/alpha.rs".to_string());
+        ring.push_back("relative/beta.rs".to_string());
+        ring.push_back("gamma.rs".to_string());
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            recent_edited_files: ring,
             ..WorkspaceEvents::default()
         }));
         let mut ctx = stub_context();
@@ -366,93 +463,24 @@ mod tests {
         ctx.events_scanned = true;
 
         let text = render_to_text(&ctx, 60, 10);
+        assert!(text.contains("files:"), "missing files label:\n{text}");
+        assert!(text.contains("alpha.rs"), "missing alpha basename:\n{text}");
+        assert!(text.contains("beta.rs"), "missing beta basename:\n{text}");
+        assert!(text.contains("gamma.rs"), "missing gamma basename:\n{text}");
         assert!(
-            text.contains("RECAPMARKER"),
-            "expected recap text in rendered output, got:\n{text}"
+            !text.contains("/abs/path/to/"),
+            "expected basename only, found full path:\n{text}"
         );
     }
 
     #[test]
-    fn render_recap_uses_available_height_beyond_three_lines() {
-        // Recap that wraps to many lines; area has plenty of vertical
-        // room. The render should expand the recap budget to use
-        // available height rather than always trimming to 3 lines.
-        //
-        // With width 20 / inner_width 18, the wrap groups four 3-char
-        // tokens per line: line1=A-D, line2=E-H, line3=I-L, line4=M-P,
-        // line5=Q-T, line6=U-X, line7=Y-Z. "MMM" lands on line 4 and
-        // is excluded by any 3-line cap.
-        let long_recap = "AAA BBB CCC DDD EEE FFF GGG HHH III JJJ KKK LLL MMM NNN OOO PPP \
-                          QQQ RRR SSS TTT UUU VVV WWW XXX YYY ZZZ";
+    fn render_files_line_caps_at_three_entries() {
+        let mut ring = VecDeque::new();
+        for name in ["one.rs", "two.rs", "three.rs", "four.rs", "five.rs"] {
+            ring.push_back(name.to_string());
+        }
         let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            first_user_text: Some("prompt".into()),
-            last_completed_turn_text: Some(long_recap.into()),
-            ..WorkspaceEvents::default()
-        }));
-        let mut ctx = stub_context();
-        ctx.events = Some(evt);
-        ctx.events_scanned = true;
-
-        let text = render_to_text(&ctx, 20, 20);
-        assert!(
-            text.contains("MMM"),
-            "expected wrapped recap to extend past line 3 (look for 'MMM'); got:\n{text}"
-        );
-    }
-
-    #[test]
-    fn render_recap_yields_to_footer_when_no_room_left() {
-        // area.height too small to fit prompt + trace + recap + footer
-        // simultaneously. Recap must yield so the "active —" line at
-        // the bottom of the footer survives — losing the timing info is
-        // worse than losing the recap.
-        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            first_user_text: Some("prompt".into()),
-            last_completed_turn_text: Some(
-                "RECAPSACRIFICED some prose that should be dropped.".into(),
-            ),
-            ..WorkspaceEvents::default()
-        }));
-        let mut ctx = stub_context();
-        ctx.events = Some(evt);
-        ctx.events_scanned = true;
-
-        let text = render_to_text(&ctx, 30, 4);
-        assert!(
-            text.contains("active"),
-            "footer 'active' line missing:\n{text}"
-        );
-        assert!(
-            !text.contains("RECAPSACRIFICED"),
-            "recap should be skipped to preserve footer:\n{text}"
-        );
-    }
-
-    #[test]
-    fn render_recap_truncates_when_no_room_for_more_lines() {
-        // Recap that wraps to many lines but area is small enough that
-        // we can't fit everything plus the created/active footer.
-        // The recap should clip and the footer should still appear.
-        let long_recap = "AAA BBB CCC DDD EEE FFF GGG HHH III JJJ KKK LLL MMM NNN OOO";
-        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            first_user_text: Some("prompt".into()),
-            last_completed_turn_text: Some(long_recap.into()),
-            ..WorkspaceEvents::default()
-        }));
-        let mut ctx = stub_context();
-        ctx.events = Some(evt);
-        ctx.events_scanned = true;
-
-        let text = render_to_text(&ctx, 20, 7);
-        // Footer survives: "created" is the prefix on the created line.
-        assert!(text.contains("created"), "footer missing:\n{text}");
-    }
-
-    #[test]
-    fn render_omits_recap_block_when_unset() {
-        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
-            first_user_text: Some("prompt".into()),
-            // last_completed_turn_text intentionally None.
+            recent_edited_files: ring,
             ..WorkspaceEvents::default()
         }));
         let mut ctx = stub_context();
@@ -460,10 +488,26 @@ mod tests {
         ctx.events_scanned = true;
 
         let text = render_to_text(&ctx, 60, 10);
-        assert!(text.contains("prompt"), "prompt missing:\n{text}");
+        assert!(text.contains("one.rs"), "missing 1st file:\n{text}");
+        assert!(text.contains("three.rs"), "missing 3rd file:\n{text}");
         assert!(
-            !text.contains("RECAPMARKER"),
-            "unexpected recap text:\n{text}"
+            !text.contains("four.rs"),
+            "expected files list capped at 3, found 4th:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_omits_files_line_when_ring_empty() {
+        let evt: &'static WorkspaceEvents =
+            Box::leak(Box::new(WorkspaceEvents::default()));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(
+            !text.contains("files:"),
+            "expected no files line when ring is empty:\n{text}"
         );
     }
 }

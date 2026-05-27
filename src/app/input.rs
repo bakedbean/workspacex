@@ -164,6 +164,15 @@ async fn fire_chip(app: &mut App, idx: usize) {
         Some(c) => c.clone(),
         None => return,
     };
+    // On the dashboard the selected workspace may not have a live
+    // session yet (the user hasn't attached). Auto-spawn one in place
+    // so the chip command isn't silently dropped. In the attached
+    // view the session already exists by definition.
+    if matches!(app.view, View::Dashboard) {
+        if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+            let _ = crate::app::ensure_workspace_session(app, ws_id);
+        }
+    }
     let session = match chip_target_session(app) {
         Some(s) => s,
         None => return,
@@ -1252,6 +1261,10 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
         (KeyCode::Enter, _) => {
             let draft = std::mem::take(&mut app.dashboard.reply_draft);
             if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                // Auto-spawn the workspace's session if it isn't running
+                // yet — otherwise an inline reply on an unattached
+                // workspace silently drops.
+                let _ = crate::app::ensure_workspace_session(app, ws_id);
                 if let Some(session) = app.sessions.get(ws_id) {
                     let mut bytes = draft.into_bytes();
                     bytes.push(b'\r');

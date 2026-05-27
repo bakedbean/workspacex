@@ -1895,6 +1895,81 @@ mod pm_state_tests {
         );
     }
 
+    /// A chip click from the dashboard on a workspace with NO live
+    /// session must auto-spawn one so the chip command isn't silently
+    /// dropped. Mirrors the production fix for the inline-reply gap.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_chip_auto_spawns_session_when_missing() {
+        use crate::store::NewWorkspace;
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "auto-spawn-test",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        app.refresh().unwrap();
+
+        // Critical precondition: NO session spawned for this workspace.
+        assert!(
+            app.sessions.get(ws_id).is_none(),
+            "precondition: workspace must not have a session yet"
+        );
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        // The session must have been auto-spawned by fire_chip.
+        assert!(
+            app.sessions.get(ws_id).is_some(),
+            "fire_chip must auto-spawn a session for the selected workspace"
+        );
+
+        // And the command must have reached the new session's PTY.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "chip command must dispatch to the auto-spawned session; got: {screen_text:?}"
+        );
+    }
+
     /// A second Ctrl-X while the leader is armed must clear it (cancel the
     /// chord), not silently re-arm. Matches the attached-view leader
     /// behavior where the follow-up key always clears the leader.

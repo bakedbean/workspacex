@@ -922,7 +922,15 @@ async fn handle_key_modal(
                     }
                 };
                 let archive_gen = app.alloc_archive_gen();
-                app.modal = Some(Modal::ArchiveRunning);
+                let script_present = repo
+                    .archive_script
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+                app.modal = Some(Modal::ArchiveRunning {
+                    step: crate::ui::modal::ArchiveStep::Script,
+                    script_present,
+                });
                 let shared_clone = shared.clone();
                 tokio::spawn(async move {
                     let result = crate::workspace::archive_with_app(
@@ -953,7 +961,7 @@ async fn handle_key_modal(
                 app.pending_create_gen = None;
             }
         }
-        Modal::ArchiveRunning => {
+        Modal::ArchiveRunning { .. } => {
             // Archive is non-cancellable. Swallow all keys until the
             // spawned task completes and reconciles the modal.
         }

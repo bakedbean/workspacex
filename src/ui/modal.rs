@@ -8,6 +8,20 @@ use ratatui::style::Modifier;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::{HashMap, HashSet};
 
+/// Which phase of `workspace::archive_with_app` is currently running.
+/// Used by `Modal::ArchiveRunning` to drive the per-step progress UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveStep {
+    /// Phase 1: running the repo's archive script (if any).
+    Script,
+    /// Phase 2: `git worktree remove` — usually the slow one.
+    RemoveWorktree,
+    /// Phase 3: `git branch -D`.
+    DeleteBranch,
+    /// Phase 4: sqlite row + MCP entry cleanup.
+    Cleanup,
+}
+
 #[derive(Debug, Clone)]
 pub enum Modal {
     NewWorkspace {
@@ -23,7 +37,13 @@ pub enum Modal {
     SetupRunning {
         cancel: tokio_util::sync::CancellationToken,
     },
-    ArchiveRunning,
+    ArchiveRunning {
+        step: ArchiveStep,
+        /// Whether the repo has an archive script configured. Drives
+        /// whether the Script row renders as in-progress/done or
+        /// "(skipped)".
+        script_present: bool,
+    },
     Error {
         message: String,
     },
@@ -105,7 +125,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             let body = format!("  {frame} Creating workspace…\n\n  [esc] cancel",);
             ("new workspace", body)
         }
-        Modal::ArchiveRunning => {
+        Modal::ArchiveRunning { step: _, script_present: _ } => {
             let frame = crate::ui::dashboard::spinner::frame(tick);
             let body = format!("  {frame} Removing workspace…");
             ("archive workspace", body)

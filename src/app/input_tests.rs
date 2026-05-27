@@ -2424,7 +2424,7 @@ mod pm_state_tests {
             handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
             // Immediately after 'y', modal should be ArchiveRunning.
             assert!(
-                matches!(g.modal, Some(Modal::ArchiveRunning)),
+                matches!(g.modal, Some(Modal::ArchiveRunning { .. })),
                 "modal should transition to ArchiveRunning immediately; got {:?}",
                 g.modal
             );
@@ -2500,7 +2500,7 @@ mod pm_state_tests {
                 crossterm::event::KeyModifiers::empty(),
             );
             handle_event(&mut g, &app, CtEvent::Key(y)).await.unwrap();
-            assert!(matches!(g.modal, Some(Modal::ArchiveRunning)));
+            assert!(matches!(g.modal, Some(Modal::ArchiveRunning { .. })));
         }
         // Yield briefly so the archive script kicks off but is still
         // running (sleep 1 gives us a 1s window).
@@ -2514,7 +2514,7 @@ mod pm_state_tests {
             );
             handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
             assert!(
-                matches!(g.modal, Some(Modal::ArchiveRunning)),
+                matches!(g.modal, Some(Modal::ArchiveRunning { .. })),
                 "Esc must not close ArchiveRunning; got {:?}",
                 g.modal
             );

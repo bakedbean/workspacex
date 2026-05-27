@@ -1716,6 +1716,169 @@ mod pm_state_tests {
         );
     }
 
+    /// Ctrl-X arms `leader_pending`; a subsequent digit fires the chip command
+    /// to the selected workspace's session.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_ctrl_x_then_digit_fires_pinned_chip() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        // Ctrl-X — arms the leader.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "Ctrl-X must arm leader_pending");
+
+        // '1' — fires chip 0, clears leader.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending, "leader must clear after digit follow-up");
+
+        // cat echoes input back; verify the command reached the PTY.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            screen_text.contains("/pull-request"),
+            "dashboard Ctrl-X+1 must dispatch /pull-request to the workspace PTY; got: {screen_text:?}"
+        );
+    }
+
+    /// Ctrl-X then a non-digit key clears the leader without firing any chip.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_ctrl_x_then_non_digit_clears_leader_no_fire() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        }];
+        app.chip_rects = vec![ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        }];
+
+        // Ctrl-X — arms the leader.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+
+        // 'a' — non-digit, clears leader without firing.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending, "leader must clear after non-digit follow-up");
+
+        // No chip command should have been dispatched.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            !screen_text.contains("/pull-request"),
+            "non-digit follow-up must not fire any chip; got: {screen_text:?}"
+        );
+    }
+
+    /// Ctrl-X + a digit whose index exceeds the number of visible chip_rects
+    /// is a no-op (fire_chip guards on idx >= chip_rects.len()).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_ctrl_x_digit_beyond_visible_chips_is_noop() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+
+        // Three commands in cache but only two chip_rects rendered.
+        app.pinned_commands_cache = vec![
+            crate::pinned::PinnedCommand {
+                label: "PR".into(),
+                command: "/pull-request".into(),
+            },
+            crate::pinned::PinnedCommand {
+                label: "B".into(),
+                command: "/build".into(),
+            },
+            crate::pinned::PinnedCommand {
+                label: "T".into(),
+                command: "/test".into(),
+            },
+        ];
+        app.chip_rects = vec![
+            ratatui::layout::Rect { x: 5, y: 30, width: 7, height: 1 },
+            ratatui::layout::Rect { x: 13, y: 30, width: 5, height: 1 },
+        ];
+
+        // Ctrl-X then '3' — index 2, beyond chip_rects.len() == 2.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let session = app.sessions.get(ws_id).unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            !screen_text.contains("/test"),
+            "digit beyond visible chips must not dispatch any command; got: {screen_text:?}"
+        );
+    }
+
     #[test]
     fn wrap_paste_bytes_wraps_with_bracketed_markers() {
         let out = wrap_paste_bytes("hello world");

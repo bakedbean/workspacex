@@ -362,6 +362,21 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         }
         return Ok(());
     }
+    // Ctrl-X leader for pinned-command chord (mirrors the attached
+    // view's binding). The next 1..9 fires the matching chip; any
+    // other follow-up just clears the leader.
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
+        return Ok(());
+    }
+    if app.leader_pending {
+        app.leader_pending = false;
+        if let KeyCode::Char(c @ '1'..='9') = k.code {
+            let idx = (c as u8 - b'1') as usize;
+            fire_chip(app, idx).await;
+        }
+        return Ok(());
+    }
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) => app.quit = true,
         (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {

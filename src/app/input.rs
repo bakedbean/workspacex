@@ -264,6 +264,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 // Ctrl-O: expand PM to a full-screen attached view so the
                 // user can scroll through claude's history naturally.
                 if app.pm.is_some() {
+                    app.leader_pending = false;
                     app.view = View::AttachedPm;
                 }
                 return Ok(());
@@ -634,6 +635,7 @@ async fn handle_key_attached(
     let session = match app.sessions.get(id) {
         Some(s) => s,
         None => {
+            app.leader_pending = false;
             app.view = View::Dashboard;
             return Ok(());
         }
@@ -845,6 +847,7 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
     let session = match app.pm.clone() {
         Some(s) => s,
         None => {
+            app.leader_pending = false;
             app.view = View::Dashboard;
             return Ok(());
         }
@@ -1063,6 +1066,7 @@ async fn handle_key_modal(
                             let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
                             let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
                             let restored = restore_attached_state(app, id);
+                            app.leader_pending = false;
                             app.view = View::Attached(restored);
                         }
                     }
@@ -1110,6 +1114,7 @@ async fn handle_key_modal(
                                 _ => {
                                     // No attached pane yet — restore saved layout or attach plainly.
                                     let restored = restore_attached_state(app, id);
+                                    app.leader_pending = false;
                                     app.view = View::Attached(restored);
                                 }
                             }
@@ -1334,6 +1339,7 @@ async fn dispatch_key(
                 let id = match state.focused_id() {
                     Some(id) => id,
                     None => {
+                        app.leader_pending = false;
                         app.view = View::Dashboard;
                         return Ok(());
                     }

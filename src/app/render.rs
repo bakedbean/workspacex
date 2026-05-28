@@ -15,6 +15,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // dashboard detail branch overwrite these with live values when chips render.
     app.chip_rects.clear();
     app.pinned_commands_cache.clear();
+    // Clear detail-bar container rects each frame; the workspace-selected
+    // branch overwrites this with live values when the detail bar renders.
+    // Prevents stale rects from triggering wheel events on invisible containers.
+    app.detail_container_rects = [None; 4];
     match &app.view {
         crate::ui::View::Dashboard => {
             let selection_is_workspace =

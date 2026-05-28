@@ -1528,35 +1528,4 @@ mod tests {
         // Title + 1 dash line = 2 rows total. Area is 10 rows. max_offset = 0.
         assert_eq!(offset, 0);
     }
-
-    #[test]
-    fn workspace_change_resets_offsets() {
-        use crate::store::WorkspaceId;
-        let mut offsets = [3u16, 4, 5, 6];
-        let mut last: Option<WorkspaceId> = Some(WorkspaceId(100));
-        let new_ws: Option<WorkspaceId> = Some(WorkspaceId(200));
-
-        if last != new_ws {
-            offsets = [0; 4];
-            last = new_ws;
-        }
-
-        assert_eq!(offsets, [0; 4]);
-        assert_eq!(last, Some(WorkspaceId(200)));
-    }
-
-    #[test]
-    fn same_workspace_preserves_offsets() {
-        use crate::store::WorkspaceId;
-        let mut offsets = [3u16, 4, 5, 6];
-        let mut last: Option<WorkspaceId> = Some(WorkspaceId(100));
-        let new_ws: Option<WorkspaceId> = Some(WorkspaceId(100));
-
-        if last != new_ws {
-            offsets = [0; 4];
-            last = new_ws;
-        }
-
-        assert_eq!(offsets, [3, 4, 5, 6]);
-    }
 }

@@ -1321,6 +1321,31 @@ mod tests {
     }
 
     #[test]
+    fn rename_mode_pre_authorizes_wsx_workspace_rename_tool() {
+        let ctx = RenameContext {
+            current_branch: "wsx/bold-fern".into(),
+            branch_prefix: "wsx".into(),
+            repo_name: "myrepo".into(),
+        };
+        let mode = SpawnMode::Fresh {
+            rename_ctx: Some(ctx),
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--allowedTools"))
+            .expect("--allowedTools should be present when rename_ctx is set and yolo=false");
+        let value = argv.get(idx + 1).expect("value should follow --allowedTools").to_string_lossy();
+        assert_eq!(value, "Bash(wsx workspace rename:*)",
+            "expected wsx-workspace-rename pre-authorization, got: {value}");
+    }
+
+    #[test]
     fn system_prompt_omitted_when_nothing_to_say() {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,

@@ -474,11 +474,7 @@ impl Store {
 
     pub fn insert_workspace(&self, w: &NewWorkspace) -> Result<WorkspaceId> {
         let now = now_ms();
-        let agent_str = match w.agent {
-            AgentKind::Claude => "claude",
-            AgentKind::Pi => "pi",
-            AgentKind::Hermes => "hermes",
-        };
+        let agent_str = w.agent.store_value();
         self.conn.execute(
             "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)
              VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5, ?6, ?7)",
@@ -541,7 +537,7 @@ impl Store {
                 setup_status: parse_setup(&r.get::<_, String>(6)?),
                 created_at: r.get(7)?,
                 yolo: r.get::<_, i64>(8)? != 0,
-                agent: parse_agent(&r.get::<_, String>(9)?),
+                agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -753,14 +749,6 @@ fn parse_setup(s: &str) -> SetupStatus {
         "Skipped" => SetupStatus::Skipped,
         "Cancelled" => SetupStatus::Cancelled,
         _ => SetupStatus::NotRun,
-    }
-}
-
-fn parse_agent(s: &str) -> AgentKind {
-    match s {
-        "pi" => AgentKind::Pi,
-        "hermes" => AgentKind::Hermes,
-        _ => AgentKind::Claude,
     }
 }
 

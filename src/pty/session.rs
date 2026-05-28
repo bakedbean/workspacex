@@ -20,6 +20,9 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
+    /// All agent kinds, in stable display order. Add new variants here when
+    /// extending the enum — `const` arrays do not get exhaustiveness checking,
+    /// so this is the one place the compiler can't catch a drift.
     pub const ALL: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes];
 
     pub fn from_str_or_default(s: Option<&str>) -> Self {
@@ -3229,5 +3232,11 @@ mod tests {
         for k in AgentKind::ALL {
             assert_eq!(AgentKind::from_str_or_default(Some(k.store_value())), k);
         }
+
+        assert_eq!(
+            AgentKind::from_str_or_default(None),
+            AgentKind::Claude,
+            "None input must default to Claude — store.rs relies on this"
+        );
     }
 }

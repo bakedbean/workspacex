@@ -176,6 +176,33 @@ fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
 
 ## Prior-session detection + Continue resume
 
+### Post-merge correction: source-tag approach abandoned
+
+**Original design**: wsx was to encode cwd into `--source wsx:<encoded-cwd>` on every Hermes spawn, then query `sessions.source` to find the latest session. This is what the spec below originally described.
+
+**What we discovered**: Hermes silently discards the `--source` flag. Its interactive chat handler hardcodes `platform="cli"` at session creation time, which preempts both the `--source` flag (which only affects `sessions list` filtering, never reaches session creation) and the `HERMES_SESSION_SOURCE` environment variable. Result: no wsx-tagged sessions ever appeared in `~/.hermes/state.db`; `latest_hermes_session_id` always returned None; the dashboard tailer never found anything to tail; Continue never resumed.
+
+**Actual implementation (spawn-timestamp-based)**:
+
+On every Hermes spawn, `prepare_hermes_workspace` writes a marker file at `<worktree>/.git/info/wsx-hermes-spawn-at` containing the current Unix epoch as a float (e.g., `"1779999480.123\n"`). This file is per-worktree-local (inside the gitdir) and is never committed.
+
+Session lookup queries by timestamp:
+
+```sql
+SELECT id FROM sessions
+WHERE started_at >= ?1 - 2.0
+ORDER BY started_at DESC
+LIMIT 1
+```
+
+`?1` is the spawn timestamp from the marker. The `-2.0` second buffer absorbs clock skew between our write and Hermes's `time.time()` call. `ORDER BY DESC LIMIT 1` returns the most recent matching session, handling the `/new` case (user starts a new Hermes session mid-run). The inherent race — if two worktrees spawn Hermes within seconds of each other, the more-recent session could be attributed wrong — is accepted and documented as best-effort.
+
+The `--source` argument is never emitted. A code comment in `build_hermes_command` explains why.
+
+---
+
+*Original design (superseded):*
+
 Hermes's `sessions` table has no `cwd` column. wsx encodes cwd into the `--source` tag on every spawn (`wsx:<encoded-cwd>`), then queries the same column to find the latest session for the current worktree. This same query drives both `has_prior_hermes_session` and the `--resume <id>` flag on Continue spawns.
 
 **Source-tag encoding** mirrors the Pi convention: `canonical_path.to_string_lossy().replace('/', '-')`. Symmetric with `has_prior_pi_session` so future readers see one encoding scheme, not two.

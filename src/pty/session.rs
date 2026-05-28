@@ -253,6 +253,31 @@ pub enum SpawnMode {
     },
 }
 
+/// Read the spawn-timestamp marker for this worktree.
+/// Returns None if absent or unparseable (best-effort: silent on IO/parse errors).
+fn read_hermes_spawn_marker(worktree: &Path) -> Option<f64> {
+    let path = resolve_gitdir(&worktree.join(".git"), worktree)?
+        .join("info/wsx-hermes-spawn-at");
+    let contents = std::fs::read_to_string(&path).ok()?;
+    contents.trim().parse::<f64>().ok()
+}
+
+/// Write the spawn-timestamp marker for this worktree.
+/// Best-effort: silent on IO error.
+fn write_hermes_spawn_marker(worktree: &Path) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    if let Some(gitdir) = resolve_gitdir(&worktree.join(".git"), worktree) {
+        let info_dir = gitdir.join("info");
+        if !info_dir.exists() && std::fs::create_dir_all(&info_dir).is_err() {
+            return;
+        }
+        let _ = std::fs::write(info_dir.join("wsx-hermes-spawn-at"), format!("{now}\n"));
+    }
+}
+
 /// True if pi has a persisted session JSONL for this worktree.
 /// Pi stores sessions at `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`,
 /// where the encoding replaces `/` with `-`.
@@ -280,24 +305,18 @@ pub fn has_prior_pi_session(worktree: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Encode a worktree path into a `--source` tag for Hermes session tagging.
-/// Returns None when canonicalization fails — callers should treat that as
-/// "don't pass `--source`" so we don't cluster multiple unresolvable cwds
-/// under a single tag and break per-worktree session lookups.
-fn hermes_source_tag(worktree: &Path) -> Option<String> {
-    let abs = std::fs::canonicalize(worktree).ok()?;
-    Some(format!("wsx:{}", abs.to_string_lossy().replace('/', "-")))
-}
-
-/// Return the most recent wsx-spawned Hermes session ID for this worktree, if any.
-/// Path-parameterized for testing; production callers should use
+/// Return the most recent Hermes session ID started at or after `spawn_ts`.
+/// Path-parameterized for testing; production callers use
 /// `latest_hermes_session_id_default`.
 ///
-/// Opens the db read-only with `immutable=1` so we don't block on Hermes's WAL
-/// when Hermes is running concurrently in another worktree, and don't risk
-/// rolling forward an inconsistent WAL.
-fn latest_hermes_session_id(db_path: &Path, worktree: &Path) -> Option<String> {
-    let tag = hermes_source_tag(worktree)?;
+/// `spawn_ts` is the Unix epoch (seconds, fractional) when wsx spawned
+/// Hermes for the worktree of interest. The query uses a 2-second
+/// look-back buffer to absorb clock skew between our marker-write time
+/// and Hermes's `time.time()` call when it creates the row.
+///
+/// Opens the db read-only with `immutable=1` so we don't block on
+/// Hermes's WAL when Hermes is running concurrently.
+fn latest_hermes_session_id(db_path: &Path, spawn_ts: f64) -> Option<String> {
     if !db_path.is_file() {
         return None;
     }
@@ -307,17 +326,18 @@ fn latest_hermes_session_id(db_path: &Path, worktree: &Path) -> Option<String> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     ).ok()?;
     conn.query_row(
-        "SELECT id FROM sessions WHERE source = ?1 ORDER BY started_at DESC LIMIT 1",
-        [&tag],
+        "SELECT id FROM sessions WHERE started_at >= ?1 - 2.0 ORDER BY started_at DESC LIMIT 1",
+        [&spawn_ts],
         |row| row.get::<_, String>(0),
     ).ok()
 }
 
 /// Production wrapper for `latest_hermes_session_id` that resolves
-/// `~/.hermes/state.db`.
+/// `~/.hermes/state.db` and reads the spawn marker for this worktree.
 pub fn latest_hermes_session_id_default(worktree: &Path) -> Option<String> {
+    let spawn_ts = read_hermes_spawn_marker(worktree)?;
     let db = dirs::home_dir()?.join(".hermes/state.db");
-    latest_hermes_session_id(&db, worktree)
+    latest_hermes_session_id(&db, spawn_ts)
 }
 
 /// True if a wsx-spawned Hermes session exists for this worktree.
@@ -786,13 +806,12 @@ pub fn build_hermes_command(
 
     cmd.arg("chat");
 
-    // Omit --source entirely if canonicalize fails — falling back to a generic
-    // "wsx" tag would cluster sessions from multiple unresolvable cwds under
-    // one tag and break latest_hermes_session_id's per-worktree precision.
-    if let Some(source) = hermes_source_tag(cwd) {
-        cmd.arg("--source");
-        cmd.arg(&source);
-    }
+    // Note: we deliberately do NOT pass `--source`. Hermes's interactive chat
+    // hardcodes platform="cli" at session creation, preempting both the
+    // --source flag (which only affects `sessions list` filtering) and the
+    // HERMES_SESSION_SOURCE env var. Per-cwd session detection is achieved
+    // via the spawn-timestamp marker (see write_hermes_spawn_marker /
+    // latest_hermes_session_id_default) instead.
 
     let (add_continue, add_yolo) = match mode {
         SpawnMode::Continue { yolo, .. } => (true, *yolo),
@@ -1104,11 +1123,13 @@ impl SessionManager {
 }
 
 /// Prepare a worktree for a Hermes spawn: rewrite the wsx-managed block in
-/// AGENTS.md (creating the file if needed) and ensure the file is hidden
-/// from `git status` via `.git/info/exclude`.
+/// AGENTS.md (creating the file if needed), ensure the file is hidden
+/// from `git status` via `.git/info/exclude`, and write the spawn-timestamp
+/// marker used for session detection.
 ///
 /// Best-effort: all IO errors are swallowed. Hermes will still launch if
-/// these side effects fail; the user just loses the rename hint.
+/// these side effects fail; the user just loses the rename hint and session
+/// detection falls back to None.
 fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
     let injected = compose_injected_prompt(mode);
     let had_content = injected.is_some();
@@ -1116,6 +1137,9 @@ fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
     if had_content {
         ensure_git_exclude(cwd, "AGENTS.md");
     }
+    // Always write the spawn marker — needed for both Fresh and Continue
+    // to find the right session, even when there's nothing to inject.
+    write_hermes_spawn_marker(cwd);
 }
 
 #[cfg(test)]
@@ -2060,28 +2084,8 @@ mod tests {
     }
 
     #[test]
-    fn hermes_source_tag_encodes_path_with_dashes_and_wsx_prefix() {
-        let tmp = tempfile::tempdir().unwrap();
-        let tag = super::hermes_source_tag(tmp.path()).expect("canonicalize should succeed for tempdir");
-        assert!(tag.starts_with("wsx:"), "tag {tag} should start with wsx:");
-        let after = &tag["wsx:".len()..];
-        assert!(!after.contains('/'), "tag {tag} should have no slashes after prefix");
-        let canonical = std::fs::canonicalize(tmp.path()).unwrap();
-        let expected_tail = canonical.to_string_lossy().replace('/', "-");
-        assert_eq!(after, expected_tail);
-    }
-
-    #[test]
-    fn hermes_source_tag_returns_none_for_nonexistent_path() {
-        let bogus = std::path::Path::new("/this/path/definitely/does/not/exist/123456");
-        assert!(super::hermes_source_tag(bogus).is_none());
-    }
-
-    #[test]
-    fn has_prior_hermes_session_false_for_fresh_tempdir() {
-        // A brand-new tempdir's canonical path will not match any source tag
-        // stored in the real ~/.hermes/state.db unless the user has somehow
-        // spawned Hermes from inside a tempdir at this exact path before.
+    fn has_prior_hermes_session_false_when_no_marker() {
+        // A brand-new tempdir has no spawn marker → no session detected.
         let tmp = tempfile::tempdir().unwrap();
         assert!(!super::has_prior_hermes_session(tmp.path()));
     }
@@ -2113,8 +2117,7 @@ mod tests {
         fn missing_db_returns_none() {
             let tmp = tempfile::tempdir().unwrap();
             let bogus = tmp.path().join("nope.db");
-            let worktree = tmp.path();
-            assert!(latest_hermes_session_id(&bogus, worktree).is_none());
+            assert!(latest_hermes_session_id(&bogus, 1000.0).is_none());
         }
 
         #[test]
@@ -2122,44 +2125,68 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let db_path = tmp.path().join("state.db");
             let _ = make_db(&db_path);
-            assert!(latest_hermes_session_id(&db_path, tmp.path()).is_none());
+            assert!(latest_hermes_session_id(&db_path, 1000.0).is_none());
         }
 
         #[test]
-        fn non_matching_source_returns_none() {
+        fn session_before_spawn_ts_returns_none() {
             let tmp = tempfile::tempdir().unwrap();
             let db_path = tmp.path().join("state.db");
             let conn = make_db(&db_path);
-            insert(&conn, "abc", "cli", 1000.0);
-            insert(&conn, "def", "telegram", 2000.0);
-            assert!(latest_hermes_session_id(&db_path, tmp.path()).is_none());
+            insert(&conn, "old", "cli", 100.0);
+            // Spawn was way later; even with -2s buffer, this row is too old.
+            assert!(latest_hermes_session_id(&db_path, 1000.0).is_none());
         }
 
         #[test]
-        fn single_match_returns_id() {
+        fn session_after_spawn_ts_returns_id() {
             let tmp = tempfile::tempdir().unwrap();
             let db_path = tmp.path().join("state.db");
             let conn = make_db(&db_path);
-            let tag = super::hermes_source_tag(tmp.path()).unwrap();
-            insert(&conn, "abc", &tag, 1000.0);
+            insert(&conn, "new", "cli", 1500.0);
             assert_eq!(
-                latest_hermes_session_id(&db_path, tmp.path()).as_deref(),
-                Some("abc")
+                latest_hermes_session_id(&db_path, 1000.0).as_deref(),
+                Some("new")
             );
         }
 
         #[test]
-        fn multiple_matches_returns_most_recent_by_started_at() {
+        fn buffer_absorbs_small_clock_skew() {
+            // Session row created 1.5s before our marker — buffer covers it.
             let tmp = tempfile::tempdir().unwrap();
             let db_path = tmp.path().join("state.db");
             let conn = make_db(&db_path);
-            let tag = super::hermes_source_tag(tmp.path()).unwrap();
-            insert(&conn, "oldest", &tag, 1000.0);
-            insert(&conn, "newest", &tag, 3000.0);
-            insert(&conn, "middle", &tag, 2000.0);
+            insert(&conn, "racy", "cli", 998.5);
             assert_eq!(
-                latest_hermes_session_id(&db_path, tmp.path()).as_deref(),
-                Some("newest")
+                latest_hermes_session_id(&db_path, 1000.0).as_deref(),
+                Some("racy")
+            );
+        }
+
+        #[test]
+        fn returns_most_recent_when_multiple_match() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            insert(&conn, "first", "cli", 1100.0);
+            insert(&conn, "second", "cli", 1200.0);
+            insert(&conn, "third", "cli", 1150.0);
+            assert_eq!(
+                latest_hermes_session_id(&db_path, 1000.0).as_deref(),
+                Some("second")
+            );
+        }
+
+        #[test]
+        fn source_irrelevant_to_lookup() {
+            // No source filtering; any row in the time range counts.
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            insert(&conn, "telegram-sess", "telegram", 1500.0);
+            assert_eq!(
+                latest_hermes_session_id(&db_path, 1000.0).as_deref(),
+                Some("telegram-sess")
             );
         }
 
@@ -2170,16 +2197,58 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let db_path = tmp.path().join("state.db");
             let writer = make_db(&db_path);
-            let tag = super::hermes_source_tag(tmp.path()).unwrap();
-            insert(&writer, "abc", &tag, 1000.0);
+            insert(&writer, "abc", "cli", 1500.0);
             // Start an explicit transaction to hold a write lock.
             writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
-            let result = latest_hermes_session_id(&db_path, tmp.path());
+            let result = latest_hermes_session_id(&db_path, 1000.0);
             // Even with the writer holding the lock, our ro+immutable read succeeds.
             assert_eq!(result.as_deref(), Some("abc"));
             writer.execute_batch("ROLLBACK;").unwrap();
             // bind to silence unused warning
             let _ = PathBuf::from(tmp.path());
+        }
+    }
+
+    mod hermes_spawn_marker {
+        #[test]
+        fn write_then_read_roundtrip() {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            super::write_hermes_spawn_marker(tmp.path());
+            let ts = super::read_hermes_spawn_marker(tmp.path()).expect("marker should be present");
+            // Within 60s of now (sanity check).
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+            assert!((now - ts).abs() < 60.0, "marker ts {ts} too far from now {now}");
+        }
+
+        #[test]
+        fn read_returns_none_when_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            assert!(super::read_hermes_spawn_marker(tmp.path()).is_none());
+        }
+
+        #[test]
+        fn read_returns_none_when_unparseable() {
+            let tmp = tempfile::tempdir().unwrap();
+            let info = tmp.path().join(".git/info");
+            std::fs::create_dir_all(&info).unwrap();
+            std::fs::write(info.join("wsx-hermes-spawn-at"), "not a float\n").unwrap();
+            assert!(super::read_hermes_spawn_marker(tmp.path()).is_none());
+        }
+
+        #[test]
+        fn write_handles_worktree_style_git_file() {
+            // `.git` is a file pointing to an external gitdir (real wsx worktree shape).
+            let tmp = tempfile::tempdir().unwrap();
+            let external = tempfile::tempdir().unwrap();
+            let gitdir = external.path().join("worktrees/feature-x");
+            std::fs::create_dir_all(&gitdir).unwrap();
+            std::fs::write(tmp.path().join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+            super::write_hermes_spawn_marker(tmp.path());
+            let marker = gitdir.join("info/wsx-hermes-spawn-at");
+            assert!(marker.exists(), "expected marker at {}", marker.display());
         }
     }
 
@@ -2563,7 +2632,8 @@ mod tests {
         }
 
         #[test]
-        fn fresh_emits_chat_subcommand_and_source_tag() {
+        fn fresh_emits_chat_subcommand_only_no_source_flag() {
+            // --source is never emitted: Hermes ignores it for session creation.
             let tmp = tempfile::tempdir().unwrap();
             let cmd = super::build_hermes_command(
                 tmp.path(),
@@ -2572,8 +2642,7 @@ mod tests {
             );
             let argv = argv_strings(&cmd);
             assert_eq!(argv.first().map(|s| s.as_str()), Some("chat"), "argv: {argv:?}");
-            let src_idx = argv.iter().position(|a| a == "--source").expect("expected --source");
-            assert!(argv[src_idx + 1].starts_with("wsx:"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--source"), "--source must not be emitted; argv: {argv:?}");
         }
 
         #[test]
@@ -2633,7 +2702,10 @@ mod tests {
         fn project_manager_mode_emits_yolo_and_resume_if_set() {
             let home = tempfile::tempdir().unwrap();
             let cwd = tempfile::tempdir().unwrap();
-            // Seed ~/.hermes/state.db with a session for cwd.
+            // Seed .git/info structure and spawn marker for cwd.
+            std::fs::create_dir_all(cwd.path().join(".git/info")).unwrap();
+            std::fs::write(cwd.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
+            // Seed ~/.hermes/state.db with a session after spawn_ts.
             let hermes_dir = home.path().join(".hermes");
             std::fs::create_dir_all(&hermes_dir).unwrap();
             let db_path = hermes_dir.join("state.db");
@@ -2641,10 +2713,9 @@ mod tests {
             conn.execute_batch(
                 "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
             ).unwrap();
-            let tag = super::hermes_source_tag(cwd.path()).unwrap();
             conn.execute(
-                "INSERT INTO sessions (id, source, started_at) VALUES ('pm-sess', ?1, 1234.5);",
-                rusqlite::params![tag],
+                "INSERT INTO sessions (id, source, started_at) VALUES ('pm-sess', 'cli', 1234.5);",
+                [],
             ).unwrap();
             drop(conn);
 
@@ -2686,7 +2757,9 @@ mod tests {
         }
 
         #[test]
-        fn source_omitted_when_canonicalize_fails() {
+        fn source_never_emitted_regardless_of_path() {
+            // --source is never emitted, even for paths that would previously have
+            // triggered source tag emission. Session detection uses the marker file.
             let bogus = std::path::Path::new("/nonexistent/path/for/canonicalize");
             let cmd = super::build_hermes_command(
                 bogus,
@@ -2695,7 +2768,7 @@ mod tests {
             );
             let argv = argv_strings(&cmd);
             assert!(!argv.iter().any(|a| a == "--source"),
-                "expected --source absent when canonicalize fails; argv: {argv:?}");
+                "expected --source absent; argv: {argv:?}");
             assert_eq!(argv.first().map(|s| s.as_str()), Some("chat"));
         }
 
@@ -2720,6 +2793,11 @@ mod tests {
         fn continue_with_prior_session_passes_resume_id() {
             let home = tempfile::tempdir().unwrap();
             let cwd = tempfile::tempdir().unwrap();
+            // Seed .git/info structure and a marker file for cwd.
+            std::fs::create_dir_all(cwd.path().join(".git/info")).unwrap();
+            // Write marker with timestamp 1000.0
+            std::fs::write(cwd.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
+
             let hermes_dir = home.path().join(".hermes");
             std::fs::create_dir_all(&hermes_dir).unwrap();
             let db_path = hermes_dir.join("state.db");
@@ -2727,10 +2805,9 @@ mod tests {
             conn.execute_batch(
                 "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
             ).unwrap();
-            let tag = super::hermes_source_tag(cwd.path()).unwrap();
             conn.execute(
-                "INSERT INTO sessions (id, source, started_at) VALUES ('session-abc', ?1, 1234.5);",
-                rusqlite::params![tag],
+                "INSERT INTO sessions (id, source, started_at) VALUES ('session-abc', 'cli', 1234.5);",
+                [],
             ).unwrap();
             drop(conn);
 

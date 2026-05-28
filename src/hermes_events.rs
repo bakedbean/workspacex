@@ -205,9 +205,13 @@ mod tests {
     }
 
     fn insert_session(conn: &rusqlite::Connection, id: &str, source: &str) {
+        insert_session_at(conn, id, source, 1000.0);
+    }
+
+    fn insert_session_at(conn: &rusqlite::Connection, id: &str, source: &str, started_at: f64) {
         conn.execute(
-            "INSERT INTO sessions (id, source, started_at) VALUES (?1, ?2, 1000.0)",
-            rusqlite::params![id, source],
+            "INSERT INTO sessions (id, source, started_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, source, started_at],
         )
         .unwrap();
     }
@@ -229,24 +233,21 @@ mod tests {
         conn.last_insert_rowid()
     }
 
-    /// Compute the wsx source tag for a path (mirrors hermes_source_tag in session.rs).
-    fn source_tag(path: &Path) -> String {
-        let abs = std::fs::canonicalize(path).unwrap();
-        format!("wsx:{}", abs.to_string_lossy().replace('/', "-"))
-    }
-
     // ── locate_session_file tests ────────────────────────────────────────────
 
     #[test]
     fn locate_session_file_returns_hermes_prefixed_path_when_session_exists() {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
+        // Set up spawn marker in worktree's .git/info directory.
+        std::fs::create_dir_all(work.path().join(".git/info")).unwrap();
+        std::fs::write(work.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
+        // Set up db with a session after spawn_ts.
         let db_dir = home.path().join(".hermes");
         std::fs::create_dir_all(&db_dir).unwrap();
         let db_path = db_dir.join("state.db");
         let conn = make_db(&db_path);
-        let tag = source_tag(work.path());
-        insert_session(&conn, "sess-abc", &tag);
+        insert_session_at(&conn, "sess-abc", "cli", 1234.5);
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());

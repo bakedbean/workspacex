@@ -62,15 +62,14 @@ pub fn render(
 
     let chip_present = !inputs.pinned.is_empty();
     let has_body = inputs.config.has_body();
-    // Rows that absolutely must be present at full height to avoid
-    // ratatui silently collapsing a `Length(1)` chunk to zero — which
-    // would leak an invisible-but-clickable chip rect or hide the
-    // reply input. Order matches the layout below: header + top rule
-    // + (body min 1 when has_body) + bottom rule + (chips when
-    // present) + reply.
-    let min_rows: u16 = 2 // header + top rule
-        + if has_body { 1 } else { 0 } // at least one body row
-        + 1 // bottom rule
+    // The body region holds the top horizontal rule, container content,
+    // and bottom horizontal rule as a single 3+ row strip — so that
+    // vertical separators between containers run uninterrupted across
+    // all three rows. When `!has_body` it collapses to just the two
+    // rule rows (no content between).
+    let body_region_rows: u16 = if has_body { 3 } else { 2 };
+    let min_rows: u16 = 1 // header
+        + body_region_rows
         + if chip_present { 1 } else { 0 } // chip slot
         + 1; // reply
     let needed = inputs.config.minimum_height().max(min_rows);
@@ -78,26 +77,22 @@ pub fn render(
         return Vec::new();
     }
 
-    let body_constraint = if has_body {
-        Constraint::Min(1)
+    let body_region_constraint = if has_body {
+        Constraint::Min(body_region_rows)
     } else {
-        Constraint::Length(0)
+        Constraint::Length(body_region_rows)
     };
     let constraints: Vec<Constraint> = if chip_present {
         vec![
             Constraint::Length(1), // header
-            Constraint::Length(1), // rule
-            body_constraint,
-            Constraint::Length(1), // rule
+            body_region_constraint,
             Constraint::Length(1), // chips
             Constraint::Length(1), // reply
         ]
     } else {
         vec![
             Constraint::Length(1), // header
-            Constraint::Length(1), // rule
-            body_constraint,
-            Constraint::Length(1), // rule
+            body_region_constraint,
             Constraint::Length(1), // reply
         ]
     };
@@ -107,13 +102,11 @@ pub fn render(
         .split(area);
 
     let header_area = chunks[0];
-    let top_rule_area = chunks[1];
-    let body_area = chunks[2];
-    let bottom_rule_area = chunks[3];
+    let body_region = chunks[1];
     let (chip_area, reply_area) = if chip_present {
-        (Some(chunks[4]), chunks[5])
+        (Some(chunks[2]), chunks[3])
     } else {
-        (None, chunks[4])
+        (None, chunks[2])
     };
 
     let header = build_header_strip(
@@ -128,23 +121,8 @@ pub fn render(
         header_area.width as usize,
     );
     f.render_widget(Paragraph::new(header), header_area);
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "─".repeat(top_rule_area.width as usize),
-            theme.dim_style(),
-        ))),
-        top_rule_area,
-    );
 
-    render_body(f, body_area, inputs, theme);
-
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "─".repeat(bottom_rule_area.width as usize),
-            theme.dim_style(),
-        ))),
-        bottom_rule_area,
-    );
+    render_body_region(f, body_region, inputs, theme);
 
     let chip_rects = if let Some(area) = chip_area {
         crate::ui::attached::render_chip_row(f, area, inputs.pinned, theme)
@@ -168,11 +146,37 @@ pub fn render(
     chip_rects
 }
 
-fn render_body(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
+fn render_body_region(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
     use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::widgets::Paragraph;
 
+    if area.height < 2 || area.width == 0 {
+        return;
+    }
     let cfg = inputs.config;
-    if !cfg.has_body() || area.height == 0 {
+
+    // Always draw full-width top and bottom horizontal rules. When
+    // multiple containers are present, the vertical separators drawn
+    // below overwrite the rule's `─` cells with `┬` / `┴` junctions
+    // so both lines stay visually continuous through the intersection.
+    let rule_style = theme.dim_style();
+    let rule_line = Line::from(Span::styled("─".repeat(area.width as usize), rule_style));
+    let top_rule = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 1,
+    };
+    let bottom_rule = Rect {
+        x: area.x,
+        y: area.y + area.height - 1,
+        width: area.width,
+        height: 1,
+    };
+    f.render_widget(Paragraph::new(rule_line.clone()), top_rule);
+    f.render_widget(Paragraph::new(rule_line), bottom_rule);
+
+    if !cfg.has_body() {
         return;
     }
 
@@ -187,15 +191,25 @@ fn render_body(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &The
         cfg.containers.iter().collect()
     };
 
-    let widths = equal_widths(containers.len());
-    let column_areas = Layout::default()
+    let n = containers.len();
+    if n == 0 {
+        return;
+    }
+
+    // Horizontal split: N columns share the remaining width equally
+    // (Fill(1)), with a single 1-cell separator chunk between each
+    // pair. No additional gap cells — module renderers already pad
+    // their content internally.
+    let mut h_constraints: Vec<Constraint> = Vec::with_capacity(2 * n - 1);
+    for i in 0..n {
+        if i > 0 {
+            h_constraints.push(Constraint::Length(1));
+        }
+        h_constraints.push(Constraint::Fill(1));
+    }
+    let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints(
-            widths
-                .iter()
-                .map(|w| Constraint::Percentage(*w))
-                .collect::<Vec<_>>(),
-        )
+        .constraints(h_constraints)
         .split(area);
 
     let ctx = crate::detail_modules::DetailContext {
@@ -214,8 +228,39 @@ fn render_body(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &The
         theme,
     };
 
-    for (col_area, ids) in column_areas.iter().zip(containers.iter()) {
-        render_container(f, *col_area, ids, &ctx, inputs.registry, theme);
+    // Container content sits between the two rule rows. Column i sits
+    // at chunk i*2 (pattern: col, sep, col, sep, col, …).
+    for (i, ids) in containers.iter().enumerate() {
+        let col = h_chunks[i * 2];
+        let content = Rect {
+            x: col.x,
+            y: col.y + 1,
+            width: col.width,
+            height: col.height.saturating_sub(2),
+        };
+        render_container(f, content, ids, &ctx, inputs.registry, theme);
+    }
+
+    // Vertical separators run the FULL body-region height. At the top
+    // and bottom rule rows we draw `┬` / `┴` instead of `│` so the
+    // horizontal rule maintains visual continuity through the
+    // intersection (its arms tie into the junction's horizontal arms).
+    for i in 1..n {
+        let sep_area = h_chunks[i * 2 - 1];
+        let last = sep_area.height.saturating_sub(1);
+        let sep_lines: Vec<Line<'static>> = (0..sep_area.height)
+            .map(|row| {
+                let glyph = if row == 0 {
+                    "┬"
+                } else if row == last {
+                    "┴"
+                } else {
+                    "│"
+                };
+                Line::from(Span::styled(glyph.to_string(), rule_style))
+            })
+            .collect();
+        f.render_widget(Paragraph::new(sep_lines), sep_area);
     }
 }
 
@@ -300,17 +345,6 @@ fn render_container(
                 );
             }
         }
-    }
-}
-
-fn equal_widths(n: usize) -> Vec<u16> {
-    match n {
-        0 => vec![],
-        1 => vec![100],
-        2 => vec![50, 50],
-        3 => vec![33, 33, 34],
-        4 => vec![25, 25, 25, 25],
-        _ => unreachable!("sanitize() guarantees containers.len() in 1..=4"),
     }
 }
 
@@ -1226,15 +1260,82 @@ mod tests {
     }
 
     #[test]
-    fn equal_widths_one_through_four() {
-        assert_eq!(equal_widths(1), vec![100]);
-        assert_eq!(equal_widths(2), vec![50, 50]);
-        assert_eq!(equal_widths(3), vec![33, 33, 34]);
-        assert_eq!(equal_widths(4), vec![25, 25, 25, 25]);
-    }
-
-    #[test]
-    fn equal_widths_zero_is_empty() {
-        assert_eq!(equal_widths(0), Vec::<u16>::new());
+    fn body_renders_vertical_separator_between_containers() {
+        // Three columns → two vertical rules running floor-to-ceiling
+        // of the body region, including the top and bottom horizontal
+        // rule rows. Every row between the header and reply must show
+        // exactly two `│` glyphs.
+        let (_store, repo, ws) = seed_workspace();
+        let evt = crate::events::WorkspaceEvents {
+            first_user_text: Some("hi".into()),
+            last_assistant_text: Some("ack".into()),
+            ..Default::default()
+        };
+        let cfg = DetailBarConfig::default();
+        let reg = make_registry();
+        let inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: Some(&evt),
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &[],
+        };
+        let text = render_to_text(&inputs, 120, 10);
+        let lines: Vec<&str> = text.lines().collect();
+        let reply_idx = lines
+            .iter()
+            .position(|l| l.contains("Reply to agent"))
+            .expect("reply row");
+        // Body region: rows 1..reply_idx (after the header, before the
+        // reply). Each row carries exactly 2 separator glyphs (3
+        // containers → 2 separators), but the glyph differs by row:
+        //   - first row (top rule):    `┬`
+        //   - middle rows (content):   `│`
+        //   - last row (bottom rule):  `┴`
+        let body_rows: Vec<&str> = lines[1..reply_idx].to_vec();
+        assert!(body_rows.len() >= 3, "body region needs >= 3 rows");
+        let last = body_rows.len() - 1;
+        for (i, row) in body_rows.iter().enumerate() {
+            let total = row
+                .chars()
+                .filter(|c| matches!(*c, '│' | '┬' | '┴'))
+                .count();
+            assert_eq!(total, 2, "expected 2 separator glyphs in row {i}: {row:?}");
+            let expected = if i == 0 {
+                '┬'
+            } else if i == last {
+                '┴'
+            } else {
+                '│'
+            };
+            let kind_count = row.chars().filter(|c| *c == expected).count();
+            assert_eq!(kind_count, 2, "expected 2 `{expected}` in row {i}: {row:?}",);
+        }
+        // The top and bottom rule rows must still show plenty of `─`
+        // (otherwise the horizontal rule wouldn't actually be drawn).
+        let top_dashes = body_rows[0].chars().filter(|c| *c == '─').count();
+        assert!(
+            top_dashes >= 10,
+            "top rule needs `─` glyphs: {:?}",
+            body_rows[0]
+        );
+        let bot_dashes = body_rows[last].chars().filter(|c| *c == '─').count();
+        assert!(
+            bot_dashes >= 10,
+            "bottom rule needs `─` glyphs: {:?}",
+            body_rows[last]
+        );
     }
 }

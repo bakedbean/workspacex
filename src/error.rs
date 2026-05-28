@@ -10,6 +10,8 @@ pub enum Error {
     Store(#[from] rusqlite::Error),
     #[error("pty: {0}")]
     Pty(String),
+    #[error("agent binary not found: {0}")]
+    AgentBinaryMissing(String),
     #[error("setup: {0}")]
     Setup(String),
     #[error("io: {0}")]

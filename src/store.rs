@@ -474,11 +474,7 @@ impl Store {
 
     pub fn insert_workspace(&self, w: &NewWorkspace) -> Result<WorkspaceId> {
         let now = now_ms();
-        let agent_str = match w.agent {
-            AgentKind::Claude => "claude",
-            AgentKind::Pi => "pi",
-            AgentKind::Hermes => "hermes",
-        };
+        let agent_str = w.agent.store_value();
         self.conn.execute(
             "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)
              VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5, ?6, ?7)",
@@ -505,6 +501,18 @@ impl Store {
         self.conn.execute(
             "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
             rusqlite::params![branch, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_workspace_agent(
+        &self,
+        id: WorkspaceId,
+        agent: crate::pty::session::AgentKind,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workspaces SET agent = ?1 WHERE id = ?2",
+            rusqlite::params![agent.store_value(), id.0],
         )?;
         Ok(())
     }
@@ -541,7 +549,7 @@ impl Store {
                 setup_status: parse_setup(&r.get::<_, String>(6)?),
                 created_at: r.get(7)?,
                 yolo: r.get::<_, i64>(8)? != 0,
-                agent: parse_agent(&r.get::<_, String>(9)?),
+                agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -753,14 +761,6 @@ fn parse_setup(s: &str) -> SetupStatus {
         "Skipped" => SetupStatus::Skipped,
         "Cancelled" => SetupStatus::Cancelled,
         _ => SetupStatus::NotRun,
-    }
-}
-
-fn parse_agent(s: &str) -> AgentKind {
-    match s {
-        "pi" => AgentKind::Pi,
-        "hermes" => AgentKind::Hermes,
-        _ => AgentKind::Claude,
     }
 }
 
@@ -1494,5 +1494,32 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0, "corrupt row deleted by the listing call");
+    }
+
+    #[test]
+    fn set_workspace_agent_updates_row() {
+        use crate::pty::session::AgentKind;
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ws",
+                branch: "repo/ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/ws"),
+                yolo: false,
+                agent: AgentKind::Claude,
+            })
+            .unwrap();
+        store.set_workspace_agent(id, AgentKind::Hermes).unwrap();
+        let ws = store
+            .workspaces(repo_id)
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == id)
+            .expect("workspace present");
+        assert_eq!(ws.agent, AgentKind::Hermes);
     }
 }

@@ -6,8 +6,8 @@
 //! handler (`handle_key_modal`) takes precedence when a modal is open.
 
 use crate::app::{
-    App, PendingEdit, RepoSettingField, SelectionTarget, SharedApp, apply_repo_setting,
-    attach_workspace, build_spawn_info, maybe_mirror_mcp, reconcile_create_result,
+    App, AttachReady, PendingEdit, RepoSettingField, SelectionTarget, SharedApp,
+    apply_repo_setting, attach_workspace, ensure_workspace_session, reconcile_create_result,
     rescan_processes, restore_attached_state, save_layout_for, schedule_detach_refresh,
 };
 use crate::error::Result;
@@ -24,6 +24,8 @@ use crossterm::event::{
 // that cascade from the surrounding `tests` module.
 #[cfg(test)]
 use crate::app::draw_for_test;
+#[cfg(test)]
+use crate::app::build_spawn_info;
 #[cfg(test)]
 use crate::ui::split::AttachedState;
 #[cfg(test)]
@@ -170,7 +172,7 @@ async fn fire_chip(app: &mut App, idx: usize) {
     // view the session already exists by definition.
     if matches!(app.view, View::Dashboard) {
         if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
-            let _ = crate::app::ensure_workspace_session(app, ws_id);
+            let _ = ensure_workspace_session(app, ws_id);
         }
     }
     let session = match chip_target_session(app) {
@@ -1091,18 +1093,24 @@ async fn handle_key_modal(
                         // Mirror the dashboard-attach flow: clear the
                         // alert, spawn (or resume) the PTY, switch view.
                         app.workspace_needs_attention.remove(&ws_id);
-                        if let Some((id, path, mode, repo_path, agent)) =
-                            build_spawn_info(app, ws_id)
-                        {
-                            maybe_mirror_mcp(app, &repo_path, &path);
-                            let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-                            let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
-                            let restored = restore_attached_state(app, id);
-                            app.leader_pending = false;
-                            app.view = View::Attached(restored);
+                        match ensure_workspace_session(app, ws_id)? {
+                            AttachReady::Ok => {
+                                if app.sessions.get(ws_id).is_some() {
+                                    let restored = restore_attached_state(app, ws_id);
+                                    app.leader_pending = false;
+                                    app.view = View::Attached(restored);
+                                }
+                            }
+                            AttachReady::AgentMissing => {
+                                // Modal::AgentMissing is set; leave view alone.
+                            }
                         }
                     }
-                    app.modal = None;
+                    // Only close the Updates-panel if AgentMissing didn't
+                    // replace the modal — otherwise we'd wipe the new modal.
+                    if !matches!(app.modal, Some(Modal::AgentMissing { .. })) {
+                        app.modal = None;
+                    }
                 }
                 KeyCode::Char('v') | KeyCode::Char('s') => {
                     // Vim-style splits: 'v' = vertical (panes side-by-side),
@@ -1116,43 +1124,49 @@ async fn handle_key_modal(
                     };
                     if let Some(ws_id) = order.get(selected_now).copied() {
                         app.workspace_needs_attention.remove(&ws_id);
-                        if let Some((id, path, mode, repo_path, agent)) =
-                            build_spawn_info(app, ws_id)
-                        {
-                            maybe_mirror_mcp(app, &repo_path, &path);
-                            let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-                            let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
-                            match &mut app.view {
-                                View::Attached(state) => {
-                                    // Same pane already focused: switch focus
-                                    // instead of splitting onto itself.
-                                    if state.focused_id() == Some(id) {
-                                        // no-op
-                                    } else if state.leaves().contains(&id) {
-                                        // Already open in another pane —
-                                        // just refocus there.
-                                        if let Some(p) = state
-                                            .tree
-                                            .leaf_paths()
-                                            .into_iter()
-                                            .find(|p| state.tree.leaf_at(p) == Some(id))
-                                        {
-                                            state.focus = p;
+                        match ensure_workspace_session(app, ws_id)? {
+                            AttachReady::Ok => {
+                                if app.sessions.get(ws_id).is_some() {
+                                    match &mut app.view {
+                                        View::Attached(state) => {
+                                            // Same pane already focused: switch focus
+                                            // instead of splitting onto itself.
+                                            if state.focused_id() == Some(ws_id) {
+                                                // no-op
+                                            } else if state.leaves().contains(&ws_id) {
+                                                // Already open in another pane —
+                                                // just refocus there.
+                                                if let Some(p) = state
+                                                    .tree
+                                                    .leaf_paths()
+                                                    .into_iter()
+                                                    .find(|p| state.tree.leaf_at(p) == Some(ws_id))
+                                                {
+                                                    state.focus = p;
+                                                }
+                                            } else {
+                                                state.split(dir, ws_id);
+                                            }
                                         }
-                                    } else {
-                                        state.split(dir, id);
+                                        _ => {
+                                            // No attached pane yet — restore saved layout or attach plainly.
+                                            let restored = restore_attached_state(app, ws_id);
+                                            app.leader_pending = false;
+                                            app.view = View::Attached(restored);
+                                        }
                                     }
                                 }
-                                _ => {
-                                    // No attached pane yet — restore saved layout or attach plainly.
-                                    let restored = restore_attached_state(app, id);
-                                    app.leader_pending = false;
-                                    app.view = View::Attached(restored);
-                                }
+                            }
+                            AttachReady::AgentMissing => {
+                                // Modal::AgentMissing is set; leave view alone.
                             }
                         }
                     }
-                    app.modal = None;
+                    // Only close the Updates-panel if AgentMissing didn't
+                    // replace the modal — otherwise we'd wipe the new modal.
+                    if !matches!(app.modal, Some(Modal::AgentMissing { .. })) {
+                        app.modal = None;
+                    }
                 }
                 _ => {}
             }
@@ -1236,6 +1250,65 @@ async fn handle_key_modal(
             }
             _ => {}
         },
+        Modal::AgentMissing { ws_id, agent, .. } => match k.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                app.modal = None;
+            }
+            KeyCode::Char('s') => {
+                let selected = crate::pty::session::AgentKind::ALL
+                    .iter()
+                    .position(|k| *k == agent)
+                    .unwrap_or(0);
+                app.modal = Some(Modal::AgentPicker {
+                    ws_id,
+                    selected,
+                    current: agent,
+                });
+            }
+            _ => {}
+        },
+        Modal::AgentPicker {
+            ws_id,
+            selected,
+            current,
+        } => {
+            use crate::pty::session::AgentKind;
+            match k.code {
+                KeyCode::Esc => {
+                    app.modal = None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let new_sel = selected.saturating_sub(1);
+                    app.modal = Some(Modal::AgentPicker {
+                        ws_id,
+                        selected: new_sel,
+                        current,
+                    });
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let new_sel = (selected + 1).min(AgentKind::ALL.len() - 1);
+                    app.modal = Some(Modal::AgentPicker {
+                        ws_id,
+                        selected: new_sel,
+                        current,
+                    });
+                }
+                KeyCode::Enter => {
+                    let new_agent = AgentKind::ALL[selected];
+                    app.store.set_workspace_agent(ws_id, new_agent)?;
+                    // Mirror to in-memory copy so the dashboard doesn't show stale
+                    // agent until poll_external_changes catches up.
+                    if let Some((_, ws)) =
+                        app.workspaces.iter_mut().find(|(_, w)| w.id == ws_id)
+                    {
+                        ws.agent = new_agent;
+                    }
+                    app.modal = None;
+                    attach_workspace(app, ws_id)?;
+                }
+                _ => {}
+            }
+        }
     }
     Ok(())
 }
@@ -1283,7 +1356,7 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
                 // Auto-spawn the workspace's session if it isn't running
                 // yet — otherwise an inline reply on an unattached
                 // workspace silently drops.
-                let _ = crate::app::ensure_workspace_session(app, ws_id);
+                let _ = ensure_workspace_session(app, ws_id);
                 if let Some(session) = app.sessions.get(ws_id) {
                     let mut bytes = draft.into_bytes();
                     bytes.push(b'\r');

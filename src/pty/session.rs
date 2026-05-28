@@ -11,6 +11,46 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use vt100::Parser;
 
+/// True if `err`'s `Display` output looks like portable-pty's
+/// "binary not found on PATH" error.
+///
+/// Why string-matching: portable-pty constructs these errors with
+/// `anyhow::bail!` and plain strings; there is no `io::Error` in the
+/// chain to detect via `io::ErrorKind::NotFound`. We match against
+/// the three message patterns portable-pty 0.9.0 produces in
+/// `src/cmdbuilder.rs::CommandBuilder::search_path`:
+///
+/// - `"because it does not exist"` — cwd-relative path missing
+/// - `"doesn't exist on the filesystem"` — absolute path missing
+/// - `"No viable candidates found in PATH"` — PATH search exhausted
+///
+/// A fourth path — `"Unable to resolve the PATH"`, fired when the
+/// `PATH` env var is entirely missing — is INTENTIONALLY excluded:
+/// that is a system misconfiguration, not a "binary not found"
+/// situation, and should surface as `Error::Pty` so the user sees
+/// the real cause.
+///
+/// If portable-pty is bumped past 0.9.0, re-verify these patterns.
+/// The `spawn_session_returns_agent_binary_missing_for_unknown_path`
+/// test guards the cwd-relative branch.
+fn is_binary_not_found(err: &dyn std::fmt::Display) -> bool {
+    let msg = err.to_string();
+    msg.contains("because it does not exist")
+        || msg.contains("doesn't exist on the filesystem")
+        || msg.contains("No viable candidates found in PATH")
+}
+
+/// Resolve the binary name we will attempt to spawn for `agent`, honoring
+/// the `WSX_<AGENT>_BIN` env-var seam used by tests.
+fn resolved_binary(agent: AgentKind) -> String {
+    let env_var = match agent {
+        AgentKind::Claude => "WSX_CLAUDE_BIN",
+        AgentKind::Pi => "WSX_PI_BIN",
+        AgentKind::Hermes => "WSX_HERMES_BIN",
+    };
+    std::env::var(env_var).unwrap_or_else(|_| agent.default_binary().to_string())
+}
+
 /// Which coding agent to spawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentKind {
@@ -20,12 +60,37 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
-    pub fn from_store(store: &crate::store::Store) -> Self {
-        match store.get_setting("coding_agent").ok().flatten().as_deref() {
+    /// All agent kinds, in stable display order. Add new variants here when
+    /// extending the enum — `const` arrays do not get exhaustiveness checking,
+    /// so this is the one place the compiler can't catch a drift.
+    pub const ALL: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes];
+
+    pub fn from_str_or_default(s: Option<&str>) -> Self {
+        match s {
             Some("pi") => AgentKind::Pi,
             Some("hermes") => AgentKind::Hermes,
             _ => AgentKind::Claude,
         }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            AgentKind::Claude => "claude",
+            AgentKind::Pi => "pi",
+            AgentKind::Hermes => "hermes",
+        }
+    }
+
+    pub fn default_binary(self) -> &'static str {
+        self.display_name()
+    }
+
+    pub fn store_value(self) -> &'static str {
+        self.display_name()
+    }
+
+    pub fn from_store(store: &crate::store::Store) -> Self {
+        Self::from_str_or_default(store.get_setting("coding_agent").ok().flatten().as_deref())
     }
 }
 
@@ -1067,7 +1132,13 @@ pub fn spawn_session(
     let mut child = pair
         .slave
         .spawn_command(child_cmd)
-        .map_err(|e| Error::Pty(format!("spawn: {e}")))?;
+        .map_err(|e| {
+            if is_binary_not_found(&e) {
+                Error::AgentBinaryMissing(resolved_binary(agent))
+            } else {
+                Error::Pty(format!("spawn: {e}"))
+            }
+        })?;
     drop(pair.slave);
 
     let killer = child.clone_killer();
@@ -1289,14 +1360,13 @@ mod tests {
         assert!(screen.contains("hello"), "screen contents: {screen:?}");
     }
 
-    // `spawn_session` propagates `pty.spawn_command(...)` errors via `?`,
-    // so the contract under test is really that portable-pty rejects a
-    // missing binary at spawn time. Validating that directly avoids the
-    // need to mutate the process-global `WSX_CLAUDE_BIN` env var — every
-    // sibling test in this file (and across `app.rs`/`pm.rs`) also
-    // mutates that var, and the resulting races make any env-driven
-    // assertion here non-deterministic. The integration path is one
-    // `?` away from `spawn_command`'s `Result`, so this is enough.
+    // Validates the contract under test (portable-pty rejects a missing
+    // binary at spawn time) directly, without driving the env-var seam.
+    // Env-var-driven tests in this file use `EnvGuard` from
+    // `test_support` to serialize against sibling tests across the crate
+    // that mutate the same process-global vars; see
+    // `spawn_session_returns_agent_binary_missing_for_unknown_path` for an
+    // example.
     #[test]
     fn missing_binary_returns_pty_error() {
         let pty_system = native_pty_system();
@@ -3186,5 +3256,62 @@ mod tests {
             !prompt.contains("'bold-fern'"),
             "prompt must not contain derived 'bold-fern'; prompt: {prompt}"
         );
+    }
+
+    #[test]
+    fn agent_kind_helpers_match_existing_strings() {
+        use super::AgentKind;
+        assert_eq!(AgentKind::ALL.len(), 3);
+        assert!(AgentKind::ALL.contains(&AgentKind::Claude));
+        assert!(AgentKind::ALL.contains(&AgentKind::Pi));
+        assert!(AgentKind::ALL.contains(&AgentKind::Hermes));
+
+        assert_eq!(AgentKind::Claude.display_name(), "claude");
+        assert_eq!(AgentKind::Pi.display_name(), "pi");
+        assert_eq!(AgentKind::Hermes.display_name(), "hermes");
+
+        assert_eq!(AgentKind::Claude.default_binary(), "claude");
+        assert_eq!(AgentKind::Pi.default_binary(), "pi");
+        assert_eq!(AgentKind::Hermes.default_binary(), "hermes");
+
+        for k in AgentKind::ALL {
+            assert_eq!(AgentKind::from_str_or_default(Some(k.store_value())), k);
+        }
+
+        assert_eq!(
+            AgentKind::from_str_or_default(None),
+            AgentKind::Claude,
+            "None input must default to Claude — store.rs relies on this"
+        );
+    }
+
+    #[test]
+    fn spawn_session_returns_agent_binary_missing_for_unknown_path() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let cwd = PathBuf::from(".");
+        let result = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            },
+            crate::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
+        );
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("spawn should fail when binary is missing"),
+        };
+        match err {
+            Error::AgentBinaryMissing(binary) => {
+                assert_eq!(binary, "/nonexistent/wsx-test-bin-does-not-exist");
+            }
+            other => panic!("expected AgentBinaryMissing, got {other:?}"),
+        }
     }
 }

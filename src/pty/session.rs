@@ -253,16 +253,50 @@ pub enum SpawnMode {
     },
 }
 
-/// Read the spawn-timestamp marker for this worktree.
+/// Marker recorded when wsx first spawns Hermes for a worktree.
+///
+/// File format (`.git/info/wsx-hermes-spawn-at`):
+/// ```text
+/// <start_ts>\n
+/// <session_id>\n   ← optional; absent on initial write, added by cache_hermes_session_id_in_marker
+/// ```
+///
+/// Old single-line files (timestamp only) continue to parse correctly with
+/// `session_id = None`.
+#[derive(Debug, Clone)]
+struct HermesSpawnMarker {
+    /// Unix epoch seconds (fractional) when wsx first spawned Hermes for this worktree.
+    start_ts: f64,
+    /// Cached session id discovered by a previous lookup. `None` until the
+    /// first successful call to `latest_hermes_session_id_default`.
+    session_id: Option<String>,
+}
+
+/// Read the spawn marker for this worktree.
 /// Returns None if absent or unparseable (best-effort: silent on IO/parse errors).
-fn read_hermes_spawn_marker(worktree: &Path) -> Option<f64> {
+fn read_hermes_spawn_marker(worktree: &Path) -> Option<HermesSpawnMarker> {
     let path = resolve_gitdir(&worktree.join(".git"), worktree)?
         .join("info/wsx-hermes-spawn-at");
     let contents = std::fs::read_to_string(&path).ok()?;
-    contents.trim().parse::<f64>().ok()
+    let mut lines = contents.lines();
+    let start_ts: f64 = lines.next()?.trim().parse().ok()?;
+    let session_id = lines
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Some(HermesSpawnMarker {
+        start_ts,
+        session_id,
+    })
 }
 
-/// Write the spawn-timestamp marker for this worktree.
+/// Write a fresh spawn-timestamp marker for this worktree.
+///
+/// Writes only the first line (`<now>\n`). The `session_id` line is added
+/// later by `cache_hermes_session_id_in_marker` once we discover which
+/// session Hermes created for this spawn. Callers that want idempotent
+/// behaviour must guard the call themselves (see `prepare_hermes_workspace`).
+///
 /// Best-effort: silent on IO error.
 fn write_hermes_spawn_marker(worktree: &Path) {
     let now = std::time::SystemTime::now()
@@ -275,6 +309,24 @@ fn write_hermes_spawn_marker(worktree: &Path) {
             return;
         }
         let _ = std::fs::write(info_dir.join("wsx-hermes-spawn-at"), format!("{now}\n"));
+    }
+}
+
+/// Update the cached session_id in the marker file, preserving the
+/// original start_ts. Best-effort: silent on IO error.
+fn cache_hermes_session_id_in_marker(worktree: &Path, session_id: &str) {
+    let Some(existing) = read_hermes_spawn_marker(worktree) else {
+        return;
+    };
+    if let Some(gitdir) = resolve_gitdir(&worktree.join(".git"), worktree) {
+        let info_dir = gitdir.join("info");
+        if !info_dir.exists() && std::fs::create_dir_all(&info_dir).is_err() {
+            return;
+        }
+        let _ = std::fs::write(
+            info_dir.join("wsx-hermes-spawn-at"),
+            format!("{}\n{}\n", existing.start_ts, session_id),
+        );
     }
 }
 
@@ -340,10 +392,53 @@ fn latest_hermes_session_id(db_path: &Path, spawn_ts: f64) -> Option<String> {
 
 /// Production wrapper for `latest_hermes_session_id` that resolves
 /// `~/.hermes/state.db` and reads the spawn marker for this worktree.
+///
+/// Uses a two-level lookup strategy:
+/// 1. **Fast path**: if the marker already has a cached `session_id` and that
+///    session still exists in the db, return it immediately. This avoids
+///    cross-workspace pollution where the time-based query might return a
+///    session from a different worktree that was started after this one.
+/// 2. **Slow path**: time-based lookup via `latest_hermes_session_id`. On
+///    success the result is written back into the marker so future calls use
+///    the fast path. If the cached id is stale (session pruned/deleted), this
+///    same slow path is used as fallback.
 pub fn latest_hermes_session_id_default(worktree: &Path) -> Option<String> {
-    let spawn_ts = read_hermes_spawn_marker(worktree)?;
+    let marker = read_hermes_spawn_marker(worktree)?;
     let db = dirs::home_dir()?.join(".hermes/state.db");
-    latest_hermes_session_id(&db, spawn_ts)
+
+    // Fast path: cached session_id that is still alive in the db.
+    if let Some(ref id) = marker.session_id {
+        if session_exists(&db, id) {
+            return Some(id.clone());
+        }
+        // Cached id is dead (session pruned/deleted); fall through to slow path.
+    }
+
+    // Slow path: time-based lookup, then cache the result for next time.
+    let id = latest_hermes_session_id(&db, marker.start_ts)?;
+    cache_hermes_session_id_in_marker(worktree, &id);
+    Some(id)
+}
+
+/// Return true if `session_id` exists in the sessions table of `db_path`.
+/// Opens the db read-only. Returns false on any IO/parse/query error.
+fn session_exists(db_path: &Path, session_id: &str) -> bool {
+    if !db_path.is_file() {
+        return false;
+    }
+    let uri = format!("file:{}?mode=ro", db_path.display());
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT 1 FROM sessions WHERE id = ?1",
+        [session_id],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 /// True if a wsx-spawned Hermes session exists for this worktree.
@@ -1133,6 +1228,13 @@ impl SessionManager {
 /// from `git status` via `.git/info/exclude`, and write the spawn-timestamp
 /// marker used for session detection.
 ///
+/// The marker is **one-time-write**: it records the timestamp of the *first*
+/// wsx spawn for this worktree. On subsequent re-attaches (Continue mode) the
+/// existing marker is preserved so the lookup query
+/// `WHERE started_at >= marker_ts - 2.0` continues to find the session that
+/// was created when the workspace was first opened. Overwriting on each spawn
+/// would reset the timestamp to "now" and silently lose session history.
+///
 /// Best-effort: all IO errors are swallowed. Hermes will still launch if
 /// these side effects fail; the user just loses the rename hint and session
 /// detection falls back to None.
@@ -1143,9 +1245,12 @@ fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
     if had_content {
         ensure_git_exclude(cwd, "AGENTS.md");
     }
-    // Always write the spawn marker — needed for both Fresh and Continue
-    // to find the right session, even when there's nothing to inject.
-    write_hermes_spawn_marker(cwd);
+    // Marker is one-time-write: only write if no marker exists yet.
+    // This preserves the original spawn timestamp across re-attaches so the
+    // session-lookup query can still find the original Hermes session.
+    if read_hermes_spawn_marker(cwd).is_none() {
+        write_hermes_spawn_marker(cwd);
+    }
 }
 
 #[cfg(test)]
@@ -2098,7 +2203,6 @@ mod tests {
 
     mod hermes_session_lookup {
         use super::latest_hermes_session_id;
-        use std::path::PathBuf;
 
         fn make_db(path: &std::path::Path) -> rusqlite::Connection {
             let conn = rusqlite::Connection::open(path).unwrap();
@@ -2241,11 +2345,12 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
             super::write_hermes_spawn_marker(tmp.path());
-            let ts = super::read_hermes_spawn_marker(tmp.path()).expect("marker should be present");
+            let marker = super::read_hermes_spawn_marker(tmp.path()).expect("marker should be present");
             // Within 60s of now (sanity check).
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-            assert!((now - ts).abs() < 60.0, "marker ts {ts} too far from now {now}");
+            assert!((now - marker.start_ts).abs() < 60.0, "marker ts {} too far from now {now}", marker.start_ts);
+            assert!(marker.session_id.is_none(), "fresh marker should have no session_id");
         }
 
         #[test]
@@ -2275,6 +2380,52 @@ mod tests {
             super::write_hermes_spawn_marker(tmp.path());
             let marker = gitdir.join("info/wsx-hermes-spawn-at");
             assert!(marker.exists(), "expected marker at {}", marker.display());
+        }
+
+        #[test]
+        fn read_tolerates_old_format() {
+            // Old single-line format (no trailing newline, no second line) must parse
+            // correctly with session_id=None.
+            let tmp = tempfile::tempdir().unwrap();
+            let info = tmp.path().join(".git/info");
+            std::fs::create_dir_all(&info).unwrap();
+            std::fs::write(info.join("wsx-hermes-spawn-at"), "1780002798.96").unwrap();
+            let marker = super::read_hermes_spawn_marker(tmp.path())
+                .expect("old-format marker should parse");
+            assert!((marker.start_ts - 1780002798.96).abs() < 0.001, "start_ts mismatch: {}", marker.start_ts);
+            assert!(marker.session_id.is_none(), "old format should yield session_id=None");
+        }
+
+        #[test]
+        fn cache_session_id_preserves_start_ts() {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            // Write a marker with a specific timestamp.
+            std::fs::write(
+                tmp.path().join(".git/info/wsx-hermes-spawn-at"),
+                "1000.0\n",
+            ).unwrap();
+            // Cache a session id.
+            super::cache_hermes_session_id_in_marker(tmp.path(), "abc");
+            let marker = super::read_hermes_spawn_marker(tmp.path())
+                .expect("marker should exist after cache");
+            assert!((marker.start_ts - 1000.0).abs() < 0.001,
+                "start_ts should be preserved; got {}", marker.start_ts);
+            assert_eq!(marker.session_id.as_deref(), Some("abc"),
+                "session_id should be cached");
+        }
+
+        #[test]
+        fn cache_session_id_no_op_when_marker_absent() {
+            // tempdir with .git/info set up but no marker file.
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            // Call cache — must not create the marker file.
+            super::cache_hermes_session_id_in_marker(tmp.path(), "abc");
+            assert!(
+                !tmp.path().join(".git/info/wsx-hermes-spawn-at").exists(),
+                "cache should not create marker when none exists"
+            );
         }
     }
 
@@ -2634,6 +2785,30 @@ mod tests {
             super::prepare_hermes_workspace(tmp.path(), &cont);
             assert!(!tmp.path().join("AGENTS.md").exists());
         }
+
+        #[test]
+        fn does_not_overwrite_existing_marker() {
+            // Write a marker with a known timestamp, then call prepare_hermes_workspace
+            // in Fresh mode. The marker must NOT be overwritten — start_ts stays 1000.0.
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            // Manually write a marker with a specific (old) timestamp.
+            std::fs::write(
+                tmp.path().join(".git/info/wsx-hermes-spawn-at"),
+                "1000.0\n",
+            ).unwrap();
+            let fresh_mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &fresh_mode);
+            let marker = super::read_hermes_spawn_marker(tmp.path())
+                .expect("marker should still exist after prepare");
+            assert!((marker.start_ts - 1000.0).abs() < 0.001,
+                "start_ts must be preserved; got {}", marker.start_ts);
+        }
     }
 
     mod hermes_build_command {
@@ -2848,6 +3023,52 @@ mod tests {
             let argv = argv_strings(&cmd);
             let idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
             assert_eq!(argv[idx + 1], "session-abc");
+        }
+
+        #[test]
+        fn continue_with_cached_session_id_uses_cached_value() {
+            // Marker file has session_id="session-cached". DB has two sessions:
+            // "session-cached" (older, started_at=1100.0) and "session-newer"
+            // (newer, started_at=1500.0). The cached id must win over the newer
+            // time-based result.
+            let home = tempfile::tempdir().unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(cwd.path().join(".git/info")).unwrap();
+            // Write marker with start_ts=1000.0 AND cached session_id.
+            std::fs::write(
+                cwd.path().join(".git/info/wsx-hermes-spawn-at"),
+                "1000.0\nsession-cached\n",
+            ).unwrap();
+
+            let hermes_dir = home.path().join(".hermes");
+            std::fs::create_dir_all(&hermes_dir).unwrap();
+            let db_path = hermes_dir.join("state.db");
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES ('session-cached', 'cli', 1100.0);",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES ('session-newer', 'cli', 1500.0);",
+                [],
+            ).unwrap();
+            drop(conn);
+
+            let mut env = super::EnvGuard::new();
+            env.set("HOME", home.path().to_string_lossy().as_ref());
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let argv = argv_strings(&cmd);
+            let idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
+            assert_eq!(argv[idx + 1], "session-cached",
+                "cached id must win over time-based newer session; argv: {argv:?}");
         }
 
         fn env_of(cmd: &portable_pty::CommandBuilder, key: &str) -> Option<String> {

@@ -2028,7 +2028,7 @@ mod tests {
     }
 
     mod hermes_session_lookup {
-        use super::*;
+        use super::latest_hermes_session_id;
         use std::path::PathBuf;
 
         fn make_db(path: &std::path::Path) -> rusqlite::Connection {
@@ -2125,7 +2125,6 @@ mod tests {
     }
 
     mod hermes_git_exclude {
-        use super::*;
         use std::fs;
         use std::io::Read;
 

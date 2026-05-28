@@ -380,12 +380,12 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                         }
                     }
                 }
-                if let Some(ref a) = agent {
-                    if a != "pi" && a != "claude" && a != "hermes" {
-                        return Err(Error::UserInput(format!(
-                            "--agent must be 'pi', 'claude', or 'hermes', got '{a}'"
-                        )));
-                    }
+                if let Some(ref a) = agent
+                    && a != "pi" && a != "claude" && a != "hermes"
+                {
+                    return Err(Error::UserInput(format!(
+                        "--agent must be 'pi', 'claude', or 'hermes', got '{a}'"
+                    )));
                 }
                 Ok(CliAction::WorkspaceCreate {
                     repo,

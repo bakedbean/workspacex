@@ -324,19 +324,23 @@ pub fn has_prior_hermes_session(worktree: &Path) -> bool {
     latest_hermes_session_id_default(worktree).is_some()
 }
 
-/// Append `name` to the worktree's `.git/info/exclude` if not already present.
-/// Best-effort: silently no-ops on any IO error or if `.git/` is absent.
-/// `.git/info/exclude` is per-worktree-local and never committed.
+/// Append `name` to the gitdir's `info/exclude` if not already present.
+///
+/// `<worktree>/.git` may be either a directory (normal clone) or a file
+/// containing `gitdir: <path>` (git worktree). We follow the file to the
+/// real gitdir before writing.
+///
+/// Best-effort: silently no-ops on any IO/parse error or if `.git/` is
+/// absent. `info/exclude` is per-gitdir-local and never committed.
 fn ensure_git_exclude(worktree: &Path, name: &str) {
-    let git_dir = worktree.join(".git");
-    if !git_dir.exists() {
+    let dot_git = worktree.join(".git");
+    let gitdir = match resolve_gitdir(&dot_git, worktree) {
+        Some(p) => p,
+        None => return,
+    };
+    let info_dir = gitdir.join("info");
+    if !info_dir.exists() && std::fs::create_dir_all(&info_dir).is_err() {
         return;
-    }
-    let info_dir = git_dir.join("info");
-    if !info_dir.exists() {
-        if std::fs::create_dir_all(&info_dir).is_err() {
-            return;
-        }
     }
     let exclude_path = info_dir.join("exclude");
     let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
@@ -350,6 +354,27 @@ fn ensure_git_exclude(worktree: &Path, name: &str) {
     new.push_str(name);
     new.push('\n');
     let _ = std::fs::write(&exclude_path, new);
+}
+
+/// Resolve `<worktree>/.git` to the real gitdir, following a worktree-style
+/// `.git` file if necessary. Returns None on missing or unparseable input.
+fn resolve_gitdir(dot_git: &Path, worktree: &Path) -> Option<std::path::PathBuf> {
+    let meta = std::fs::metadata(dot_git).ok()?;
+    if meta.is_dir() {
+        return Some(dot_git.to_path_buf());
+    }
+    if !meta.is_file() {
+        return None;
+    }
+    let contents = std::fs::read_to_string(dot_git).ok()?;
+    let line = contents.lines().next()?;
+    let rest = line.strip_prefix("gitdir:")?.trim();
+    let path = std::path::PathBuf::from(rest);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(worktree.join(path))
+    }
 }
 
 /// Resolve whether a workspace has a prior session based on the agent kind.
@@ -1924,6 +1949,55 @@ mod tests {
             // No .git/ at all. Must not panic.
             super::ensure_git_exclude(tmp.path(), "AGENTS.md");
             assert!(!tmp.path().join(".git").exists());
+        }
+
+        #[test]
+        fn follows_worktree_style_git_file_with_absolute_gitdir() {
+            let tmp = tempfile::tempdir().unwrap();
+            // External gitdir lives outside the worktree
+            let external = tempfile::tempdir().unwrap();
+            let gitdir = external.path().join("worktrees/feature-x");
+            fs::create_dir_all(&gitdir).unwrap();
+            // worktree/.git is a FILE pointing at the external gitdir
+            fs::write(
+                tmp.path().join(".git"),
+                format!("gitdir: {}\n", gitdir.display()),
+            )
+            .unwrap();
+
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+
+            let exclude = gitdir.join("info/exclude");
+            let contents = read(&exclude);
+            assert!(contents.contains("AGENTS.md"),
+                "expected AGENTS.md in {}: {contents:?}", exclude.display());
+        }
+
+        #[test]
+        fn follows_worktree_style_git_file_with_relative_gitdir() {
+            let tmp = tempfile::tempdir().unwrap();
+            // Relative gitdir resolved against the worktree path
+            let rel = "external-gitdir";
+            fs::create_dir_all(tmp.path().join(rel)).unwrap();
+            fs::write(
+                tmp.path().join(".git"),
+                format!("gitdir: {rel}\n"),
+            )
+            .unwrap();
+
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+
+            let exclude = tmp.path().join(rel).join("info/exclude");
+            let contents = read(&exclude);
+            assert!(contents.contains("AGENTS.md"));
+        }
+
+        #[test]
+        fn returns_silently_when_git_file_unparseable() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::write(tmp.path().join(".git"), "not a valid git pointer\n").unwrap();
+            // Must not panic and must not create any files
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
         }
     }
 }

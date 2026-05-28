@@ -771,6 +771,39 @@ fn render_rename_system_prompt_hermes(current_branch: &str, branch_prefix: &str)
     render_rename_system_prompt_pi(current_branch, branch_prefix)
 }
 
+/// Decide what text to inject into the wsx-managed block of AGENTS.md for a
+/// given Hermes spawn mode. Returns None when nothing needs injecting.
+fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
+    fn combine(rename: String, custom: Option<String>) -> String {
+        match custom {
+            None => rename,
+            Some(c) => format!("{rename}\n\n{c}"),
+        }
+    }
+
+    match mode {
+        SpawnMode::Fresh {
+            rename_ctx: Some(ctx),
+            custom_instructions,
+            ..
+        } => Some(combine(
+            render_rename_system_prompt_hermes(&ctx.current_branch, &ctx.branch_prefix),
+            custom_instructions.clone(),
+        )),
+        SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions,
+            ..
+        }
+        | SpawnMode::Continue {
+            custom_instructions, ..
+        } => custom_instructions.clone(),
+        SpawnMode::ProjectManager {
+            custom_instructions, ..
+        } => Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+    }
+}
+
 pub fn spawn_session(
     cwd: &Path,
     cols: u16,
@@ -2185,6 +2218,100 @@ mod tests {
             super::write_agents_md_section(tmp.path(), Some("inject"));
             // Restore perms so tempdir cleanup works.
             fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+    }
+
+    mod hermes_compose {
+        fn rename_ctx() -> super::RenameContext {
+            super::RenameContext {
+                current_branch: "wsx/bold-fern".into(),
+                branch_prefix: "wsx".into(),
+            }
+        }
+
+        #[test]
+        fn fresh_with_rename_returns_rename_text() {
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: Some(rename_ctx()),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert!(result.contains("git branch -m wsx/bold-fern"));
+        }
+
+        #[test]
+        fn fresh_with_rename_and_custom_combines_both() {
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: Some(rename_ctx()),
+                custom_instructions: Some("Use ruff.".into()),
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert!(result.contains("git branch -m"));
+            assert!(result.contains("Use ruff."));
+            let rename_pos = result.find("git branch -m").unwrap();
+            let custom_pos = result.find("Use ruff.").unwrap();
+            assert!(custom_pos > rename_pos, "custom should come after rename block");
+        }
+
+        #[test]
+        fn fresh_without_rename_returns_custom_only() {
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: Some("Use ruff.".into()),
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert_eq!(result, "Use ruff.");
+        }
+
+        #[test]
+        fn fresh_with_nothing_returns_none() {
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            assert!(super::compose_injected_prompt(&mode).is_none());
+        }
+
+        #[test]
+        fn continue_with_custom_returns_custom() {
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: Some("Be terse.".into()),
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert_eq!(result, "Be terse.");
+        }
+
+        #[test]
+        fn continue_without_custom_returns_none() {
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            assert!(super::compose_injected_prompt(&mode).is_none());
+        }
+
+        #[test]
+        fn project_manager_returns_pm_prompt() {
+            let mode = super::SpawnMode::ProjectManager {
+                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                resume: false,
+                fast_mode: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert!(!result.is_empty());
         }
     }
 }

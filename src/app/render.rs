@@ -276,7 +276,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             global_pinned.as_deref(),
                             repo.pinned_commands.as_deref(),
                         );
-                        let inputs = crate::ui::dashboard::detail::DetailInputs {
+                        let mut inputs = crate::ui::dashboard::detail::DetailInputs {
                             repo,
                             workspace: ws,
                             events: app.workspace_events.get(&ws.id),
@@ -297,15 +297,17 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             config: &detail_cfg,
                             registry: &app.registry,
                             pinned: &pinned,
+                            scroll_offsets: &mut app.detail_scroll_offsets,
                         };
-                        let rects = crate::ui::dashboard::detail::render(
+                        let out = crate::ui::dashboard::detail::render(
                             f,
                             detail_area,
-                            &inputs,
+                            &mut inputs,
                             &app.theme,
                         );
-                        if !rects.is_empty() {
-                            app.chip_rects = rects;
+                        app.detail_container_rects = out.container_rects;
+                        if !out.chip_rects.is_empty() {
+                            app.chip_rects = out.chip_rects;
                             app.pinned_commands_cache = pinned;
                         }
                     }

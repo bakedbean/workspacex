@@ -6,9 +6,9 @@
 //! handler (`handle_key_modal`) takes precedence when a modal is open.
 
 use crate::app::{
-    App, PendingEdit, RepoSettingField, SelectionTarget, SharedApp, apply_repo_setting,
-    attach_workspace, reconcile_create_result, rescan_processes, restore_attached_state,
-    save_layout_for, schedule_detach_refresh,
+    App, AttachReady, PendingEdit, RepoSettingField, SelectionTarget, SharedApp,
+    apply_repo_setting, attach_workspace, ensure_workspace_session, reconcile_create_result,
+    rescan_processes, restore_attached_state, save_layout_for, schedule_detach_refresh,
 };
 use crate::error::Result;
 use crate::store::WorkspaceId;
@@ -25,7 +25,7 @@ use crossterm::event::{
 #[cfg(test)]
 use crate::app::draw_for_test;
 #[cfg(test)]
-use crate::app::{build_spawn_info, maybe_mirror_mcp};
+use crate::app::build_spawn_info;
 #[cfg(test)]
 use crate::ui::split::AttachedState;
 #[cfg(test)]
@@ -172,7 +172,7 @@ async fn fire_chip(app: &mut App, idx: usize) {
     // view the session already exists by definition.
     if matches!(app.view, View::Dashboard) {
         if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
-            let _ = crate::app::ensure_workspace_session(app, ws_id);
+            let _ = ensure_workspace_session(app, ws_id);
         }
     }
     let session = match chip_target_session(app) {
@@ -1093,15 +1093,15 @@ async fn handle_key_modal(
                         // Mirror the dashboard-attach flow: clear the
                         // alert, spawn (or resume) the PTY, switch view.
                         app.workspace_needs_attention.remove(&ws_id);
-                        match crate::app::ensure_workspace_session(app, ws_id)? {
-                            crate::app::AttachReady::Ok => {
+                        match ensure_workspace_session(app, ws_id)? {
+                            AttachReady::Ok => {
                                 if app.sessions.get(ws_id).is_some() {
                                     let restored = restore_attached_state(app, ws_id);
                                     app.leader_pending = false;
                                     app.view = View::Attached(restored);
                                 }
                             }
-                            crate::app::AttachReady::AgentMissing => {
+                            AttachReady::AgentMissing => {
                                 // Modal::AgentMissing is set; leave view alone.
                             }
                         }
@@ -1124,8 +1124,8 @@ async fn handle_key_modal(
                     };
                     if let Some(ws_id) = order.get(selected_now).copied() {
                         app.workspace_needs_attention.remove(&ws_id);
-                        match crate::app::ensure_workspace_session(app, ws_id)? {
-                            crate::app::AttachReady::Ok => {
+                        match ensure_workspace_session(app, ws_id)? {
+                            AttachReady::Ok => {
                                 if app.sessions.get(ws_id).is_some() {
                                     match &mut app.view {
                                         View::Attached(state) => {
@@ -1157,7 +1157,7 @@ async fn handle_key_modal(
                                     }
                                 }
                             }
-                            crate::app::AttachReady::AgentMissing => {
+                            AttachReady::AgentMissing => {
                                 // Modal::AgentMissing is set; leave view alone.
                             }
                         }
@@ -1253,8 +1253,13 @@ async fn handle_key_modal(
         // Real dispatch for AgentMissing/AgentPicker arrives in Tasks 6 & 7.
         // For now, accept Esc to dismiss so the modal can't soft-lock the TUI
         // between this task and the follow-up tasks.
-        Modal::AgentMissing { .. } | Modal::AgentPicker { .. } => {
-            if matches!(k.code, KeyCode::Esc) {
+        Modal::AgentMissing { .. } => {
+            if k.code == KeyCode::Esc {
+                app.modal = None;
+            }
+        }
+        Modal::AgentPicker { .. } => {
+            if k.code == KeyCode::Esc {
                 app.modal = None;
             }
         }
@@ -1305,7 +1310,7 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
                 // Auto-spawn the workspace's session if it isn't running
                 // yet — otherwise an inline reply on an unattached
                 // workspace silently drops.
-                let _ = crate::app::ensure_workspace_session(app, ws_id);
+                let _ = ensure_workspace_session(app, ws_id);
                 if let Some(session) = app.sessions.get(ws_id) {
                     let mut bytes = draft.into_bytes();
                     bytes.push(b'\r');

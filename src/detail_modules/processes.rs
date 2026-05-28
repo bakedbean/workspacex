@@ -17,15 +17,29 @@ impl DetailModule for Processes {
     fn height_hint(&self, ctx: &DetailContext<'_>) -> Constraint {
         Constraint::Length(ctx.procs.len().clamp(1, 6) as u16)
     }
+    fn lines(
+        &self,
+        ctx: &DetailContext<'_>,
+        width: u16,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        build_lines(ctx, width)
+    }
     fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
         use ratatui::widgets::Paragraph;
-        let lines = crate::ui::dashboard::detail::build_processes(
-            ctx.procs,
-            ctx.theme,
-            area.width as usize,
-        );
+        let lines = build_lines(ctx, area.width);
         frame.render_widget(Paragraph::new(lines), area);
     }
+}
+
+fn build_lines(
+    ctx: &DetailContext<'_>,
+    width: u16,
+) -> Vec<ratatui::text::Line<'static>> {
+    crate::ui::dashboard::detail::build_processes(
+        ctx.procs,
+        ctx.theme,
+        width as usize,
+    )
 }
 
 #[cfg(test)]
@@ -74,5 +88,21 @@ mod tests {
         let mut ctx = stub_context();
         ctx.procs = Box::leak(procs.into_boxed_slice());
         assert_eq!(Processes.height_hint(&ctx), Constraint::Length(6));
+    }
+
+    #[test]
+    fn lines_returns_one_line_per_proc() {
+        let procs = vec![proc(1, "a"), proc(2, "b"), proc(3, "c")];
+        let mut ctx = stub_context();
+        ctx.procs = Box::leak(procs.into_boxed_slice());
+        let out = Processes.lines(&ctx, 40);
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn lines_zero_procs_returns_one_dash_line() {
+        let ctx = stub_context();
+        let out = Processes.lines(&ctx, 40);
+        assert_eq!(out.len(), 1);
     }
 }

@@ -1349,7 +1349,53 @@ async fn handle_paste(app: &mut App, shared: &SharedApp, content: String) -> Res
     }
     Ok(())
 }
+/// Returns the slot index of the detail-bar container under (col, row),
+/// or None if no container rect matches.
+fn container_under_cursor(app: &App, col: u16, row: u16) -> Option<usize> {
+    app.detail_container_rects
+        .iter()
+        .enumerate()
+        .find_map(|(i, slot)| {
+            let r = slot.as_ref()?;
+            let in_rect = col >= r.x
+                && col < r.x.saturating_add(r.width)
+                && row >= r.y
+                && row < r.y.saturating_add(r.height);
+            if in_rect { Some(i) } else { None }
+        })
+}
+
+/// Bump the scroll offset for container `slot` by `delta` rows. Clamped
+/// to [0, u16::MAX] here; the next draw clamps further to the actual
+/// content height in `render_container`.
+fn adjust_detail_scroll(app: &mut App, slot: usize, delta: u16, up: bool) {
+    if slot >= app.detail_scroll_offsets.len() {
+        return;
+    }
+    let cur = app.detail_scroll_offsets[slot];
+    app.detail_scroll_offsets[slot] = if up {
+        cur.saturating_sub(delta)
+    } else {
+        cur.saturating_add(delta)
+    };
+}
+
 async fn handle_mouse(app: &mut App, m: MouseEvent) {
+    // Detail-bar container scroll: consume wheel events on the Dashboard
+    // view when the cursor is over a container rect. Fall through for
+    // wheel events elsewhere (existing scroll_active routing).
+    if matches!(
+        m.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) && matches!(app.view, crate::ui::View::Dashboard)
+    {
+        if let Some(slot) = container_under_cursor(app, m.column, m.row) {
+            let up = matches!(m.kind, MouseEventKind::ScrollUp);
+            adjust_detail_scroll(app, slot, 3, up);
+            return;
+        }
+    }
+
     match m.kind {
         MouseEventKind::ScrollUp => scroll_active(app, 3, true),
         MouseEventKind::ScrollDown => scroll_active(app, 3, false),

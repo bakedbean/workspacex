@@ -15,6 +15,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // dashboard detail branch overwrite these with live values when chips render.
     app.chip_rects.clear();
     app.pinned_commands_cache.clear();
+    // Clear detail-bar container rects each frame; the workspace-selected
+    // branch overwrites this with live values when the detail bar renders.
+    // Prevents stale rects from triggering wheel events on invisible containers.
+    app.detail_container_rects = [None; 4];
     match &app.view {
         crate::ui::View::Dashboard => {
             let selection_is_workspace =
@@ -276,7 +280,12 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             global_pinned.as_deref(),
                             repo.pinned_commands.as_deref(),
                         );
-                        let inputs = crate::ui::dashboard::detail::DetailInputs {
+                        crate::app::reset_detail_scroll_on_workspace_change(
+                            &mut app.detail_scroll_offsets,
+                            &mut app.detail_scroll_last_workspace,
+                            Some(ws.id),
+                        );
+                        let mut inputs = crate::ui::dashboard::detail::DetailInputs {
                             repo,
                             workspace: ws,
                             events: app.workspace_events.get(&ws.id),
@@ -297,15 +306,17 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             config: &detail_cfg,
                             registry: &app.registry,
                             pinned: &pinned,
+                            scroll_offsets: &mut app.detail_scroll_offsets,
                         };
-                        let rects = crate::ui::dashboard::detail::render(
+                        let out = crate::ui::dashboard::detail::render(
                             f,
                             detail_area,
-                            &inputs,
+                            &mut inputs,
                             &app.theme,
                         );
-                        if !rects.is_empty() {
-                            app.chip_rects = rects;
+                        app.detail_container_rects = out.container_rects;
+                        if !out.chip_rects.is_empty() {
+                            app.chip_rects = out.chip_rects;
                             app.pinned_commands_cache = pinned;
                         }
                     }

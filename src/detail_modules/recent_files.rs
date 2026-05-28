@@ -2,8 +2,6 @@
 //! within the workspace, with per-file diff stats.
 
 use crate::detail_modules::{DetailContext, DetailModule};
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
 
 pub struct RecentFiles;
 
@@ -14,19 +12,18 @@ impl DetailModule for RecentFiles {
     fn title(&self) -> &'static str {
         "RECENT FILES"
     }
-    fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
-        Constraint::Min(3)
-    }
-    fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
-        use ratatui::widgets::Paragraph;
-        let lines = crate::ui::dashboard::detail::build_recent_files(
+    fn lines(
+        &self,
+        ctx: &DetailContext<'_>,
+        width: u16,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        crate::ui::dashboard::detail::build_recent_files(
             ctx.events,
             ctx.diff_per_file,
             &ctx.workspace.worktree_path,
             ctx.theme,
-            area.width as usize,
-        );
-        frame.render_widget(Paragraph::new(lines), area);
+            width as usize,
+        )
     }
 }
 
@@ -46,8 +43,9 @@ mod tests {
     }
 
     #[test]
-    fn height_hint_is_min_three() {
+    fn lines_empty_events_returns_one_dash_line() {
         let ctx = stub_context();
-        assert_eq!(RecentFiles.height_hint(&ctx), Constraint::Min(3));
+        let out = RecentFiles.lines(&ctx, 40);
+        assert_eq!(out.len(), 1, "empty state should emit one '—' line");
     }
 }

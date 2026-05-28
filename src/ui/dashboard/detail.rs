@@ -45,6 +45,15 @@ pub struct DetailInputs<'a> {
     /// Pinned commands resolved for the selected workspace's repo. When
     /// empty, no chip row is rendered.
     pub pinned: &'a [crate::pinned::PinnedCommand],
+    /// Per-slot scroll offsets. Borrowed mutably so the container can
+    /// clamp them to the current content height during render.
+    pub scroll_offsets: &'a mut [u16; 4],
+}
+
+#[derive(Debug, Default)]
+pub struct DetailDrawOutput {
+    pub chip_rects: Vec<ratatui::layout::Rect>,
+    pub container_rects: [Option<ratatui::layout::Rect>; 4],
 }
 
 /// Render the detail bar into `area`. No-op when `area.height` is below
@@ -54,9 +63,9 @@ pub struct DetailInputs<'a> {
 pub fn render(
     f: &mut Frame,
     area: Rect,
-    inputs: &DetailInputs<'_>,
+    inputs: &mut DetailInputs<'_>,
     theme: &Theme,
-) -> Vec<ratatui::layout::Rect> {
+) -> DetailDrawOutput {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
 
@@ -74,7 +83,7 @@ pub fn render(
         + 1; // reply
     let needed = inputs.config.minimum_height().max(min_rows);
     if area.height == 0 || area.height < needed {
-        return Vec::new();
+        return DetailDrawOutput::default();
     }
 
     let body_region_constraint = if has_body {
@@ -122,7 +131,7 @@ pub fn render(
     );
     f.render_widget(Paragraph::new(header), header_area);
 
-    render_body_region(f, body_region, inputs, theme);
+    let container_rects = render_body_region(f, body_region, inputs, theme);
 
     let chip_rects = if let Some(area) = chip_area {
         crate::ui::attached::render_chip_row(f, area, inputs.pinned, theme)
@@ -143,15 +152,24 @@ pub fn render(
         f.set_cursor_position((reply_area.x + cx, reply_area.y));
     }
 
-    chip_rects
+    DetailDrawOutput {
+        chip_rects,
+        container_rects,
+    }
 }
 
-fn render_body_region(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, theme: &Theme) {
+fn render_body_region(
+    f: &mut Frame,
+    area: Rect,
+    inputs: &mut DetailInputs<'_>,
+    theme: &Theme,
+) -> [Option<Rect>; 4] {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
 
+    let mut rects: [Option<Rect>; 4] = [None; 4];
     if area.height < 2 || area.width == 0 {
-        return;
+        return rects;
     }
     let cfg = inputs.config;
 
@@ -177,7 +195,7 @@ fn render_body_region(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, them
     f.render_widget(Paragraph::new(rule_line), bottom_rule);
 
     if !cfg.has_body() {
-        return;
+        return rects;
     }
 
     // Narrow-terminal collapse: < 80 cols → first non-empty container only.
@@ -193,7 +211,7 @@ fn render_body_region(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, them
 
     let n = containers.len();
     if n == 0 {
-        return;
+        return rects;
     }
 
     // Horizontal split: N columns share the remaining width equally
@@ -227,6 +245,8 @@ fn render_body_region(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, them
         events_scanned: inputs.events_scanned,
         theme,
     };
+    let registry = inputs.registry;
+    let scroll_offsets: &mut [u16; 4] = inputs.scroll_offsets;
 
     // Container content sits between the two rule rows. Column i sits
     // at chunk i*2 (pattern: col, sep, col, sep, col, …).
@@ -238,7 +258,30 @@ fn render_body_region(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, them
             width: col.width,
             height: col.height.saturating_sub(2),
         };
-        render_container(f, content, ids, &ctx, inputs.registry, theme);
+        let slot_idx = if area.width < 80 {
+            // Narrow-collapse path: only the first non-empty container renders.
+            // Its slot index in the App-state array is its original position
+            // in cfg.containers — not its position in the filtered view.
+            cfg.containers
+                .iter()
+                .position(|c| !c.is_empty())
+                .unwrap_or(0)
+        } else {
+            // Normal path: container order is preserved, slot = loop index.
+            i
+        };
+        if slot_idx < 4 {
+            render_container(
+                f,
+                content,
+                ids,
+                &ctx,
+                registry,
+                theme,
+                &mut scroll_offsets[slot_idx],
+            );
+            rects[slot_idx] = Some(content);
+        }
     }
 
     // Vertical separators run the FULL body-region height. At the top
@@ -262,6 +305,8 @@ fn render_body_region(f: &mut Frame, area: Rect, inputs: &DetailInputs<'_>, them
             .collect();
         f.render_widget(Paragraph::new(sep_lines), sep_area);
     }
+
+    rects
 }
 
 fn render_container(
@@ -271,80 +316,76 @@ fn render_container(
     ctx: &crate::detail_modules::DetailContext<'_>,
     reg: &crate::detail_modules::Registry,
     theme: &Theme,
+    offset: &mut u16,
 ) {
-    use ratatui::layout::{Constraint, Direction, Layout};
-    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-    if module_ids.is_empty() || area.height == 0 {
+    if module_ids.is_empty() || area.height == 0 || area.width == 0 {
         return;
     }
 
-    enum Slot<'a> {
-        Found(&'a dyn crate::detail_modules::DetailModule),
-        Unknown(&'a str),
-    }
-    let slots: Vec<Slot<'_>> = module_ids
-        .iter()
-        .map(|id| match reg.get(id) {
-            Some(m) => Slot::Found(m),
-            None => {
-                tracing::warn!(id = %id, "detail_bar: unknown module id in container");
-                Slot::Unknown(id.as_str())
-            }
-        })
-        .collect();
-
-    // Per slot: [title row, body, gap row]. Last slot's gap is Length(0).
-    // Unknown placeholder body = Length(0); only the title row renders.
-    let constraints: Vec<Constraint> = slots
-        .iter()
-        .enumerate()
-        .flat_map(|(i, slot)| {
-            let last = i == slots.len() - 1;
-            let body = match slot {
-                Slot::Found(m) => m.height_hint(ctx),
-                Slot::Unknown(_) => Constraint::Length(0),
-            };
-            let title = Constraint::Length(1);
-            let gap = if last {
-                Constraint::Length(0)
-            } else {
-                Constraint::Length(1)
-            };
-            [title, body, gap]
-        })
-        .collect();
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
+    // Reserve the rightmost column for the scrollbar so column width stays
+    // stable regardless of whether content currently overflows.
+    let content_width = area.width.saturating_sub(1);
+    let content_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: content_width,
+        height: area.height,
+    };
+    let bar_area = Rect {
+        x: area.x + content_width,
+        y: area.y,
+        width: 1,
+        height: area.height,
+    };
 
     let label_style = Style::default()
-        .fg(ctx.theme.path)
+        .fg(theme.path)
         .add_modifier(Modifier::BOLD);
 
-    for (i, slot) in slots.iter().enumerate() {
-        let title_area = chunks[i * 3];
-        let body_area = chunks[i * 3 + 1];
-        match slot {
-            Slot::Found(m) => {
-                f.render_widget(
-                    Paragraph::new(Line::from(Span::styled(m.title(), label_style))),
-                    title_area,
-                );
-                m.render(body_area, ctx, f);
+    // Build virtual line list: title row + body lines + 1-row gap between
+    // modules. Last module has no trailing gap.
+    let mut virtual_lines: Vec<Line<'static>> = Vec::new();
+    let last_idx = module_ids.len().saturating_sub(1);
+    for (i, id) in module_ids.iter().enumerate() {
+        match reg.get(id) {
+            Some(m) => {
+                virtual_lines.push(Line::from(Span::styled(m.title(), label_style)));
+                virtual_lines.extend(m.lines(ctx, content_width));
             }
-            Slot::Unknown(id) => {
-                f.render_widget(
-                    Paragraph::new(Line::from(Span::styled(
-                        format!("[unknown: {id}]"),
-                        theme.dim_style(),
-                    ))),
-                    title_area,
-                );
+            None => {
+                tracing::warn!(id = %id, "detail_bar: unknown module id in container");
+                virtual_lines.push(Line::from(Span::styled(
+                    format!("[unknown: {id}]"),
+                    theme.dim_style(),
+                )));
             }
         }
+        if i != last_idx {
+            virtual_lines.push(Line::from(""));
+        }
+    }
+
+    let content_height: u16 = virtual_lines.len().min(u16::MAX as usize) as u16;
+    let max_offset = content_height.saturating_sub(area.height);
+    if *offset > max_offset {
+        *offset = max_offset;
+    }
+
+    let start = *offset as usize;
+    let end = (start + area.height as usize).min(virtual_lines.len());
+    let visible: Vec<Line<'static>> = virtual_lines[start..end].to_vec();
+    f.render_widget(Paragraph::new(visible), content_area);
+
+    if content_height > area.height {
+        let mut state = ScrollbarState::new(content_height as usize)
+            .position(*offset as usize)
+            .viewport_content_length(area.height as usize);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None);
+        f.render_stateful_widget(scrollbar, bar_area, &mut state);
     }
 }
 
@@ -664,7 +705,7 @@ mod tests {
         reg
     }
 
-    fn render_to_text(inputs: &DetailInputs<'_>, w: u16, h: u16) -> String {
+    fn render_to_text(inputs: &mut DetailInputs<'_>, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -732,7 +773,8 @@ mod tests {
         let result = terminal.draw(|f| {
             let theme = Theme::wsx();
             let cfg = DetailBarConfig::default();
-            let inputs = DetailInputs {
+            let mut offsets = [0u16; 4];
+            let mut inputs = DetailInputs {
                 repo: &repo,
                 workspace: &ws,
                 events: None,
@@ -750,8 +792,9 @@ mod tests {
                 config: &cfg,
                 registry: &reg,
                 pinned: &[],
+                scroll_offsets: &mut offsets,
             };
-            render(f, Rect::new(0, 0, 80, 0), &inputs, &theme);
+            render(f, Rect::new(0, 0, 80, 0), &mut inputs, &theme);
         });
         assert!(result.is_ok());
     }
@@ -880,7 +923,8 @@ mod tests {
         };
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
@@ -901,8 +945,9 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            scroll_offsets: &mut offsets,
         };
-        let text = render_to_text(&inputs, 120, 10);
+        let text = render_to_text(&mut inputs, 120, 10);
         assert!(
             text.contains("repo-overview") || text.contains("ws"),
             "header name: {text:?}"
@@ -930,7 +975,8 @@ mod tests {
             ..DetailBarConfig::default()
         };
         let reg = make_registry();
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
@@ -948,9 +994,10 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            scroll_offsets: &mut offsets,
         };
         // Width 100, height exactly CHROME_ROWS (4).
-        let text = render_to_text(&inputs, 100, DetailBarConfig::CHROME_ROWS);
+        let text = render_to_text(&mut inputs, 100, DetailBarConfig::CHROME_ROWS);
         assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
         assert!(
             !text.contains("SESSION SUMMARY"),
@@ -974,7 +1021,8 @@ mod tests {
         };
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
@@ -992,8 +1040,9 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            scroll_offsets: &mut offsets,
         };
-        let text = render_to_text(&inputs, 70, 10);
+        let text = render_to_text(&mut inputs, 70, 10);
         assert!(text.contains("SESSION SUMMARY"), "summary kept: {text:?}");
         assert!(
             !text.contains("RECENT CHAT"),
@@ -1022,7 +1071,8 @@ mod tests {
         let mut cfg = DetailBarConfig::default();
         cfg.containers = vec![vec!["seshun_summary".into()]];
         let reg = make_registry();
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: None,
@@ -1040,8 +1090,9 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            scroll_offsets: &mut offsets,
         };
-        let text = render_to_text(&inputs, 120, 10);
+        let text = render_to_text(&mut inputs, 120, 10);
         assert!(
             text.contains("[unknown: seshun_summary]"),
             "expected unknown placeholder in: {text:?}",
@@ -1058,7 +1109,8 @@ mod tests {
         let mut cfg = DetailBarConfig::default();
         cfg.containers = vec![vec!["recent_chat".into()]];
         let reg = make_registry();
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
@@ -1076,8 +1128,9 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            scroll_offsets: &mut offsets,
         };
-        let text = render_to_text(&inputs, 120, 10);
+        let text = render_to_text(&mut inputs, 120, 10);
         assert!(text.contains("RECENT CHAT"), "chat title: {text:?}");
         // Other module titles must NOT appear when only recent_chat is configured.
         assert!(
@@ -1103,7 +1156,8 @@ mod tests {
                 command: "/feedback".into(),
             },
         ];
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: None,
@@ -1121,8 +1175,9 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &pinned,
+            scroll_offsets: &mut offsets,
         };
-        let text = render_to_text(&inputs, 120, 12);
+        let text = render_to_text(&mut inputs, 120, 12);
         // Chip labels must appear, and "Reply to agent" must still appear
         // (we only inserted a row, didn't remove the reply row).
         assert!(text.contains("PR"), "chip label PR present: {text:?}");
@@ -1152,7 +1207,8 @@ mod tests {
         let (_store, repo, ws) = seed_workspace();
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: None,
@@ -1170,6 +1226,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            scroll_offsets: &mut offsets,
         };
         // Capture render's returned rects via a closure-bound outer mut
         // (Terminal::draw can't propagate values out of its closure).
@@ -1179,7 +1236,8 @@ mod tests {
         terminal
             .draw(|f| {
                 let theme = Theme::wsx();
-                returned = render(f, Rect::new(0, 0, 120, 12), &inputs, &theme);
+                let out = render(f, Rect::new(0, 0, 120, 12), &mut inputs, &theme);
+                returned = out.chip_rects;
             })
             .unwrap();
         assert!(returned.is_empty(), "no chip rects when pinned empty");
@@ -1203,7 +1261,8 @@ mod tests {
             label: "PR".into(),
             command: "/pr".into(),
         }];
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: None,
@@ -1221,6 +1280,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &pinned,
+            scroll_offsets: &mut offsets,
         };
         // Area height exactly CHROME_ROWS (4). With chips present we need 5.
         let mut terminal =
@@ -1229,7 +1289,8 @@ mod tests {
         terminal
             .draw(|f| {
                 let theme = Theme::wsx();
-                returned = render(f, Rect::new(0, 0, 80, 4), &inputs, &theme);
+                let out = render(f, Rect::new(0, 0, 80, 4), &mut inputs, &theme);
+                returned = out.chip_rects;
             })
             .unwrap();
         assert!(
@@ -1273,7 +1334,8 @@ mod tests {
         };
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
-        let inputs = DetailInputs {
+        let mut offsets = [0u16; 4];
+        let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
@@ -1291,8 +1353,9 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            scroll_offsets: &mut offsets,
         };
-        let text = render_to_text(&inputs, 120, 10);
+        let text = render_to_text(&mut inputs, 120, 10);
         let lines: Vec<&str> = text.lines().collect();
         let reply_idx = lines
             .iter()
@@ -1337,5 +1400,132 @@ mod tests {
             "bottom rule needs `─` glyphs: {:?}",
             body_rows[last]
         );
+    }
+
+    #[test]
+    fn render_container_short_content_no_scrollbar() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let reg = make_registry();
+        let ids = vec!["processes".to_string()];
+        let mut offset: u16 = 0;
+        let (_store, repo, workspace) = seed_workspace();
+        let theme = Theme::default();
+        let ctx = crate::detail_modules::DetailContext {
+            repo: &repo,
+            workspace: &workspace,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: crate::ui::dashboard::status::Status::Idle,
+            ago_secs: None,
+            events_scanned: true,
+            theme: &theme,
+        };
+        terminal
+            .draw(|f| {
+                let area = Rect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 10,
+                };
+                render_container(f, area, &ids, &ctx, &reg, &theme, &mut offset);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        // Rightmost column (x=39) should be blank — no scrollbar painted.
+        for y in 0..10 {
+            let sym = buf[(39, y)].symbol();
+            assert_eq!(
+                sym, " ",
+                "expected blank scrollbar column at row {y}, got {sym:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn render_container_tall_content_renders_scrollbar() {
+        let backend = TestBackend::new(40, 4); // very short — forces overflow
+        let mut terminal = Terminal::new(backend).unwrap();
+        let reg = make_registry();
+        // Stack two modules so the virtual line list exceeds 4 rows
+        // (2 titles + at least 1 body line each + 1 gap = >= 5).
+        let ids = vec!["processes".to_string(), "session_summary".to_string()];
+        let mut offset: u16 = 0;
+        let (_store, repo, workspace) = seed_workspace();
+        let theme = Theme::default();
+        let ctx = crate::detail_modules::DetailContext {
+            repo: &repo,
+            workspace: &workspace,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: crate::ui::dashboard::status::Status::Idle,
+            ago_secs: None,
+            events_scanned: true,
+            theme: &theme,
+        };
+        terminal
+            .draw(|f| {
+                let area = Rect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 4,
+                };
+                render_container(f, area, &ids, &ctx, &reg, &theme, &mut offset);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let any_nonblank = (0..4).any(|y| buf[(39, y)].symbol() != " ");
+        assert!(any_nonblank, "expected scrollbar glyphs in rightmost column");
+    }
+
+    #[test]
+    fn render_container_clamps_offset_when_content_shrinks() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let reg = make_registry();
+        let ids = vec!["processes".to_string()];
+        let mut offset: u16 = 50; // wildly past end
+        let (_store, repo, workspace) = seed_workspace();
+        let theme = Theme::default();
+        let ctx = crate::detail_modules::DetailContext {
+            repo: &repo,
+            workspace: &workspace,
+            events: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            status: crate::ui::dashboard::status::Status::Idle,
+            ago_secs: None,
+            events_scanned: true,
+            theme: &theme,
+        };
+        terminal
+            .draw(|f| {
+                let area = Rect {
+                    x: 0,
+                    y: 0,
+                    width: 40,
+                    height: 10,
+                };
+                render_container(f, area, &ids, &ctx, &reg, &theme, &mut offset);
+            })
+            .unwrap();
+        // Title + 1 dash line = 2 rows total. Area is 10 rows. max_offset = 0.
+        assert_eq!(offset, 0);
     }
 }

@@ -188,6 +188,18 @@ pub struct App {
     /// Rects of the rendered chip row buttons from the last draw tick.
     /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
     pub chip_rects: Vec<ratatui::layout::Rect>,
+    /// Per-slot scroll offset for detail-bar containers. Bumped by mouse
+    /// wheel via `handle_mouse`, clamped on every draw to
+    /// `content_height - visible_height` for the matching container.
+    pub detail_scroll_offsets: [u16; 4],
+    /// Sentinel for reset-on-workspace-switch. When the selected
+    /// workspace changes, `detail_scroll_offsets` zeroes out and this
+    /// updates. See `src/ui/dashboard/detail.rs::render`.
+    pub detail_scroll_last_workspace: Option<crate::store::WorkspaceId>,
+    /// Rect for each rendered detail-bar container slot, populated each
+    /// draw and consumed by `handle_mouse` for hit-testing wheel events.
+    /// Mirrors the `chip_rects` draw-populates-input-reads pattern.
+    pub detail_container_rects: [Option<ratatui::layout::Rect>; 4],
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
@@ -261,6 +273,9 @@ impl App {
             next_archive_gen: 0,
             pending_archive_gen: None,
             chip_rects: Vec::new(),
+            detail_scroll_offsets: [0; 4],
+            detail_scroll_last_workspace: None,
+            detail_container_rects: [None; 4],
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),
@@ -433,6 +448,25 @@ impl App {
             running,
             has_prior,
         )
+    }
+
+}
+
+/// Zero detail-bar scroll offsets and update the sentinel when the
+/// selected workspace changes. Called by `app::render::draw` before the
+/// detail bar renders. Takes the two fields by mutable reference rather
+/// than `&mut App` so the caller can hold an immutable borrow of
+/// `app.workspaces` (or another field) at the same call site — direct
+/// field access lets the borrow checker split disjoint borrows where a
+/// method on `&mut App` cannot.
+pub(crate) fn reset_detail_scroll_on_workspace_change(
+    offsets: &mut [u16; 4],
+    last_workspace: &mut Option<crate::store::WorkspaceId>,
+    current: Option<crate::store::WorkspaceId>,
+) {
+    if *last_workspace != current {
+        *offsets = [0; 4];
+        *last_workspace = current;
     }
 }
 
@@ -1208,5 +1242,44 @@ mod derive_stopped_kind_tests {
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
+    }
+
+    #[test]
+    fn reset_detail_scroll_zeroes_offsets_on_workspace_change() {
+        use crate::store::WorkspaceId;
+        let mut offsets = [3u16, 7, 0, 2];
+        let mut last = Some(WorkspaceId(100));
+
+        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(200)));
+
+        assert_eq!(offsets, [0; 4]);
+        assert_eq!(last, Some(WorkspaceId(200)));
+    }
+
+    #[test]
+    fn reset_detail_scroll_preserves_offsets_on_same_workspace() {
+        use crate::store::WorkspaceId;
+        let mut offsets = [3u16, 7, 0, 2];
+        let mut last = Some(WorkspaceId(100));
+
+        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(100)));
+
+        assert_eq!(offsets, [3, 7, 0, 2]);
+        assert_eq!(last, Some(WorkspaceId(100)));
+    }
+
+    #[test]
+    fn reset_detail_scroll_handles_initial_none_to_some() {
+        use crate::store::WorkspaceId;
+        // App starts with detail_scroll_last_workspace = None and offsets
+        // already zero; first draw with a selected workspace should update
+        // the sentinel even though the offsets are technically unchanged.
+        let mut offsets = [5u16, 0, 0, 0]; // seeded non-zero
+        let mut last: Option<WorkspaceId> = None;
+
+        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(42)));
+
+        assert_eq!(offsets, [0; 4]);
+        assert_eq!(last, Some(WorkspaceId(42)));
     }
 }

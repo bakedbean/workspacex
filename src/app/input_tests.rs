@@ -4118,6 +4118,118 @@ mod detail_bar_focus_tests {
             ref other => panic!("expected AgentPicker, got {other:?}"),
         }
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_picker_down_advances_and_clamps() {
+        use crate::pty::session::AgentKind;
+        use crate::ui::modal::Modal;
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::AgentPicker {
+            ws_id: crate::store::WorkspaceId(1),
+            selected: 0,
+            current: AgentKind::Claude,
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+
+        for expected in [1usize, 2, 2 /* clamps at last index */] {
+            handle_key_modal(
+                &mut app,
+                &shared,
+                KeyEvent::new(crossterm::event::KeyCode::Down, KeyModifiers::NONE),
+            )
+            .await
+            .unwrap();
+            match app.modal {
+                Some(Modal::AgentPicker { selected, .. }) => {
+                    assert_eq!(selected, expected, "Down step");
+                }
+                ref other => panic!("expected AgentPicker, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_picker_enter_persists_and_retries_attach() {
+        use crate::pty::session::AgentKind;
+        use crate::store::{NewWorkspace, WorkspaceState};
+        use crate::test_support::{EnvGuard, cat_path};
+        use crate::ui::modal::Modal;
+        // Switch from broken Hermes (won't spawn) to Claude (substituted with `cat`,
+        // which spawns fine), so the retry attach succeeds.
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ws",
+                branch: "repo/ws",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: AgentKind::Hermes,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let claude_idx = AgentKind::ALL
+            .iter()
+            .position(|k| *k == AgentKind::Claude)
+            .unwrap();
+        app.modal = Some(Modal::AgentPicker {
+            ws_id: id,
+            selected: claude_idx,
+            current: AgentKind::Hermes,
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        // Store now reports Claude.
+        let stored = app
+            .store
+            .workspaces(repo_id)
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == id)
+            .expect("workspace present");
+        assert_eq!(stored.agent, AgentKind::Claude);
+        // In-memory mirror also updated.
+        let mem = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == id)
+            .expect("workspace in memory")
+            .1
+            .clone();
+        assert_eq!(mem.agent, AgentKind::Claude);
+        // A session exists.
+        assert!(app.sessions.get(id).is_some(), "session should be alive");
+        // Modal closed.
+        assert!(app.modal.is_none(), "modal should be cleared on success");
+    }
 }
 
 #[cfg(test)]

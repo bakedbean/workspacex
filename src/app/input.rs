@@ -1267,9 +1267,46 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        Modal::AgentPicker { .. } => {
-            if k.code == KeyCode::Esc {
-                app.modal = None;
+        Modal::AgentPicker {
+            ws_id,
+            selected,
+            current,
+        } => {
+            use crate::pty::session::AgentKind;
+            match k.code {
+                KeyCode::Esc => {
+                    app.modal = None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let new_sel = selected.saturating_sub(1);
+                    app.modal = Some(Modal::AgentPicker {
+                        ws_id,
+                        selected: new_sel,
+                        current,
+                    });
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let new_sel = (selected + 1).min(AgentKind::ALL.len() - 1);
+                    app.modal = Some(Modal::AgentPicker {
+                        ws_id,
+                        selected: new_sel,
+                        current,
+                    });
+                }
+                KeyCode::Enter => {
+                    let new_agent = AgentKind::ALL[selected];
+                    app.store.set_workspace_agent(ws_id, new_agent)?;
+                    // Mirror to in-memory copy so the dashboard doesn't show stale
+                    // agent until poll_external_changes catches up.
+                    if let Some((_, ws)) =
+                        app.workspaces.iter_mut().find(|(_, w)| w.id == ws_id)
+                    {
+                        ws.agent = new_agent;
+                    }
+                    app.modal = None;
+                    attach_workspace(app, ws_id)?;
+                }
+                _ => {}
             }
         }
     }

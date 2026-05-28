@@ -312,12 +312,24 @@ fn latest_hermes_session_id(db_path: &Path, worktree: &Path) -> Option<String> {
     ).ok()
 }
 
+/// Production wrapper for `latest_hermes_session_id` that resolves
+/// `~/.hermes/state.db`.
+pub fn latest_hermes_session_id_default(worktree: &Path) -> Option<String> {
+    let db = dirs::home_dir()?.join(".hermes/state.db");
+    latest_hermes_session_id(&db, worktree)
+}
+
+/// True if a wsx-spawned Hermes session exists for this worktree.
+pub fn has_prior_hermes_session(worktree: &Path) -> bool {
+    latest_hermes_session_id_default(worktree).is_some()
+}
+
 /// Resolve whether a workspace has a prior session based on the agent kind.
 pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     match agent {
         AgentKind::Claude => has_prior_session(worktree),
         AgentKind::Pi => has_prior_pi_session(worktree),
-        AgentKind::Hermes => false, // stub — replaced in Task 4
+        AgentKind::Hermes => has_prior_hermes_session(worktree),
     }
 }
 
@@ -1722,6 +1734,15 @@ mod tests {
     fn hermes_source_tag_returns_none_for_nonexistent_path() {
         let bogus = std::path::Path::new("/this/path/definitely/does/not/exist/123456");
         assert!(super::hermes_source_tag(bogus).is_none());
+    }
+
+    #[test]
+    fn has_prior_hermes_session_false_for_fresh_tempdir() {
+        // A brand-new tempdir's canonical path will not match any source tag
+        // stored in the real ~/.hermes/state.db unless the user has somehow
+        // spawned Hermes from inside a tempdir at this exact path before.
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!super::has_prior_hermes_session(tmp.path()));
     }
 
     mod hermes_session_lookup {

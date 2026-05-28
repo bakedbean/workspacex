@@ -17,6 +17,19 @@ impl DetailModule for RecentFiles {
     fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
         Constraint::Min(3)
     }
+    fn lines(
+        &self,
+        ctx: &DetailContext<'_>,
+        width: u16,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        crate::ui::dashboard::detail::build_recent_files(
+            ctx.events,
+            ctx.diff_per_file,
+            &ctx.workspace.worktree_path,
+            ctx.theme,
+            width as usize,
+        )
+    }
     fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
         use ratatui::widgets::Paragraph;
         let lines = crate::ui::dashboard::detail::build_recent_files(
@@ -49,5 +62,12 @@ mod tests {
     fn height_hint_is_min_three() {
         let ctx = stub_context();
         assert_eq!(RecentFiles.height_hint(&ctx), Constraint::Min(3));
+    }
+
+    #[test]
+    fn lines_empty_events_returns_one_dash_line() {
+        let ctx = stub_context();
+        let out = RecentFiles.lines(&ctx, 40);
+        assert_eq!(out.len(), 1, "empty state should emit one '—' line");
     }
 }

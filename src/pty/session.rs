@@ -216,6 +216,7 @@ impl Drop for Session {
 pub struct RenameContext {
     pub current_branch: String,
     pub branch_prefix: String, // empty if no prefix
+    pub repo_name: String,     // wsx repo name (used by `wsx workspace rename <repo> ...`)
 }
 
 /// How to spawn the claude process for a workspace.
@@ -466,8 +467,8 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
 ///
 /// When `mode` is `Fresh { rename_ctx: Some(_) }` and `WSX_RENAME_MODE` is
 /// `claude` (the default), appends a system-prompt instruction directing
-/// claude to rename the branch based on the user's first message, plus
-/// pre-authorizes `Bash(git branch:*)` so the rename runs without a
+/// claude to rename the workspace based on the user's first message, plus
+/// pre-authorizes `Bash(wsx workspace rename:*)` so the rename runs without a
 /// permission prompt. When `mode` is `Continue`, passes `--continue` so
 /// claude resumes the most recent persisted session for this worktree.
 pub fn build_claude_command(
@@ -482,7 +483,7 @@ pub fn build_claude_command(
         cmd.env(k, v);
     }
 
-    let (rename_prompt, custom, allow_git_branch, add_continue, skip_permissions, add_dirs) =
+    let (rename_prompt, custom, allow_wsx_rename, add_continue, skip_permissions, add_dirs) =
         match mode {
             SpawnMode::Continue {
                 custom_instructions,
@@ -510,6 +511,7 @@ pub fn build_claude_command(
                             Some(render_rename_system_prompt(
                                 &ctx.current_branch,
                                 &ctx.branch_prefix,
+                                &ctx.repo_name,
                             )),
                             true,
                         )
@@ -555,9 +557,9 @@ pub fn build_claude_command(
 
     if skip_permissions {
         cmd.arg("--dangerously-skip-permissions");
-    } else if allow_git_branch {
+    } else if allow_wsx_rename {
         cmd.arg("--allowedTools");
-        cmd.arg("Bash(git branch:*)");
+        cmd.arg("Bash(wsx workspace rename:*)");
     }
 
     if remote.enabled {
@@ -590,24 +592,34 @@ pub fn build_claude_command(
     cmd
 }
 
-fn render_rename_system_prompt(current_branch: &str, branch_prefix: &str) -> String {
-    let prefix = if branch_prefix.is_empty() {
-        String::new()
+fn render_rename_system_prompt(
+    current_branch: &str,
+    branch_prefix: &str,
+    repo_name: &str,
+) -> String {
+    let current_slug = if branch_prefix.is_empty() {
+        current_branch.to_string()
     } else {
-        format!("{}/", branch_prefix.trim_end_matches('/'))
+        let prefix_with_slash = format!("{}/", branch_prefix.trim_end_matches('/'));
+        current_branch
+            .strip_prefix(&prefix_with_slash)
+            .unwrap_or(current_branch)
+            .to_string()
     };
     format!(
         "This is a wsx-managed worktree currently checked out on a placeholder branch \
-         named `{current_branch}`. The placeholder is a randomly-generated \
-         adjective-plant slug from the wsx workspace manager.\n\n\
+         named `{current_branch}`. The placeholder slug is `{current_slug}` (auto-generated \
+         adjective+plant from the wsx workspace manager).\n\n\
          BEFORE doing the work the user asks about, on their first message: \
-         run `git branch -m {current_branch} {prefix}<slug>` where `<slug>` is a \
+         run `wsx workspace rename {repo_name} {current_slug} <slug>` where `<slug>` is a \
          2-4 word lowercase kebab-case summary of what the user is asking for. \
-         Then briefly tell the user \"renamed branch to {prefix}<slug>\" on one line \
+         This command updates both the git branch and the wsx workspace registry — do \
+         NOT run `git branch -m` directly, since that leaves wsx's database stale. \
+         After renaming, briefly tell the user \"renamed workspace to <slug>\" on one line \
          and proceed with their actual request.\n\n\
          Constraints:\n\
-         - Keep the `{prefix}` prefix exactly as shown.\n\
-         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars.\n\
+         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars. Do NOT include the \
+         branch prefix — wsx prepends it automatically.\n\
          - Don't ask for confirmation; don't add extra explanation.\n\
          - Only do this once per worktree. If the current branch is no longer \
          the placeholder `{current_branch}`, skip the rename — it's already done.\n"
@@ -659,6 +671,7 @@ pub fn build_pi_command(
                     Some(render_rename_system_prompt_pi(
                         &ctx.current_branch,
                         &ctx.branch_prefix,
+                        &ctx.repo_name,
                     ))
                 } else {
                     None
@@ -819,25 +832,35 @@ pub fn build_hermes_command(
 
 /// Pi version of the rename system prompt. Pi uses `bash` (lowercase) as its
 /// tool name and has no permission system, so we don't need to
-/// pre-authorize the git branch command.
-fn render_rename_system_prompt_pi(current_branch: &str, branch_prefix: &str) -> String {
-    let prefix = if branch_prefix.is_empty() {
-        String::new()
+/// pre-authorize the wsx workspace rename command.
+fn render_rename_system_prompt_pi(
+    current_branch: &str,
+    branch_prefix: &str,
+    repo_name: &str,
+) -> String {
+    let current_slug = if branch_prefix.is_empty() {
+        current_branch.to_string()
     } else {
-        format!("{}/", branch_prefix.trim_end_matches('/'))
+        let prefix_with_slash = format!("{}/", branch_prefix.trim_end_matches('/'));
+        current_branch
+            .strip_prefix(&prefix_with_slash)
+            .unwrap_or(current_branch)
+            .to_string()
     };
     format!(
         "This is a wsx-managed worktree currently checked out on a placeholder branch \
-         named `{current_branch}`. The placeholder is a randomly-generated \
-         adjective-plant slug from the wsx workspace manager.\n\n\
+         named `{current_branch}`. The placeholder slug is `{current_slug}` (auto-generated \
+         adjective+plant from the wsx workspace manager).\n\n\
          BEFORE doing the work the user asks about, on their first message: \
-         run `git branch -m {current_branch} {prefix}<slug>` where `<slug>` is a \
+         run `wsx workspace rename {repo_name} {current_slug} <slug>` where `<slug>` is a \
          2-4 word lowercase kebab-case summary of what the user is asking for. \
-         Then briefly tell the user \"renamed branch to {prefix}<slug>\" on one line \
+         This command updates both the git branch and the wsx workspace registry — do \
+         NOT run `git branch -m` directly, since that leaves wsx's database stale. \
+         After renaming, briefly tell the user \"renamed workspace to <slug>\" on one line \
          and proceed with their actual request.\n\n\
          Constraints:\n\
-         - Keep the `{prefix}` prefix exactly as shown.\n\
-         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars.\n\
+         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars. Do NOT include the \
+         branch prefix — wsx prepends it automatically.\n\
          - Don't ask for confirmation; don't add extra explanation.\n\
          - Only do this once per worktree. If the current branch is no longer \
          the placeholder `{current_branch}`, skip the rename — it's already done.\n"
@@ -848,8 +871,12 @@ fn render_rename_system_prompt_pi(current_branch: &str, branch_prefix: &str) -> 
 /// the Pi version — Hermes has no permission system and uses plain bash, same
 /// as Pi. Keep this function distinct from the Pi helper so future divergence
 /// (e.g., a Hermes-specific tool naming convention) is a one-place change.
-fn render_rename_system_prompt_hermes(current_branch: &str, branch_prefix: &str) -> String {
-    render_rename_system_prompt_pi(current_branch, branch_prefix)
+fn render_rename_system_prompt_hermes(
+    current_branch: &str,
+    branch_prefix: &str,
+    repo_name: &str,
+) -> String {
+    render_rename_system_prompt_pi(current_branch, branch_prefix, repo_name)
 }
 
 /// Decide what text to inject into the wsx-managed block of AGENTS.md for a
@@ -868,7 +895,11 @@ fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
             custom_instructions,
             ..
         } => Some(combine(
-            render_rename_system_prompt_hermes(&ctx.current_branch, &ctx.branch_prefix),
+            render_rename_system_prompt_hermes(
+                &ctx.current_branch,
+                &ctx.branch_prefix,
+                &ctx.repo_name,
+            ),
             custom_instructions.clone(),
         )),
         SpawnMode::Fresh {
@@ -1231,6 +1262,7 @@ mod tests {
         let ctx = RenameContext {
             current_branch: "wsx/bold-fern".into(),
             branch_prefix: "wsx".into(),
+            repo_name: "myrepo".into(),
         };
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(ctx),
@@ -1250,14 +1282,14 @@ mod tests {
             .expect("system prompt value should follow")
             .to_string_lossy();
         assert!(
-            prompt.contains("git branch -m wsx/bold-fern"),
+            prompt.contains("wsx workspace rename myrepo bold-fern"),
             "rename block missing"
         );
         assert!(
             prompt.contains("Use tabs not spaces"),
             "custom instructions missing"
         );
-        let rename_pos = prompt.find("git branch -m").unwrap();
+        let rename_pos = prompt.find("wsx workspace rename").unwrap();
         let custom_pos = prompt.find("Use tabs not spaces").unwrap();
         assert!(
             custom_pos > rename_pos,
@@ -1283,7 +1315,7 @@ mod tests {
         let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
         assert!(prompt.contains("Use ruff"));
         assert!(
-            !prompt.contains("git branch -m"),
+            !prompt.contains("wsx workspace rename"),
             "rename should not appear on Continue"
         );
     }
@@ -1364,37 +1396,39 @@ mod tests {
 
     #[test]
     fn rename_prompt_includes_current_branch_and_prefix() {
-        let p = render_rename_system_prompt("wsx/bold-fern", "wsx");
+        let p = render_rename_system_prompt("wsx/bold-fern", "wsx", "myrepo");
         assert!(p.contains("`wsx/bold-fern`"));
-        assert!(p.contains("git branch -m wsx/bold-fern wsx/<slug>"));
-        assert!(p.contains("Keep the `wsx/` prefix"));
+        assert!(p.contains("wsx workspace rename myrepo bold-fern <slug>"));
+        // No "Keep the prefix" constraint — wsx handles that automatically.
+        assert!(!p.contains("Keep the `wsx/` prefix"));
     }
 
     #[test]
     fn rename_prompt_handles_empty_prefix() {
-        let p = render_rename_system_prompt("bold-fern", "");
+        let p = render_rename_system_prompt("bold-fern", "", "myrepo");
         assert!(p.contains("`bold-fern`"));
-        assert!(p.contains("git branch -m bold-fern <slug>"));
+        assert!(p.contains("wsx workspace rename myrepo bold-fern <slug>"));
     }
 
     #[test]
     fn render_rename_prompt_hermes_includes_branch_and_prefix() {
-        let prompt = super::render_rename_system_prompt_hermes("wsx/bold-fern", "wsx");
-        assert!(prompt.contains("git branch -m wsx/bold-fern"));
-        assert!(prompt.contains("wsx/<slug>"));
+        let prompt = super::render_rename_system_prompt_hermes("wsx/bold-fern", "wsx", "myrepo");
+        assert!(prompt.contains("wsx workspace rename myrepo bold-fern"));
+        // No "Keep the prefix" constraint — wsx handles that automatically.
+        assert!(!prompt.contains("Keep the `wsx/` prefix"));
     }
 
     #[test]
     fn render_rename_prompt_hermes_handles_empty_prefix() {
-        let prompt = super::render_rename_system_prompt_hermes("bold-fern", "");
-        assert!(prompt.contains("git branch -m bold-fern"));
+        let prompt = super::render_rename_system_prompt_hermes("bold-fern", "", "myrepo");
+        assert!(prompt.contains("wsx workspace rename myrepo bold-fern"));
         assert!(!prompt.contains("//"), "prompt should not contain double-slash: {prompt}");
     }
 
     #[test]
     fn render_rename_prompt_hermes_matches_pi_today() {
-        let hermes = super::render_rename_system_prompt_hermes("wsx/x", "wsx");
-        let pi = super::render_rename_system_prompt_pi("wsx/x", "wsx");
+        let hermes = super::render_rename_system_prompt_hermes("wsx/x", "wsx", "myrepo");
+        let pi = super::render_rename_system_prompt_pi("wsx/x", "wsx", "myrepo");
         assert_eq!(hermes, pi, "drift between hermes and pi rename prompts");
     }
 
@@ -2317,6 +2351,7 @@ mod tests {
             super::RenameContext {
                 current_branch: "wsx/bold-fern".into(),
                 branch_prefix: "wsx".into(),
+                repo_name: "myrepo".into(),
             }
         }
 
@@ -2329,7 +2364,7 @@ mod tests {
                 yolo: false,
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
-            assert!(result.contains("git branch -m wsx/bold-fern"));
+            assert!(result.contains("wsx workspace rename myrepo bold-fern"));
         }
 
         #[test]
@@ -2341,9 +2376,9 @@ mod tests {
                 yolo: false,
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
-            assert!(result.contains("git branch -m"));
+            assert!(result.contains("wsx workspace rename"));
             assert!(result.contains("Use ruff."));
-            let rename_pos = result.find("git branch -m").unwrap();
+            let rename_pos = result.find("wsx workspace rename").unwrap();
             let custom_pos = result.find("Use ruff.").unwrap();
             assert!(custom_pos > rename_pos, "custom should come after rename block");
         }
@@ -2421,6 +2456,7 @@ mod tests {
                 rename_ctx: Some(super::RenameContext {
                     current_branch: "wsx/bold-fern".into(),
                     branch_prefix: "wsx".into(),
+                    repo_name: "myrepo".into(),
                 }),
                 custom_instructions: None,
                 additional_dirs: vec![],
@@ -2430,7 +2466,7 @@ mod tests {
 
             let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
             assert!(agents.contains("<!-- BEGIN wsx-managed -->"));
-            assert!(agents.contains("git branch -m wsx/bold-fern"));
+            assert!(agents.contains("wsx workspace rename myrepo bold-fern"));
 
             let exclude = fs::read_to_string(tmp.path().join(".git/info/exclude")).unwrap();
             assert!(exclude.lines().any(|l| l == "AGENTS.md"));
@@ -2445,6 +2481,7 @@ mod tests {
                 rename_ctx: Some(super::RenameContext {
                     current_branch: "wsx/bold-fern".into(),
                     branch_prefix: "wsx".into(),
+                    repo_name: "myrepo".into(),
                 }),
                 custom_instructions: None,
                 additional_dirs: vec![],
@@ -2461,7 +2498,7 @@ mod tests {
             let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap_or_default();
             assert!(!agents.contains("<!-- BEGIN wsx-managed -->"),
                 "wsx block should be removed; got: {agents}");
-            assert!(!agents.contains("git branch -m"),
+            assert!(!agents.contains("wsx workspace rename"),
                 "rename text should be gone; got: {agents}");
         }
 

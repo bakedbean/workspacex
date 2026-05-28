@@ -736,6 +736,87 @@ pub fn build_pi_command(
     cmd
 }
 
+/// Build a `CommandBuilder` for `hermes chat` (or whatever `WSX_HERMES_BIN`
+/// points to) inside `cwd`. Inherits the current process env.
+///
+/// Maps wsx spawn modes to Hermes CLI flags:
+/// - `Fresh` → bare `hermes chat`, no continue/resume.
+/// - `Continue` → `--resume <id>` if a prior wsx session exists for this cwd,
+///   otherwise silently launches fresh (better than bare `--continue` which
+///   would resume the globally-most-recent Hermes session regardless of cwd).
+/// - `ProjectManager` → `--resume <id>` if `resume`, always `--yolo`.
+///
+/// Model selection uses env-var precedence:
+///   1. `WSX_HERMES_MODEL` → set `HERMES_INFERENCE_MODEL` env var on the child
+///      (works in all Hermes modes, unlike `--model` which is `-z/--tui` only).
+///   2. `WSX_HERMES_PROVIDER` → forward as `--provider <value>` (may be a no-op
+///      in classic REPL per Hermes docs; persistent provider lives in
+///      `~/.hermes/config.yaml`).
+///
+/// `--worktree` is never emitted — wsx manages worktrees itself; passing it
+/// would double-isolate.
+///
+/// Prompt injection (rename / custom_instructions / PM prompt) is handled
+/// separately by `prepare_hermes_workspace`, which writes a wsx-managed
+/// block into `AGENTS.md`.
+pub fn build_hermes_command(
+    cwd: &Path,
+    mode: &SpawnMode,
+    _remote: crate::remote_control::RemoteOpts,
+) -> CommandBuilder {
+    let bin = std::env::var("WSX_HERMES_BIN").unwrap_or_else(|_| "hermes".to_string());
+    let mut cmd = CommandBuilder::new(bin);
+    cmd.cwd(cwd);
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
+
+    cmd.arg("chat");
+
+    // Omit --source entirely if canonicalize fails — falling back to a generic
+    // "wsx" tag would cluster sessions from multiple unresolvable cwds under
+    // one tag and break latest_hermes_session_id's per-worktree precision.
+    if let Some(source) = hermes_source_tag(cwd) {
+        cmd.arg("--source");
+        cmd.arg(&source);
+    }
+
+    let (add_continue, add_yolo) = match mode {
+        SpawnMode::Continue { yolo, .. } => (true, *yolo),
+        SpawnMode::Fresh { yolo, .. } => (false, *yolo),
+        SpawnMode::ProjectManager { resume, .. } => (*resume, true),
+    };
+
+    if add_continue {
+        if let Some(id) = latest_hermes_session_id_default(cwd) {
+            cmd.arg("--resume");
+            cmd.arg(&id);
+        }
+        // No prior wsx session → silently launch fresh.
+    }
+    if add_yolo {
+        cmd.arg("--yolo");
+    }
+
+    let model = std::env::var("WSX_HERMES_MODEL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let provider = std::env::var("WSX_HERMES_PROVIDER")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(m) = &model {
+        cmd.env("HERMES_INFERENCE_MODEL", m);
+    }
+    if let Some(p) = &provider {
+        cmd.arg("--provider");
+        cmd.arg(p);
+    }
+
+    cmd
+}
+
 /// Pi version of the rename system prompt. Pi uses `bash` (lowercase) as its
 /// tool name and has no permission system, so we don't need to
 /// pre-authorize the git branch command.
@@ -2400,6 +2481,234 @@ mod tests {
             };
             super::prepare_hermes_workspace(tmp.path(), &cont);
             assert!(!tmp.path().join("AGENTS.md").exists());
+        }
+    }
+
+    mod hermes_build_command {
+        use std::ffi::OsStr;
+
+        fn argv_strings(cmd: &portable_pty::CommandBuilder) -> Vec<String> {
+            // Skip argv[0] (the binary name); callers assert on subcommand/flags.
+            cmd.get_argv()
+                .iter()
+                .skip(1)
+                .map(|s| s.to_string_lossy().into_owned())
+                .collect()
+        }
+
+        fn fresh_no_rename() -> super::SpawnMode {
+            super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            }
+        }
+
+        #[test]
+        fn fresh_emits_chat_subcommand_and_source_tag() {
+            let tmp = tempfile::tempdir().unwrap();
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            let argv = argv_strings(&cmd);
+            assert_eq!(argv.first().map(|s| s.as_str()), Some("chat"), "argv: {argv:?}");
+            let src_idx = argv.iter().position(|a| a == "--source").expect("expected --source");
+            assert!(argv[src_idx + 1].starts_with("wsx:"), "argv: {argv:?}");
+        }
+
+        #[test]
+        fn fresh_omits_continue_resume_and_yolo() {
+            let tmp = tempfile::tempdir().unwrap();
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--resume"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--yolo"), "argv: {argv:?}");
+        }
+
+        #[test]
+        fn yolo_fresh_emits_yolo_flag() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: true,
+            };
+            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
+        }
+
+        #[test]
+        fn yolo_continue_emits_yolo_flag() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: true,
+            };
+            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
+        }
+
+        #[test]
+        fn project_manager_mode_is_always_yolo() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mode = super::SpawnMode::ProjectManager {
+                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                resume: false,
+                fast_mode: false,
+            };
+            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
+        }
+
+        #[test]
+        fn no_worktree_flag_ever_emitted() {
+            let tmp = tempfile::tempdir().unwrap();
+            for mode in &[
+                fresh_no_rename(),
+                super::SpawnMode::Continue { custom_instructions: None, additional_dirs: vec![], yolo: true },
+                super::SpawnMode::ProjectManager {
+                    workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
+                    custom_instructions: None,
+                    additional_dirs: vec![],
+                    resume: true,
+                    fast_mode: false,
+                },
+            ] {
+                let cmd = super::build_hermes_command(tmp.path(), mode, crate::remote_control::RemoteOpts::disabled());
+                let argv = argv_strings(&cmd);
+                assert!(!argv.iter().any(|a| a == "--worktree" || a == "-w"),
+                    "should never emit --worktree; argv: {argv:?}");
+            }
+        }
+
+        #[test]
+        fn source_omitted_when_canonicalize_fails() {
+            let bogus = std::path::Path::new("/nonexistent/path/for/canonicalize");
+            let cmd = super::build_hermes_command(
+                bogus,
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--source"),
+                "expected --source absent when canonicalize fails; argv: {argv:?}");
+            assert_eq!(argv.first().map(|s| s.as_str()), Some("chat"));
+        }
+
+        #[test]
+        fn continue_without_prior_session_omits_resume() {
+            let tmp = tempfile::tempdir().unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            let mut env = super::EnvGuard::new();
+            env.set("HOME", tmp.path().to_string_lossy().as_ref());
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--resume"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
+        }
+
+        #[test]
+        fn continue_with_prior_session_passes_resume_id() {
+            let home = tempfile::tempdir().unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            let hermes_dir = home.path().join(".hermes");
+            std::fs::create_dir_all(&hermes_dir).unwrap();
+            let db_path = hermes_dir.join("state.db");
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
+            ).unwrap();
+            let tag = super::hermes_source_tag(cwd.path()).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES ('session-abc', ?1, 1234.5);",
+                rusqlite::params![tag],
+            ).unwrap();
+            drop(conn);
+
+            let mut env = super::EnvGuard::new();
+            env.set("HOME", home.path().to_string_lossy().as_ref());
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let argv = argv_strings(&cmd);
+            let idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
+            assert_eq!(argv[idx + 1], "session-abc");
+        }
+
+        fn env_of(cmd: &portable_pty::CommandBuilder, key: &str) -> Option<String> {
+            cmd.get_env(OsStr::new(key))
+                .map(|v| v.to_string_lossy().into_owned())
+        }
+
+        #[test]
+        fn wsx_hermes_model_env_sets_inference_model_env_on_child() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_HERMES_MODEL", "deepseek/deepseek-v4-pro");
+            env.remove("WSX_HERMES_PROVIDER");
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            assert_eq!(
+                env_of(&cmd, "HERMES_INFERENCE_MODEL"),
+                Some("deepseek/deepseek-v4-pro".to_string())
+            );
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
+        }
+
+        #[test]
+        fn wsx_hermes_provider_env_passes_provider_flag() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut env = super::EnvGuard::new();
+            env.remove("WSX_HERMES_MODEL");
+            env.set("WSX_HERMES_PROVIDER", "openrouter");
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            let argv = argv_strings(&cmd);
+            let idx = argv.iter().position(|a| a == "--provider").expect("expected --provider");
+            assert_eq!(argv[idx + 1], "openrouter");
+        }
+
+        #[test]
+        fn empty_model_env_treated_as_unset() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_HERMES_MODEL", "   ");
+            env.set("WSX_HERMES_PROVIDER", "");
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            assert!(env_of(&cmd, "HERMES_INFERENCE_MODEL").is_none());
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
         }
     }
 }

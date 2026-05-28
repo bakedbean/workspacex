@@ -838,6 +838,7 @@ pub(crate) fn build_spawn_info(
                 current_branch: ws.branch.clone(),
                 branch_prefix: resolved_prefix,
                 repo_name: repo.name.clone(),
+                current_slug: ws.name.clone(),
             })
         } else {
             None

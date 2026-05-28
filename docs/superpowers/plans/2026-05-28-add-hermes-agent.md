@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Post-merge correction (read before using this plan as a reference):**
+>
+> This plan describes a `--source wsx:<cwd>` session-detection mechanism that the implementation **deliberately does not use**. We discovered during real-world testing that Hermes silently discards the `--source` flag at session creation (its interactive `chat` handler hardcodes `platform="cli"`, preempting both the flag and the `HERMES_SESSION_SOURCE` env var). The actual implementation uses a spawn-timestamp marker file at `<gitdir>/info/wsx-hermes-spawn-at`, replaced in commit `9f0b7cd` and refined in `10d2b8e` (one-time marker write + session_id caching). See those commits and `src/pty/session.rs::latest_hermes_session_id_default` for the live behavior. Do not implement the source-tag scheme this plan describes — it will compile but Hermes will ignore the flag and the dashboard will not populate.
+
 **Goal:** Add `AgentKind::Hermes` to wsx as a third coding-agent harness with full feature parity to the Pi integration: spawn, continue/resume, model/provider env overrides, yolo, auto-rename system prompt, and prior-session indicator.
 
 **Architecture:** Mirror the existing Claude/Pi shape — one `match AgentKind { ... }` dispatch, one `build_<agent>_command` per agent, one `has_prior_<agent>_session` per agent. Compensate for Hermes's two missing capabilities (no `--append-system-prompt`, no per-cwd session storage) with an AGENTS.md prompt-injection helper and a `--source wsx:<cwd>`-tagged sqlite query.

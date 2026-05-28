@@ -117,6 +117,9 @@ fn tail_session_from_db(
         },
     )?;
 
+    let mut longest_assistant_text: Option<String> = None;
+    let mut last_assistant_text: Option<String> = None;
+
     for row_result in rows {
         let (id, role, content, _tool_call_id, tool_calls, tool_name, timestamp, finish_reason) =
             row_result?;
@@ -160,13 +163,20 @@ fn tail_session_from_db(
                 }
             }
             "assistant" => {
-                // Last non-empty assistant text in batch wins.
+                // Track last and longest non-empty assistant text in batch.
                 if let Some(text) = content.as_deref() {
                     let trimmed = text.trim();
                     if !trimmed.is_empty() {
-                        let owned = trimmed.to_string();
-                        update.longest_assistant_text_in_batch = Some(owned.clone());
-                        update.last_assistant_text = Some(owned);
+                        last_assistant_text = Some(trimmed.to_string());
+                        // Track longest by character count (Unicode-aware).
+                        let len = trimmed.chars().count();
+                        match longest_assistant_text {
+                            None => longest_assistant_text = Some(trimmed.to_string()),
+                            Some(ref existing) if len > existing.chars().count() => {
+                                longest_assistant_text = Some(trimmed.to_string());
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 // Last finish_reason in batch wins.
@@ -217,6 +227,9 @@ fn tail_session_from_db(
             }
         }
     }
+
+    update.last_assistant_text = last_assistant_text;
+    update.longest_assistant_text_in_batch = longest_assistant_text;
 
     Ok(update)
 }
@@ -667,6 +680,38 @@ mod tests {
             ev.display.starts_with("hello world"),
             "whitespace should be collapsed; got: {:?}",
             ev.display
+        );
+    }
+
+    // ── Batch D: longest_assistant_text_in_batch tracks by char count ────────
+
+    #[test]
+    fn tail_session_longest_assistant_text_is_actually_longest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "longest1", "wsx:test");
+        insert_message(&conn, "longest1", "assistant", Some("ack"), None, None);
+        insert_message(
+            &conn,
+            "longest1",
+            "assistant",
+            Some("this is a substantial paragraph of recap text describing what was done"),
+            None,
+            None,
+        );
+        insert_message(&conn, "longest1", "assistant", Some("ok"), None, None);
+
+        let update = tail_session_from_db(&db_path, "longest1", 0).unwrap();
+        assert_eq!(
+            update.last_assistant_text.as_deref(),
+            Some("ok"),
+            "last_assistant_text should be the last row"
+        );
+        assert_eq!(
+            update.longest_assistant_text_in_batch.as_deref(),
+            Some("this is a substantial paragraph of recap text describing what was done"),
+            "longest_assistant_text_in_batch should be the longest row by char count"
         );
     }
 }

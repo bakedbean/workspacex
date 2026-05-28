@@ -377,6 +377,81 @@ fn resolve_gitdir(dot_git: &Path, worktree: &Path) -> Option<std::path::PathBuf>
     }
 }
 
+const HERMES_BLOCK_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
+const HERMES_BLOCK_END: &str = "<!-- END wsx-managed -->";
+
+/// Rewrite the wsx-managed section of `AGENTS.md` in `cwd`.
+///
+/// Strips any existing `BEGIN/END wsx-managed` block, then appends a new
+/// block with `content` if Some, or writes back just the stripped content if
+/// None. Skips the write entirely if the result equals the existing file.
+///
+/// Best-effort: any IO error is silently swallowed.
+fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
+    let path = cwd.join("AGENTS.md");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let stripped = strip_wsx_block(&existing);
+    let new = match content {
+        Some(c) => {
+            let mut s = stripped.into_owned();
+            if !s.is_empty() && !s.ends_with('\n') {
+                s.push('\n');
+            }
+            if !s.is_empty() {
+                s.push('\n');
+            }
+            s.push_str(HERMES_BLOCK_BEGIN);
+            s.push('\n');
+            s.push_str(c);
+            if !c.ends_with('\n') {
+                s.push('\n');
+            }
+            s.push_str(HERMES_BLOCK_END);
+            s.push('\n');
+            s
+        }
+        None => stripped.into_owned(),
+    };
+
+    if new == existing {
+        return;
+    }
+    if new.is_empty() && !path.exists() {
+        return;
+    }
+    let _ = std::fs::write(&path, new);
+}
+
+/// Remove a `BEGIN/END wsx-managed` block (and the surrounding blank lines
+/// it produced when we wrote it) from `source`, returning a `Cow` so we
+/// can avoid allocation in the common no-block path.
+fn strip_wsx_block(source: &str) -> std::borrow::Cow<'_, str> {
+    let Some(begin) = source.find(HERMES_BLOCK_BEGIN) else {
+        return std::borrow::Cow::Borrowed(source);
+    };
+    let Some(end_rel) = source[begin..].find(HERMES_BLOCK_END) else {
+        // Malformed (BEGIN without END) — strip from BEGIN onwards.
+        return std::borrow::Cow::Owned(source[..begin].trim_end_matches('\n').to_string());
+    };
+    let end = begin + end_rel + HERMES_BLOCK_END.len();
+    // Consume one trailing newline after END if present, so successive
+    // strip/append cycles don't grow blank-line padding.
+    let mut tail_start = end;
+    if source.as_bytes().get(tail_start) == Some(&b'\n') {
+        tail_start += 1;
+    }
+    // Trim trailing newlines from the prefix so we don't accumulate blank lines.
+    let prefix = source[..begin].trim_end_matches('\n');
+    let suffix = &source[tail_start..];
+    let mut combined = String::with_capacity(prefix.len() + suffix.len() + 1);
+    combined.push_str(prefix);
+    if !prefix.is_empty() && !suffix.is_empty() {
+        combined.push('\n');
+    }
+    combined.push_str(suffix);
+    std::borrow::Cow::Owned(combined)
+}
+
 /// Resolve whether a workspace has a prior session based on the agent kind.
 pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     match agent {
@@ -1998,6 +2073,93 @@ mod tests {
             fs::write(tmp.path().join(".git"), "not a valid git pointer\n").unwrap();
             // Must not panic and must not create any files
             super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+        }
+    }
+
+    mod hermes_agents_md {
+        use super::*;
+        use std::fs;
+
+        const MARKER_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
+        const MARKER_END: &str = "<!-- END wsx-managed -->";
+
+        #[test]
+        fn creates_file_with_fenced_block_when_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(contents.contains(MARKER_BEGIN), "missing BEGIN marker: {contents:?}");
+            assert!(contents.contains(MARKER_END), "missing END marker: {contents:?}");
+            assert!(contents.contains("inject me"));
+        }
+
+        #[test]
+        fn preserves_user_content_outside_wsx_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "# User notes\n\nKeep me.\n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("# User notes"));
+            assert!(contents.contains("Keep me."));
+            assert!(contents.contains("inject me"));
+        }
+
+        #[test]
+        fn replaces_existing_wsx_block_idempotently() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            let after_first = fs::read_to_string(&path).unwrap();
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            let after_second = fs::read_to_string(&path).unwrap();
+            assert_eq!(after_first, after_second, "second write should be byte-identical");
+        }
+
+        #[test]
+        fn replacing_block_with_new_content_replaces_in_place() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            super::write_agents_md_section(tmp.path(), Some("second"));
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("second"));
+            assert!(!contents.contains("first"), "old content should be removed");
+        }
+
+        #[test]
+        fn strips_block_when_content_is_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "user content\n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("temp"));
+            super::write_agents_md_section(tmp.path(), None);
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("user content"));
+            assert!(!contents.contains(MARKER_BEGIN));
+            assert!(!contents.contains("temp"));
+        }
+
+        #[test]
+        fn no_write_when_content_is_none_and_no_existing_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            // Don't create the file at all.
+            super::write_agents_md_section(tmp.path(), None);
+            assert!(!path.exists(), "should not create AGENTS.md just to strip nothing");
+        }
+
+        #[test]
+        fn survives_unreadable_agents_md() {
+            use std::os::unix::fs::PermissionsExt;
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "untouchable\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+            // Must not panic.
+            super::write_agents_md_section(tmp.path(), Some("inject"));
+            // Restore perms so tempdir cleanup works.
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         }
     }
 }

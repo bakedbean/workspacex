@@ -85,7 +85,7 @@ impl StopReason {
         )
     }
 
-    fn from_json_str(s: &str) -> Self {
+    pub(crate) fn from_json_str(s: &str) -> Self {
         match s {
             "end_turn" => StopReason::EndTurn,
             "tool_use" => StopReason::ToolUse,

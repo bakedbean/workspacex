@@ -728,7 +728,7 @@ The block is rewritten every time Hermes spawns and automatically cleaned up whe
 - **Untracked `AGENTS.md`**: wsx adds it to `.git/info/exclude` so it doesn't show up in `git status`.
 - **Tracked `AGENTS.md`**: the worktree will show the file as modified during a Hermes spawn — this is expected and the modification disappears on subsequent spawns when there's no custom instructions to inject.
 
-**Session-tail limitation**: session history tailing in the dashboard's activity sub-line is not supported for Hermes workspaces. Hermes stores sessions in `~/.hermes/state.db` (sqlite) rather than per-cwd JSONL files like Claude and Pi. The dashboard shows `off` or `resumable` for Hermes workspaces.
+**Session-tail (MVP)**: wsx tails `~/.hermes/state.db` (sqlite) to populate the dashboard's RECENT CHAT and SESSION SUMMARY detail modules for Hermes workspaces. The following fields are populated: last assistant text, first user prompt, stop reason, and tool-use counts (all Hermes tool names count as "other" for now — categorization into read/edit/write/bash buckets is a follow-up since Hermes uses lowercase tool names rather than Claude's capitalized convention). What is still missing compared to Claude/Pi: per-event chat log in the main log view (events vec is not populated), edited-files tracking (tool_calls JSON parsing deferred), and pending-tool-use timing for permission-prompt detection. These are deferred to a follow-up.
 
 **Environment overrides**: configure Hermes via `~/.hermes/config.yaml` (persistent settings), or set `WSX_HERMES_MODEL` and `WSX_HERMES_PROVIDER` to override per-workspace:
 

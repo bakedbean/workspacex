@@ -477,6 +477,7 @@ impl Store {
         let agent_str = match w.agent {
             AgentKind::Claude => "claude",
             AgentKind::Pi => "pi",
+            AgentKind::Hermes => "hermes",
         };
         self.conn.execute(
             "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)

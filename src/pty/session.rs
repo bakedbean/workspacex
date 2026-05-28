@@ -16,12 +16,14 @@ use vt100::Parser;
 pub enum AgentKind {
     Claude,
     Pi,
+    Hermes,
 }
 
 impl AgentKind {
     pub fn from_store(store: &crate::store::Store) -> Self {
         match store.get_setting("coding_agent").ok().flatten().as_deref() {
             Some("pi") => AgentKind::Pi,
+            Some("hermes") => AgentKind::Hermes,
             _ => AgentKind::Claude,
         }
     }
@@ -282,6 +284,7 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     match agent {
         AgentKind::Claude => has_prior_session(worktree),
         AgentKind::Pi => has_prior_pi_session(worktree),
+        AgentKind::Hermes => false, // stub — replaced in Task 5
     }
 }
 
@@ -608,6 +611,14 @@ pub fn spawn_session(
     let child_cmd = match agent {
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
         AgentKind::Pi => build_pi_command(cwd, &mode, remote),
+        AgentKind::Hermes => {
+            // Placeholder until Task 13 wires the real implementation.
+            // CommandBuilder::new("hermes") at least produces a valid spawnable command
+            // shape so the type-checker and integration paths work.
+            let mut cmd = CommandBuilder::new("hermes");
+            cmd.cwd(cwd);
+            cmd
+        }
     };
     let mut child = pair
         .slave

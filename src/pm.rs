@@ -106,6 +106,10 @@ fn compute_session_log_dir(worktree: &Path, agent: crate::pty::session::AgentKin
             let encoded = crate::pi_events::encode_cwd(&abs);
             home.join(".pi/agent/sessions").join(encoded)
         }
+        crate::pty::session::AgentKind::Hermes => {
+            // stub — replaced in Task 5
+            home.join(".hermes/sessions")
+        }
     }
 }
 

@@ -995,6 +995,21 @@ impl SessionManager {
     }
 }
 
+/// Prepare a worktree for a Hermes spawn: rewrite the wsx-managed block in
+/// AGENTS.md (creating the file if needed) and ensure the file is hidden
+/// from `git status` via `.git/info/exclude`.
+///
+/// Best-effort: all IO errors are swallowed. Hermes will still launch if
+/// these side effects fail; the user just loses the rename hint.
+fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
+    let injected = compose_injected_prompt(mode);
+    let had_content = injected.is_some();
+    write_agents_md_section(cwd, injected.as_deref());
+    if had_content {
+        ensure_git_exclude(cwd, "AGENTS.md");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2312,6 +2327,79 @@ mod tests {
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
             assert!(!result.is_empty());
+        }
+    }
+
+    mod hermes_prepare_workspace {
+        use std::fs;
+
+        fn init_gitdir(dir: &std::path::Path) {
+            fs::create_dir_all(dir.join(".git/info")).unwrap();
+        }
+
+        #[test]
+        fn fresh_with_rename_writes_agents_md_and_exclude() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: Some(super::RenameContext {
+                    current_branch: "wsx/bold-fern".into(),
+                    branch_prefix: "wsx".into(),
+                }),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &mode);
+
+            let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(agents.contains("<!-- BEGIN wsx-managed -->"));
+            assert!(agents.contains("git branch -m wsx/bold-fern"));
+
+            let exclude = fs::read_to_string(tmp.path().join(".git/info/exclude")).unwrap();
+            assert!(exclude.lines().any(|l| l == "AGENTS.md"));
+        }
+
+        #[test]
+        fn continue_without_custom_instructions_strips_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            // First prepare a Fresh+rename state.
+            let fresh = super::SpawnMode::Fresh {
+                rename_ctx: Some(super::RenameContext {
+                    current_branch: "wsx/bold-fern".into(),
+                    branch_prefix: "wsx".into(),
+                }),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &fresh);
+            // Now spawn Continue with nothing to inject.
+            let cont = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &cont);
+            let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap_or_default();
+            assert!(!agents.contains("<!-- BEGIN wsx-managed -->"),
+                "wsx block should be removed; got: {agents}");
+            assert!(!agents.contains("git branch -m"),
+                "rename text should be gone; got: {agents}");
+        }
+
+        #[test]
+        fn no_op_when_continue_no_custom_and_no_existing_agents_md() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let cont = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &cont);
+            assert!(!tmp.path().join("AGENTS.md").exists());
         }
     }
 }

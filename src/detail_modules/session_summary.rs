@@ -24,117 +24,134 @@ impl DetailModule for SessionSummary {
         // wraps) just expand the column when room is available.
         Constraint::Min(5)
     }
+
+    fn lines(
+        &self,
+        ctx: &DetailContext<'_>,
+        width: u16,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        build_lines(ctx, width)
+    }
+
     fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
-        use ratatui::style::{Modifier, Style};
-        use ratatui::text::{Line, Span};
         use ratatui::widgets::Paragraph;
+        let lines = build_lines(ctx, area.width);
+        frame.render_widget(Paragraph::new(lines), area);
+    }
+}
 
-        // Pull `Duration` once so `now_ms` and `now_secs` share the
-        // same time base. The rest of the codebase uses
-        // `as_millis() as i64` for epoch-ms (see `app.rs`,
-        // `app/background.rs`); deriving `now_ms` from `as_secs() * 1000`
-        // would truncate sub-second precision and skew the 3s threshold
-        // in `pending_permission_tool`.
-        let now_duration = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let now_ms = now_duration.as_millis() as i64;
-        let now_secs = now_duration.as_secs();
-        let created_at_secs = (ctx.workspace.created_at.max(0) / 1000) as u64;
-        let created_secs = now_secs.saturating_sub(created_at_secs);
+fn build_lines(
+    ctx: &DetailContext<'_>,
+    width: u16,
+) -> Vec<ratatui::text::Line<'static>> {
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
 
-        let events = if ctx.events_scanned { ctx.events } else { None };
-        let theme = ctx.theme;
-        let status = ctx.status;
-        let column_width = area.width as usize;
-        let inner_width = column_width.saturating_sub(2).max(1);
-        let ago_secs = ctx.ago_secs;
+    // Pull `Duration` once so `now_ms` and `now_secs` share the
+    // same time base. The rest of the codebase uses
+    // `as_millis() as i64` for epoch-ms (see `app.rs`,
+    // `app/background.rs`); deriving `now_ms` from `as_secs() * 1000`
+    // would truncate sub-second precision and skew the 3s threshold
+    // in `pending_permission_tool`.
+    let now_duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let now_ms = now_duration.as_millis() as i64;
+    let now_secs = now_duration.as_secs();
+    let created_at_secs = (ctx.workspace.created_at.max(0) / 1000) as u64;
+    let created_secs = now_secs.saturating_sub(created_at_secs);
 
-        let mut out: Vec<Line<'static>> = Vec::new();
+    let events = if ctx.events_scanned { ctx.events } else { None };
+    let theme = ctx.theme;
+    let status = ctx.status;
+    let column_width = width as usize;
+    let inner_width = column_width.saturating_sub(2).max(1);
+    let ago_secs = ctx.ago_secs;
 
-        // Bullet prefix takes the workspace's status color so the SESSION
-        // SUMMARY column visually echoes the row's status gutter.
-        let prefix = Span::styled("▸ ".to_string(), theme.status_style(status));
-        // Continuation indent for wrapped/multi-line prompts: 2 cells, so
-        // wrapped lines align with the first character of the prompt text.
-        let continuation = Span::raw("  ".to_string());
+    let mut out: Vec<Line<'static>> = Vec::new();
 
-        match events {
-            None => {
-                out.push(Line::from(Span::styled(
-                    "  loading…".to_string(),
-                    theme.dim_style(),
-                )));
-            }
-            Some(evt) => {
-                if let Some(prompt) = evt.first_user_text.as_deref() {
-                    let trimmed = prompt.trim();
-                    if !trimmed.is_empty() {
-                        // Respect `\n` from the original prompt AND wrap long lines
-                        // to the column width so the prompt is fully readable.
-                        let wrapped = wrap_lines(trimmed, inner_width);
-                        let italic = Style::default().add_modifier(Modifier::ITALIC);
-                        for (i, line_text) in wrapped.iter().enumerate() {
-                            let leader = if i == 0 {
-                                prefix.clone()
-                            } else {
-                                continuation.clone()
-                            };
-                            out.push(Line::from(vec![
-                                leader,
-                                Span::styled(line_text.clone(), italic),
-                            ]));
-                        }
+    // Bullet prefix takes the workspace's status color so the SESSION
+    // SUMMARY column visually echoes the row's status gutter.
+    let prefix = Span::styled("▸ ".to_string(), theme.status_style(status));
+    // Continuation indent for wrapped/multi-line prompts: 2 cells, so
+    // wrapped lines align with the first character of the prompt text.
+    let continuation = Span::raw("  ".to_string());
+
+    match events {
+        None => {
+            out.push(Line::from(Span::styled(
+                "  loading…".to_string(),
+                theme.dim_style(),
+            )));
+        }
+        Some(evt) => {
+            if let Some(prompt) = evt.first_user_text.as_deref() {
+                let trimmed = prompt.trim();
+                if !trimmed.is_empty() {
+                    // Respect `\n` from the original prompt AND wrap long lines
+                    // to the column width so the prompt is fully readable.
+                    let wrapped = wrap_lines(trimmed, inner_width);
+                    let italic = Style::default().add_modifier(Modifier::ITALIC);
+                    for (i, line_text) in wrapped.iter().enumerate() {
+                        let leader = if i == 0 {
+                            prefix.clone()
+                        } else {
+                            continuation.clone()
+                        };
+                        out.push(Line::from(vec![
+                            leader,
+                            Span::styled(line_text.clone(), italic),
+                        ]));
                     }
                 }
+            }
 
-                let trace = format_tool_trace(&evt.tool_use_counts);
-                let trace_body = if trace.is_empty() {
-                    Span::styled("—".to_string(), theme.dim_style())
-                } else {
-                    Span::raw(truncate_to_chars(&trace, inner_width))
-                };
-                out.push(Line::from(vec![prefix.clone(), trace_body]));
+            let trace = format_tool_trace(&evt.tool_use_counts);
+            let trace_body = if trace.is_empty() {
+                Span::styled("—".to_string(), theme.dim_style())
+            } else {
+                Span::raw(truncate_to_chars(&trace, inner_width))
+            };
+            out.push(Line::from(vec![prefix.clone(), trace_body]));
 
-                // State line: canonical status label, optionally enriched
-                // with a why-detail (pending tool, stall duration) that
-                // RECENT CHAT can't surface.
-                let state_text = format_state_line(status, evt, now_ms);
+            // State line: canonical status label, optionally enriched
+            // with a why-detail (pending tool, stall duration) that
+            // RECENT CHAT can't surface.
+            let state_text = format_state_line(status, evt, now_ms);
+            out.push(Line::from(vec![
+                prefix.clone(),
+                Span::styled(truncate_to_chars(&state_text, inner_width), theme.dim_style()),
+            ]));
+
+            // Recent files: 1–3 basenames from the edited-files ring.
+            // Omitted when the ring is empty so we don't reserve a row
+            // for a meaningless dash.
+            if let Some(files_text) = format_recent_files(&evt.recent_edited_files, inner_width)
+            {
                 out.push(Line::from(vec![
                     prefix.clone(),
-                    Span::styled(truncate_to_chars(&state_text, inner_width), theme.dim_style()),
+                    Span::styled(files_text, theme.dim_style()),
                 ]));
-
-                // Recent files: 1–3 basenames from the edited-files ring.
-                // Omitted when the ring is empty so we don't reserve a row
-                // for a meaningless dash.
-                if let Some(files_text) = format_recent_files(&evt.recent_edited_files, inner_width)
-                {
-                    out.push(Line::from(vec![
-                        prefix.clone(),
-                        Span::styled(files_text, theme.dim_style()),
-                    ]));
-                }
             }
         }
-
-        let created_text = format!("created {} ago", format_ago_short(Some(created_secs)));
-        out.push(Line::from(vec![
-            prefix.clone(),
-            Span::styled(created_text, theme.dim_style()),
-        ]));
-
-        let active_text = match ago_secs {
-            Some(s) => format!("active {} ago", format_ago_short(Some(s))),
-            None => "active —".to_string(),
-        };
-        out.push(Line::from(vec![
-            prefix.clone(),
-            Span::styled(active_text, theme.dim_style()),
-        ]));
-
-        frame.render_widget(Paragraph::new(out), area);
     }
+
+    let created_text = format!("created {} ago", format_ago_short(Some(created_secs)));
+    out.push(Line::from(vec![
+        prefix.clone(),
+        Span::styled(created_text, theme.dim_style()),
+    ]));
+
+    let active_text = match ago_secs {
+        Some(s) => format!("active {} ago", format_ago_short(Some(s))),
+        None => "active —".to_string(),
+    };
+    out.push(Line::from(vec![
+        prefix.clone(),
+        Span::styled(active_text, theme.dim_style()),
+    ]));
+
+    out
 }
 
 /// Canonical status label, optionally enriched with a why-detail. The
@@ -526,5 +543,16 @@ mod tests {
             !text.contains("files:"),
             "expected no files line when ring is empty:\n{text}"
         );
+    }
+
+    #[test]
+    fn lines_loading_state_emits_loading_line() {
+        let mut ctx = stub_context();
+        ctx.events_scanned = false;
+        let out = SessionSummary.lines(&ctx, 40);
+        assert!(!out.is_empty());
+        // First line in the loading branch is "  loading…" in dim style.
+        let first_text: String = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(first_text.contains("loading"), "expected 'loading' line, got: {first_text:?}");
     }
 }

@@ -101,11 +101,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             agent,
             ..
         } => {
-            let agent_label = match agent {
-                crate::pty::session::AgentKind::Claude => "claude",
-                crate::pty::session::AgentKind::Pi => "pi",
-                crate::pty::session::AgentKind::Hermes => "hermes",
-            };
+            let agent_label = agent.display_name();
             (
                 if *yolo {
                     "new workspace (permissive)"

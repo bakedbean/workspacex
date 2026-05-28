@@ -20,12 +20,34 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
-    pub fn from_store(store: &crate::store::Store) -> Self {
-        match store.get_setting("coding_agent").ok().flatten().as_deref() {
+    pub const ALL: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes];
+
+    pub fn from_str_or_default(s: Option<&str>) -> Self {
+        match s {
             Some("pi") => AgentKind::Pi,
             Some("hermes") => AgentKind::Hermes,
             _ => AgentKind::Claude,
         }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            AgentKind::Claude => "claude",
+            AgentKind::Pi => "pi",
+            AgentKind::Hermes => "hermes",
+        }
+    }
+
+    pub fn default_binary(self) -> &'static str {
+        self.display_name()
+    }
+
+    pub fn store_value(self) -> &'static str {
+        self.display_name()
+    }
+
+    pub fn from_store(store: &crate::store::Store) -> Self {
+        Self::from_str_or_default(store.get_setting("coding_agent").ok().flatten().as_deref())
     }
 }
 
@@ -3186,5 +3208,26 @@ mod tests {
             !prompt.contains("'bold-fern'"),
             "prompt must not contain derived 'bold-fern'; prompt: {prompt}"
         );
+    }
+
+    #[test]
+    fn agent_kind_helpers_match_existing_strings() {
+        use super::AgentKind;
+        assert_eq!(AgentKind::ALL.len(), 3);
+        assert!(AgentKind::ALL.contains(&AgentKind::Claude));
+        assert!(AgentKind::ALL.contains(&AgentKind::Pi));
+        assert!(AgentKind::ALL.contains(&AgentKind::Hermes));
+
+        assert_eq!(AgentKind::Claude.display_name(), "claude");
+        assert_eq!(AgentKind::Pi.display_name(), "pi");
+        assert_eq!(AgentKind::Hermes.display_name(), "hermes");
+
+        assert_eq!(AgentKind::Claude.default_binary(), "claude");
+        assert_eq!(AgentKind::Pi.default_binary(), "pi");
+        assert_eq!(AgentKind::Hermes.default_binary(), "hermes");
+
+        for k in AgentKind::ALL {
+            assert_eq!(AgentKind::from_str_or_default(Some(k.store_value())), k);
+        }
     }
 }

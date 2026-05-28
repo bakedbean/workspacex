@@ -803,11 +803,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let r = lookup_repo(&store, &repo)?;
             let worktree_base = dirs.app_dir().join("worktrees");
             std::fs::create_dir_all(&worktree_base)?;
-            let agent_kind = match agent.as_deref() {
-                Some("pi") => crate::pty::session::AgentKind::Pi,
-                Some("hermes") => crate::pty::session::AgentKind::Hermes,
-                _ => crate::pty::session::AgentKind::Claude,
-            };
+            let agent_kind = crate::pty::session::AgentKind::from_str_or_default(agent.as_deref());
             let created = crate::workspace::create(
                 &store,
                 &r,

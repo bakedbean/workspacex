@@ -78,7 +78,12 @@ fn tail_session_from_db(
         .into());
     }
 
-    let uri = format!("file:{}?mode=ro&immutable=1", db_path.display());
+    // We open WITHOUT immutable=1 so the reader sees WAL-pending writes from
+    // the live Hermes process. WAL mode allows concurrent readers + 1 writer,
+    // so plain read-only access is non-blocking and returns the live view.
+    // immutable=1 was a previous (wrong) choice that silently filtered out
+    // WAL pages and made the dashboard show stale data.
+    let uri = format!("file:{}?mode=ro", db_path.display());
     let conn = rusqlite::Connection::open_with_flags(
         &uri,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,

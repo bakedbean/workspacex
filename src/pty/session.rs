@@ -314,13 +314,19 @@ pub fn has_prior_pi_session(worktree: &Path) -> bool {
 /// look-back buffer to absorb clock skew between our marker-write time
 /// and Hermes's `time.time()` call when it creates the row.
 ///
-/// Opens the db read-only with `immutable=1` so we don't block on
-/// Hermes's WAL when Hermes is running concurrently.
+/// Opens the db read-only (no `immutable=1`) so the reader sees WAL-pending
+/// writes from a live Hermes process. WAL mode supports concurrent
+/// readers + 1 writer, so this neither blocks Hermes nor returns stale data.
 fn latest_hermes_session_id(db_path: &Path, spawn_ts: f64) -> Option<String> {
     if !db_path.is_file() {
         return None;
     }
-    let uri = format!("file:{}?mode=ro&immutable=1", db_path.display());
+    // We open WITHOUT immutable=1 so the reader sees WAL-pending writes from
+    // the live Hermes process. WAL mode allows concurrent readers + 1 writer,
+    // so plain read-only access is non-blocking and returns the live view.
+    // immutable=1 was a previous (wrong) choice that silently filtered out
+    // WAL pages and made the dashboard show stale data.
+    let uri = format!("file:{}?mode=ro", db_path.display());
     let conn = rusqlite::Connection::open_with_flags(
         &uri,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
@@ -2191,21 +2197,41 @@ mod tests {
         }
 
         #[test]
-        fn concurrent_writer_does_not_block_read() {
-            // Open a writer holding the db, then query — immutable=1 means we
-            // ignore the lock and read a snapshot.
+        fn concurrent_writer_does_not_block_read_in_wal_mode() {
             let tmp = tempfile::tempdir().unwrap();
             let db_path = tmp.path().join("state.db");
             let writer = make_db(&db_path);
-            insert(&writer, "abc", "cli", 1500.0);
-            // Start an explicit transaction to hold a write lock.
-            writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
-            let result = latest_hermes_session_id(&db_path, 1000.0);
-            // Even with the writer holding the lock, our ro+immutable read succeeds.
-            assert_eq!(result.as_deref(), Some("abc"));
+            // Switch to WAL mode (matches Hermes's real-world configuration).
+            writer.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            insert(&writer, "committed", "cli", 1000.0);
+            // Start an explicit transaction that writes but doesn't commit yet.
+            writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO sessions (id, source, started_at) VALUES ('uncommitted', 'cli', 2000.0);").unwrap();
+
+            // Our reader should see the committed row (the WAL pages from earlier commits
+            // are visible) but NOT the uncommitted one. spawn_ts=0 sweeps everything.
+            let result = latest_hermes_session_id(&db_path, 0.0);
+            assert_eq!(result.as_deref(), Some("committed"),
+                "expected to see committed row, not uncommitted; got: {result:?}");
+
             writer.execute_batch("ROLLBACK;").unwrap();
-            // bind to silence unused warning
-            let _ = PathBuf::from(tmp.path());
+        }
+
+        #[test]
+        fn reader_sees_wal_committed_writes() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let writer = make_db(&db_path);
+            writer.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            // First commit goes through normal checkpoint behavior.
+            insert(&writer, "first", "cli", 1000.0);
+            // Subsequent commits land in WAL before checkpoint.
+            insert(&writer, "second", "cli", 2000.0);
+            insert(&writer, "third", "cli", 3000.0);
+            // Without a manual checkpoint, "second" and "third" are WAL-pending.
+            // The reader must still see them all.
+            let result = latest_hermes_session_id(&db_path, 0.0);
+            assert_eq!(result.as_deref(), Some("third"),
+                "expected newest WAL-committed row; got: {result:?}");
         }
     }
 

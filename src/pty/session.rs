@@ -2568,6 +2568,41 @@ mod tests {
         }
 
         #[test]
+        fn project_manager_mode_emits_yolo_and_resume_if_set() {
+            let home = tempfile::tempdir().unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            // Seed ~/.hermes/state.db with a session for cwd.
+            let hermes_dir = home.path().join(".hermes");
+            std::fs::create_dir_all(&hermes_dir).unwrap();
+            let db_path = hermes_dir.join("state.db");
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
+            ).unwrap();
+            let tag = super::hermes_source_tag(cwd.path()).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES ('pm-sess', ?1, 1234.5);",
+                rusqlite::params![tag],
+            ).unwrap();
+            drop(conn);
+
+            let mut env = super::EnvGuard::new();
+            env.set("HOME", home.path().to_string_lossy().as_ref());
+            let mode = super::SpawnMode::ProjectManager {
+                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                resume: true,
+                fast_mode: false,
+            };
+            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let argv = argv_strings(&cmd);
+            let resume_idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
+            assert_eq!(argv[resume_idx + 1], "pm-sess");
+            assert!(argv.iter().any(|a| a == "--yolo"), "argv: {argv:?}");
+        }
+
+        #[test]
         fn no_worktree_flag_ever_emitted() {
             let tmp = tempfile::tempdir().unwrap();
             for mode in &[

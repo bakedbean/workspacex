@@ -707,8 +707,8 @@ Supported agents:
 
 | Agent | CLI option | Source | Config |
 |---|---|---|---|
-| `claude` (default) | `--agent claude` | Claude Code binary | Environment + `~/.claude.json` MCP |
-| `pi` | `--agent pi` | Claude Code binary | Environment + `~/.claude.json` MCP |
+| `claude` (default) | `--agent claude` | `claude` binary (override via `WSX_CLAUDE_BIN`) | Environment + `~/.claude.json` MCP |
+| `pi` | `--agent pi` | `pi` binary (override via `WSX_PI_BIN`) | `~/.pi/` |
 | `hermes` | `--agent hermes` | [nousresearch/hermes-agent](https://github.com/nousresearch/hermes-agent) | `~/.hermes/config.yaml` (provider, model) |
 
 ### Hermes integration

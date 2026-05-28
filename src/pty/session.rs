@@ -2077,19 +2077,15 @@ mod tests {
     }
 
     mod hermes_agents_md {
-        use super::*;
         use std::fs;
-
-        const MARKER_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
-        const MARKER_END: &str = "<!-- END wsx-managed -->";
 
         #[test]
         fn creates_file_with_fenced_block_when_absent() {
             let tmp = tempfile::tempdir().unwrap();
             super::write_agents_md_section(tmp.path(), Some("inject me"));
             let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
-            assert!(contents.contains(MARKER_BEGIN), "missing BEGIN marker: {contents:?}");
-            assert!(contents.contains(MARKER_END), "missing END marker: {contents:?}");
+            assert!(contents.contains(super::HERMES_BLOCK_BEGIN), "missing BEGIN marker: {contents:?}");
+            assert!(contents.contains(super::HERMES_BLOCK_END), "missing END marker: {contents:?}");
             assert!(contents.contains("inject me"));
         }
 
@@ -2136,7 +2132,7 @@ mod tests {
             super::write_agents_md_section(tmp.path(), None);
             let contents = fs::read_to_string(&path).unwrap();
             assert!(contents.contains("user content"));
-            assert!(!contents.contains(MARKER_BEGIN));
+            assert!(!contents.contains(super::HERMES_BLOCK_BEGIN));
             assert!(!contents.contains("temp"));
         }
 

@@ -763,6 +763,14 @@ fn render_rename_system_prompt_pi(current_branch: &str, branch_prefix: &str) -> 
     )
 }
 
+/// Hermes version of the rename system prompt. Today the text is identical to
+/// the Pi version — Hermes has no permission system and uses plain bash, same
+/// as Pi. Keep this function distinct from the Pi helper so future divergence
+/// (e.g., a Hermes-specific tool naming convention) is a one-place change.
+fn render_rename_system_prompt_hermes(current_branch: &str, branch_prefix: &str) -> String {
+    render_rename_system_prompt_pi(current_branch, branch_prefix)
+}
+
 pub fn spawn_session(
     cwd: &Path,
     cols: u16,
@@ -1242,6 +1250,27 @@ mod tests {
         let p = render_rename_system_prompt("bold-fern", "");
         assert!(p.contains("`bold-fern`"));
         assert!(p.contains("git branch -m bold-fern <slug>"));
+    }
+
+    #[test]
+    fn render_rename_prompt_hermes_includes_branch_and_prefix() {
+        let prompt = super::render_rename_system_prompt_hermes("wsx/bold-fern", "wsx");
+        assert!(prompt.contains("git branch -m wsx/bold-fern"));
+        assert!(prompt.contains("wsx/<slug>"));
+    }
+
+    #[test]
+    fn render_rename_prompt_hermes_handles_empty_prefix() {
+        let prompt = super::render_rename_system_prompt_hermes("bold-fern", "");
+        assert!(prompt.contains("git branch -m bold-fern"));
+        assert!(!prompt.contains("//"), "prompt should not contain double-slash: {prompt}");
+    }
+
+    #[test]
+    fn render_rename_prompt_hermes_matches_pi_today() {
+        let hermes = super::render_rename_system_prompt_hermes("wsx/x", "wsx");
+        let pi = super::render_rename_system_prompt_pi("wsx/x", "wsx");
+        assert_eq!(hermes, pi, "drift between hermes and pi rename prompts");
     }
 
     #[test]

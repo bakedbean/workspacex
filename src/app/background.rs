@@ -40,7 +40,7 @@ pub async fn tail_workspace_events(
             crate::events::locate_session_file(&worktree_path)
         }
         crate::pty::session::AgentKind::Pi => crate::pi_events::locate_session_file(&worktree_path),
-        crate::pty::session::AgentKind::Hermes => None, // stub — replaced in Task 5
+        crate::pty::session::AgentKind::Hermes => None, // Hermes has no per-cwd JSONL session files; dashboard session-tail is not supported for Hermes workspaces.
     };
     // Snapshot the FULL (file_path, byte_offset) pair so the commit can
     // detect a concurrent tail that landed between our snapshot and now.
@@ -64,7 +64,7 @@ pub async fn tail_workspace_events(
     let tail_result = match ws_agent {
         crate::pty::session::AgentKind::Claude => crate::events::tail_session(&file, tail_from),
         crate::pty::session::AgentKind::Pi => crate::pi_events::tail_session(&file, tail_from),
-        crate::pty::session::AgentKind::Hermes => return, // stub — replaced in Task 5
+        crate::pty::session::AgentKind::Hermes => return, // Hermes has no per-cwd JSONL session files; locate_session_file returns None first so this arm is unreachable. Kept for match exhaustiveness.
     };
     let Ok(update) = tail_result else {
         return;

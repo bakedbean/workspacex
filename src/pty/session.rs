@@ -284,7 +284,7 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     match agent {
         AgentKind::Claude => has_prior_session(worktree),
         AgentKind::Pi => has_prior_pi_session(worktree),
-        AgentKind::Hermes => false, // stub — replaced in Task 5
+        AgentKind::Hermes => false, // stub — replaced in Task 4
     }
 }
 
@@ -612,7 +612,7 @@ pub fn spawn_session(
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
         AgentKind::Pi => build_pi_command(cwd, &mode, remote),
         AgentKind::Hermes => {
-            // Placeholder until Task 13 wires the real implementation.
+            // Placeholder until Task 11 wires the real implementation.
             // CommandBuilder::new("hermes") at least produces a valid spawnable command
             // shape so the type-checker and integration paths work.
             let mut cmd = CommandBuilder::new("hermes");

@@ -107,8 +107,8 @@ fn compute_session_log_dir(worktree: &Path, agent: crate::pty::session::AgentKin
             home.join(".pi/agent/sessions").join(encoded)
         }
         crate::pty::session::AgentKind::Hermes => {
-            // stub — replaced in Task 5
-            home.join(".hermes/sessions")
+            // Hermes stores sessions in ~/.hermes/state.db (sqlite), not a per-cwd log directory. PM dossier session-tail is not supported for Hermes workspaces.
+            home.join(".hermes/UNSUPPORTED-no-session-log-dir-for-hermes")
         }
     }
 }

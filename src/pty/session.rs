@@ -288,6 +288,30 @@ fn hermes_source_tag(worktree: &Path) -> Option<String> {
     Some(format!("wsx:{}", abs.to_string_lossy().replace('/', "-")))
 }
 
+/// Return the most recent wsx-spawned Hermes session ID for this worktree, if any.
+/// Path-parameterized for testing; production callers should use
+/// `latest_hermes_session_id_default`.
+///
+/// Opens the db read-only with `immutable=1` so we don't block on Hermes's WAL
+/// when Hermes is running concurrently in another worktree, and don't risk
+/// rolling forward an inconsistent WAL.
+fn latest_hermes_session_id(db_path: &Path, worktree: &Path) -> Option<String> {
+    let tag = hermes_source_tag(worktree)?;
+    if !db_path.is_file() {
+        return None;
+    }
+    let uri = format!("file:{}?mode=ro&immutable=1", db_path.display());
+    let conn = rusqlite::Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ).ok()?;
+    conn.query_row(
+        "SELECT id FROM sessions WHERE source = ?1 ORDER BY started_at DESC LIMIT 1",
+        [&tag],
+        |row| row.get::<_, String>(0),
+    ).ok()
+}
+
 /// Resolve whether a workspace has a prior session based on the agent kind.
 pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     match agent {
@@ -1698,5 +1722,102 @@ mod tests {
     fn hermes_source_tag_returns_none_for_nonexistent_path() {
         let bogus = std::path::Path::new("/this/path/definitely/does/not/exist/123456");
         assert!(super::hermes_source_tag(bogus).is_none());
+    }
+
+    mod hermes_session_lookup {
+        use super::*;
+        use std::path::PathBuf;
+
+        fn make_db(path: &std::path::Path) -> rusqlite::Connection {
+            let conn = rusqlite::Connection::open(path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    started_at REAL NOT NULL
+                );",
+            ).unwrap();
+            conn
+        }
+
+        fn insert(conn: &rusqlite::Connection, id: &str, source: &str, started_at: f64) {
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, source, started_at],
+            ).unwrap();
+        }
+
+        #[test]
+        fn missing_db_returns_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let bogus = tmp.path().join("nope.db");
+            let worktree = tmp.path();
+            assert!(latest_hermes_session_id(&bogus, worktree).is_none());
+        }
+
+        #[test]
+        fn empty_sessions_returns_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let _ = make_db(&db_path);
+            assert!(latest_hermes_session_id(&db_path, tmp.path()).is_none());
+        }
+
+        #[test]
+        fn non_matching_source_returns_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            insert(&conn, "abc", "cli", 1000.0);
+            insert(&conn, "def", "telegram", 2000.0);
+            assert!(latest_hermes_session_id(&db_path, tmp.path()).is_none());
+        }
+
+        #[test]
+        fn single_match_returns_id() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            let tag = super::hermes_source_tag(tmp.path()).unwrap();
+            insert(&conn, "abc", &tag, 1000.0);
+            assert_eq!(
+                latest_hermes_session_id(&db_path, tmp.path()).as_deref(),
+                Some("abc")
+            );
+        }
+
+        #[test]
+        fn multiple_matches_returns_most_recent_by_started_at() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            let tag = super::hermes_source_tag(tmp.path()).unwrap();
+            insert(&conn, "oldest", &tag, 1000.0);
+            insert(&conn, "newest", &tag, 3000.0);
+            insert(&conn, "middle", &tag, 2000.0);
+            assert_eq!(
+                latest_hermes_session_id(&db_path, tmp.path()).as_deref(),
+                Some("newest")
+            );
+        }
+
+        #[test]
+        fn concurrent_writer_does_not_block_read() {
+            // Open a writer holding the db, then query — immutable=1 means we
+            // ignore the lock and read a snapshot.
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let writer = make_db(&db_path);
+            let tag = super::hermes_source_tag(tmp.path()).unwrap();
+            insert(&writer, "abc", &tag, 1000.0);
+            // Start an explicit transaction to hold a write lock.
+            writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
+            let result = latest_hermes_session_id(&db_path, tmp.path());
+            // Even with the writer holding the lock, our ro+immutable read succeeds.
+            assert_eq!(result.as_deref(), Some("abc"));
+            writer.execute_batch("ROLLBACK;").unwrap();
+            // bind to silence unused warning
+            let _ = PathBuf::from(tmp.path());
+        }
     }
 }

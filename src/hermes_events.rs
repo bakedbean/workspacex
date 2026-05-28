@@ -18,7 +18,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::events::{StopReason, TailUpdate};
+use crate::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
 
 const HERMES_PREFIX: &str = "hermes:";
 
@@ -118,7 +118,7 @@ fn tail_session_from_db(
     )?;
 
     for row_result in rows {
-        let (id, role, content, _tool_call_id, _tool_calls, tool_name, _timestamp, finish_reason) =
+        let (id, role, content, _tool_call_id, tool_calls, tool_name, timestamp, finish_reason) =
             row_result?;
 
         // Advance the high-water mark.
@@ -129,6 +129,9 @@ fn tail_session_from_db(
             }
         }
 
+        // Hermes stores timestamps as REAL seconds; convert to ms.
+        let timestamp_ms = (timestamp * 1000.0) as i64;
+
         match role.as_str() {
             "user" => {
                 // Capture the first non-empty user text in this batch.
@@ -138,6 +141,21 @@ fn tail_session_from_db(
                         if !trimmed.is_empty() {
                             update.first_user_text = Some(trimmed.to_string());
                         }
+                    }
+                }
+                // Emit EventSnapshot for non-empty user content.
+                if let Some(text) = content.as_deref() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        let display = crate::events::truncate_display(
+                            &format!("user: {}", crate::events::collapse_ws(trimmed)),
+                            crate::events::MAX_DISPLAY_CHARS,
+                        );
+                        update.events.push(EventSnapshot {
+                            kind: EventKind::UserMessage,
+                            display,
+                            timestamp_ms,
+                        });
                     }
                 }
             }
@@ -158,9 +176,35 @@ fn tail_session_from_db(
                         update.last_stop_reason = Some(StopReason::from_json_str(trimmed));
                     }
                 }
+                // Emit EventSnapshot: prefer tool_calls when content is empty.
+                let content_trimmed = content.as_deref().map(str::trim).unwrap_or("").to_string();
+                if !content_trimmed.is_empty() {
+                    let display = crate::events::truncate_display(
+                        &crate::events::collapse_ws(&content_trimmed),
+                        crate::events::MAX_DISPLAY_CHARS,
+                    );
+                    update.events.push(EventSnapshot {
+                        kind: EventKind::AssistantText,
+                        display,
+                        timestamp_ms,
+                    });
+                } else if let Some(tc) = tool_calls.as_deref() {
+                    let tc_trimmed = tc.trim();
+                    if !tc_trimmed.is_empty() {
+                        let display = format_tool_use_display(tc_trimmed);
+                        update.events.push(EventSnapshot {
+                            kind: EventKind::AssistantToolUse,
+                            display,
+                            timestamp_ms,
+                        });
+                    }
+                }
+            }
+            "tool" | "system" => {
+                // Tool results and system messages are noise; skip EventSnapshot.
             }
             _ => {
-                // "tool", "system", and any unknown roles: ignored for MVP.
+                // Any other unknown roles: ignored.
             }
         }
 
@@ -175,6 +219,52 @@ fn tail_session_from_db(
     }
 
     Ok(update)
+}
+
+/// Extract a short display string from a Hermes tool_calls JSON array.
+/// Returns "using a tool" on parse failure or empty array; otherwise
+/// "using <name>" for the first tool, or "ran `<cmd>`" if the tool is
+/// terminal/bash and we can find a command argument.
+fn format_tool_use_display(tool_calls_json: &str) -> String {
+    let parsed: std::result::Result<serde_json::Value, _> = serde_json::from_str(tool_calls_json);
+    let Ok(value) = parsed else {
+        return "using a tool".to_string();
+    };
+    let Some(arr) = value.as_array() else {
+        return "using a tool".to_string();
+    };
+    let Some(first) = arr.first() else {
+        return "using a tool".to_string();
+    };
+    let name = first
+        .get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("");
+    if name.is_empty() {
+        return "using a tool".to_string();
+    }
+    // Special-case terminal/bash to show the command, like Claude does.
+    if name == "terminal" || name == "bash" {
+        // arguments is a JSON-as-string; parse it and look for "command".
+        let cmd = first
+            .get("function")
+            .and_then(|f| f.get("arguments"))
+            .and_then(|a| a.as_str())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get("command").cloned())
+            .and_then(|c| c.as_str().map(str::to_string));
+        if let Some(cmd) = cmd {
+            return crate::events::truncate_display(
+                &format!("ran `{}`", crate::events::collapse_ws(&cmd)),
+                crate::events::MAX_DISPLAY_CHARS,
+            );
+        }
+    }
+    crate::events::truncate_display(
+        &format!("using {}", name),
+        crate::events::MAX_DISPLAY_CHARS,
+    )
 }
 
 #[cfg(test)]
@@ -233,6 +323,25 @@ mod tests {
             "INSERT INTO messages (session_id, role, content, tool_name, timestamp, finish_reason)
              VALUES (?1, ?2, ?3, ?4, 1000.0, ?5)",
             rusqlite::params![session_id, role, content, tool_name, finish_reason],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    /// Full-featured insert helper that exposes all fields needed for
+    /// EventSnapshot emission tests (tool_calls and explicit timestamp).
+    fn insert_message_full(
+        conn: &rusqlite::Connection,
+        session_id: &str,
+        role: &str,
+        content: Option<&str>,
+        tool_calls: Option<&str>,
+        timestamp: f64,
+    ) -> i64 {
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, tool_calls, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![session_id, role, content, tool_calls, timestamp],
         )
         .unwrap();
         conn.last_insert_rowid()
@@ -417,5 +526,147 @@ mod tests {
         assert!(update.last_assistant_text.is_none());
         assert!(update.first_user_text.is_none());
         assert!(update.last_stop_reason.is_none());
+    }
+
+    // ── EventSnapshot emission tests ─────────────────────────────────────────
+
+    #[test]
+    fn tail_session_emits_user_message_event_snapshot() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "ev1", "wsx:test");
+        insert_message_full(&conn, "ev1", "user", Some("Hello Hermes!"), None, 1000.0);
+
+        let update = tail_session_from_db(&db_path, "ev1", 0).unwrap();
+        assert_eq!(update.events.len(), 1, "expected 1 event");
+        let ev = &update.events[0];
+        assert_eq!(ev.kind, EventKind::UserMessage);
+        assert!(
+            ev.display.starts_with("user: "),
+            "display should start with 'user: ', got: {:?}",
+            ev.display
+        );
+        assert!(
+            ev.display.contains("Hello Hermes!"),
+            "display should contain the message text"
+        );
+    }
+
+    #[test]
+    fn tail_session_emits_assistant_text_event_snapshot() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "ev2", "wsx:test");
+        insert_message_full(&conn, "ev2", "assistant", Some("Here is the answer."), None, 1000.0);
+
+        let update = tail_session_from_db(&db_path, "ev2", 0).unwrap();
+        assert_eq!(update.events.len(), 1, "expected 1 event");
+        let ev = &update.events[0];
+        assert_eq!(ev.kind, EventKind::AssistantText);
+        assert!(
+            !ev.display.starts_with("user: "),
+            "assistant text display must not start with 'user: '"
+        );
+        assert!(
+            ev.display.contains("Here is the answer."),
+            "display should contain the assistant text"
+        );
+    }
+
+    #[test]
+    fn tail_session_emits_assistant_tool_use_event_snapshot_with_named_tool() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "ev3", "wsx:test");
+        let tool_calls_json = r#"[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"}}]"#;
+        insert_message_full(&conn, "ev3", "assistant", None, Some(tool_calls_json), 1000.0);
+
+        let update = tail_session_from_db(&db_path, "ev3", 0).unwrap();
+        assert_eq!(update.events.len(), 1, "expected 1 event");
+        let ev = &update.events[0];
+        assert_eq!(ev.kind, EventKind::AssistantToolUse);
+        assert_eq!(ev.display, "using read_file");
+    }
+
+    #[test]
+    fn tail_session_emits_assistant_tool_use_event_snapshot_with_terminal_command() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "ev4", "wsx:test");
+        let tool_calls_json = r#"[{"id":"call_2","type":"function","function":{"name":"terminal","arguments":"{\"command\":\"ls -la\"}"}}]"#;
+        insert_message_full(&conn, "ev4", "assistant", None, Some(tool_calls_json), 1000.0);
+
+        let update = tail_session_from_db(&db_path, "ev4", 0).unwrap();
+        assert_eq!(update.events.len(), 1, "expected 1 event");
+        let ev = &update.events[0];
+        assert_eq!(ev.kind, EventKind::AssistantToolUse);
+        assert!(
+            ev.display.starts_with("ran `"),
+            "terminal tool display should start with 'ran `', got: {:?}",
+            ev.display
+        );
+        assert!(
+            ev.display.contains("ls -la"),
+            "display should contain the command"
+        );
+    }
+
+    #[test]
+    fn tail_session_skips_tool_role_rows() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "ev5", "wsx:test");
+        insert_message_full(&conn, "ev5", "tool", Some("tool output here"), None, 1000.0);
+
+        let update = tail_session_from_db(&db_path, "ev5", 0).unwrap();
+        assert!(
+            update.events.is_empty(),
+            "tool role rows should not emit EventSnapshot"
+        );
+    }
+
+    #[test]
+    fn tail_session_event_order_matches_message_id_order() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "ev6", "wsx:test");
+        // Insert in ascending order (ids 1, 2, 3) — query is ORDER BY id ASC.
+        insert_message_full(&conn, "ev6", "user", Some("first"), None, 1000.0);
+        insert_message_full(&conn, "ev6", "assistant", Some("second"), None, 1001.0);
+        insert_message_full(&conn, "ev6", "user", Some("third"), None, 1002.0);
+
+        let update = tail_session_from_db(&db_path, "ev6", 0).unwrap();
+        assert_eq!(update.events.len(), 3, "expected 3 events");
+        assert_eq!(update.events[0].kind, EventKind::UserMessage);
+        assert!(update.events[0].display.contains("first"));
+        assert_eq!(update.events[1].kind, EventKind::AssistantText);
+        assert!(update.events[1].display.contains("second"));
+        assert_eq!(update.events[2].kind, EventKind::UserMessage);
+        assert!(update.events[2].display.contains("third"));
+    }
+
+    #[test]
+    fn tail_session_collapses_whitespace_in_display() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "ev7", "wsx:test");
+        insert_message_full(&conn, "ev7", "assistant", Some("hello\n\n   world"), None, 1000.0);
+
+        let update = tail_session_from_db(&db_path, "ev7", 0).unwrap();
+        assert_eq!(update.events.len(), 1, "expected 1 event");
+        let ev = &update.events[0];
+        assert_eq!(ev.kind, EventKind::AssistantText);
+        assert!(
+            ev.display.starts_with("hello world"),
+            "whitespace should be collapsed; got: {:?}",
+            ev.display
+        );
     }
 }

@@ -1360,14 +1360,13 @@ mod tests {
         assert!(screen.contains("hello"), "screen contents: {screen:?}");
     }
 
-    // `spawn_session` propagates `pty.spawn_command(...)` errors via `?`,
-    // so the contract under test is really that portable-pty rejects a
-    // missing binary at spawn time. Validating that directly avoids the
-    // need to mutate the process-global `WSX_CLAUDE_BIN` env var — every
-    // sibling test in this file (and across `app.rs`/`pm.rs`) also
-    // mutates that var, and the resulting races make any env-driven
-    // assertion here non-deterministic. The integration path is one
-    // `?` away from `spawn_command`'s `Result`, so this is enough.
+    // Validates the contract under test (portable-pty rejects a missing
+    // binary at spawn time) directly, without driving the env-var seam.
+    // Env-var-driven tests in this file use `EnvGuard` from
+    // `test_support` to serialize against sibling tests across the crate
+    // that mutate the same process-global vars; see
+    // `spawn_session_returns_agent_binary_missing_for_unknown_path` for an
+    // example.
     #[test]
     fn missing_binary_returns_pty_error() {
         let pty_system = native_pty_system();

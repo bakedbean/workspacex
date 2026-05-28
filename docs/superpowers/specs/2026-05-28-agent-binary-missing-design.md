@@ -55,22 +55,32 @@ In `spawn_session` (`src/pty/session.rs:1041`), inspect the
 `portable-pty` error before stringifying it:
 
 ```rust
-let mut child = pair
-    .slave
-    .spawn_command(child_cmd)
-    .map_err(|e| {
-        if root_io_kind(&e) == Some(io::ErrorKind::NotFound) {
-            Error::AgentBinaryMissing(resolved_binary(agent))
-        } else {
-            Error::Pty(format!("spawn: {e}"))
-        }
-    })?;
+let mut child = pair.slave.spawn_command(child_cmd).map_err(|e| {
+    if is_binary_not_found(&e) {
+        Error::AgentBinaryMissing(resolved_binary(agent))
+    } else {
+        Error::Pty(format!("spawn: {e}"))
+    }
+})?;
 ```
 
-`root_io_kind` walks the error chain looking for an `io::Error` and
-returns its `kind()`. `resolved_binary(agent)` reads `WSX_<AGENT>_BIN`
-and falls back to the agent's default name. Both are private helpers in
-`src/pty/session.rs`.
+`is_binary_not_found(err)` matches `err`'s `Display` output against the
+three "binary not on PATH" messages portable-pty 0.9.0 produces in
+`src/cmdbuilder.rs::CommandBuilder::search_path`: `"because it does not
+exist"`, `"doesn't exist on the filesystem"`, and `"No viable candidates
+found in PATH"`. We string-match (rather than walking the error chain for
+`io::ErrorKind::NotFound`) because portable-pty constructs these errors
+with `anyhow::bail!` and plain strings — the underlying `io::Error` is
+not preserved in the chain. The fourth portable-pty error path
+(`"Unable to resolve the PATH"`, fired when the `PATH` env var is
+entirely missing) is intentionally NOT matched: it signals system
+misconfiguration, not a missing binary, and should surface as
+`Error::Pty`. If portable-pty is bumped past 0.9.0, re-verify these
+patterns; the `spawn_session_returns_agent_binary_missing_for_unknown_path`
+test guards the cwd-relative branch.
+
+`resolved_binary(agent)` reads `WSX_<AGENT>_BIN` and falls back to the
+agent's default name. Both are private helpers in `src/pty/session.rs`.
 
 ### 2. Spawn call-site handling
 

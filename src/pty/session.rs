@@ -907,12 +907,8 @@ pub fn spawn_session(
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
         AgentKind::Pi => build_pi_command(cwd, &mode, remote),
         AgentKind::Hermes => {
-            // Placeholder until Task 11 wires the real implementation.
-            // CommandBuilder::new("hermes") at least produces a valid spawnable command
-            // shape so the type-checker and integration paths work.
-            let mut cmd = CommandBuilder::new("hermes");
-            cmd.cwd(cwd);
-            cmd
+            prepare_hermes_workspace(cwd, &mode);
+            build_hermes_command(cwd, &mode, remote)
         }
     };
     let mut child = pair

@@ -279,6 +279,15 @@ pub fn has_prior_pi_session(worktree: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Encode a worktree path into a `--source` tag for Hermes session tagging.
+/// Returns None when canonicalization fails — callers should treat that as
+/// "don't pass `--source`" so we don't cluster multiple unresolvable cwds
+/// under a single tag and break per-worktree session lookups.
+fn hermes_source_tag(worktree: &Path) -> Option<String> {
+    let abs = std::fs::canonicalize(worktree).ok()?;
+    Some(format!("wsx:{}", abs.to_string_lossy().replace('/', "-")))
+}
+
 /// Resolve whether a workspace has a prior session based on the agent kind.
 pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     match agent {
@@ -1671,5 +1680,23 @@ mod tests {
             assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
             assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
         }
+    }
+
+    #[test]
+    fn hermes_source_tag_encodes_path_with_dashes_and_wsx_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tag = super::hermes_source_tag(tmp.path()).expect("canonicalize should succeed for tempdir");
+        assert!(tag.starts_with("wsx:"), "tag {tag} should start with wsx:");
+        let after = &tag["wsx:".len()..];
+        assert!(!after.contains('/'), "tag {tag} should have no slashes after prefix");
+        let canonical = std::fs::canonicalize(tmp.path()).unwrap();
+        let expected_tail = canonical.to_string_lossy().replace('/', "-");
+        assert_eq!(after, expected_tail);
+    }
+
+    #[test]
+    fn hermes_source_tag_returns_none_for_nonexistent_path() {
+        let bogus = std::path::Path::new("/this/path/definitely/does/not/exist/123456");
+        assert!(super::hermes_source_tag(bogus).is_none());
     }
 }

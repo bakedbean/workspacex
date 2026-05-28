@@ -1384,8 +1384,10 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
     // Detail-bar container scroll: consume wheel events on the Dashboard
     // view when the cursor is over a container rect. Fall through for
     // wheel events elsewhere (existing scroll_active routing).
-    if matches!(m.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown)
-        && matches!(app.view, crate::ui::View::Dashboard)
+    if matches!(
+        m.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) && matches!(app.view, crate::ui::View::Dashboard)
     {
         if let Some(slot) = container_under_cursor(app, m.column, m.row) {
             let up = matches!(m.kind, MouseEventKind::ScrollUp);

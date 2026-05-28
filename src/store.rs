@@ -759,6 +759,7 @@ fn parse_setup(s: &str) -> SetupStatus {
 fn parse_agent(s: &str) -> AgentKind {
     match s {
         "pi" => AgentKind::Pi,
+        "hermes" => AgentKind::Hermes,
         _ => AgentKind::Claude,
     }
 }

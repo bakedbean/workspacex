@@ -11,23 +11,32 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use vt100::Parser;
 
-/// Detect whether an error returned by `portable-pty`'s `spawn_command`
-/// means "the binary was not found".
+/// True if `err`'s `Display` output looks like portable-pty's
+/// "binary not found on PATH" error.
 ///
-/// `portable_pty::CommandBuilder::search_path` always returns a plain
-/// `anyhow::bail!` with a human-readable string — it does **not** wrap an
-/// `std::io::Error`, so we cannot walk the chain for `ErrorKind::NotFound`.
-/// Instead we match on the stable message patterns that portable-pty uses:
-///   • "doesn't exist on the filesystem"  (absolute path, not present)
-///   • "does not exist"                   (relative path, not present)
-///   • "No viable candidates found in PATH" (relative name, PATH search)
+/// Why string-matching: portable-pty constructs these errors with
+/// `anyhow::bail!` and plain strings; there is no `io::Error` in the
+/// chain to detect via `io::ErrorKind::NotFound`. We match against
+/// the three message patterns portable-pty 0.9.0 produces in
+/// `src/cmdbuilder.rs::CommandBuilder::search_path`:
 ///
-/// Mis-matches ("is a directory", "is not executable") correctly return false
-/// so those errors stay as `Error::Pty`.
+/// - `"because it does not exist"` — cwd-relative path missing
+/// - `"doesn't exist on the filesystem"` — absolute path missing
+/// - `"No viable candidates found in PATH"` — PATH search exhausted
+///
+/// A fourth path — `"Unable to resolve the PATH"`, fired when the
+/// `PATH` env var is entirely missing — is INTENTIONALLY excluded:
+/// that is a system misconfiguration, not a "binary not found"
+/// situation, and should surface as `Error::Pty` so the user sees
+/// the real cause.
+///
+/// If portable-pty is bumped past 0.9.0, re-verify these patterns.
+/// The `spawn_session_returns_agent_binary_missing_for_unknown_path`
+/// test guards the cwd-relative branch.
 fn is_binary_not_found(err: &dyn std::fmt::Display) -> bool {
-    let msg = format!("{err}");
-    msg.contains("doesn't exist on the filesystem")
-        || msg.contains("does not exist")
+    let msg = err.to_string();
+    msg.contains("because it does not exist")
+        || msg.contains("doesn't exist on the filesystem")
         || msg.contains("No viable candidates found in PATH")
 }
 

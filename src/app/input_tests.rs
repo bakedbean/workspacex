@@ -3263,6 +3263,73 @@ mod pm_state_tests {
             ref other => panic!("expected AgentMissing modal, got {other:?}"),
         }
     }
+
+    #[test]
+    fn agent_missing_modal_renders_binary_name() {
+        use crate::pty::session::AgentKind;
+        use crate::ui::modal::Modal;
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::AgentMissing {
+            ws_id: crate::store::WorkspaceId(1),
+            agent: AgentKind::Hermes,
+            binary: "/nonexistent/hermes".to_string(),
+        });
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Hermes is not installed")
+                || rendered.contains("hermes is not installed"),
+            "expected 'Hermes is not installed' line:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("/nonexistent/hermes"),
+            "expected binary path in modal body:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('s') && rendered.contains("switch agent"),
+            "expected switch-agent hint:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn agent_picker_modal_renders_three_agents_with_current_marker() {
+        use crate::pty::session::AgentKind;
+        use crate::ui::modal::Modal;
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::AgentPicker {
+            ws_id: crate::store::WorkspaceId(1),
+            selected: 0,
+            current: AgentKind::Hermes,
+        });
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("claude"), "expected claude row: {rendered}");
+        assert!(rendered.contains("pi"), "expected pi row: {rendered}");
+        assert!(rendered.contains("hermes"), "expected hermes row: {rendered}");
+        assert!(rendered.contains("current"), "expected current marker: {rendered}");
+    }
 }
 
 #[cfg(test)]

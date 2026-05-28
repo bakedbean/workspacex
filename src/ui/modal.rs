@@ -68,6 +68,7 @@ pub enum Modal {
     AgentPicker {
         ws_id: crate::store::WorkspaceId,
         selected: usize,
+        current: crate::pty::session::AgentKind,
     },
 }
 
@@ -97,11 +98,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
     // defensively.
     if matches!(
         modal,
-        Modal::UpdatesPanel { .. }
-            | Modal::ProcessList { .. }
-            | Modal::RepoSettings { .. }
-            | Modal::AgentMissing { .. }
-            | Modal::AgentPicker { .. }
+        Modal::UpdatesPanel { .. } | Modal::ProcessList { .. } | Modal::RepoSettings { .. }
     ) {
         return;
     }
@@ -145,8 +142,39 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         Modal::UpdatesPanel { .. } => unreachable!("UpdatesPanel must not reach render()"),
         Modal::ProcessList { .. } => unreachable!("ProcessList must not reach render()"),
         Modal::RepoSettings { .. } => unreachable!("RepoSettings must not reach render()"),
-        Modal::AgentMissing { .. } => unreachable!("AgentMissing must not reach render() (Task 5)"),
-        Modal::AgentPicker { .. } => unreachable!("AgentPicker must not reach render() (Task 5)"),
+        Modal::AgentMissing { agent, binary, .. } => (
+            "agent not installed",
+            format!(
+                "{name} is not installed.\n\n\
+                 The `{binary}` binary was not found on PATH.\n\
+                 Install it, then re-enter the workspace.\n\n\
+                 s    switch agent for this workspace\n\
+                 Esc  dismiss",
+                name = capitalize_first(agent.display_name()),
+                binary = binary,
+            ),
+        ),
+        Modal::AgentPicker {
+            selected, current, ..
+        } => {
+            let list = crate::pty::session::AgentKind::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, k)| {
+                    let marker = if i == *selected { ">" } else { " " };
+                    let current_tag = if *k == *current { "  (current)" } else { "" };
+                    format!("{marker}  {name}{current_tag}", name = k.display_name())
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                "pick an agent",
+                format!(
+                    "Choose an agent for this workspace:\n\n{list}\n\n\
+                     \u{2191}\u{2193} move   Enter confirm   Esc cancel"
+                ),
+            )
+        }
     };
     let style = if matches!(modal, Modal::Error { .. }) {
         theme.err_style()
@@ -691,6 +719,17 @@ pub fn render_repo_settings(
             .style(theme.dim_style()),
         footer_area,
     );
+}
+
+/// Uppercase only the first character of `s`. Used to render the agent
+/// name in the AgentMissing modal as a proper sentence-start without
+/// changing the canonical lowercase form returned by `AgentKind::display_name`.
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// First non-empty line, trimmed and truncated. Used by render_repo_settings.

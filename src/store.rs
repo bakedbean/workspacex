@@ -477,6 +477,7 @@ impl Store {
         let agent_str = match w.agent {
             AgentKind::Claude => "claude",
             AgentKind::Pi => "pi",
+            AgentKind::Hermes => "hermes",
         };
         self.conn.execute(
             "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)
@@ -758,6 +759,7 @@ fn parse_setup(s: &str) -> SetupStatus {
 fn parse_agent(s: &str) -> AgentKind {
     match s {
         "pi" => AgentKind::Pi,
+        "hermes" => AgentKind::Hermes,
         _ => AgentKind::Claude,
     }
 }

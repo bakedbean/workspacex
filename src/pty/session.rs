@@ -16,12 +16,14 @@ use vt100::Parser;
 pub enum AgentKind {
     Claude,
     Pi,
+    Hermes,
 }
 
 impl AgentKind {
     pub fn from_store(store: &crate::store::Store) -> Self {
         match store.get_setting("coding_agent").ok().flatten().as_deref() {
             Some("pi") => AgentKind::Pi,
+            Some("hermes") => AgentKind::Hermes,
             _ => AgentKind::Claude,
         }
     }
@@ -214,6 +216,8 @@ impl Drop for Session {
 pub struct RenameContext {
     pub current_branch: String,
     pub branch_prefix: String, // empty if no prefix
+    pub repo_name: String,     // wsx repo name (used by `wsx workspace rename <repo> ...`)
+    pub current_slug: String,  // wsx workspace name (the stored slug, e.g., "patient-larkspur")
 }
 
 /// How to spawn the claude process for a workspace.
@@ -250,6 +254,83 @@ pub enum SpawnMode {
     },
 }
 
+/// Marker recorded when wsx first spawns Hermes for a worktree.
+///
+/// File format (`.git/info/wsx-hermes-spawn-at`):
+/// ```text
+/// <start_ts>\n
+/// <session_id>\n   ← optional; absent on initial write, added by cache_hermes_session_id_in_marker
+/// ```
+///
+/// Old single-line files (timestamp only) continue to parse correctly with
+/// `session_id = None`.
+#[derive(Debug, Clone)]
+struct HermesSpawnMarker {
+    /// Unix epoch seconds (fractional) when wsx first spawned Hermes for this worktree.
+    start_ts: f64,
+    /// Cached session id discovered by a previous lookup. `None` until the
+    /// first successful call to `latest_hermes_session_id_default`.
+    session_id: Option<String>,
+}
+
+/// Read the spawn marker for this worktree.
+/// Returns None if absent or unparseable (best-effort: silent on IO/parse errors).
+fn read_hermes_spawn_marker(worktree: &Path) -> Option<HermesSpawnMarker> {
+    let path = resolve_gitdir(&worktree.join(".git"), worktree)?
+        .join("info/wsx-hermes-spawn-at");
+    let contents = std::fs::read_to_string(&path).ok()?;
+    let mut lines = contents.lines();
+    let start_ts: f64 = lines.next()?.trim().parse().ok()?;
+    let session_id = lines
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Some(HermesSpawnMarker {
+        start_ts,
+        session_id,
+    })
+}
+
+/// Write a fresh spawn-timestamp marker for this worktree.
+///
+/// Writes only the first line (`<now>\n`). The `session_id` line is added
+/// later by `cache_hermes_session_id_in_marker` once we discover which
+/// session Hermes created for this spawn. Callers that want idempotent
+/// behaviour must guard the call themselves (see `prepare_hermes_workspace`).
+///
+/// Best-effort: silent on IO error.
+fn write_hermes_spawn_marker(worktree: &Path) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    if let Some(gitdir) = resolve_gitdir(&worktree.join(".git"), worktree) {
+        let info_dir = gitdir.join("info");
+        if !info_dir.exists() && std::fs::create_dir_all(&info_dir).is_err() {
+            return;
+        }
+        let _ = std::fs::write(info_dir.join("wsx-hermes-spawn-at"), format!("{now}\n"));
+    }
+}
+
+/// Update the cached session_id in the marker file, preserving the
+/// original start_ts. Best-effort: silent on IO error.
+fn cache_hermes_session_id_in_marker(worktree: &Path, session_id: &str) {
+    let Some(existing) = read_hermes_spawn_marker(worktree) else {
+        return;
+    };
+    if let Some(gitdir) = resolve_gitdir(&worktree.join(".git"), worktree) {
+        let info_dir = gitdir.join("info");
+        if !info_dir.exists() && std::fs::create_dir_all(&info_dir).is_err() {
+            return;
+        }
+        let _ = std::fs::write(
+            info_dir.join("wsx-hermes-spawn-at"),
+            format!("{}\n{}\n", existing.start_ts, session_id),
+        );
+    }
+}
+
 /// True if pi has a persisted session JSONL for this worktree.
 /// Pi stores sessions at `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`,
 /// where the encoding replaces `/` with `-`.
@@ -277,11 +358,229 @@ pub fn has_prior_pi_session(worktree: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Return the most recent Hermes session ID started at or after `spawn_ts`.
+/// Path-parameterized for testing; production callers use
+/// `latest_hermes_session_id_default`.
+///
+/// `spawn_ts` is the Unix epoch (seconds, fractional) when wsx spawned
+/// Hermes for the worktree of interest. The query uses a 2-second
+/// look-back buffer to absorb clock skew between our marker-write time
+/// and Hermes's `time.time()` call when it creates the row.
+///
+/// Opens the db read-only (no `immutable=1`) so the reader sees WAL-pending
+/// writes from a live Hermes process. WAL mode supports concurrent
+/// readers + 1 writer, so this neither blocks Hermes nor returns stale data.
+fn latest_hermes_session_id(db_path: &Path, spawn_ts: f64) -> Option<String> {
+    if !db_path.is_file() {
+        return None;
+    }
+    // We open WITHOUT immutable=1 so the reader sees WAL-pending writes from
+    // the live Hermes process. WAL mode allows concurrent readers + 1 writer,
+    // so plain read-only access is non-blocking and returns the live view.
+    // immutable=1 was a previous (wrong) choice that silently filtered out
+    // WAL pages and made the dashboard show stale data.
+    let uri = format!("file:{}?mode=ro", db_path.display());
+    let conn = rusqlite::Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ).ok()?;
+    conn.query_row(
+        "SELECT id FROM sessions WHERE started_at >= ?1 - 2.0 ORDER BY started_at DESC LIMIT 1",
+        [&spawn_ts],
+        |row| row.get::<_, String>(0),
+    ).ok()
+}
+
+/// Production wrapper for `latest_hermes_session_id` that resolves
+/// `~/.hermes/state.db` and reads the spawn marker for this worktree.
+///
+/// Uses a two-level lookup strategy:
+/// 1. **Fast path**: if the marker already has a cached `session_id` and that
+///    session still exists in the db, return it immediately. This avoids
+///    cross-workspace pollution where the time-based query might return a
+///    session from a different worktree that was started after this one.
+/// 2. **Slow path**: time-based lookup via `latest_hermes_session_id`. On
+///    success the result is written back into the marker so future calls use
+///    the fast path. If the cached id is stale (session pruned/deleted), this
+///    same slow path is used as fallback.
+pub fn latest_hermes_session_id_default(worktree: &Path) -> Option<String> {
+    let marker = read_hermes_spawn_marker(worktree)?;
+    let db = dirs::home_dir()?.join(".hermes/state.db");
+
+    // Fast path: cached session_id that is still alive in the db.
+    if let Some(ref id) = marker.session_id {
+        if session_exists(&db, id) {
+            return Some(id.clone());
+        }
+        // Cached id is dead (session pruned/deleted); fall through to slow path.
+    }
+
+    // Slow path: time-based lookup, then cache the result for next time.
+    let id = latest_hermes_session_id(&db, marker.start_ts)?;
+    cache_hermes_session_id_in_marker(worktree, &id);
+    Some(id)
+}
+
+/// Return true if `session_id` exists in the sessions table of `db_path`.
+/// Opens the db read-only. Returns false on any IO/parse/query error.
+fn session_exists(db_path: &Path, session_id: &str) -> bool {
+    if !db_path.is_file() {
+        return false;
+    }
+    let uri = format!("file:{}?mode=ro", db_path.display());
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT 1 FROM sessions WHERE id = ?1",
+        [session_id],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// True if a wsx-spawned Hermes session exists for this worktree.
+pub fn has_prior_hermes_session(worktree: &Path) -> bool {
+    latest_hermes_session_id_default(worktree).is_some()
+}
+
+/// Append `name` to the gitdir's `info/exclude` if not already present.
+///
+/// `<worktree>/.git` may be either a directory (normal clone) or a file
+/// containing `gitdir: <path>` (git worktree). We follow the file to the
+/// real gitdir before writing.
+///
+/// Best-effort: silently no-ops on any IO/parse error or if `.git/` is
+/// absent. `info/exclude` is per-gitdir-local and never committed.
+fn ensure_git_exclude(worktree: &Path, name: &str) {
+    let dot_git = worktree.join(".git");
+    let gitdir = match resolve_gitdir(&dot_git, worktree) {
+        Some(p) => p,
+        None => return,
+    };
+    let info_dir = gitdir.join("info");
+    if !info_dir.exists() && std::fs::create_dir_all(&info_dir).is_err() {
+        return;
+    }
+    let exclude_path = info_dir.join("exclude");
+    let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+    if existing.lines().any(|l| l == name) {
+        return;
+    }
+    let mut new = existing;
+    if !new.is_empty() && !new.ends_with('\n') {
+        new.push('\n');
+    }
+    new.push_str(name);
+    new.push('\n');
+    let _ = std::fs::write(&exclude_path, new);
+}
+
+/// Resolve `<worktree>/.git` to the real gitdir, following a worktree-style
+/// `.git` file if necessary. Returns None on missing or unparseable input.
+fn resolve_gitdir(dot_git: &Path, worktree: &Path) -> Option<std::path::PathBuf> {
+    let meta = std::fs::metadata(dot_git).ok()?;
+    if meta.is_dir() {
+        return Some(dot_git.to_path_buf());
+    }
+    if !meta.is_file() {
+        return None;
+    }
+    let contents = std::fs::read_to_string(dot_git).ok()?;
+    let line = contents.lines().next()?;
+    let rest = line.strip_prefix("gitdir:")?.trim();
+    let path = std::path::PathBuf::from(rest);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(worktree.join(path))
+    }
+}
+
+const HERMES_BLOCK_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
+const HERMES_BLOCK_END: &str = "<!-- END wsx-managed -->";
+
+/// Rewrite the wsx-managed section of `AGENTS.md` in `cwd`.
+///
+/// Strips any existing `BEGIN/END wsx-managed` block, then appends a new
+/// block with `content` if Some, or writes back just the stripped content if
+/// None. Skips the write entirely if the result equals the existing file.
+///
+/// Best-effort: any IO error is silently swallowed.
+fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
+    let path = cwd.join("AGENTS.md");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let stripped = strip_wsx_block(&existing);
+    let new = match content {
+        Some(c) => {
+            let mut s = stripped.into_owned();
+            if !s.is_empty() && !s.ends_with('\n') {
+                s.push('\n');
+            }
+            if !s.is_empty() {
+                s.push('\n');
+            }
+            s.push_str(HERMES_BLOCK_BEGIN);
+            s.push('\n');
+            s.push_str(c);
+            if !c.ends_with('\n') {
+                s.push('\n');
+            }
+            s.push_str(HERMES_BLOCK_END);
+            s.push('\n');
+            s
+        }
+        None => stripped.into_owned(),
+    };
+
+    if new == existing {
+        return;
+    }
+    if new.is_empty() && !path.exists() {
+        return;
+    }
+    let _ = std::fs::write(&path, new);
+}
+
+/// Remove a `BEGIN/END wsx-managed` block (and the surrounding blank lines
+/// it produced when we wrote it) from `source`, returning a `Cow` so we
+/// can avoid allocation in the common no-block path.
+fn strip_wsx_block(source: &str) -> std::borrow::Cow<'_, str> {
+    let Some(begin) = source.find(HERMES_BLOCK_BEGIN) else {
+        return std::borrow::Cow::Borrowed(source);
+    };
+    let Some(end_rel) = source[begin..].find(HERMES_BLOCK_END) else {
+        // Malformed (BEGIN without END) — strip from BEGIN onwards.
+        return std::borrow::Cow::Owned(source[..begin].trim_end_matches('\n').to_string());
+    };
+    let end = begin + end_rel + HERMES_BLOCK_END.len();
+    // Consume one trailing newline after END if present, so successive
+    // strip/append cycles don't grow blank-line padding.
+    let mut tail_start = end;
+    if source.as_bytes().get(tail_start) == Some(&b'\n') {
+        tail_start += 1;
+    }
+    // Trim trailing newlines from the prefix so we don't accumulate blank lines.
+    let prefix = source[..begin].trim_end_matches('\n');
+    let suffix = &source[tail_start..];
+    let mut combined = String::with_capacity(prefix.len() + suffix.len() + 1);
+    combined.push_str(prefix);
+    if !prefix.is_empty() && !suffix.is_empty() {
+        combined.push('\n');
+    }
+    combined.push_str(suffix);
+    std::borrow::Cow::Owned(combined)
+}
+
 /// Resolve whether a workspace has a prior session based on the agent kind.
 pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     match agent {
         AgentKind::Claude => has_prior_session(worktree),
         AgentKind::Pi => has_prior_pi_session(worktree),
+        AgentKind::Hermes => has_prior_hermes_session(worktree),
     }
 }
 
@@ -290,8 +589,8 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
 ///
 /// When `mode` is `Fresh { rename_ctx: Some(_) }` and `WSX_RENAME_MODE` is
 /// `claude` (the default), appends a system-prompt instruction directing
-/// claude to rename the branch based on the user's first message, plus
-/// pre-authorizes `Bash(git branch:*)` so the rename runs without a
+/// claude to rename the workspace based on the user's first message, plus
+/// pre-authorizes `Bash(wsx workspace rename:*)` so the rename runs without a
 /// permission prompt. When `mode` is `Continue`, passes `--continue` so
 /// claude resumes the most recent persisted session for this worktree.
 pub fn build_claude_command(
@@ -306,7 +605,7 @@ pub fn build_claude_command(
         cmd.env(k, v);
     }
 
-    let (rename_prompt, custom, allow_git_branch, add_continue, skip_permissions, add_dirs) =
+    let (rename_prompt, custom, allow_wsx_rename, add_continue, skip_permissions, add_dirs) =
         match mode {
             SpawnMode::Continue {
                 custom_instructions,
@@ -334,6 +633,8 @@ pub fn build_claude_command(
                             Some(render_rename_system_prompt(
                                 &ctx.current_branch,
                                 &ctx.branch_prefix,
+                                &ctx.repo_name,
+                                &ctx.current_slug,
                             )),
                             true,
                         )
@@ -379,9 +680,9 @@ pub fn build_claude_command(
 
     if skip_permissions {
         cmd.arg("--dangerously-skip-permissions");
-    } else if allow_git_branch {
+    } else if allow_wsx_rename {
         cmd.arg("--allowedTools");
-        cmd.arg("Bash(git branch:*)");
+        cmd.arg("Bash(wsx workspace rename:*)");
     }
 
     if remote.enabled {
@@ -414,24 +715,37 @@ pub fn build_claude_command(
     cmd
 }
 
-fn render_rename_system_prompt(current_branch: &str, branch_prefix: &str) -> String {
-    let prefix = if branch_prefix.is_empty() {
-        String::new()
-    } else {
-        format!("{}/", branch_prefix.trim_end_matches('/'))
-    };
+/// Single-quote a string for embedding in a shell command shown to the
+/// agent. Handles internal single quotes via the `'\''` escape so the
+/// agent renders a valid `wsx workspace rename` invocation even when
+/// repo names contain spaces or shell metacharacters.
+fn shell_quote(s: &str) -> String {
+    let escaped = s.replace('\'', r"'\''");
+    format!("'{escaped}'")
+}
+
+fn render_rename_system_prompt(
+    current_branch: &str,
+    _branch_prefix: &str,
+    repo_name: &str,
+    current_slug: &str,
+) -> String {
+    let quoted_repo = shell_quote(repo_name);
+    let quoted_slug = shell_quote(current_slug);
     format!(
         "This is a wsx-managed worktree currently checked out on a placeholder branch \
-         named `{current_branch}`. The placeholder is a randomly-generated \
-         adjective-plant slug from the wsx workspace manager.\n\n\
+         named `{current_branch}`. The placeholder slug is `{current_slug}` (auto-generated \
+         adjective+plant from the wsx workspace manager).\n\n\
          BEFORE doing the work the user asks about, on their first message: \
-         run `git branch -m {current_branch} {prefix}<slug>` where `<slug>` is a \
+         run `wsx workspace rename {quoted_repo} {quoted_slug} <slug>` where `<slug>` is a \
          2-4 word lowercase kebab-case summary of what the user is asking for. \
-         Then briefly tell the user \"renamed branch to {prefix}<slug>\" on one line \
+         This command updates both the git branch and the wsx workspace registry — do \
+         NOT run `git branch -m` directly, since that leaves wsx's database stale. \
+         After renaming, briefly tell the user \"renamed workspace to <slug>\" on one line \
          and proceed with their actual request.\n\n\
          Constraints:\n\
-         - Keep the `{prefix}` prefix exactly as shown.\n\
-         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars.\n\
+         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars. Do NOT include the \
+         branch prefix — wsx prepends it automatically.\n\
          - Don't ask for confirmation; don't add extra explanation.\n\
          - Only do this once per worktree. If the current branch is no longer \
          the placeholder `{current_branch}`, skip the rename — it's already done.\n"
@@ -483,6 +797,8 @@ pub fn build_pi_command(
                     Some(render_rename_system_prompt_pi(
                         &ctx.current_branch,
                         &ctx.branch_prefix,
+                        &ctx.repo_name,
+                        &ctx.current_slug,
                     ))
                 } else {
                     None
@@ -560,31 +876,166 @@ pub fn build_pi_command(
     cmd
 }
 
+/// Build a `CommandBuilder` for `hermes chat` (or whatever `WSX_HERMES_BIN`
+/// points to) inside `cwd`. Inherits the current process env.
+///
+/// Maps wsx spawn modes to Hermes CLI flags:
+/// - `Fresh` → bare `hermes chat`, no continue/resume.
+/// - `Continue` → `--resume <id>` if a prior wsx session exists for this cwd,
+///   otherwise silently launches fresh (better than bare `--continue` which
+///   would resume the globally-most-recent Hermes session regardless of cwd).
+/// - `ProjectManager` → `--resume <id>` if `resume`, always `--yolo`.
+///
+/// Model selection uses env-var precedence:
+///   1. `WSX_HERMES_MODEL` → set `HERMES_INFERENCE_MODEL` env var on the child
+///      (works in all Hermes modes, unlike `--model` which is `-z/--tui` only).
+///   2. `WSX_HERMES_PROVIDER` → forward as `--provider <value>` (may be a no-op
+///      in classic REPL per Hermes docs; persistent provider lives in
+///      `~/.hermes/config.yaml`).
+///
+/// `--worktree` is never emitted — wsx manages worktrees itself; passing it
+/// would double-isolate.
+///
+/// Prompt injection (rename / custom_instructions / PM prompt) is handled
+/// separately by `prepare_hermes_workspace`, which writes a wsx-managed
+/// block into `AGENTS.md`.
+pub fn build_hermes_command(
+    cwd: &Path,
+    mode: &SpawnMode,
+    _remote: crate::remote_control::RemoteOpts,
+) -> CommandBuilder {
+    let bin = std::env::var("WSX_HERMES_BIN").unwrap_or_else(|_| "hermes".to_string());
+    let mut cmd = CommandBuilder::new(bin);
+    cmd.cwd(cwd);
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
+
+    cmd.arg("chat");
+
+    // Note: we deliberately do NOT pass `--source`. Hermes's interactive chat
+    // hardcodes platform="cli" at session creation, preempting both the
+    // --source flag (which only affects `sessions list` filtering) and the
+    // HERMES_SESSION_SOURCE env var. Per-cwd session detection is achieved
+    // via the spawn-timestamp marker (see write_hermes_spawn_marker /
+    // latest_hermes_session_id_default) instead.
+
+    let (add_continue, add_yolo) = match mode {
+        SpawnMode::Continue { yolo, .. } => (true, *yolo),
+        SpawnMode::Fresh { yolo, .. } => (false, *yolo),
+        SpawnMode::ProjectManager { resume, .. } => (*resume, true),
+    };
+
+    if add_continue {
+        if let Some(id) = latest_hermes_session_id_default(cwd) {
+            cmd.arg("--resume");
+            cmd.arg(&id);
+        }
+        // No prior wsx session → silently launch fresh.
+    }
+    if add_yolo {
+        cmd.arg("--yolo");
+    }
+
+    let model = std::env::var("WSX_HERMES_MODEL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let provider = std::env::var("WSX_HERMES_PROVIDER")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(m) = &model {
+        cmd.env("HERMES_INFERENCE_MODEL", m);
+    }
+    if let Some(p) = &provider {
+        cmd.arg("--provider");
+        cmd.arg(p);
+    }
+
+    cmd
+}
+
 /// Pi version of the rename system prompt. Pi uses `bash` (lowercase) as its
 /// tool name and has no permission system, so we don't need to
-/// pre-authorize the git branch command.
-fn render_rename_system_prompt_pi(current_branch: &str, branch_prefix: &str) -> String {
-    let prefix = if branch_prefix.is_empty() {
-        String::new()
-    } else {
-        format!("{}/", branch_prefix.trim_end_matches('/'))
-    };
+/// pre-authorize the wsx workspace rename command.
+fn render_rename_system_prompt_pi(
+    current_branch: &str,
+    _branch_prefix: &str,
+    repo_name: &str,
+    current_slug: &str,
+) -> String {
+    let quoted_repo = shell_quote(repo_name);
+    let quoted_slug = shell_quote(current_slug);
     format!(
         "This is a wsx-managed worktree currently checked out on a placeholder branch \
-         named `{current_branch}`. The placeholder is a randomly-generated \
-         adjective-plant slug from the wsx workspace manager.\n\n\
+         named `{current_branch}`. The placeholder slug is `{current_slug}` (auto-generated \
+         adjective+plant from the wsx workspace manager).\n\n\
          BEFORE doing the work the user asks about, on their first message: \
-         run `git branch -m {current_branch} {prefix}<slug>` where `<slug>` is a \
+         run `wsx workspace rename {quoted_repo} {quoted_slug} <slug>` where `<slug>` is a \
          2-4 word lowercase kebab-case summary of what the user is asking for. \
-         Then briefly tell the user \"renamed branch to {prefix}<slug>\" on one line \
+         This command updates both the git branch and the wsx workspace registry — do \
+         NOT run `git branch -m` directly, since that leaves wsx's database stale. \
+         After renaming, briefly tell the user \"renamed workspace to <slug>\" on one line \
          and proceed with their actual request.\n\n\
          Constraints:\n\
-         - Keep the `{prefix}` prefix exactly as shown.\n\
-         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars.\n\
+         - Slug: lowercase, 2-4 words, hyphen-separated, max ~32 chars. Do NOT include the \
+         branch prefix — wsx prepends it automatically.\n\
          - Don't ask for confirmation; don't add extra explanation.\n\
          - Only do this once per worktree. If the current branch is no longer \
          the placeholder `{current_branch}`, skip the rename — it's already done.\n"
     )
+}
+
+/// Hermes version of the rename system prompt. Today the text is identical to
+/// the Pi version — Hermes has no permission system and uses plain bash, same
+/// as Pi. Keep this function distinct from the Pi helper so future divergence
+/// (e.g., a Hermes-specific tool naming convention) is a one-place change.
+fn render_rename_system_prompt_hermes(
+    current_branch: &str,
+    branch_prefix: &str,
+    repo_name: &str,
+    current_slug: &str,
+) -> String {
+    render_rename_system_prompt_pi(current_branch, branch_prefix, repo_name, current_slug)
+}
+
+/// Decide what text to inject into the wsx-managed block of AGENTS.md for a
+/// given Hermes spawn mode. Returns None when nothing needs injecting.
+fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
+    fn combine(rename: String, custom: Option<String>) -> String {
+        match custom {
+            None => rename,
+            Some(c) => format!("{rename}\n\n{c}"),
+        }
+    }
+
+    match mode {
+        SpawnMode::Fresh {
+            rename_ctx: Some(ctx),
+            custom_instructions,
+            ..
+        } => Some(combine(
+            render_rename_system_prompt_hermes(
+                &ctx.current_branch,
+                &ctx.branch_prefix,
+                &ctx.repo_name,
+                &ctx.current_slug,
+            ),
+            custom_instructions.clone(),
+        )),
+        SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions,
+            ..
+        }
+        | SpawnMode::Continue {
+            custom_instructions, ..
+        } => custom_instructions.clone(),
+        SpawnMode::ProjectManager {
+            custom_instructions, ..
+        } => Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+    }
 }
 
 pub fn spawn_session(
@@ -608,6 +1059,10 @@ pub fn spawn_session(
     let child_cmd = match agent {
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
         AgentKind::Pi => build_pi_command(cwd, &mode, remote),
+        AgentKind::Hermes => {
+            prepare_hermes_workspace(cwd, &mode);
+            build_hermes_command(cwd, &mode, remote)
+        }
     };
     let mut child = pair
         .slave
@@ -770,6 +1225,36 @@ impl SessionManager {
     }
 }
 
+/// Prepare a worktree for a Hermes spawn: rewrite the wsx-managed block in
+/// AGENTS.md (creating the file if needed), ensure the file is hidden
+/// from `git status` via `.git/info/exclude`, and write the spawn-timestamp
+/// marker used for session detection.
+///
+/// The marker is **one-time-write**: it records the timestamp of the *first*
+/// wsx spawn for this worktree. On subsequent re-attaches (Continue mode) the
+/// existing marker is preserved so the lookup query
+/// `WHERE started_at >= marker_ts - 2.0` continues to find the session that
+/// was created when the workspace was first opened. Overwriting on each spawn
+/// would reset the timestamp to "now" and silently lose session history.
+///
+/// Best-effort: all IO errors are swallowed. Hermes will still launch if
+/// these side effects fail; the user just loses the rename hint and session
+/// detection falls back to None.
+fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
+    let injected = compose_injected_prompt(mode);
+    let had_content = injected.is_some();
+    write_agents_md_section(cwd, injected.as_deref());
+    if had_content {
+        ensure_git_exclude(cwd, "AGENTS.md");
+    }
+    // Marker is one-time-write: only write if no marker exists yet.
+    // This preserves the original spawn timestamp across re-attaches so the
+    // session-lookup query can still find the original Hermes session.
+    if read_hermes_spawn_marker(cwd).is_none() {
+        write_hermes_spawn_marker(cwd);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -914,6 +1399,8 @@ mod tests {
         let ctx = RenameContext {
             current_branch: "wsx/bold-fern".into(),
             branch_prefix: "wsx".into(),
+            repo_name: "myrepo".into(),
+            current_slug: "bold-fern".into(),
         };
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(ctx),
@@ -933,14 +1420,14 @@ mod tests {
             .expect("system prompt value should follow")
             .to_string_lossy();
         assert!(
-            prompt.contains("git branch -m wsx/bold-fern"),
+            prompt.contains("wsx workspace rename 'myrepo' 'bold-fern'"),
             "rename block missing"
         );
         assert!(
             prompt.contains("Use tabs not spaces"),
             "custom instructions missing"
         );
-        let rename_pos = prompt.find("git branch -m").unwrap();
+        let rename_pos = prompt.find("wsx workspace rename").unwrap();
         let custom_pos = prompt.find("Use tabs not spaces").unwrap();
         assert!(
             custom_pos > rename_pos,
@@ -966,9 +1453,35 @@ mod tests {
         let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
         assert!(prompt.contains("Use ruff"));
         assert!(
-            !prompt.contains("git branch -m"),
+            !prompt.contains("wsx workspace rename"),
             "rename should not appear on Continue"
         );
+    }
+
+    #[test]
+    fn rename_mode_pre_authorizes_wsx_workspace_rename_tool() {
+        let ctx = RenameContext {
+            current_branch: "wsx/bold-fern".into(),
+            branch_prefix: "wsx".into(),
+            repo_name: "myrepo".into(),
+            current_slug: "bold-fern".into(),
+        };
+        let mode = SpawnMode::Fresh {
+            rename_ctx: Some(ctx),
+            custom_instructions: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--allowedTools"))
+            .expect("--allowedTools should be present when rename_ctx is set and yolo=false");
+        let value = argv.get(idx + 1).expect("value should follow --allowedTools").to_string_lossy();
+        assert_eq!(value, "Bash(wsx workspace rename:*)",
+            "expected wsx-workspace-rename pre-authorization, got: {value}");
     }
 
     #[test]
@@ -1047,17 +1560,40 @@ mod tests {
 
     #[test]
     fn rename_prompt_includes_current_branch_and_prefix() {
-        let p = render_rename_system_prompt("wsx/bold-fern", "wsx");
+        let p = render_rename_system_prompt("wsx/bold-fern", "wsx", "myrepo", "bold-fern");
         assert!(p.contains("`wsx/bold-fern`"));
-        assert!(p.contains("git branch -m wsx/bold-fern wsx/<slug>"));
-        assert!(p.contains("Keep the `wsx/` prefix"));
+        assert!(p.contains("wsx workspace rename 'myrepo' 'bold-fern' <slug>"));
+        // No "Keep the prefix" constraint — wsx handles that automatically.
+        assert!(!p.contains("Keep the `wsx/` prefix"));
     }
 
     #[test]
     fn rename_prompt_handles_empty_prefix() {
-        let p = render_rename_system_prompt("bold-fern", "");
+        let p = render_rename_system_prompt("bold-fern", "", "myrepo", "bold-fern");
         assert!(p.contains("`bold-fern`"));
-        assert!(p.contains("git branch -m bold-fern <slug>"));
+        assert!(p.contains("wsx workspace rename 'myrepo' 'bold-fern' <slug>"));
+    }
+
+    #[test]
+    fn render_rename_prompt_hermes_includes_branch_and_prefix() {
+        let prompt = super::render_rename_system_prompt_hermes("wsx/bold-fern", "wsx", "myrepo", "bold-fern");
+        assert!(prompt.contains("wsx workspace rename 'myrepo' 'bold-fern'"));
+        // No "Keep the prefix" constraint — wsx handles that automatically.
+        assert!(!prompt.contains("Keep the `wsx/` prefix"));
+    }
+
+    #[test]
+    fn render_rename_prompt_hermes_handles_empty_prefix() {
+        let prompt = super::render_rename_system_prompt_hermes("bold-fern", "", "myrepo", "bold-fern");
+        assert!(prompt.contains("wsx workspace rename 'myrepo' 'bold-fern'"));
+        assert!(!prompt.contains("//"), "prompt should not contain double-slash: {prompt}");
+    }
+
+    #[test]
+    fn render_rename_prompt_hermes_matches_pi_today() {
+        let hermes = super::render_rename_system_prompt_hermes("wsx/x", "wsx", "myrepo", "x");
+        let pi = super::render_rename_system_prompt_pi("wsx/x", "wsx", "myrepo", "x");
+        assert_eq!(hermes, pi, "drift between hermes and pi rename prompts");
     }
 
     #[test]
@@ -1660,5 +2196,995 @@ mod tests {
             assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
             assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
         }
+    }
+
+    #[test]
+    fn has_prior_hermes_session_false_when_no_marker() {
+        // A brand-new tempdir has no spawn marker → no session detected.
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!super::has_prior_hermes_session(tmp.path()));
+    }
+
+    mod hermes_session_lookup {
+        use super::latest_hermes_session_id;
+
+        fn make_db(path: &std::path::Path) -> rusqlite::Connection {
+            let conn = rusqlite::Connection::open(path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    started_at REAL NOT NULL
+                );",
+            ).unwrap();
+            conn
+        }
+
+        fn insert(conn: &rusqlite::Connection, id: &str, source: &str, started_at: f64) {
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, source, started_at],
+            ).unwrap();
+        }
+
+        #[test]
+        fn missing_db_returns_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let bogus = tmp.path().join("nope.db");
+            assert!(latest_hermes_session_id(&bogus, 1000.0).is_none());
+        }
+
+        #[test]
+        fn empty_sessions_returns_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let _ = make_db(&db_path);
+            assert!(latest_hermes_session_id(&db_path, 1000.0).is_none());
+        }
+
+        #[test]
+        fn session_before_spawn_ts_returns_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            insert(&conn, "old", "cli", 100.0);
+            // Spawn was way later; even with -2s buffer, this row is too old.
+            assert!(latest_hermes_session_id(&db_path, 1000.0).is_none());
+        }
+
+        #[test]
+        fn session_after_spawn_ts_returns_id() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            insert(&conn, "new", "cli", 1500.0);
+            assert_eq!(
+                latest_hermes_session_id(&db_path, 1000.0).as_deref(),
+                Some("new")
+            );
+        }
+
+        #[test]
+        fn buffer_absorbs_small_clock_skew() {
+            // Session row created 1.5s before our marker — buffer covers it.
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            insert(&conn, "racy", "cli", 998.5);
+            assert_eq!(
+                latest_hermes_session_id(&db_path, 1000.0).as_deref(),
+                Some("racy")
+            );
+        }
+
+        #[test]
+        fn returns_most_recent_when_multiple_match() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            insert(&conn, "first", "cli", 1100.0);
+            insert(&conn, "second", "cli", 1200.0);
+            insert(&conn, "third", "cli", 1150.0);
+            assert_eq!(
+                latest_hermes_session_id(&db_path, 1000.0).as_deref(),
+                Some("second")
+            );
+        }
+
+        #[test]
+        fn source_irrelevant_to_lookup() {
+            // No source filtering; any row in the time range counts.
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let conn = make_db(&db_path);
+            insert(&conn, "telegram-sess", "telegram", 1500.0);
+            assert_eq!(
+                latest_hermes_session_id(&db_path, 1000.0).as_deref(),
+                Some("telegram-sess")
+            );
+        }
+
+        #[test]
+        fn concurrent_writer_does_not_block_read_in_wal_mode() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let writer = make_db(&db_path);
+            // Switch to WAL mode (matches Hermes's real-world configuration).
+            writer.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            insert(&writer, "committed", "cli", 1000.0);
+            // Start an explicit transaction that writes but doesn't commit yet.
+            writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO sessions (id, source, started_at) VALUES ('uncommitted', 'cli', 2000.0);").unwrap();
+
+            // Our reader should see the committed row (the WAL pages from earlier commits
+            // are visible) but NOT the uncommitted one. spawn_ts=0 sweeps everything.
+            let result = latest_hermes_session_id(&db_path, 0.0);
+            assert_eq!(result.as_deref(), Some("committed"),
+                "expected to see committed row, not uncommitted; got: {result:?}");
+
+            writer.execute_batch("ROLLBACK;").unwrap();
+        }
+
+        #[test]
+        fn reader_sees_wal_committed_writes() {
+            let tmp = tempfile::tempdir().unwrap();
+            let db_path = tmp.path().join("state.db");
+            let writer = make_db(&db_path);
+            writer.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            // First commit goes through normal checkpoint behavior.
+            insert(&writer, "first", "cli", 1000.0);
+            // Subsequent commits land in WAL before checkpoint.
+            insert(&writer, "second", "cli", 2000.0);
+            insert(&writer, "third", "cli", 3000.0);
+            // Without a manual checkpoint, "second" and "third" are WAL-pending.
+            // The reader must still see them all.
+            let result = latest_hermes_session_id(&db_path, 0.0);
+            assert_eq!(result.as_deref(), Some("third"),
+                "expected newest WAL-committed row; got: {result:?}");
+        }
+    }
+
+    mod hermes_spawn_marker {
+        #[test]
+        fn write_then_read_roundtrip() {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            super::write_hermes_spawn_marker(tmp.path());
+            let marker = super::read_hermes_spawn_marker(tmp.path()).expect("marker should be present");
+            // Within 60s of now (sanity check).
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+            assert!((now - marker.start_ts).abs() < 60.0, "marker ts {} too far from now {now}", marker.start_ts);
+            assert!(marker.session_id.is_none(), "fresh marker should have no session_id");
+        }
+
+        #[test]
+        fn read_returns_none_when_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            assert!(super::read_hermes_spawn_marker(tmp.path()).is_none());
+        }
+
+        #[test]
+        fn read_returns_none_when_unparseable() {
+            let tmp = tempfile::tempdir().unwrap();
+            let info = tmp.path().join(".git/info");
+            std::fs::create_dir_all(&info).unwrap();
+            std::fs::write(info.join("wsx-hermes-spawn-at"), "not a float\n").unwrap();
+            assert!(super::read_hermes_spawn_marker(tmp.path()).is_none());
+        }
+
+        #[test]
+        fn write_handles_worktree_style_git_file() {
+            // `.git` is a file pointing to an external gitdir (real wsx worktree shape).
+            let tmp = tempfile::tempdir().unwrap();
+            let external = tempfile::tempdir().unwrap();
+            let gitdir = external.path().join("worktrees/feature-x");
+            std::fs::create_dir_all(&gitdir).unwrap();
+            std::fs::write(tmp.path().join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+            super::write_hermes_spawn_marker(tmp.path());
+            let marker = gitdir.join("info/wsx-hermes-spawn-at");
+            assert!(marker.exists(), "expected marker at {}", marker.display());
+        }
+
+        #[test]
+        fn read_tolerates_old_format() {
+            // Old single-line format (no trailing newline, no second line) must parse
+            // correctly with session_id=None.
+            let tmp = tempfile::tempdir().unwrap();
+            let info = tmp.path().join(".git/info");
+            std::fs::create_dir_all(&info).unwrap();
+            std::fs::write(info.join("wsx-hermes-spawn-at"), "1780002798.96").unwrap();
+            let marker = super::read_hermes_spawn_marker(tmp.path())
+                .expect("old-format marker should parse");
+            assert!((marker.start_ts - 1780002798.96).abs() < 0.001, "start_ts mismatch: {}", marker.start_ts);
+            assert!(marker.session_id.is_none(), "old format should yield session_id=None");
+        }
+
+        #[test]
+        fn cache_session_id_preserves_start_ts() {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            // Write a marker with a specific timestamp.
+            std::fs::write(
+                tmp.path().join(".git/info/wsx-hermes-spawn-at"),
+                "1000.0\n",
+            ).unwrap();
+            // Cache a session id.
+            super::cache_hermes_session_id_in_marker(tmp.path(), "abc");
+            let marker = super::read_hermes_spawn_marker(tmp.path())
+                .expect("marker should exist after cache");
+            assert!((marker.start_ts - 1000.0).abs() < 0.001,
+                "start_ts should be preserved; got {}", marker.start_ts);
+            assert_eq!(marker.session_id.as_deref(), Some("abc"),
+                "session_id should be cached");
+        }
+
+        #[test]
+        fn cache_session_id_no_op_when_marker_absent() {
+            // tempdir with .git/info set up but no marker file.
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            // Call cache — must not create the marker file.
+            super::cache_hermes_session_id_in_marker(tmp.path(), "abc");
+            assert!(
+                !tmp.path().join(".git/info/wsx-hermes-spawn-at").exists(),
+                "cache should not create marker when none exists"
+            );
+        }
+    }
+
+    mod hermes_git_exclude {
+        use std::fs;
+        use std::io::Read;
+
+        fn init_gitdir(dir: &std::path::Path) {
+            fs::create_dir_all(dir.join(".git/info")).unwrap();
+        }
+
+        fn read(path: &std::path::Path) -> String {
+            let mut s = String::new();
+            fs::File::open(path).unwrap().read_to_string(&mut s).unwrap();
+            s
+        }
+
+        #[test]
+        fn creates_exclude_line_when_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let contents = read(&tmp.path().join(".git/info/exclude"));
+            assert!(
+                contents.lines().any(|l| l == "AGENTS.md"),
+                "expected AGENTS.md line in {contents:?}"
+            );
+        }
+
+        #[test]
+        fn idempotent_when_entry_already_present() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let exclude = tmp.path().join(".git/info/exclude");
+            fs::write(&exclude, "AGENTS.md\n").unwrap();
+            let before = read(&exclude);
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let after = read(&exclude);
+            assert_eq!(before, after);
+        }
+
+        #[test]
+        fn handles_missing_info_dir() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::create_dir_all(tmp.path().join(".git")).unwrap();
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let contents = read(&tmp.path().join(".git/info/exclude"));
+            assert!(contents.contains("AGENTS.md"));
+        }
+
+        #[test]
+        fn no_op_when_gitdir_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            // No .git/ at all. Must not panic.
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            assert!(!tmp.path().join(".git").exists());
+        }
+
+        #[test]
+        fn follows_worktree_style_git_file_with_absolute_gitdir() {
+            let tmp = tempfile::tempdir().unwrap();
+            // External gitdir lives outside the worktree
+            let external = tempfile::tempdir().unwrap();
+            let gitdir = external.path().join("worktrees/feature-x");
+            fs::create_dir_all(&gitdir).unwrap();
+            // worktree/.git is a FILE pointing at the external gitdir
+            fs::write(
+                tmp.path().join(".git"),
+                format!("gitdir: {}\n", gitdir.display()),
+            )
+            .unwrap();
+
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+
+            let exclude = gitdir.join("info/exclude");
+            let contents = read(&exclude);
+            assert!(contents.contains("AGENTS.md"),
+                "expected AGENTS.md in {}: {contents:?}", exclude.display());
+        }
+
+        #[test]
+        fn follows_worktree_style_git_file_with_relative_gitdir() {
+            let tmp = tempfile::tempdir().unwrap();
+            // Relative gitdir resolved against the worktree path
+            let rel = "external-gitdir";
+            fs::create_dir_all(tmp.path().join(rel)).unwrap();
+            fs::write(
+                tmp.path().join(".git"),
+                format!("gitdir: {rel}\n"),
+            )
+            .unwrap();
+
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+
+            let exclude = tmp.path().join(rel).join("info/exclude");
+            let contents = read(&exclude);
+            assert!(contents.contains("AGENTS.md"));
+        }
+
+        #[test]
+        fn returns_silently_when_git_file_unparseable() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::write(tmp.path().join(".git"), "not a valid git pointer\n").unwrap();
+            // Must not panic and must not create any files
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+        }
+    }
+
+    mod hermes_agents_md {
+        use std::fs;
+
+        #[test]
+        fn creates_file_with_fenced_block_when_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(contents.contains(super::HERMES_BLOCK_BEGIN), "missing BEGIN marker: {contents:?}");
+            assert!(contents.contains(super::HERMES_BLOCK_END), "missing END marker: {contents:?}");
+            assert!(contents.contains("inject me"));
+        }
+
+        #[test]
+        fn preserves_user_content_outside_wsx_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "# User notes\n\nKeep me.\n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("# User notes"));
+            assert!(contents.contains("Keep me."));
+            assert!(contents.contains("inject me"));
+        }
+
+        #[test]
+        fn replaces_existing_wsx_block_idempotently() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            let after_first = fs::read_to_string(&path).unwrap();
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            let after_second = fs::read_to_string(&path).unwrap();
+            assert_eq!(after_first, after_second, "second write should be byte-identical");
+        }
+
+        #[test]
+        fn replacing_block_with_new_content_replaces_in_place() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            super::write_agents_md_section(tmp.path(), Some("second"));
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("second"));
+            assert!(!contents.contains("first"), "old content should be removed");
+        }
+
+        #[test]
+        fn strips_block_when_content_is_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "user content\n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("temp"));
+            super::write_agents_md_section(tmp.path(), None);
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("user content"));
+            assert!(!contents.contains(super::HERMES_BLOCK_BEGIN));
+            assert!(!contents.contains("temp"));
+        }
+
+        #[test]
+        fn no_write_when_content_is_none_and_no_existing_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            // Don't create the file at all.
+            super::write_agents_md_section(tmp.path(), None);
+            assert!(!path.exists(), "should not create AGENTS.md just to strip nothing");
+        }
+
+        #[test]
+        fn survives_unreadable_agents_md() {
+            use std::os::unix::fs::PermissionsExt;
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "untouchable\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+            // Must not panic.
+            super::write_agents_md_section(tmp.path(), Some("inject"));
+            // Restore perms so tempdir cleanup works.
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+    }
+
+    mod hermes_compose {
+        fn rename_ctx() -> super::RenameContext {
+            super::RenameContext {
+                current_branch: "wsx/bold-fern".into(),
+                branch_prefix: "wsx".into(),
+                repo_name: "myrepo".into(),
+                current_slug: "bold-fern".into(),
+            }
+        }
+
+        #[test]
+        fn fresh_with_rename_returns_rename_text() {
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: Some(rename_ctx()),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert!(result.contains("wsx workspace rename 'myrepo' 'bold-fern'"));
+        }
+
+        #[test]
+        fn fresh_with_rename_and_custom_combines_both() {
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: Some(rename_ctx()),
+                custom_instructions: Some("Use ruff.".into()),
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert!(result.contains("wsx workspace rename"));
+            assert!(result.contains("Use ruff."));
+            let rename_pos = result.find("wsx workspace rename").unwrap();
+            let custom_pos = result.find("Use ruff.").unwrap();
+            assert!(custom_pos > rename_pos, "custom should come after rename block");
+        }
+
+        #[test]
+        fn fresh_without_rename_returns_custom_only() {
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: Some("Use ruff.".into()),
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert_eq!(result, "Use ruff.");
+        }
+
+        #[test]
+        fn fresh_with_nothing_returns_none() {
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            assert!(super::compose_injected_prompt(&mode).is_none());
+        }
+
+        #[test]
+        fn continue_with_custom_returns_custom() {
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: Some("Be terse.".into()),
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert_eq!(result, "Be terse.");
+        }
+
+        #[test]
+        fn continue_without_custom_returns_none() {
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            assert!(super::compose_injected_prompt(&mode).is_none());
+        }
+
+        #[test]
+        fn project_manager_returns_pm_prompt() {
+            let mode = super::SpawnMode::ProjectManager {
+                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                resume: false,
+                fast_mode: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            assert!(!result.is_empty());
+        }
+    }
+
+    mod hermes_prepare_workspace {
+        use std::fs;
+
+        fn init_gitdir(dir: &std::path::Path) {
+            fs::create_dir_all(dir.join(".git/info")).unwrap();
+        }
+
+        #[test]
+        fn fresh_with_rename_writes_agents_md_and_exclude() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: Some(super::RenameContext {
+                    current_branch: "wsx/bold-fern".into(),
+                    branch_prefix: "wsx".into(),
+                    repo_name: "myrepo".into(),
+                    current_slug: "bold-fern".into(),
+                }),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &mode);
+
+            let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(agents.contains("<!-- BEGIN wsx-managed -->"));
+            assert!(agents.contains("wsx workspace rename 'myrepo' 'bold-fern'"));
+
+            let exclude = fs::read_to_string(tmp.path().join(".git/info/exclude")).unwrap();
+            assert!(exclude.lines().any(|l| l == "AGENTS.md"));
+        }
+
+        #[test]
+        fn continue_without_custom_instructions_strips_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            // First prepare a Fresh+rename state.
+            let fresh = super::SpawnMode::Fresh {
+                rename_ctx: Some(super::RenameContext {
+                    current_branch: "wsx/bold-fern".into(),
+                    branch_prefix: "wsx".into(),
+                    repo_name: "myrepo".into(),
+                    current_slug: "bold-fern".into(),
+                }),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &fresh);
+            // Now spawn Continue with nothing to inject.
+            let cont = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &cont);
+            let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap_or_default();
+            assert!(!agents.contains("<!-- BEGIN wsx-managed -->"),
+                "wsx block should be removed; got: {agents}");
+            assert!(!agents.contains("wsx workspace rename"),
+                "rename text should be gone; got: {agents}");
+        }
+
+        #[test]
+        fn no_op_when_continue_no_custom_and_no_existing_agents_md() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let cont = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &cont);
+            assert!(!tmp.path().join("AGENTS.md").exists());
+        }
+
+        #[test]
+        fn does_not_overwrite_existing_marker() {
+            // Write a marker with a known timestamp, then call prepare_hermes_workspace
+            // in Fresh mode. The marker must NOT be overwritten — start_ts stays 1000.0.
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            // Manually write a marker with a specific (old) timestamp.
+            std::fs::write(
+                tmp.path().join(".git/info/wsx-hermes-spawn-at"),
+                "1000.0\n",
+            ).unwrap();
+            let fresh_mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &fresh_mode);
+            let marker = super::read_hermes_spawn_marker(tmp.path())
+                .expect("marker should still exist after prepare");
+            assert!((marker.start_ts - 1000.0).abs() < 0.001,
+                "start_ts must be preserved; got {}", marker.start_ts);
+        }
+    }
+
+    mod hermes_build_command {
+        use std::ffi::OsStr;
+
+        fn argv_strings(cmd: &portable_pty::CommandBuilder) -> Vec<String> {
+            // Skip argv[0] (the binary name); callers assert on subcommand/flags.
+            cmd.get_argv()
+                .iter()
+                .skip(1)
+                .map(|s| s.to_string_lossy().into_owned())
+                .collect()
+        }
+
+        fn fresh_no_rename() -> super::SpawnMode {
+            super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            }
+        }
+
+        #[test]
+        fn fresh_emits_chat_subcommand_only_no_source_flag() {
+            // --source is never emitted: Hermes ignores it for session creation.
+            let tmp = tempfile::tempdir().unwrap();
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            let argv = argv_strings(&cmd);
+            assert_eq!(argv.first().map(|s| s.as_str()), Some("chat"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--source"), "--source must not be emitted; argv: {argv:?}");
+        }
+
+        #[test]
+        fn fresh_omits_continue_resume_and_yolo() {
+            let tmp = tempfile::tempdir().unwrap();
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--resume"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--yolo"), "argv: {argv:?}");
+        }
+
+        #[test]
+        fn yolo_fresh_emits_yolo_flag() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: true,
+            };
+            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
+        }
+
+        #[test]
+        fn yolo_continue_emits_yolo_flag() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: true,
+            };
+            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
+        }
+
+        #[test]
+        fn project_manager_mode_is_always_yolo() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mode = super::SpawnMode::ProjectManager {
+                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                resume: false,
+                fast_mode: false,
+            };
+            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
+        }
+
+        #[test]
+        fn project_manager_mode_emits_yolo_and_resume_if_set() {
+            let home = tempfile::tempdir().unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            // Seed .git/info structure and spawn marker for cwd.
+            std::fs::create_dir_all(cwd.path().join(".git/info")).unwrap();
+            std::fs::write(cwd.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
+            // Seed ~/.hermes/state.db with a session after spawn_ts.
+            let hermes_dir = home.path().join(".hermes");
+            std::fs::create_dir_all(&hermes_dir).unwrap();
+            let db_path = hermes_dir.join("state.db");
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES ('pm-sess', 'cli', 1234.5);",
+                [],
+            ).unwrap();
+            drop(conn);
+
+            let mut env = super::EnvGuard::new();
+            env.set("HOME", home.path().to_string_lossy().as_ref());
+            let mode = super::SpawnMode::ProjectManager {
+                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                resume: true,
+                fast_mode: false,
+            };
+            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let argv = argv_strings(&cmd);
+            let resume_idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
+            assert_eq!(argv[resume_idx + 1], "pm-sess");
+            assert!(argv.iter().any(|a| a == "--yolo"), "argv: {argv:?}");
+        }
+
+        #[test]
+        fn no_worktree_flag_ever_emitted() {
+            let tmp = tempfile::tempdir().unwrap();
+            for mode in &[
+                fresh_no_rename(),
+                super::SpawnMode::Continue { custom_instructions: None, additional_dirs: vec![], yolo: true },
+                super::SpawnMode::ProjectManager {
+                    workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
+                    custom_instructions: None,
+                    additional_dirs: vec![],
+                    resume: true,
+                    fast_mode: false,
+                },
+            ] {
+                let cmd = super::build_hermes_command(tmp.path(), mode, crate::remote_control::RemoteOpts::disabled());
+                let argv = argv_strings(&cmd);
+                assert!(!argv.iter().any(|a| a == "--worktree" || a == "-w"),
+                    "should never emit --worktree; argv: {argv:?}");
+            }
+        }
+
+        #[test]
+        fn source_never_emitted_regardless_of_path() {
+            // --source is never emitted, even for paths that would previously have
+            // triggered source tag emission. Session detection uses the marker file.
+            let bogus = std::path::Path::new("/nonexistent/path/for/canonicalize");
+            let cmd = super::build_hermes_command(
+                bogus,
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--source"),
+                "expected --source absent; argv: {argv:?}");
+            assert_eq!(argv.first().map(|s| s.as_str()), Some("chat"));
+        }
+
+        #[test]
+        fn continue_without_prior_session_omits_resume() {
+            let tmp = tempfile::tempdir().unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            let mut env = super::EnvGuard::new();
+            env.set("HOME", tmp.path().to_string_lossy().as_ref());
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--resume"), "argv: {argv:?}");
+            assert!(!argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
+        }
+
+        #[test]
+        fn continue_with_prior_session_passes_resume_id() {
+            let home = tempfile::tempdir().unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            // Seed .git/info structure and a marker file for cwd.
+            std::fs::create_dir_all(cwd.path().join(".git/info")).unwrap();
+            // Write marker with timestamp 1000.0
+            std::fs::write(cwd.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
+
+            let hermes_dir = home.path().join(".hermes");
+            std::fs::create_dir_all(&hermes_dir).unwrap();
+            let db_path = hermes_dir.join("state.db");
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES ('session-abc', 'cli', 1234.5);",
+                [],
+            ).unwrap();
+            drop(conn);
+
+            let mut env = super::EnvGuard::new();
+            env.set("HOME", home.path().to_string_lossy().as_ref());
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let argv = argv_strings(&cmd);
+            let idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
+            assert_eq!(argv[idx + 1], "session-abc");
+        }
+
+        #[test]
+        fn continue_with_cached_session_id_uses_cached_value() {
+            // Marker file has session_id="session-cached". DB has two sessions:
+            // "session-cached" (older, started_at=1100.0) and "session-newer"
+            // (newer, started_at=1500.0). The cached id must win over the newer
+            // time-based result.
+            let home = tempfile::tempdir().unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(cwd.path().join(".git/info")).unwrap();
+            // Write marker with start_ts=1000.0 AND cached session_id.
+            std::fs::write(
+                cwd.path().join(".git/info/wsx-hermes-spawn-at"),
+                "1000.0\nsession-cached\n",
+            ).unwrap();
+
+            let hermes_dir = home.path().join(".hermes");
+            std::fs::create_dir_all(&hermes_dir).unwrap();
+            let db_path = hermes_dir.join("state.db");
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES ('session-cached', 'cli', 1100.0);",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO sessions (id, source, started_at) VALUES ('session-newer', 'cli', 1500.0);",
+                [],
+            ).unwrap();
+            drop(conn);
+
+            let mut env = super::EnvGuard::new();
+            env.set("HOME", home.path().to_string_lossy().as_ref());
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let argv = argv_strings(&cmd);
+            let idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
+            assert_eq!(argv[idx + 1], "session-cached",
+                "cached id must win over time-based newer session; argv: {argv:?}");
+        }
+
+        fn env_of(cmd: &portable_pty::CommandBuilder, key: &str) -> Option<String> {
+            cmd.get_env(OsStr::new(key))
+                .map(|v| v.to_string_lossy().into_owned())
+        }
+
+        #[test]
+        fn wsx_hermes_model_env_sets_inference_model_env_on_child() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut env = super::EnvGuard::new();
+            env.remove("HERMES_INFERENCE_MODEL");
+            env.set("WSX_HERMES_MODEL", "deepseek/deepseek-v4-pro");
+            env.remove("WSX_HERMES_PROVIDER");
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            assert_eq!(
+                env_of(&cmd, "HERMES_INFERENCE_MODEL"),
+                Some("deepseek/deepseek-v4-pro".to_string())
+            );
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
+        }
+
+        #[test]
+        fn wsx_hermes_provider_env_passes_provider_flag() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut env = super::EnvGuard::new();
+            env.remove("WSX_HERMES_MODEL");
+            env.set("WSX_HERMES_PROVIDER", "openrouter");
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            let argv = argv_strings(&cmd);
+            let idx = argv.iter().position(|a| a == "--provider").expect("expected --provider");
+            assert_eq!(argv[idx + 1], "openrouter");
+        }
+
+        #[test]
+        fn empty_model_env_treated_as_unset() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut env = super::EnvGuard::new();
+            env.remove("HERMES_INFERENCE_MODEL");
+            env.set("WSX_HERMES_MODEL", "   ");
+            env.set("WSX_HERMES_PROVIDER", "");
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &fresh_no_rename(),
+                crate::remote_control::RemoteOpts::disabled(),
+            );
+            assert!(env_of(&cmd, "HERMES_INFERENCE_MODEL").is_none());
+            let argv = argv_strings(&cmd);
+            assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
+        }
+    }
+
+    // ── Batch B: shell_quote helper and rename prompt quoting ────────────────
+
+    #[test]
+    fn shell_quote_handles_internal_single_quote() {
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn render_rename_prompt_claude_shell_quotes_repo_name_with_space() {
+        let prompt = render_rename_system_prompt("wsx/bold-fern", "wsx", "my repo", "bold-fern");
+        assert!(
+            prompt.contains("wsx workspace rename 'my repo'"),
+            "expected single-quoted repo name with space; prompt: {prompt}"
+        );
+    }
+
+    #[test]
+    fn render_rename_prompt_pi_shell_quotes_repo_name_with_metacharacter() {
+        let prompt = render_rename_system_prompt_pi("wsx/bold-fern", "wsx", "foo;bar", "bold-fern");
+        assert!(
+            prompt.contains("'foo;bar'"),
+            "expected single-quoted repo name with metachar; prompt: {prompt}"
+        );
+    }
+
+    // ── Batch C: rename prompt uses stored ws.name, not derived slug ─────────
+
+    #[test]
+    fn rename_prompt_uses_ws_name_not_derived_slug() {
+        let ctx = RenameContext {
+            current_branch: "OLD-PREFIX/bold-fern".into(),
+            branch_prefix: "wsx".into(),
+            repo_name: "myrepo".into(),
+            current_slug: "actual-stored-name".into(),
+        };
+        let prompt = render_rename_system_prompt(
+            &ctx.current_branch,
+            &ctx.branch_prefix,
+            &ctx.repo_name,
+            &ctx.current_slug,
+        );
+        assert!(
+            prompt.contains("wsx workspace rename 'myrepo' 'actual-stored-name' <slug>"),
+            "expected stored slug in rename command; prompt: {prompt}"
+        );
+        assert!(
+            !prompt.contains("'bold-fern'"),
+            "prompt must not contain derived 'bold-fern'; prompt: {prompt}"
+        );
     }
 }

@@ -93,10 +93,10 @@ Per-repo list of other wsx-registered repos that workspaces in this repo should 
 ### Workspace management
 
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes]
 ```
 
-Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned Claude session.
+Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned Claude session. `--agent` overrides the `coding_agent` setting (see [Coding agents](#coding-agents)) for this workspace. Default: `claude`.
 
 ```
 wsx workspace list [<repo>]
@@ -147,6 +147,7 @@ Known keys:
 |---|---|
 | `branch_prefix` | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`. |
 | `custom_instructions` | Free-text appended to claude's system prompt on every workspace spawn. |
+| `coding_agent` | Default coding agent for new workspaces: `claude` (default) / `pi` / `hermes`. Per-workspace override via `wsx workspace create <repo> --agent <agent>`. See [Coding agents](#coding-agents). |
 | `nerd_fonts` | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable. |
 | `editor_cmd` | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`. |
 | `terminal_cmd` | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`. |
@@ -693,6 +694,50 @@ After your first prompt in a freshly-created workspace, wsx renames the workspac
 
 The rename only fires on workspaces whose name still matches the generated `<adjective>-<plant>` pattern.
 
+## Coding agents
+
+By default, wsx spawns Claude Code (`claude`) as the coding agent in every workspace. You can choose a different agent per-workspace or set a global default:
+
+```bash
+wsx config set coding_agent hermes           # new workspaces use hermes by default
+wsx workspace create backend --agent pi      # override for a single workspace
+```
+
+Supported agents:
+
+| Agent | CLI option | Source | Config |
+|---|---|---|---|
+| `claude` (default) | `--agent claude` | `claude` binary (override via `WSX_CLAUDE_BIN`) | Environment + `~/.claude.json` MCP |
+| `pi` | `--agent pi` | `pi` binary (override via `WSX_PI_BIN`) | `~/.pi/` |
+| `hermes` | `--agent hermes` | [nousresearch/hermes-agent](https://github.com/nousresearch/hermes-agent) | `~/.hermes/config.yaml` (provider, model) |
+
+### Hermes integration
+
+When a workspace uses `coding_agent: hermes`, wsx spawns `hermes` (or the path in `WSX_HERMES_BIN`) instead of `claude`. Hermes runs in classic REPL mode and receives wsx custom instructions and auto-rename directives.
+
+**AGENTS.md management**: Because Hermes lacks a `--append-system-prompt` flag, wsx injects instructions into a fenced block at the end of `AGENTS.md` in the worktree's working directory:
+
+```markdown
+<!-- BEGIN wsx-managed -->
+…injected instructions…
+<!-- END wsx-managed -->
+```
+
+The block is rewritten every time Hermes spawns and automatically cleaned up when there's nothing to inject. This approach works whether or not the repository tracks `AGENTS.md` in git:
+
+- **Untracked `AGENTS.md`**: wsx adds it to `.git/info/exclude` so it doesn't show up in `git status`.
+- **Tracked `AGENTS.md`**: the worktree will show the file as modified during a Hermes spawn — this is expected and the modification disappears on subsequent spawns when there's no custom instructions to inject.
+
+**Session detection**: On every Hermes spawn, wsx writes a timestamp marker at `<worktree>/.git/info/wsx-hermes-spawn-at` (per-worktree-local, never committed). To find the active Hermes session for a worktree, wsx queries `~/.hermes/state.db` for the most recent session started at or after that timestamp (with a 2-second look-back buffer to absorb clock skew). This drives both the prior-session indicator on the dashboard and the `--resume <id>` flag on Continue spawns. Note: if two worktrees both spawn Hermes within a few seconds of each other, the lookup is best-effort — the more-recent session could be attributed to either worktree depending on timing.
+
+**Session-tail**: wsx tails `~/.hermes/state.db` (sqlite) to populate the dashboard's RECENT CHAT, SESSION SUMMARY, and last-message columns for Hermes workspaces. The following fields are populated: last assistant text, first user prompt, stop reason, tool-use counts, and per-event snapshots (user messages, assistant text, and tool calls — including `ran \`<cmd>\`` display for terminal/bash tool invocations). Tool-use counts treat all Hermes tool names as "other" for now — categorization into read/edit/write/bash buckets is a follow-up since Hermes uses lowercase tool names rather than Claude's capitalized convention. Still missing compared to Claude/Pi: edited-files tracking and pending-tool-use timing for permission-prompt detection.
+
+**Environment overrides**: configure Hermes via `~/.hermes/config.yaml` (persistent settings), or set `WSX_HERMES_MODEL` and `WSX_HERMES_PROVIDER` to override per-workspace:
+
+```bash
+WSX_HERMES_MODEL=llama-3-70b-instruct WSX_HERMES_PROVIDER=together wsx workspace create backend --agent hermes
+```
+
 ## Project manager pane
 
 Press `p` on the dashboard to open a horizontal pane below the workspace list
@@ -737,6 +782,9 @@ Customize PM's behavior with `wsx config set pm_custom_instructions @./pm.md`.
 |---|---|
 | `WSX_RENAME_MODE` | Auto-rename mode: `claude` (default) / `local` / `off` |
 | `WSX_CLAUDE_BIN` | Path to the `claude` binary (default: looked up via `PATH`). Used by tests to substitute `cat`. |
+| `WSX_HERMES_BIN` | Path to the `hermes` binary (default: looked up via `PATH`). Only used when `coding_agent` is `hermes`. |
+| `WSX_HERMES_MODEL` | Model override for Hermes, passed as `HERMES_INFERENCE_MODEL` env var on the child Hermes process. When set, overrides the model in `~/.hermes/config.yaml`. |
+| `WSX_HERMES_PROVIDER` | Provider override for Hermes, passed as `--provider` to the Hermes CLI. Note: in classic REPL mode (the default), Hermes uses the persistent provider from `~/.hermes/config.yaml`; this flag primarily affects `-z/--oneshot` and `--tui` modes. |
 | `EDITOR` | Editor invoked by `wsx config edit` (default: `vi`) |
 | `VISUAL` / `EDITOR` | Fallback when `editor_cmd` is unset |
 | `TERMINAL` | Fallback when `terminal_cmd` is unset |

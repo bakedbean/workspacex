@@ -372,7 +372,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                         "--yolo" => yolo = true,
                         "--agent" => {
                             agent = Some(it.next().ok_or_else(|| {
-                                Error::UserInput("--agent needs value (pi or claude)".into())
+                                Error::UserInput("--agent needs value (pi, claude, or hermes)".into())
                             })?);
                         }
                         other => {
@@ -380,12 +380,12 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                         }
                     }
                 }
-                if let Some(ref a) = agent {
-                    if a != "pi" && a != "claude" {
-                        return Err(Error::UserInput(format!(
-                            "--agent must be 'pi' or 'claude', got '{a}'"
-                        )));
-                    }
+                if let Some(ref a) = agent
+                    && a != "pi" && a != "claude" && a != "hermes"
+                {
+                    return Err(Error::UserInput(format!(
+                        "--agent must be 'pi', 'claude', or 'hermes', got '{a}'"
+                    )));
                 }
                 Ok(CliAction::WorkspaceCreate {
                     repo,
@@ -805,6 +805,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             std::fs::create_dir_all(&worktree_base)?;
             let agent_kind = match agent.as_deref() {
                 Some("pi") => crate::pty::session::AgentKind::Pi,
+                Some("hermes") => crate::pty::session::AgentKind::Hermes,
                 _ => crate::pty::session::AgentKind::Claude,
             };
             let created = crate::workspace::create(

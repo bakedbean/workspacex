@@ -449,6 +449,25 @@ impl App {
             has_prior,
         )
     }
+
+}
+
+/// Zero detail-bar scroll offsets and update the sentinel when the
+/// selected workspace changes. Called by `app::render::draw` before the
+/// detail bar renders. Takes the two fields by mutable reference rather
+/// than `&mut App` so the caller can hold an immutable borrow of
+/// `app.workspaces` (or another field) at the same call site — direct
+/// field access lets the borrow checker split disjoint borrows where a
+/// method on `&mut App` cannot.
+pub(crate) fn reset_detail_scroll_on_workspace_change(
+    offsets: &mut [u16; 4],
+    last_workspace: &mut Option<crate::store::WorkspaceId>,
+    current: Option<crate::store::WorkspaceId>,
+) {
+    if *last_workspace != current {
+        *offsets = [0; 4];
+        *last_workspace = current;
+    }
 }
 
 /// Derive the StoppedKind for a workspace based on its WorkspaceEvents.
@@ -1223,5 +1242,44 @@ mod derive_stopped_kind_tests {
         evt.pending_tool_uses
             .insert("t1".into(), ("AskUserQuestion".into(), 0));
         assert_eq!(derive_stopped_kind(&evt), Some(StoppedKind::AwaitingAnswer));
+    }
+
+    #[test]
+    fn reset_detail_scroll_zeroes_offsets_on_workspace_change() {
+        use crate::store::WorkspaceId;
+        let mut offsets = [3u16, 7, 0, 2];
+        let mut last = Some(WorkspaceId(100));
+
+        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(200)));
+
+        assert_eq!(offsets, [0; 4]);
+        assert_eq!(last, Some(WorkspaceId(200)));
+    }
+
+    #[test]
+    fn reset_detail_scroll_preserves_offsets_on_same_workspace() {
+        use crate::store::WorkspaceId;
+        let mut offsets = [3u16, 7, 0, 2];
+        let mut last = Some(WorkspaceId(100));
+
+        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(100)));
+
+        assert_eq!(offsets, [3, 7, 0, 2]);
+        assert_eq!(last, Some(WorkspaceId(100)));
+    }
+
+    #[test]
+    fn reset_detail_scroll_handles_initial_none_to_some() {
+        use crate::store::WorkspaceId;
+        // App starts with detail_scroll_last_workspace = None and offsets
+        // already zero; first draw with a selected workspace should update
+        // the sentinel even though the offsets are technically unchanged.
+        let mut offsets = [5u16, 0, 0, 0]; // seeded non-zero
+        let mut last: Option<WorkspaceId> = None;
+
+        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(42)));
+
+        assert_eq!(offsets, [0; 4]);
+        assert_eq!(last, Some(WorkspaceId(42)));
     }
 }

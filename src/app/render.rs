@@ -280,12 +280,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             global_pinned.as_deref(),
                             repo.pinned_commands.as_deref(),
                         );
-                        // Reset detail-bar scroll offsets when the selected workspace changes.
-                        let current_ws_id = Some(ws.id);
-                        if app.detail_scroll_last_workspace != current_ws_id {
-                            app.detail_scroll_offsets = [0; 4];
-                            app.detail_scroll_last_workspace = current_ws_id;
-                        }
+                        crate::app::reset_detail_scroll_on_workspace_change(
+                            &mut app.detail_scroll_offsets,
+                            &mut app.detail_scroll_last_workspace,
+                            Some(ws.id),
+                        );
                         let mut inputs = crate::ui::dashboard::detail::DetailInputs {
                             repo,
                             workspace: ws,

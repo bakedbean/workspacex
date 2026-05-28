@@ -4050,6 +4050,74 @@ mod detail_bar_focus_tests {
             "Ctrl-X+1 while reply focused must dispatch /pull-request to PTY; got: {screen_text:?}"
         );
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_missing_modal_esc_dismisses() {
+        use crate::pty::session::AgentKind;
+        use crate::ui::modal::Modal;
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::AgentMissing {
+            ws_id: crate::store::WorkspaceId(1),
+            agent: AgentKind::Hermes,
+            binary: "hermes".to_string(),
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "Esc should dismiss AgentMissing");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_missing_modal_s_opens_picker_with_current_preselected() {
+        use crate::pty::session::AgentKind;
+        use crate::ui::modal::Modal;
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = crate::store::WorkspaceId(42);
+        app.modal = Some(Modal::AgentMissing {
+            ws_id,
+            agent: AgentKind::Hermes,
+            binary: "hermes".to_string(),
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Char('s'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(Modal::AgentPicker {
+                ws_id: picker_ws,
+                selected,
+                current,
+            }) => {
+                assert_eq!(picker_ws, ws_id);
+                assert_eq!(current, AgentKind::Hermes);
+                assert_eq!(AgentKind::ALL[selected], AgentKind::Hermes);
+            }
+            ref other => panic!("expected AgentPicker, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]

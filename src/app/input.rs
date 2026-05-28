@@ -1250,14 +1250,23 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        // Real dispatch for AgentMissing/AgentPicker arrives in Tasks 6 & 7.
-        // For now, accept Esc to dismiss so the modal can't soft-lock the TUI
-        // between this task and the follow-up tasks.
-        Modal::AgentMissing { .. } => {
-            if k.code == KeyCode::Esc {
+        Modal::AgentMissing { ws_id, agent, .. } => match k.code {
+            KeyCode::Esc | KeyCode::Enter => {
                 app.modal = None;
             }
-        }
+            KeyCode::Char('s') => {
+                let selected = crate::pty::session::AgentKind::ALL
+                    .iter()
+                    .position(|k| *k == agent)
+                    .unwrap_or(0);
+                app.modal = Some(Modal::AgentPicker {
+                    ws_id,
+                    selected,
+                    current: agent,
+                });
+            }
+            _ => {}
+        },
         Modal::AgentPicker { .. } => {
             if k.code == KeyCode::Esc {
                 app.modal = None;

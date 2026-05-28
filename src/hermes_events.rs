@@ -255,11 +255,7 @@ mod tests {
         assert!(result.is_some(), "expected Some but got None");
         let vpath = result.unwrap();
         let s = vpath.to_string_lossy();
-        assert!(
-            s.starts_with("hermes:"),
-            "expected hermes: prefix, got {s:?}"
-        );
-        assert!(s.contains("sess-abc"), "expected session id in path, got {s:?}");
+        assert_eq!(s, "hermes:sess-abc");
     }
 
     #[test]
@@ -366,8 +362,6 @@ mod tests {
         insert_message(&conn, "s5", "tool", None, Some("bash"), None);
         insert_message(&conn, "s5", "tool", None, Some("read_file"), None);
 
-        // Close the write connection before opening the read connection.
-        drop(conn);
         let update = tail_session_from_db(&db_path, "s5", 0).unwrap();
         // Hermes tool names are lowercase ("bash", "read_file", etc.) while
         // ToolUseCounts::increment is case-sensitive and Claude-flavored
@@ -402,5 +396,20 @@ mod tests {
             matches!(update.last_stop_reason, Some(StopReason::EndTurn)),
             "last stop reason should be end_turn (last in batch)"
         );
+    }
+
+    #[test]
+    fn tail_session_empty_session_from_zero_returns_zero_offset_and_empty_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("state.db");
+        let conn = make_db(&db_path);
+        insert_session(&conn, "sess-empty", "wsx:test");
+        // No messages inserted.
+
+        let update = super::tail_session_from_db(&db_path, "sess-empty", 0).unwrap();
+        assert_eq!(update.new_offset, 0);
+        assert!(update.last_assistant_text.is_none());
+        assert!(update.first_user_text.is_none());
+        assert!(update.last_stop_reason.is_none());
     }
 }

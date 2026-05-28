@@ -2,8 +2,6 @@
 //! activity, and tool-use trace for the selected workspace.
 
 use crate::detail_modules::{DetailContext, DetailModule};
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
 
 pub struct SessionSummary;
 
@@ -14,16 +12,6 @@ impl DetailModule for SessionSummary {
     fn title(&self) -> &'static str {
         "SESSION SUMMARY"
     }
-    fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
-        // Full layout is 6 rows (prompt + trace + state + files +
-        // 2-row footer), but `Min` is a floor, not a ceiling — the
-        // layout engine can grow past it when neighboring modules have
-        // slack. We request 5: enough for the common no-prompt case
-        // (trace + state + files + footer) and one row of headroom
-        // for a short single-line prompt; longer prompts (and their
-        // wraps) just expand the column when room is available.
-        Constraint::Min(5)
-    }
 
     fn lines(
         &self,
@@ -31,12 +19,6 @@ impl DetailModule for SessionSummary {
         width: u16,
     ) -> Vec<ratatui::text::Line<'static>> {
         build_lines(ctx, width)
-    }
-
-    fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
-        use ratatui::widgets::Paragraph;
-        let lines = build_lines(ctx, area.width);
-        frame.render_widget(Paragraph::new(lines), area);
     }
 }
 
@@ -349,8 +331,10 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
+                use ratatui::widgets::Paragraph;
                 let area = ratatui::layout::Rect::new(0, 0, w, h);
-                SessionSummary.render(area, ctx, f);
+                let lines = SessionSummary.lines(ctx, w);
+                f.render_widget(Paragraph::new(lines), area);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -372,13 +356,6 @@ mod tests {
     #[test]
     fn title_is_uppercase() {
         assert_eq!(SessionSummary.title(), "SESSION SUMMARY");
-    }
-
-    #[test]
-    fn height_hint_is_min_five() {
-        // Prompt + trace + state + files + footer (bottom row) → 5.
-        let ctx = stub_context();
-        assert_eq!(SessionSummary.height_hint(&ctx), Constraint::Min(5));
     }
 
     // -- state line + recent files ----------------------------------

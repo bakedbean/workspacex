@@ -12,8 +12,6 @@ use crate::proc::ProcInfo;
 use crate::store::{Repo, Workspace};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
 use std::collections::HashMap;
 
 /// Borrowed snapshot of everything a module might need to render.
@@ -44,29 +42,15 @@ pub trait DetailModule: Send + Sync {
     /// not render their own title.
     fn title(&self) -> &'static str;
 
-    /// Vertical sizing hint when multiple modules stack in one
-    /// container. Fed directly to `Layout::vertical(...)`. Receives
-    /// the context so data-dependent modules (e.g. `Processes`) can
-    /// size to their current contents.
-    fn height_hint(&self, ctx: &DetailContext<'_>) -> Constraint;
-
-    /// Render the module's body into `area`. The host has already
-    /// drawn the title row above `area`.
-    fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>);
-
     /// Produce the module's content lines. The container will paint
     /// these via `Paragraph` and slice them by scroll offset. `width`
     /// is the column width the content will be drawn into (use for
-    /// wrapping/truncation decisions). Default returns empty — will be
-    /// overridden by every module, and the default is removed in the
-    /// final cleanup task.
+    /// wrapping/truncation decisions).
     fn lines(
         &self,
-        _ctx: &DetailContext<'_>,
-        _width: u16,
-    ) -> Vec<ratatui::text::Line<'static>> {
-        Vec::new()
-    }
+        ctx: &DetailContext<'_>,
+        width: u16,
+    ) -> Vec<ratatui::text::Line<'static>>;
 }
 
 pub struct Registry {
@@ -179,12 +163,10 @@ pub(crate) mod tests_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::layout::Constraint;
 
     struct MockModule {
         id: &'static str,
         title: &'static str,
-        hint: Constraint,
     }
     impl DetailModule for MockModule {
         fn id(&self) -> &'static str {
@@ -193,15 +175,12 @@ mod tests {
         fn title(&self) -> &'static str {
             self.title
         }
-        fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
-            self.hint
-        }
-        fn render(
+        fn lines(
             &self,
-            _area: ratatui::layout::Rect,
             _ctx: &DetailContext<'_>,
-            _frame: &mut ratatui::Frame<'_>,
-        ) {
+            _width: u16,
+        ) -> Vec<ratatui::text::Line<'static>> {
+            Vec::new()
         }
     }
 
@@ -217,7 +196,6 @@ mod tests {
         reg.register(Box::new(MockModule {
             id: "foo",
             title: "FOO",
-            hint: Constraint::Length(3),
         }));
         let m = reg.get("foo").expect("module foo should be registered");
         assert_eq!(m.id(), "foo");
@@ -230,7 +208,6 @@ mod tests {
         reg.register(Box::new(MockModule {
             id: "foo",
             title: "FOO",
-            hint: Constraint::Length(1),
         }));
         assert!(reg.get("nonexistent").is_none());
     }
@@ -241,12 +218,10 @@ mod tests {
         reg.register(Box::new(MockModule {
             id: "a",
             title: "A",
-            hint: Constraint::Length(1),
         }));
         reg.register(Box::new(MockModule {
             id: "b",
             title: "B",
-            hint: Constraint::Length(1),
         }));
         let ids: std::collections::HashSet<_> = reg.ids().collect();
         assert!(ids.contains("a"));

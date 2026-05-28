@@ -2,8 +2,6 @@
 //! turns for the selected workspace.
 
 use crate::detail_modules::{DetailContext, DetailModule};
-use ratatui::Frame;
-use ratatui::layout::{Constraint, Rect};
 
 pub struct RecentChat;
 
@@ -14,28 +12,12 @@ impl DetailModule for RecentChat {
     fn title(&self) -> &'static str {
         "RECENT CHAT"
     }
-    fn height_hint(&self, _ctx: &DetailContext<'_>) -> Constraint {
-        Constraint::Min(3)
-    }
     fn lines(
         &self,
         ctx: &DetailContext<'_>,
         width: u16,
     ) -> Vec<ratatui::text::Line<'static>> {
         build_lines(ctx, width)
-    }
-    fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>) {
-        use ratatui::widgets::Paragraph;
-        let mut lines = build_lines(ctx, area.width);
-        // Tail-slice: preserve the legacy RECENT CHAT visual contract of
-        // showing the last `area.height` wrapped lines. Once Task 7's
-        // scrolling container takes over and `render` is removed, this
-        // slicing moves to the container layer (which uses scroll offset).
-        let max = (area.height as usize).max(1);
-        if lines.len() > max {
-            lines = lines.split_off(lines.len() - max);
-        }
-        frame.render_widget(Paragraph::new(lines), area);
     }
 }
 
@@ -137,12 +119,6 @@ mod tests {
     #[test]
     fn title_is_uppercase() {
         assert_eq!(RecentChat.title(), "RECENT CHAT");
-    }
-
-    #[test]
-    fn height_hint_is_min_three() {
-        let ctx = stub_context();
-        assert_eq!(RecentChat.height_hint(&ctx), Constraint::Min(3));
     }
 
     #[test]

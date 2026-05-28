@@ -188,6 +188,18 @@ pub struct App {
     /// Rects of the rendered chip row buttons from the last draw tick.
     /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
     pub chip_rects: Vec<ratatui::layout::Rect>,
+    /// Per-slot scroll offset for detail-bar containers. Bumped by mouse
+    /// wheel via `handle_mouse`, clamped on every draw to
+    /// `content_height - visible_height` for the matching container.
+    pub detail_scroll_offsets: [u16; 4],
+    /// Sentinel for reset-on-workspace-switch. When the selected
+    /// workspace changes, `detail_scroll_offsets` zeroes out and this
+    /// updates. See `src/ui/dashboard/detail.rs::render`.
+    pub detail_scroll_last_workspace: Option<crate::store::WorkspaceId>,
+    /// Rect for each rendered detail-bar container slot, populated each
+    /// draw and consumed by `handle_mouse` for hit-testing wheel events.
+    /// Mirrors the `chip_rects` draw-populates-input-reads pattern.
+    pub detail_container_rects: [Option<ratatui::layout::Rect>; 4],
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
@@ -261,6 +273,9 @@ impl App {
             next_archive_gen: 0,
             pending_archive_gen: None,
             chip_rects: Vec::new(),
+            detail_scroll_offsets: [0; 4],
+            detail_scroll_last_workspace: None,
+            detail_container_rects: [None; 4],
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),

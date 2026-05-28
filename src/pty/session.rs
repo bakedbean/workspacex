@@ -2664,6 +2664,7 @@ mod tests {
         fn wsx_hermes_model_env_sets_inference_model_env_on_child() {
             let tmp = tempfile::tempdir().unwrap();
             let mut env = super::EnvGuard::new();
+            env.remove("HERMES_INFERENCE_MODEL");
             env.set("WSX_HERMES_MODEL", "deepseek/deepseek-v4-pro");
             env.remove("WSX_HERMES_PROVIDER");
             let cmd = super::build_hermes_command(
@@ -2699,6 +2700,7 @@ mod tests {
         fn empty_model_env_treated_as_unset() {
             let tmp = tempfile::tempdir().unwrap();
             let mut env = super::EnvGuard::new();
+            env.remove("HERMES_INFERENCE_MODEL");
             env.set("WSX_HERMES_MODEL", "   ");
             env.set("WSX_HERMES_PROVIDER", "");
             let cmd = super::build_hermes_command(

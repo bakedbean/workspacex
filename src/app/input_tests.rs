@@ -3227,6 +3227,42 @@ mod pm_state_tests {
             "bar absent on repo header: {rendered}"
         );
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ensure_workspace_session_sets_modal_when_binary_missing() {
+        use crate::pty::session::AgentKind;
+        use crate::store::{NewWorkspace, WorkspaceState};
+        let mut env = EnvGuard::new();
+        env.set("WSX_HERMES_BIN", "/nonexistent/wsx-test-hermes");
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ws",
+                branch: "repo/ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/ws"),
+                yolo: false,
+                agent: AgentKind::Hermes,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let outcome = crate::app::ensure_workspace_session(&mut app, id).unwrap();
+        assert!(matches!(outcome, crate::app::AttachReady::AgentMissing));
+        match app.modal {
+            Some(crate::ui::modal::Modal::AgentMissing { ws_id, agent, ref binary }) => {
+                assert_eq!(ws_id, id);
+                assert_eq!(agent, AgentKind::Hermes);
+                assert_eq!(binary, "/nonexistent/wsx-test-hermes");
+            }
+            ref other => panic!("expected AgentMissing modal, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]

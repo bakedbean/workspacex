@@ -60,6 +60,15 @@ pub enum Modal {
         repo_id: crate::store::RepoId,
         selected: usize,
     },
+    AgentMissing {
+        ws_id: crate::store::WorkspaceId,
+        agent: crate::pty::session::AgentKind,
+        binary: String,
+    },
+    AgentPicker {
+        ws_id: crate::store::WorkspaceId,
+        selected: usize,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -88,7 +97,11 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
     // defensively.
     if matches!(
         modal,
-        Modal::UpdatesPanel { .. } | Modal::ProcessList { .. } | Modal::RepoSettings { .. }
+        Modal::UpdatesPanel { .. }
+            | Modal::ProcessList { .. }
+            | Modal::RepoSettings { .. }
+            | Modal::AgentMissing { .. }
+            | Modal::AgentPicker { .. }
     ) {
         return;
     }
@@ -132,6 +145,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         Modal::UpdatesPanel { .. } => unreachable!("UpdatesPanel must not reach render()"),
         Modal::ProcessList { .. } => unreachable!("ProcessList must not reach render()"),
         Modal::RepoSettings { .. } => unreachable!("RepoSettings must not reach render()"),
+        Modal::AgentMissing { .. } => unreachable!("AgentMissing must not reach render() (Task 5)"),
+        Modal::AgentPicker { .. } => unreachable!("AgentPicker must not reach render() (Task 5)"),
     };
     let style = if matches!(modal, Modal::Error { .. }) {
         theme.err_style()

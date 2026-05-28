@@ -37,6 +37,16 @@ pub enum SelectionTarget {
     Workspace(crate::store::WorkspaceId),
 }
 
+/// Outcome of `ensure_workspace_session`. `AgentMissing` signals to callers
+/// that the spawn failed because the agent binary was not on PATH; the
+/// helper already set `Modal::AgentMissing`, so callers should skip the
+/// view switch and leave the modal up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachReady {
+    Ok,
+    AgentMissing,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoSettingField {
     RepoName,
@@ -924,23 +934,37 @@ pub(crate) fn restore_attached_state(
 pub(crate) fn ensure_workspace_session(
     app: &mut App,
     ws_id: crate::store::WorkspaceId,
-) -> Result<()> {
+) -> Result<AttachReady> {
     if app.sessions.get(ws_id).is_some() {
-        return Ok(());
+        return Ok(AttachReady::Ok);
     }
     if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
-        let _ = app.sessions.spawn(id, &path, 80, 24, mode, remote, agent)?;
+        match app.sessions.spawn(id, &path, 80, 24, mode, remote, agent) {
+            Ok(_) => {}
+            Err(crate::error::Error::AgentBinaryMissing(binary)) => {
+                app.modal = Some(crate::ui::modal::Modal::AgentMissing {
+                    ws_id,
+                    agent,
+                    binary,
+                });
+                return Ok(AttachReady::AgentMissing);
+            }
+            Err(e) => return Err(e),
+        }
     }
-    Ok(())
+    Ok(AttachReady::Ok)
 }
 
 /// Attach to a workspace: ensure a session, restore layout, and switch
 /// to attached view. Shared by the `Enter` / `i` / `l` key handlers.
 pub(crate) fn attach_workspace(app: &mut App, ws_id: crate::store::WorkspaceId) -> Result<()> {
     app.workspace_needs_attention.remove(&ws_id);
-    ensure_workspace_session(app, ws_id)?;
+    match ensure_workspace_session(app, ws_id)? {
+        AttachReady::Ok => {}
+        AttachReady::AgentMissing => return Ok(()),
+    }
     if app.sessions.get(ws_id).is_some() {
         let restored = restore_attached_state(app, ws_id);
         app.view = View::Attached(restored);

@@ -324,6 +324,34 @@ pub fn has_prior_hermes_session(worktree: &Path) -> bool {
     latest_hermes_session_id_default(worktree).is_some()
 }
 
+/// Append `name` to the worktree's `.git/info/exclude` if not already present.
+/// Best-effort: silently no-ops on any IO error or if `.git/` is absent.
+/// `.git/info/exclude` is per-worktree-local and never committed.
+fn ensure_git_exclude(worktree: &Path, name: &str) {
+    let git_dir = worktree.join(".git");
+    if !git_dir.exists() {
+        return;
+    }
+    let info_dir = git_dir.join("info");
+    if !info_dir.exists() {
+        if std::fs::create_dir_all(&info_dir).is_err() {
+            return;
+        }
+    }
+    let exclude_path = info_dir.join("exclude");
+    let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+    if existing.lines().any(|l| l == name) {
+        return;
+    }
+    let mut new = existing;
+    if !new.is_empty() && !new.ends_with('\n') {
+        new.push('\n');
+    }
+    new.push_str(name);
+    new.push('\n');
+    let _ = std::fs::write(&exclude_path, new);
+}
+
 /// Resolve whether a workspace has a prior session based on the agent kind.
 pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     match agent {
@@ -1839,6 +1867,63 @@ mod tests {
             writer.execute_batch("ROLLBACK;").unwrap();
             // bind to silence unused warning
             let _ = PathBuf::from(tmp.path());
+        }
+    }
+
+    mod hermes_git_exclude {
+        use super::*;
+        use std::fs;
+        use std::io::Read;
+
+        fn init_gitdir(dir: &std::path::Path) {
+            fs::create_dir_all(dir.join(".git/info")).unwrap();
+        }
+
+        fn read(path: &std::path::Path) -> String {
+            let mut s = String::new();
+            fs::File::open(path).unwrap().read_to_string(&mut s).unwrap();
+            s
+        }
+
+        #[test]
+        fn creates_exclude_line_when_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let contents = read(&tmp.path().join(".git/info/exclude"));
+            assert!(
+                contents.lines().any(|l| l == "AGENTS.md"),
+                "expected AGENTS.md line in {contents:?}"
+            );
+        }
+
+        #[test]
+        fn idempotent_when_entry_already_present() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let exclude = tmp.path().join(".git/info/exclude");
+            fs::write(&exclude, "AGENTS.md\n").unwrap();
+            let before = read(&exclude);
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let after = read(&exclude);
+            assert_eq!(before, after);
+        }
+
+        #[test]
+        fn handles_missing_info_dir() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::create_dir_all(tmp.path().join(".git")).unwrap();
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let contents = read(&tmp.path().join(".git/info/exclude"));
+            assert!(contents.contains("AGENTS.md"));
+        }
+
+        #[test]
+        fn no_op_when_gitdir_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            // No .git/ at all. Must not panic.
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            assert!(!tmp.path().join(".git").exists());
         }
     }
 }

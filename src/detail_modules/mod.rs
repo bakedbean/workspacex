@@ -53,6 +53,20 @@ pub trait DetailModule: Send + Sync {
     /// Render the module's body into `area`. The host has already
     /// drawn the title row above `area`.
     fn render(&self, area: Rect, ctx: &DetailContext<'_>, frame: &mut Frame<'_>);
+
+    /// Produce the module's content lines. The container will paint
+    /// these via `Paragraph` and slice them by scroll offset. `width`
+    /// is the column width the content will be drawn into (use for
+    /// wrapping/truncation decisions). Default returns empty — will be
+    /// overridden by every module, and the default is removed in the
+    /// final cleanup task.
+    fn lines(
+        &self,
+        _ctx: &DetailContext<'_>,
+        _width: u16,
+    ) -> Vec<ratatui::text::Line<'static>> {
+        Vec::new()
+    }
 }
 
 pub struct Registry {

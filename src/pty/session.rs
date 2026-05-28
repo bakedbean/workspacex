@@ -11,6 +11,37 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio::sync::mpsc;
 use vt100::Parser;
 
+/// Detect whether an error returned by `portable-pty`'s `spawn_command`
+/// means "the binary was not found".
+///
+/// `portable_pty::CommandBuilder::search_path` always returns a plain
+/// `anyhow::bail!` with a human-readable string — it does **not** wrap an
+/// `std::io::Error`, so we cannot walk the chain for `ErrorKind::NotFound`.
+/// Instead we match on the stable message patterns that portable-pty uses:
+///   • "doesn't exist on the filesystem"  (absolute path, not present)
+///   • "does not exist"                   (relative path, not present)
+///   • "No viable candidates found in PATH" (relative name, PATH search)
+///
+/// Mis-matches ("is a directory", "is not executable") correctly return false
+/// so those errors stay as `Error::Pty`.
+fn is_binary_not_found(err: &dyn std::fmt::Display) -> bool {
+    let msg = format!("{err}");
+    msg.contains("doesn't exist on the filesystem")
+        || msg.contains("does not exist")
+        || msg.contains("No viable candidates found in PATH")
+}
+
+/// Resolve the binary name we will attempt to spawn for `agent`, honoring
+/// the `WSX_<AGENT>_BIN` env-var seam used by tests.
+fn resolved_binary(agent: AgentKind) -> String {
+    let env_var = match agent {
+        AgentKind::Claude => "WSX_CLAUDE_BIN",
+        AgentKind::Pi => "WSX_PI_BIN",
+        AgentKind::Hermes => "WSX_HERMES_BIN",
+    };
+    std::env::var(env_var).unwrap_or_else(|_| agent.default_binary().to_string())
+}
+
 /// Which coding agent to spawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentKind {
@@ -1092,7 +1123,13 @@ pub fn spawn_session(
     let mut child = pair
         .slave
         .spawn_command(child_cmd)
-        .map_err(|e| Error::Pty(format!("spawn: {e}")))?;
+        .map_err(|e| {
+            if is_binary_not_found(&e) {
+                Error::AgentBinaryMissing(resolved_binary(agent))
+            } else {
+                Error::Pty(format!("spawn: {e}"))
+            }
+        })?;
     drop(pair.slave);
 
     let killer = child.clone_killer();
@@ -3238,5 +3275,35 @@ mod tests {
             AgentKind::Claude,
             "None input must default to Claude — store.rs relies on this"
         );
+    }
+
+    #[test]
+    fn spawn_session_returns_agent_binary_missing_for_unknown_path() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let cwd = PathBuf::from(".");
+        let result = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                additional_dirs: vec![],
+                yolo: false,
+            },
+            crate::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
+        );
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("spawn should fail when binary is missing"),
+        };
+        match err {
+            Error::AgentBinaryMissing(binary) => {
+                assert_eq!(binary, "/nonexistent/wsx-test-bin-does-not-exist");
+            }
+            other => panic!("expected AgentBinaryMissing, got {other:?}"),
+        }
     }
 }

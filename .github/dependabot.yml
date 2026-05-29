@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # Rust dependencies (Cargo.toml / Cargo.lock).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    # Collapse routine non-breaking bumps into a single PR to cut review noise;
+    # major bumps still come through as individual PRs.
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # The GitHub Actions used by the workflows above.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch

@@ -251,12 +251,12 @@ const PLANTS: &[&str] = &[
     "woad",
 ];
 
-use rand::Rng;
+use rand::RngExt;
 
 pub fn generate() -> String {
-    let mut rng = rand::thread_rng();
-    let a = ADJECTIVES[rng.gen_range(0..ADJECTIVES.len())];
-    let p = PLANTS[rng.gen_range(0..PLANTS.len())];
+    let mut rng = rand::rng();
+    let a = ADJECTIVES[rng.random_range(0..ADJECTIVES.len())];
+    let p = PLANTS[rng.random_range(0..PLANTS.len())];
     format!("{a}-{p}")
 }
 

@@ -44,7 +44,7 @@ pub struct DetailInputs<'a> {
     pub registry: &'a crate::detail_modules::Registry,
     /// Pinned commands resolved for the selected workspace's repo. When
     /// empty, no chip row is rendered.
-    pub pinned: &'a [crate::pinned::PinnedCommand],
+    pub pinned: &'a [crate::commands::pinned::PinnedCommand],
     /// Per-slot scroll offsets. Borrowed mutably so the container can
     /// clamp them to the current content height during render.
     pub scroll_offsets: &'a mut [u16; 4],
@@ -1149,11 +1149,11 @@ mod tests {
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
         let pinned = vec![
-            crate::pinned::PinnedCommand {
+            crate::commands::pinned::PinnedCommand {
                 label: "PR".into(),
                 command: "/pull-request".into(),
             },
-            crate::pinned::PinnedCommand {
+            crate::commands::pinned::PinnedCommand {
                 label: "FB".into(),
                 command: "/feedback".into(),
             },
@@ -1259,7 +1259,7 @@ mod tests {
             ..DetailBarConfig::default()
         };
         let reg = make_registry();
-        let pinned = vec![crate::pinned::PinnedCommand {
+        let pinned = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pr".into(),
         }];

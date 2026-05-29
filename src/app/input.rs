@@ -480,7 +480,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     .map(|(rid, w)| (*rid, w.worktree_path.clone()));
                 if let Some((_, path)) = info {
                     let cmd = app.store.get_setting("editor_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_editor(&path, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_in_editor(&path, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -497,7 +497,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     .map(|(rid, w)| (*rid, w.worktree_path.clone()));
                 if let Some((_, path)) = info {
                     let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_terminal(&path, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_in_terminal(&path, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -515,7 +515,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 if let Some(path) = info {
                     let cmd = app.store.get_setting("diff_cmd").ok().flatten();
                     let base = crate::git::resolve_base_branch(&path).await;
-                    if let Err(e) = crate::external::open_diff(&path, &base, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_diff(&path, &base, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -533,7 +533,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     .map(|(_, w)| w.worktree_path.clone());
                 if let Some(path) = info {
                     let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_lazygit(&path, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_in_lazygit(&path, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -746,7 +746,7 @@ async fn handle_key_attached(
                     .map(|(_, w)| w.worktree_path.clone());
                 if let Some(path) = path {
                     let cmd = app.store.get_setting("editor_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_editor(&path, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_in_editor(&path, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -762,7 +762,7 @@ async fn handle_key_attached(
                     .map(|(_, w)| w.worktree_path.clone());
                 if let Some(path) = path {
                     let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_terminal(&path, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_in_terminal(&path, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -779,7 +779,7 @@ async fn handle_key_attached(
                 if let Some(path) = path {
                     let cmd = app.store.get_setting("diff_cmd").ok().flatten();
                     let base = crate::git::resolve_base_branch(&path).await;
-                    if let Err(e) = crate::external::open_diff(&path, &base, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_diff(&path, &base, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -795,7 +795,7 @@ async fn handle_key_attached(
                     .map(|(_, w)| w.worktree_path.clone());
                 if let Some(path) = path {
                     let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_lazygit(&path, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_in_lazygit(&path, cmd.as_deref()) {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });

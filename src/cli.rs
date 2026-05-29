@@ -767,7 +767,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RemoteList => {
-            let remotes = crate::remotes::list(&store)?;
+            let remotes = crate::commands::remotes::list(&store)?;
             if remotes.is_empty() {
                 println!("no remotes configured. add one with: wsx config edit remotes");
                 return Ok(());
@@ -777,8 +777,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RemoteRun { name } => {
-            let command = crate::remotes::lookup(&store, &name)?.ok_or_else(|| {
-                let available = crate::remotes::list(&store)
+            let command = crate::commands::remotes::lookup(&store, &name)?.ok_or_else(|| {
+                let available = crate::commands::remotes::list(&store)
                     .ok()
                     .map(|v| v.into_iter().map(|r| r.name).collect::<Vec<_>>().join(", "))
                     .unwrap_or_default();

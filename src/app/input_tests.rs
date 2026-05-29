@@ -1527,7 +1527,7 @@ mod pm_state_tests {
 
         // Populate the cache directly (Task 7's resolution path is tested
         // separately via the resolve() unit tests).
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -1572,7 +1572,7 @@ mod pm_state_tests {
         let ws_id = spawn_attached_workspace(&mut app);
 
         // Only one chip in the cache.
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -1614,7 +1614,7 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let _ws_id = spawn_attached_workspace(&mut app);
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -1652,7 +1652,7 @@ mod pm_state_tests {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let _ws_id = spawn_attached_workspace(&mut app);
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -1697,7 +1697,7 @@ mod pm_state_tests {
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
         app.dashboard.selected = 0;
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -1740,7 +1740,7 @@ mod pm_state_tests {
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
         app.dashboard.selected = 0;
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -1795,7 +1795,7 @@ mod pm_state_tests {
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
         app.dashboard.selected = 0;
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -1853,15 +1853,15 @@ mod pm_state_tests {
 
         // Three commands in cache but only two chip_rects rendered.
         app.pinned_commands_cache = vec![
-            crate::pinned::PinnedCommand {
+            crate::commands::pinned::PinnedCommand {
                 label: "PR".into(),
                 command: "/pull-request".into(),
             },
-            crate::pinned::PinnedCommand {
+            crate::commands::pinned::PinnedCommand {
                 label: "B".into(),
                 command: "/build".into(),
             },
-            crate::pinned::PinnedCommand {
+            crate::commands::pinned::PinnedCommand {
                 label: "T".into(),
                 command: "/test".into(),
             },
@@ -1924,7 +1924,7 @@ mod pm_state_tests {
         assert_eq!(app.dashboard.reply_draft, "");
         assert!(app.dashboard.reply_draft_clear_at_ms.is_none());
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -2053,7 +2053,7 @@ mod pm_state_tests {
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
         app.dashboard.selected = 0;
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -2142,7 +2142,7 @@ mod pm_state_tests {
         app.dashboard.reply_draft = "hello agent".into();
         app.focus = crate::ui::PaneFocus::ProjectManager;
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];
@@ -4271,7 +4271,7 @@ mod detail_bar_focus_tests {
         app.focus = crate::ui::PaneFocus::DetailBarReply;
         app.dashboard.reply_draft = "half-typed message".to_string();
 
-        app.pinned_commands_cache = vec![crate::pinned::PinnedCommand {
+        app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
         }];

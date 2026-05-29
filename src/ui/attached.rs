@@ -1,4 +1,4 @@
-use crate::pinned::{PinnedCommand, truncate_label};
+use crate::commands::pinned::{PinnedCommand, truncate_label};
 use crate::pty::render::render_screen;
 use crate::pty::session::Session;
 use crate::ui::split::{Divider, SplitDirection};
@@ -355,7 +355,7 @@ pub(crate) fn render_chip_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pinned::PinnedCommand;
+    use crate::commands::pinned::PinnedCommand;
 
     fn cmds(specs: &[(&str, &str)]) -> Vec<PinnedCommand> {
         specs

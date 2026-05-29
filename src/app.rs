@@ -220,7 +220,7 @@ pub struct App {
         ratatui::layout::Rect,
     )>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
-    pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
+    pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
     /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
     /// with ratatui's escape sequences. See Task 4 / Critical review.
@@ -574,7 +574,7 @@ where
         crossterm::terminal::LeaveAlternateScreen
     )?;
 
-    let result = crate::external::edit_in_editor(&current, ext);
+    let result = crate::commands::external::edit_in_editor(&current, ext);
 
     // Resume the TUI.
     crossterm::execute!(

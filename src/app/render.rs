@@ -277,7 +277,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .map(Vec::as_slice)
                             .unwrap_or(&[]);
                         let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
-                        let pinned = crate::pinned::resolve(
+                        let pinned = crate::commands::pinned::resolve(
                             global_pinned.as_deref(),
                             repo.pinned_commands.as_deref(),
                         );
@@ -391,7 +391,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .find(|r| r.id == w.repo_id)
                         .and_then(|r| r.pinned_commands.clone())
                 });
-            let pinned = crate::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
+            let pinned = crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
 
             let (pane_area, chip_area, status_area, footer_area) =
                 attached::layout_chrome(area, line.is_some(), !pinned.is_empty());
@@ -465,7 +465,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     compute_attention_line(app, None, max_width)
                 };
                 // PM pane is out of scope for pinned commands per spec.
-                let pinned: &[crate::pinned::PinnedCommand] = &[];
+                let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
                 let (pane_area, chip_area, status_area, footer_area) =
                     attached::layout_chrome(area, line.is_some(), false);
                 attached::resize_pane(session, pane_area, false);

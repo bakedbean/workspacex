@@ -44,17 +44,15 @@ pub fn locate_session_file(worktree: &Path) -> Option<PathBuf> {
 /// can't be opened or the path doesn't start with `hermes:`.
 pub fn tail_session(virtual_path: &Path, from_offset: u64) -> Result<TailUpdate> {
     let path_str = virtual_path.to_string_lossy();
-    let session_id = path_str
-        .strip_prefix(HERMES_PREFIX)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "hermes_events::tail_session: path {:?} does not start with '{}'",
-                    virtual_path, HERMES_PREFIX
-                ),
-            )
-        })?;
+    let session_id = path_str.strip_prefix(HERMES_PREFIX).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "hermes_events::tail_session: path {:?} does not start with '{}'",
+                virtual_path, HERMES_PREFIX
+            ),
+        )
+    })?;
 
     let db_path = dirs::home_dir()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cannot resolve HOME"))?
@@ -65,11 +63,7 @@ pub fn tail_session(virtual_path: &Path, from_offset: u64) -> Result<TailUpdate>
 
 /// Path-parameterized implementation used by both production code (via
 /// `tail_session`) and tests (which pass a tempdir db path).
-fn tail_session_from_db(
-    db_path: &Path,
-    session_id: &str,
-    from_offset: u64,
-) -> Result<TailUpdate> {
+fn tail_session_from_db(db_path: &Path, session_id: &str, from_offset: u64) -> Result<TailUpdate> {
     if !db_path.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -101,21 +95,18 @@ fn tail_session_from_db(
         ..TailUpdate::default()
     };
 
-    let rows = stmt.query_map(
-        rusqlite::params![session_id, from_offset as i64],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,            // id
-                row.get::<_, String>(1)?,          // role
-                row.get::<_, Option<String>>(2)?,  // content
-                row.get::<_, Option<String>>(3)?,  // tool_call_id (unused for MVP)
-                row.get::<_, Option<String>>(4)?,  // tool_calls (unused for MVP)
-                row.get::<_, Option<String>>(5)?,  // tool_name
-                row.get::<_, f64>(6)?,             // timestamp
-                row.get::<_, Option<String>>(7)?,  // finish_reason
-            ))
-        },
-    )?;
+    let rows = stmt.query_map(rusqlite::params![session_id, from_offset as i64], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,            // id
+            row.get::<_, String>(1)?,         // role
+            row.get::<_, Option<String>>(2)?, // content
+            row.get::<_, Option<String>>(3)?, // tool_call_id (unused for MVP)
+            row.get::<_, Option<String>>(4)?, // tool_calls (unused for MVP)
+            row.get::<_, Option<String>>(5)?, // tool_name
+            row.get::<_, f64>(6)?,            // timestamp
+            row.get::<_, Option<String>>(7)?, // finish_reason
+        ))
+    })?;
 
     let mut longest_assistant_text: Option<String> = None;
     let mut last_assistant_text: Option<String> = None;
@@ -274,10 +265,7 @@ fn format_tool_use_display(tool_calls_json: &str) -> String {
             );
         }
     }
-    crate::events::truncate_display(
-        &format!("using {}", name),
-        crate::events::MAX_DISPLAY_CHARS,
-    )
+    crate::events::truncate_display(&format!("using {}", name), crate::events::MAX_DISPLAY_CHARS)
 }
 
 #[cfg(test)]
@@ -368,7 +356,11 @@ mod tests {
         let work = tempfile::TempDir::new().unwrap();
         // Set up spawn marker in worktree's .git/info directory.
         std::fs::create_dir_all(work.path().join(".git/info")).unwrap();
-        std::fs::write(work.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
+        std::fs::write(
+            work.path().join(".git/info/wsx-hermes-spawn-at"),
+            "1000.0\n",
+        )
+        .unwrap();
         // Set up db with a session after spawn_ts.
         let db_dir = home.path().join(".hermes");
         std::fs::create_dir_all(&db_dir).unwrap();
@@ -407,8 +399,22 @@ mod tests {
         let conn = make_db(&db_path);
         insert_session(&conn, "s1", "wsx:test");
         insert_message(&conn, "s1", "user", Some("Hello Hermes!"), None, None);
-        insert_message(&conn, "s1", "assistant", Some("Hi there!"), None, Some("end_turn"));
-        insert_message(&conn, "s1", "assistant", Some("How can I help?"), None, Some("end_turn"));
+        insert_message(
+            &conn,
+            "s1",
+            "assistant",
+            Some("Hi there!"),
+            None,
+            Some("end_turn"),
+        );
+        insert_message(
+            &conn,
+            "s1",
+            "assistant",
+            Some("How can I help?"),
+            None,
+            Some("end_turn"),
+        );
 
         let update = tail_session_from_db(&db_path, "s1", 0).unwrap();
 
@@ -430,7 +436,14 @@ mod tests {
         let db_path = tmp.path().join("state.db");
         let conn = make_db(&db_path);
         insert_session(&conn, "s2", "wsx:test");
-        insert_message(&conn, "s2", "assistant", Some("Done."), None, Some("end_turn"));
+        insert_message(
+            &conn,
+            "s2",
+            "assistant",
+            Some("Done."),
+            None,
+            Some("end_turn"),
+        );
 
         let update = tail_session_from_db(&db_path, "s2", 0).unwrap();
         assert!(
@@ -447,7 +460,14 @@ mod tests {
         let conn = make_db(&db_path);
         insert_session(&conn, "s3", "wsx:test");
         insert_message(&conn, "s3", "user", Some("msg1"), None, None);
-        let last_id = insert_message(&conn, "s3", "assistant", Some("resp1"), None, Some("end_turn"));
+        let last_id = insert_message(
+            &conn,
+            "s3",
+            "assistant",
+            Some("resp1"),
+            None,
+            Some("end_turn"),
+        );
 
         let update = tail_session_from_db(&db_path, "s3", 0).unwrap();
         assert_eq!(
@@ -463,7 +483,14 @@ mod tests {
         let conn = make_db(&db_path);
         insert_session(&conn, "s4", "wsx:test");
         insert_message(&conn, "s4", "user", Some("prompt"), None, None);
-        insert_message(&conn, "s4", "assistant", Some("answer"), None, Some("end_turn"));
+        insert_message(
+            &conn,
+            "s4",
+            "assistant",
+            Some("answer"),
+            None,
+            Some("end_turn"),
+        );
 
         // First call — consume all rows.
         let first = tail_session_from_db(&db_path, "s4", 0).unwrap();
@@ -495,8 +522,14 @@ mod tests {
         // ToolUseCounts::increment is case-sensitive and Claude-flavored
         // ("Bash", "Read", etc.). MVP: all Hermes tool uses count as "other".
         // Full categorization is a follow-up.
-        assert_eq!(update.tool_use_counts.other, 3, "expected 3 other tool uses (MVP: hermes names are lowercase, all fall through to other)");
-        assert_eq!(update.tool_use_counts.bash, 0, "bash bucket empty until hermes tool name normalization is added");
+        assert_eq!(
+            update.tool_use_counts.other, 3,
+            "expected 3 other tool uses (MVP: hermes names are lowercase, all fall through to other)"
+        );
+        assert_eq!(
+            update.tool_use_counts.bash, 0,
+            "bash bucket empty until hermes tool name normalization is added"
+        );
     }
 
     #[test]
@@ -511,8 +544,22 @@ mod tests {
         let db_path = tmp.path().join("state.db");
         let conn = make_db(&db_path);
         insert_session(&conn, "s6", "wsx:test");
-        insert_message(&conn, "s6", "assistant", Some("first response"), None, Some("tool_use"));
-        insert_message(&conn, "s6", "assistant", Some("second response"), None, Some("end_turn"));
+        insert_message(
+            &conn,
+            "s6",
+            "assistant",
+            Some("first response"),
+            None,
+            Some("tool_use"),
+        );
+        insert_message(
+            &conn,
+            "s6",
+            "assistant",
+            Some("second response"),
+            None,
+            Some("end_turn"),
+        );
 
         let update = tail_session_from_db(&db_path, "s6", 0).unwrap();
         assert_eq!(
@@ -572,7 +619,14 @@ mod tests {
         let db_path = tmp.path().join("state.db");
         let conn = make_db(&db_path);
         insert_session(&conn, "ev2", "wsx:test");
-        insert_message_full(&conn, "ev2", "assistant", Some("Here is the answer."), None, 1000.0);
+        insert_message_full(
+            &conn,
+            "ev2",
+            "assistant",
+            Some("Here is the answer."),
+            None,
+            1000.0,
+        );
 
         let update = tail_session_from_db(&db_path, "ev2", 0).unwrap();
         assert_eq!(update.events.len(), 1, "expected 1 event");
@@ -595,7 +649,14 @@ mod tests {
         let conn = make_db(&db_path);
         insert_session(&conn, "ev3", "wsx:test");
         let tool_calls_json = r#"[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"}}]"#;
-        insert_message_full(&conn, "ev3", "assistant", None, Some(tool_calls_json), 1000.0);
+        insert_message_full(
+            &conn,
+            "ev3",
+            "assistant",
+            None,
+            Some(tool_calls_json),
+            1000.0,
+        );
 
         let update = tail_session_from_db(&db_path, "ev3", 0).unwrap();
         assert_eq!(update.events.len(), 1, "expected 1 event");
@@ -611,7 +672,14 @@ mod tests {
         let conn = make_db(&db_path);
         insert_session(&conn, "ev4", "wsx:test");
         let tool_calls_json = r#"[{"id":"call_2","type":"function","function":{"name":"terminal","arguments":"{\"command\":\"ls -la\"}"}}]"#;
-        insert_message_full(&conn, "ev4", "assistant", None, Some(tool_calls_json), 1000.0);
+        insert_message_full(
+            &conn,
+            "ev4",
+            "assistant",
+            None,
+            Some(tool_calls_json),
+            1000.0,
+        );
 
         let update = tail_session_from_db(&db_path, "ev4", 0).unwrap();
         assert_eq!(update.events.len(), 1, "expected 1 event");
@@ -670,7 +738,14 @@ mod tests {
         let db_path = tmp.path().join("state.db");
         let conn = make_db(&db_path);
         insert_session(&conn, "ev7", "wsx:test");
-        insert_message_full(&conn, "ev7", "assistant", Some("hello\n\n   world"), None, 1000.0);
+        insert_message_full(
+            &conn,
+            "ev7",
+            "assistant",
+            Some("hello\n\n   world"),
+            None,
+            1000.0,
+        );
 
         let update = tail_session_from_db(&db_path, "ev7", 0).unwrap();
         assert_eq!(update.events.len(), 1, "expected 1 event");

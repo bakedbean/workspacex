@@ -13,8 +13,8 @@ pub struct StatusCounts {
     pub idle: u32,
 }
 
-impl StatusCounts {
-    pub fn from_iter<I: IntoIterator<Item = Status>>(iter: I) -> Self {
+impl FromIterator<Status> for StatusCounts {
+    fn from_iter<I: IntoIterator<Item = Status>>(iter: I) -> Self {
         let mut c = Self::default();
         for s in iter {
             match s {
@@ -28,7 +28,9 @@ impl StatusCounts {
         }
         c
     }
+}
 
+impl StatusCounts {
     pub fn total(&self) -> u32 {
         self.question + self.stalled + self.waiting + self.thinking + self.complete + self.idle
     }

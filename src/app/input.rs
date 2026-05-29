@@ -23,9 +23,9 @@ use crossterm::event::{
 // `AttachedState`, `Arc`, and `Mutex` through `super::*` glob imports
 // that cascade from the surrounding `tests` module.
 #[cfg(test)]
-use crate::app::draw_for_test;
-#[cfg(test)]
 use crate::app::build_spawn_info;
+#[cfg(test)]
+use crate::app::draw_for_test;
 #[cfg(test)]
 use crate::ui::split::AttachedState;
 #[cfg(test)]
@@ -153,11 +153,11 @@ fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::
 ///     have truncated some chips at narrow widths),
 ///   - the cache has no command at `idx` (defensive),
 ///   - no chip target can be resolved.
-/// When dispatched from `View::Dashboard`, also clears any in-flight
-/// reply draft and returns focus to the dashboard. In other views
-/// (attached, attached-PM) the dispatch is byte-only so it matches the
-/// attached-view keyboard chord and doesn't trample dashboard state the
-/// user can't see.
+///     When dispatched from `View::Dashboard`, also clears any in-flight
+///     reply draft and returns focus to the dashboard. In other views
+///     (attached, attached-PM) the dispatch is byte-only so it matches the
+///     attached-view keyboard chord and doesn't trample dashboard state the
+///     user can't see.
 async fn fire_chip(app: &mut App, idx: usize) {
     if idx >= app.chip_rects.len() {
         return;
@@ -929,7 +929,9 @@ async fn handle_key_modal(
                 agent = match agent {
                     crate::pty::session::AgentKind::Claude => crate::pty::session::AgentKind::Pi,
                     crate::pty::session::AgentKind::Pi => crate::pty::session::AgentKind::Hermes,
-                    crate::pty::session::AgentKind::Hermes => crate::pty::session::AgentKind::Claude,
+                    crate::pty::session::AgentKind::Hermes => {
+                        crate::pty::session::AgentKind::Claude
+                    }
                 };
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id,
@@ -1136,11 +1138,10 @@ async fn handle_key_modal(
                                             } else if state.leaves().contains(&ws_id) {
                                                 // Already open in another pane —
                                                 // just refocus there.
-                                                if let Some(p) = state
-                                                    .tree
-                                                    .leaf_paths()
-                                                    .into_iter()
-                                                    .find(|p| state.tree.leaf_at(p) == Some(ws_id))
+                                                if let Some(p) =
+                                                    state.tree.leaf_paths().into_iter().find(|p| {
+                                                        state.tree.leaf_at(p) == Some(ws_id)
+                                                    })
                                                 {
                                                     state.focus = p;
                                                 }
@@ -1298,9 +1299,7 @@ async fn handle_key_modal(
                     app.store.set_workspace_agent(ws_id, new_agent)?;
                     // Mirror to in-memory copy so the dashboard doesn't show stale
                     // agent until poll_external_changes catches up.
-                    if let Some((_, ws)) =
-                        app.workspaces.iter_mut().find(|(_, w)| w.id == ws_id)
-                    {
+                    if let Some((_, ws)) = app.workspaces.iter_mut().find(|(_, w)| w.id == ws_id) {
                         ws.agent = new_agent;
                     }
                     app.modal = None;

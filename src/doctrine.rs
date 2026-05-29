@@ -40,10 +40,7 @@ const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
 /// - a disable sentinel (`off` / `none` / `disabled`, case-insensitive) →
 ///   `None`, suppressing injection for that install.
 /// - any other value → that value verbatim, for every agent.
-pub fn resolve_effective_doctrine(
-    store: &crate::store::Store,
-    agent: AgentKind,
-) -> Option<String> {
+pub fn resolve_effective_doctrine(store: &crate::store::Store, agent: AgentKind) -> Option<String> {
     match store.get_setting("process_doctrine") {
         Ok(Some(v)) => {
             let trimmed = v.trim();
@@ -79,7 +76,10 @@ mod tests {
     fn doctrine_covers_all_practices_for_claude() {
         let d = process_doctrine(AgentKind::Claude).to_lowercase();
         assert!(d.contains("plan"), "must mention planning: {d}");
-        assert!(d.contains("superpowers"), "claude must get superpowers clause: {d}");
+        assert!(
+            d.contains("superpowers"),
+            "claude must get superpowers clause: {d}"
+        );
         assert!(d.contains("commit"), "must mention commits: {d}");
         assert!(d.contains("wsx skill"), "must mention the wsx skill: {d}");
     }
@@ -87,16 +87,31 @@ mod tests {
     #[test]
     fn pi_also_gets_superpowers() {
         let d = process_doctrine(AgentKind::Pi).to_lowercase();
-        assert!(d.contains("superpowers"), "pi must get superpowers clause: {d}");
+        assert!(
+            d.contains("superpowers"),
+            "pi must get superpowers clause: {d}"
+        );
     }
 
     #[test]
     fn hermes_omits_superpowers_but_keeps_the_rest() {
         let d = process_doctrine(AgentKind::Hermes).to_lowercase();
-        assert!(!d.contains("superpowers"), "hermes must NOT get superpowers clause: {d}");
-        assert!(d.contains("plan"), "hermes must still get planning clause: {d}");
-        assert!(d.contains("commit"), "hermes must still get commits clause: {d}");
-        assert!(d.contains("wsx skill"), "hermes must still get wsx skill clause: {d}");
+        assert!(
+            !d.contains("superpowers"),
+            "hermes must NOT get superpowers clause: {d}"
+        );
+        assert!(
+            d.contains("plan"),
+            "hermes must still get planning clause: {d}"
+        );
+        assert!(
+            d.contains("commit"),
+            "hermes must still get commits clause: {d}"
+        );
+        assert!(
+            d.contains("wsx skill"),
+            "hermes must still get wsx skill clause: {d}"
+        );
     }
 
     #[test]
@@ -111,7 +126,9 @@ mod tests {
     #[test]
     fn resolve_override_replaces_default_verbatim() {
         let store = crate::store::Store::open_in_memory().unwrap();
-        store.set_setting("process_doctrine", "CUSTOM DOCTRINE").unwrap();
+        store
+            .set_setting("process_doctrine", "CUSTOM DOCTRINE")
+            .unwrap();
         assert_eq!(
             resolve_effective_doctrine(&store, AgentKind::Hermes),
             Some("CUSTOM DOCTRINE".to_string())

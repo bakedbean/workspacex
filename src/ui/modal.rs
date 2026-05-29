@@ -132,7 +132,10 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             let body = format!("  {frame} Creating workspace…\n\n  [esc] cancel",);
             ("new workspace", body)
         }
-        Modal::ArchiveRunning { step, script_present } => {
+        Modal::ArchiveRunning {
+            step,
+            script_present,
+        } => {
             let body = render_archive_steps(*step, *script_present, tick);
             ("archive workspace", body)
         }
@@ -828,7 +831,10 @@ mod render_archive_steps_tests {
     fn step_script_with_script_present_marks_script_in_progress() {
         let body = render_archive_steps(ArchiveStep::Script, true, 0);
         // Spinner frame for tick=0 is '⠋' (from spinner::frame tests).
-        assert!(body.contains("⠋ Running archive script"), "body was:\n{body}");
+        assert!(
+            body.contains("⠋ Running archive script"),
+            "body was:\n{body}"
+        );
         assert!(body.contains("· Removing worktree"), "body was:\n{body}");
         assert!(body.contains("· Deleting branch"), "body was:\n{body}");
         assert!(body.contains("· Cleaning up registry"), "body was:\n{body}");
@@ -837,7 +843,10 @@ mod render_archive_steps_tests {
     #[test]
     fn step_remove_worktree_marks_script_done_and_worktree_in_progress() {
         let body = render_archive_steps(ArchiveStep::RemoveWorktree, true, 0);
-        assert!(body.contains("✓ Running archive script"), "body was:\n{body}");
+        assert!(
+            body.contains("✓ Running archive script"),
+            "body was:\n{body}"
+        );
         assert!(body.contains("⠋ Removing worktree"), "body was:\n{body}");
         assert!(body.contains("· Deleting branch"), "body was:\n{body}");
         assert!(body.contains("· Cleaning up registry"), "body was:\n{body}");
@@ -846,7 +855,10 @@ mod render_archive_steps_tests {
     #[test]
     fn step_cleanup_marks_everything_but_cleanup_done() {
         let body = render_archive_steps(ArchiveStep::Cleanup, true, 0);
-        assert!(body.contains("✓ Running archive script"), "body was:\n{body}");
+        assert!(
+            body.contains("✓ Running archive script"),
+            "body was:\n{body}"
+        );
         assert!(body.contains("✓ Removing worktree"), "body was:\n{body}");
         assert!(body.contains("✓ Deleting branch"), "body was:\n{body}");
         assert!(body.contains("⠋ Cleaning up registry"), "body was:\n{body}");

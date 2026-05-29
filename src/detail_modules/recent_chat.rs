@@ -12,19 +12,12 @@ impl DetailModule for RecentChat {
     fn title(&self) -> &'static str {
         "RECENT CHAT"
     }
-    fn lines(
-        &self,
-        ctx: &DetailContext<'_>,
-        width: u16,
-    ) -> Vec<ratatui::text::Line<'static>> {
+    fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
         build_lines(ctx, width)
     }
 }
 
-fn build_lines(
-    ctx: &DetailContext<'_>,
-    width: u16,
-) -> Vec<ratatui::text::Line<'static>> {
+fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
     use ratatui::text::{Line, Span};
 
     let events = if ctx.events_scanned { ctx.events } else { None };
@@ -125,6 +118,9 @@ mod tests {
     fn lines_with_no_events_returns_at_least_one_line() {
         let ctx = stub_context();
         let out = RecentChat.lines(&ctx, 40);
-        assert!(!out.is_empty(), "RecentChat should emit at least one line in empty state");
+        assert!(
+            !out.is_empty(),
+            "RecentChat should emit at least one line in empty state"
+        );
     }
 }

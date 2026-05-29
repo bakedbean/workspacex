@@ -13,19 +13,12 @@ impl DetailModule for SessionSummary {
         "SESSION SUMMARY"
     }
 
-    fn lines(
-        &self,
-        ctx: &DetailContext<'_>,
-        width: u16,
-    ) -> Vec<ratatui::text::Line<'static>> {
+    fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
         build_lines(ctx, width)
     }
 }
 
-fn build_lines(
-    ctx: &DetailContext<'_>,
-    width: u16,
-) -> Vec<ratatui::text::Line<'static>> {
+fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
     use ratatui::style::{Modifier, Style};
     use ratatui::text::{Line, Span};
 
@@ -102,14 +95,16 @@ fn build_lines(
             let state_text = format_state_line(status, evt, now_ms);
             out.push(Line::from(vec![
                 prefix.clone(),
-                Span::styled(truncate_to_chars(&state_text, inner_width), theme.dim_style()),
+                Span::styled(
+                    truncate_to_chars(&state_text, inner_width),
+                    theme.dim_style(),
+                ),
             ]));
 
             // Recent files: 1–3 basenames from the edited-files ring.
             // Omitted when the ring is empty so we don't reserve a row
             // for a meaningless dash.
-            if let Some(files_text) = format_recent_files(&evt.recent_edited_files, inner_width)
-            {
+            if let Some(files_text) = format_recent_files(&evt.recent_edited_files, inner_width) {
                 out.push(Line::from(vec![
                     prefix.clone(),
                     Span::styled(files_text, theme.dim_style()),
@@ -157,10 +152,8 @@ fn format_state_line(
             }),
         Status::Stalled => {
             if evt.last_log_activity_ms > 0 {
-                let quiet_secs = now_ms
-                    .saturating_sub(evt.last_log_activity_ms)
-                    .max(0) as u64
-                    / 1000;
+                let quiet_secs =
+                    now_ms.saturating_sub(evt.last_log_activity_ms).max(0) as u64 / 1000;
                 Some(format!("{} quiet", format_ago_short(Some(quiet_secs))))
             } else {
                 None
@@ -362,8 +355,7 @@ mod tests {
 
     #[test]
     fn render_shows_status_label() {
-        let evt: &'static WorkspaceEvents =
-            Box::leak(Box::new(WorkspaceEvents::default()));
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents::default()));
         let mut ctx = stub_context();
         ctx.events = Some(evt);
         ctx.events_scanned = true;
@@ -455,11 +447,7 @@ mod tests {
         // Use the production helper so the ring's most-recent-first
         // ordering matches what real edits produce.
         let mut evt = WorkspaceEvents::default();
-        for path in [
-            "/abs/path/to/alpha.rs",
-            "relative/beta.rs",
-            "gamma.rs",
-        ] {
+        for path in ["/abs/path/to/alpha.rs", "relative/beta.rs", "gamma.rs"] {
             evt.push_recent_edited_file(path.to_string());
         }
         let evt: &'static WorkspaceEvents = Box::leak(Box::new(evt));
@@ -494,9 +482,15 @@ mod tests {
         ctx.events_scanned = true;
 
         let text = render_to_text(&ctx, 60, 10);
-        assert!(text.contains("five.rs"), "missing most-recent file:\n{text}");
+        assert!(
+            text.contains("five.rs"),
+            "missing most-recent file:\n{text}"
+        );
         assert!(text.contains("four.rs"), "missing 2nd-most-recent:\n{text}");
-        assert!(text.contains("three.rs"), "missing 3rd-most-recent:\n{text}");
+        assert!(
+            text.contains("three.rs"),
+            "missing 3rd-most-recent:\n{text}"
+        );
         assert!(
             !text.contains("two.rs"),
             "expected list capped at 3 most-recent; found older entry:\n{text}"
@@ -509,8 +503,7 @@ mod tests {
 
     #[test]
     fn render_omits_files_line_when_ring_empty() {
-        let evt: &'static WorkspaceEvents =
-            Box::leak(Box::new(WorkspaceEvents::default()));
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents::default()));
         let mut ctx = stub_context();
         ctx.events = Some(evt);
         ctx.events_scanned = true;
@@ -530,6 +523,9 @@ mod tests {
         assert!(!out.is_empty());
         // First line in the loading branch is "  loading…" in dim style.
         let first_text: String = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(first_text.contains("loading"), "expected 'loading' line, got: {first_text:?}");
+        assert!(
+            first_text.contains("loading"),
+            "expected 'loading' line, got: {first_text:?}"
+        );
     }
 }

@@ -958,8 +958,8 @@ fn skip_insight_block(lines: &[&str], start: usize) -> usize {
         return start;
     }
     let window_end = (start + 1 + 20).min(lines.len());
-    for i in (start + 1)..window_end {
-        let candidate = lines[i].trim().trim_matches('`').trim();
+    for (i, line) in lines.iter().enumerate().take(window_end).skip(start + 1) {
+        let candidate = line.trim().trim_matches('`').trim();
         if !candidate.is_empty()
             && candidate
                 .chars()
@@ -980,8 +980,8 @@ fn skip_code_fence(lines: &[&str], start: usize) -> usize {
     {
         return start;
     }
-    for i in (start + 1)..lines.len() {
-        if lines[i].trim().starts_with("```") {
+    for (i, line) in lines.iter().enumerate().skip(start + 1) {
+        if line.trim().starts_with("```") {
             return i + 1;
         }
     }

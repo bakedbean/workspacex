@@ -340,9 +340,7 @@ fn render_container(
         height: area.height,
     };
 
-    let label_style = Style::default()
-        .fg(theme.path)
-        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
 
     // Build virtual line list: title row + body lines + 1-row gap between
     // modules. Last module has no trailing gap.
@@ -1068,8 +1066,10 @@ mod tests {
     #[test]
     fn render_with_unknown_module_id_shows_placeholder() {
         let (_store, repo, ws) = seed_workspace();
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![vec!["seshun_summary".into()]];
+        let cfg = DetailBarConfig {
+            containers: vec![vec!["seshun_summary".into()]],
+            ..Default::default()
+        };
         let reg = make_registry();
         let mut offsets = [0u16; 4];
         let mut inputs = DetailInputs {
@@ -1106,8 +1106,10 @@ mod tests {
             last_assistant_text: Some("hello".into()),
             ..Default::default()
         };
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![vec!["recent_chat".into()]];
+        let cfg = DetailBarConfig {
+            containers: vec![vec!["recent_chat".into()]],
+            ..Default::default()
+        };
         let reg = make_registry();
         let mut offsets = [0u16; 4];
         let mut inputs = DetailInputs {
@@ -1487,7 +1489,10 @@ mod tests {
             .unwrap();
         let buf = terminal.backend().buffer();
         let any_nonblank = (0..4).any(|y| buf[(39, y)].symbol() != " ");
-        assert!(any_nonblank, "expected scrollbar glyphs in rightmost column");
+        assert!(
+            any_nonblank,
+            "expected scrollbar glyphs in rightmost column"
+        );
     }
 
     #[test]

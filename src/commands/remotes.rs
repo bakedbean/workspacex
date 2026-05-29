@@ -4,8 +4,8 @@
 //!
 //! See `docs/superpowers/specs/2026-05-18-named-remotes-design.md`.
 
-use crate::error::Result;
 use crate::data::store::Store;
+use crate::error::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Remote {

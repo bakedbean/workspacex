@@ -6,10 +6,10 @@
 //! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
 
 use crate::activity::events::WorkspaceEvents;
-use crate::git::forge::BranchLifecycle;
-use crate::git::DiffStats;
 use crate::activity::proc::ProcInfo;
 use crate::data::store::{Repo, Workspace};
+use crate::git::DiffStats;
+use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use std::collections::HashMap;

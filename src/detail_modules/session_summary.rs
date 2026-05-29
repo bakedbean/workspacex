@@ -313,8 +313,8 @@ fn wrap_lines(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detail_modules::tests_helpers::stub_context;
     use crate::activity::events::{StopReason, WorkspaceEvents};
+    use crate::detail_modules::tests_helpers::stub_context;
     use crate::ui::dashboard::status::Status;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

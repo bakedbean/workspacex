@@ -39,7 +39,9 @@ pub async fn tail_workspace_events(
         crate::pty::session::AgentKind::Claude => {
             crate::activity::events::locate_session_file(&worktree_path)
         }
-        crate::pty::session::AgentKind::Pi => crate::activity::pi_events::locate_session_file(&worktree_path),
+        crate::pty::session::AgentKind::Pi => {
+            crate::activity::pi_events::locate_session_file(&worktree_path)
+        }
         crate::pty::session::AgentKind::Hermes => {
             crate::activity::hermes_events::locate_session_file(&worktree_path)
         }
@@ -64,8 +66,12 @@ pub async fn tail_workspace_events(
         return;
     };
     let tail_result = match ws_agent {
-        crate::pty::session::AgentKind::Claude => crate::activity::events::tail_session(&file, tail_from),
-        crate::pty::session::AgentKind::Pi => crate::activity::pi_events::tail_session(&file, tail_from),
+        crate::pty::session::AgentKind::Claude => {
+            crate::activity::events::tail_session(&file, tail_from)
+        }
+        crate::pty::session::AgentKind::Pi => {
+            crate::activity::pi_events::tail_session(&file, tail_from)
+        }
         crate::pty::session::AgentKind::Hermes => {
             crate::activity::hermes_events::tail_session(&file, tail_from)
         }
@@ -228,8 +234,8 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 .iter()
                 .filter_map(|(_, w)| {
                     let repo = g.repos.iter().find(|r| r.id == w.repo_id)?;
-                    let prefix =
-                        crate::data::repo::resolve_branch_prefix(repo, &g.store).unwrap_or_default();
+                    let prefix = crate::data::repo::resolve_branch_prefix(repo, &g.store)
+                        .unwrap_or_default();
                     Some((
                         w.id,
                         w.worktree_path.clone(),

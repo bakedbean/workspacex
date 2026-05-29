@@ -1,5 +1,5 @@
-use crate::git::forge::BranchLifecycle;
 use crate::data::store::RepoId;
+use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};

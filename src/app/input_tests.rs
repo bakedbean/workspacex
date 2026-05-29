@@ -3321,8 +3321,8 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ensure_workspace_session_sets_modal_when_binary_missing() {
-        use crate::pty::session::AgentKind;
         use crate::data::store::{NewWorkspace, WorkspaceState};
+        use crate::pty::session::AgentKind;
         let mut env = EnvGuard::new();
         env.set("WSX_HERMES_BIN", "/nonexistent/wsx-test-hermes");
         let store = Store::open_in_memory().unwrap();
@@ -3541,8 +3541,8 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn agent_picker_enter_persists_and_retries_attach() {
-        use crate::pty::session::AgentKind;
         use crate::data::store::{NewWorkspace, WorkspaceState};
+        use crate::pty::session::AgentKind;
         use crate::test_support::{EnvGuard, cat_path};
         use crate::ui::modal::Modal;
         // Switch from broken Hermes (won't spawn) to Claude (substituted with `cat`,
@@ -3853,7 +3853,11 @@ mod restore_layout_tests {
 
     fn setup_two_workspaces_with_sessions(
         slug: &str,
-    ) -> (App, crate::data::store::WorkspaceId, crate::data::store::WorkspaceId) {
+    ) -> (
+        App,
+        crate::data::store::WorkspaceId,
+        crate::data::store::WorkspaceId,
+    ) {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());

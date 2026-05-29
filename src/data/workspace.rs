@@ -1,11 +1,11 @@
-use crate::error::{Error, Result};
-use crate::git;
-use crate::names;
-use crate::pty::session::AgentKind;
 use crate::data::setup::{self, SetupLine, SetupResult};
 use crate::data::store::{
     NewWorkspace, Repo, SetupStatus, Store, Workspace, WorkspaceId, WorkspaceState,
 };
+use crate::error::{Error, Result};
+use crate::git;
+use crate::names;
+use crate::pty::session::AgentKind;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]

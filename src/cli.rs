@@ -1383,7 +1383,10 @@ mod tests {
         // Sanity: round-trips to default config.
         let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&seed).unwrap();
-        assert_eq!(parsed, crate::config::detail_bar_config::DetailBarConfig::default());
+        assert_eq!(
+            parsed,
+            crate::config::detail_bar_config::DetailBarConfig::default()
+        );
         // Pretty-printed: contains newlines.
         assert!(seed.contains('\n'));
     }

@@ -53,8 +53,8 @@
 //! Other top-level `type` values: `session`, `model_change`,
 //! `thinking_level_change`, `compaction_summary`, `branch_summary`. We skip those.
 
-use crate::error::Result;
 use crate::activity::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
+use crate::error::Result;
 use std::path::{Path, PathBuf};
 
 /// Encode an absolute path the way pi does for `~/.pi/agent/sessions/`.

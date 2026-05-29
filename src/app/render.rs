@@ -391,7 +391,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .find(|r| r.id == w.repo_id)
                         .and_then(|r| r.pinned_commands.clone())
                 });
-            let pinned = crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
+            let pinned =
+                crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
 
             let (pane_area, chip_area, status_area, footer_area) =
                 attached::layout_chrome(area, line.is_some(), !pinned.is_empty());

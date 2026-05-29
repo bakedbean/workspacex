@@ -40,7 +40,10 @@ const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
 /// - a disable sentinel (`off` / `none` / `disabled`, case-insensitive) →
 ///   `None`, suppressing injection for that install.
 /// - any other value → that value verbatim, for every agent.
-pub fn resolve_effective_doctrine(store: &crate::data::store::Store, agent: AgentKind) -> Option<String> {
+pub fn resolve_effective_doctrine(
+    store: &crate::data::store::Store,
+    agent: AgentKind,
+) -> Option<String> {
     match store.get_setting("process_doctrine") {
         Ok(Some(v)) => {
             let trimmed = v.trim();

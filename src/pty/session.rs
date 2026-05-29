@@ -1,7 +1,7 @@
 #![allow(clippy::collapsible_if, clippy::arc_with_non_send_sync)]
 
-use crate::error::{Error, Result};
 use crate::data::store::WorkspaceId;
+use crate::error::{Error, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -774,7 +774,9 @@ pub fn build_claude_command(
             fast_mode: _, // emitted below, after the match
         } => (
             None,
-            Some(crate::agent::pm::pm_system_prompt(custom_instructions.as_deref())),
+            Some(crate::agent::pm::pm_system_prompt(
+                custom_instructions.as_deref(),
+            )),
             None,
             false,
             *resume,
@@ -935,7 +937,9 @@ pub fn build_pi_command(
             fast_mode: _, // pi has no fast mode
         } => (
             None,
-            Some(crate::agent::pm::pm_system_prompt(custom_instructions.as_deref())),
+            Some(crate::agent::pm::pm_system_prompt(
+                custom_instructions.as_deref(),
+            )),
             None,
             *resume,
         ),
@@ -1158,7 +1162,9 @@ fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
             ..
         } => (
             None,
-            Some(crate::agent::pm::pm_system_prompt(custom_instructions.as_deref())),
+            Some(crate::agent::pm::pm_system_prompt(
+                custom_instructions.as_deref(),
+            )),
             None,
         ),
     };
@@ -1551,7 +1557,11 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -1586,7 +1596,11 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
         let idx = argv
@@ -1617,7 +1631,11 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -1643,7 +1661,11 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -1663,7 +1685,11 @@ mod tests {
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(
             argv.iter()
@@ -1681,7 +1707,11 @@ mod tests {
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
         assert!(
@@ -1701,7 +1731,11 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -1800,7 +1834,11 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--dangerously-skip-permissions"), "{dbg}");
         assert!(!dbg.contains("--allowedTools"), "{dbg}");
@@ -1821,7 +1859,11 @@ mod tests {
             resume: true,
             fast_mode: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--continue"), "{dbg}");
     }
@@ -1836,7 +1878,11 @@ mod tests {
             resume: false,
             fast_mode: true,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -1859,7 +1905,11 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(
             !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
@@ -1877,7 +1927,11 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(
             !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
@@ -1894,7 +1948,11 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(
             !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
@@ -1962,7 +2020,11 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -2009,7 +2071,11 @@ mod tests {
             ],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let args: Vec<String> = cmd
             .get_argv()
             .iter()
@@ -2041,7 +2107,11 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let args: Vec<String> = cmd
             .get_argv()
             .iter()
@@ -2336,7 +2406,11 @@ mod tests {
 
         let argv_of = |env: &mut EnvGuard, mode: &SpawnMode| -> Vec<String> {
             let _ = env;
-            let cmd = build_pi_command(&cwd, mode, crate::agent::remote_control::RemoteOpts::disabled());
+            let cmd = build_pi_command(
+                &cwd,
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+            );
             cmd.get_argv()
                 .iter()
                 .map(|s| s.to_string_lossy().into_owned())
@@ -3640,7 +3714,11 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -3668,7 +3746,11 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_pi_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_pi_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -3700,7 +3782,11 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let cmd = build_pi_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_pi_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -3730,7 +3816,11 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
         let argv = cmd.get_argv();
         let idx = argv
             .iter()

@@ -1,6 +1,6 @@
+use crate::data::store::{Repo, RepoId, Store};
 use crate::error::{Error, Result};
 use crate::git;
-use crate::data::store::{Repo, RepoId, Store};
 use std::path::Path;
 
 pub async fn add(store: &Store, path: &Path, name: &str, branch_prefix: &str) -> Result<RepoId> {

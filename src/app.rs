@@ -1,8 +1,8 @@
 #![allow(clippy::collapsible_if)]
 
+use crate::data::store::{Repo, Store, Workspace, WorkspaceId};
 use crate::error::Result;
 use crate::pty::session::SessionManager;
-use crate::data::store::{Repo, Store, Workspace, WorkspaceId};
 use crate::ui::View;
 use crate::ui::dashboard::DashboardState;
 use crate::ui::modal::Modal;
@@ -135,18 +135,23 @@ pub struct App {
         std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::WorkspaceStatus>,
     /// Cached PR lifecycle per workspace. Absent key = never polled; present
     /// key = last successful poll's result.
-    pub pr_lifecycle:
-        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::forge::BranchLifecycle>,
+    pub pr_lifecycle: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::git::forge::BranchLifecycle,
+    >,
     /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
     pub pr_last_poll_ms: std::collections::HashMap<crate::data::store::WorkspaceId, i64>,
     /// Last epoch-ms we attempted a `git diff --shortstat` per workspace
     /// (throttle key). 10s minimum interval keeps the dashboard
     /// `+N −N` cell fresh without re-running diff on every 2s tick.
     pub diff_last_poll_ms: std::collections::HashMap<crate::data::store::WorkspaceId, i64>,
-    pub workspace_events:
-        std::collections::HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
+    pub workspace_events: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::activity::events::WorkspaceEvents,
+    >,
     /// Per-workspace tracking for attention-alert state.
-    pub workspace_activity: std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
+    pub workspace_activity:
+        std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
     /// Workspaces whose JSONL events have been read at least once by the
     /// tail loop. Until a workspace is in this set the classifier's output
     /// is provisional (it can only see session-liveness, not stop_reason),
@@ -160,17 +165,21 @@ pub struct App {
     /// Anchors whose saved layout has more than one pane. Used by the
     /// dashboard to render the split-layout indicator. Recomputed by
     /// `App::refresh`.
-    pub workspaces_with_multi_pane_layouts: std::collections::HashSet<crate::data::store::WorkspaceId>,
+    pub workspaces_with_multi_pane_layouts:
+        std::collections::HashSet<crate::data::store::WorkspaceId>,
     /// Processes detected per workspace (cwd inside the workspace's
     /// worktree). Refreshed every ~10s by branch_drift_poll.
-    pub workspace_processes:
-        std::collections::HashMap<crate::data::store::WorkspaceId, Vec<crate::activity::proc::ProcInfo>>,
+    pub workspace_processes: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        Vec<crate::activity::proc::ProcInfo>,
+    >,
     /// Monotonic counter incremented every animation tick. Drives
     /// dashboard spinner phase + any other tick-driven UI animation.
     pub tick: u32,
     /// Cached `git diff --shortstat` output per workspace (added/deleted).
     /// Populated lazily by the workspace-status poller.
-    pub workspace_diff: std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::DiffStats>,
+    pub workspace_diff:
+        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::DiffStats>,
     /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
     /// to the worktree root (as `git diff --numstat` emits them).
     /// Populated by the same poller that maintains `workspace_diff`.
@@ -400,7 +409,10 @@ impl App {
     /// signal when the PTY is still actively streaming (see
     /// `Status::classify`) to avoid false positives from long-running
     /// shell commands.
-    pub fn awaiting_permission(&self, ws_id: crate::data::store::WorkspaceId) -> Option<(String, i64)> {
+    pub fn awaiting_permission(
+        &self,
+        ws_id: crate::data::store::WorkspaceId,
+    ) -> Option<(String, i64)> {
         let evt = self.workspace_events.get(&ws_id)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -493,7 +505,9 @@ pub(crate) fn reset_detail_scroll_on_workspace_change(
 /// Returns Some when the agent is paused waiting on the user (either
 /// mid-turn with a pending question tool, or end-of-turn with a
 /// trailing question / completion).
-pub(crate) fn derive_stopped_kind(e: &crate::activity::events::WorkspaceEvents) -> Option<StoppedKind> {
+pub(crate) fn derive_stopped_kind(
+    e: &crate::activity::events::WorkspaceEvents,
+) -> Option<StoppedKind> {
     // Question tools fire even without a terminal stop_reason — the model
     // is mid-turn but has explicitly asked the user something.
     if e.pending_question_tool().is_some() {
@@ -798,7 +812,9 @@ pub(crate) fn apply_repo_setting(
             } else {
                 // Validate. Use DetailBarOverride (not DetailBarConfig)
                 // because per-repo entries are partial overrides.
-                match serde_json::from_str::<crate::config::detail_bar_config::DetailBarOverride>(trimmed) {
+                match serde_json::from_str::<crate::config::detail_bar_config::DetailBarOverride>(
+                    trimmed,
+                ) {
                     Ok(_) => app.store.set_repo_detail_bar_config(repo_id, Some(trimmed)),
                     Err(e) => Err(crate::error::Error::UserInput(format!(
                         "detail_bar_config is not valid JSON: {e}"
@@ -971,7 +987,10 @@ pub(crate) fn ensure_workspace_session(
 
 /// Attach to a workspace: ensure a session, restore layout, and switch
 /// to attached view. Shared by the `Enter` / `i` / `l` key handlers.
-pub(crate) fn attach_workspace(app: &mut App, ws_id: crate::data::store::WorkspaceId) -> Result<()> {
+pub(crate) fn attach_workspace(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Result<()> {
     app.workspace_needs_attention.remove(&ws_id);
     match ensure_workspace_session(app, ws_id)? {
         AttachReady::Ok => {}
@@ -1110,8 +1129,8 @@ pub(crate) async fn reconcile_archive_result(
 #[cfg(test)]
 mod reconcile_archive_tests {
     use super::*;
-    use crate::error::Error;
     use crate::data::setup::SetupResult;
+    use crate::error::Error;
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::Mutex;

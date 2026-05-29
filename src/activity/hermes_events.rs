@@ -17,8 +17,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
 use crate::activity::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
+use crate::error::Result;
 
 const HERMES_PREFIX: &str = "hermes:";
 
@@ -265,7 +265,10 @@ fn format_tool_use_display(tool_calls_json: &str) -> String {
             );
         }
     }
-    crate::activity::events::truncate_display(&format!("using {}", name), crate::activity::events::MAX_DISPLAY_CHARS)
+    crate::activity::events::truncate_display(
+        &format!("using {}", name),
+        crate::activity::events::MAX_DISPLAY_CHARS,
+    )
 }
 
 #[cfg(test)]

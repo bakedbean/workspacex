@@ -1,7 +1,7 @@
 //! Project Manager pane: dossier file + PM Claude Code session orchestration.
 
-use crate::error::{Error, Result};
 use crate::data::store::{Store, WorkspaceState};
+use crate::error::{Error, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

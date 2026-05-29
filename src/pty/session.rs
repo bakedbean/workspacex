@@ -189,6 +189,36 @@ impl Session {
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Encode a wheel event for the inner program when it has mouse reporting
+    /// enabled. Returns `None` when mouse mode is off, in which case the caller
+    /// should fall back to wsx's own scrollback. `col`/`row` are 1-based cell
+    /// coordinates relative to the pane the cursor is over.
+    pub fn wheel_report_bytes(&self, up: bool, col: u16, row: u16) -> Option<Vec<u8>> {
+        let p = self.parser.lock().unwrap();
+        let screen = p.screen();
+        if matches!(screen.mouse_protocol_mode(), vt100::MouseProtocolMode::None) {
+            return None;
+        }
+        // Wheel-up = button 64, wheel-down = 65 (press-only -> trailing `M`).
+        let cb: u16 = if up { 64 } else { 65 };
+        match screen.mouse_protocol_encoding() {
+            vt100::MouseProtocolEncoding::Sgr => {
+                Some(format!("\x1b[<{cb};{col};{row}M").into_bytes())
+            }
+            // Default + Utf8: fall back to the legacy X10 single-byte triplet.
+            // Proper Utf8 mode would wrap coords as UTF-8 codepoints, but no
+            // agent in practice requests Utf8 (they use SGR), so that complexity
+            // isn't worth it. Clamp to 223 so `32 + coord` fits in a byte; a
+            // cursor past column 223 on a Utf8-mode terminal yields a slightly
+            // wrong position, which beats a malformed escape sequence.
+            _ => {
+                let c = col.min(223) as u8;
+                let r = row.min(223) as u8;
+                Some(vec![0x1b, b'[', b'M', 32 + cb as u8, 32 + c, 32 + r])
+            }
+        }
+    }
+
     pub fn is_scrolled(&self) -> bool {
         self.scrollback_offset
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -2160,6 +2190,46 @@ mod tests {
             AgentKind::Claude,
         )
         .expect("spawn_session for scrollback test")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_report_none_when_mouse_mode_off() {
+        let s = spawn_for_test();
+        assert!(s.wheel_report_bytes(true, 5, 10).is_none());
+        s.kill();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_report_sgr_when_sgr_mode() {
+        let s = spawn_for_test();
+        {
+            let mut p = s.parser.lock().unwrap();
+            p.process(b"\x1b[?1000h\x1b[?1006h"); // mouse on + SGR encoding
+        }
+        assert_eq!(
+            s.wheel_report_bytes(true, 5, 10),
+            Some(b"\x1b[<64;5;10M".to_vec())
+        );
+        assert_eq!(
+            s.wheel_report_bytes(false, 5, 10),
+            Some(b"\x1b[<65;5;10M".to_vec())
+        );
+        s.kill();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wheel_report_x10_when_default_encoding() {
+        let s = spawn_for_test();
+        {
+            let mut p = s.parser.lock().unwrap();
+            p.process(b"\x1b[?1000h"); // mouse on, default (non-SGR) encoding
+        }
+        // up=64 -> 32+64=96; col 1 -> 33; row 1 -> 33
+        assert_eq!(
+            s.wheel_report_bytes(true, 1, 1),
+            Some(vec![0x1b, b'[', b'M', 96, 33, 33])
+        );
+        s.kill();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

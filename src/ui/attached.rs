@@ -20,9 +20,18 @@ pub struct PaneSpec<'a> {
     pub focused: bool,
 }
 
+/// What `render_panes` reports back to the caller for input hit-testing.
+pub struct PanesDrawOutput {
+    /// Clickable rects of the pinned-command chips (same as before).
+    pub chip_rects: Vec<Rect>,
+    /// `(session, terminal content rect)` for each rendered pane.
+    pub pane_rects: Vec<(Arc<Session>, Rect)>,
+}
+
 /// Render one or more attached panes plus the shared chrome (optional
-/// chip row, optional attention line, footer). Returns the per-chip
-/// clickable Rects for mouse hit-testing.
+/// chip row, optional attention line, footer). Returns a [`PanesDrawOutput`]:
+/// the per-chip clickable rects plus each pane's `(session, content rect)`,
+/// both consumed by the input handler for mouse hit-testing.
 ///
 /// Layout (top to bottom):
 ///   - the pane area, subdivided per `panes[i].rect` (which the caller
@@ -48,11 +57,13 @@ pub fn render_panes(
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
     theme: &Theme,
-) -> Vec<Rect> {
+) -> PanesDrawOutput {
     let show_titles = panes.len() > 1;
 
+    let mut pane_rects = Vec::with_capacity(panes.len());
     for pane in panes {
-        render_one_pane(f, pane, show_titles, theme);
+        let term_area = render_one_pane(f, pane, show_titles, theme);
+        pane_rects.push((Arc::clone(pane.session), term_area));
     }
 
     render_dividers(f, dividers, theme);
@@ -72,10 +83,14 @@ pub fn render_panes(
 
     // Chips + inline rule filler. Always renders so the rule shows even
     // when there are no pinned commands.
-    render_chip_row(f, chip_area, pinned, theme)
+    let chip_rects = render_chip_row(f, chip_area, pinned, theme);
+    PanesDrawOutput {
+        chip_rects,
+        pane_rects,
+    }
 }
 
-fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: &Theme) {
+fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: &Theme) -> Rect {
     let (title_area, term_area) = if show_title {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -127,6 +142,7 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
         }
     }
     drop(parser);
+    term_area
 }
 
 /// Draw subtle 1-cell dividers between adjacent split panes. Vertical

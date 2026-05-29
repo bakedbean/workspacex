@@ -1439,6 +1439,30 @@ fn container_under_cursor(app: &App, col: u16, row: u16) -> Option<usize> {
         })
 }
 
+/// Returns the `(session, rect)` of the attached-view pane under (col, row),
+/// or None when the cursor is over chrome / no pane. Mirrors
+/// `container_under_cursor`'s saturating bounds check.
+fn pane_under_cursor(
+    app: &App,
+    col: u16,
+    row: u16,
+) -> Option<(
+    std::sync::Arc<crate::pty::session::Session>,
+    ratatui::layout::Rect,
+)> {
+    app.attached_pane_rects.iter().find_map(|(session, r)| {
+        let in_rect = col >= r.x
+            && col < r.x.saturating_add(r.width)
+            && row >= r.y
+            && row < r.y.saturating_add(r.height);
+        if in_rect {
+            Some((std::sync::Arc::clone(session), *r))
+        } else {
+            None
+        }
+    })
+}
+
 /// Bump the scroll offset for container `slot` by `delta` rows. Clamped
 /// to [0, u16::MAX] here; the next draw clamps further to the actual
 /// content height in `render_container`.
@@ -1467,6 +1491,30 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
             let up = matches!(m.kind, MouseEventKind::ScrollUp);
             adjust_detail_scroll(app, slot, 3, up);
             return;
+        }
+    }
+
+    // Attached view: a plain wheel over a pane whose agent has mouse
+    // reporting on is forwarded to that agent's PTY so it scrolls its own
+    // view (notably its full-screen UI, where wsx has no scrollback).
+    // Shift+wheel, panes without mouse mode, and scrolls over chrome all
+    // fall through to `scroll_active` (wsx scrollback) below.
+    if matches!(
+        m.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) && matches!(
+        app.view,
+        crate::ui::View::Attached(_) | crate::ui::View::AttachedPm
+    ) && !m.modifiers.contains(KeyModifiers::SHIFT)
+    {
+        if let Some((session, rect)) = pane_under_cursor(app, m.column, m.row) {
+            let up = matches!(m.kind, MouseEventKind::ScrollUp);
+            let rel_col = m.column.saturating_sub(rect.x).saturating_add(1);
+            let rel_row = m.row.saturating_sub(rect.y).saturating_add(1);
+            if let Some(bytes) = session.wheel_report_bytes(up, rel_col, rel_row) {
+                let _ = session.writer.send(bytes).await;
+                return;
+            }
         }
     }
 

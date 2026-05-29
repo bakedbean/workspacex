@@ -49,7 +49,7 @@ Terminal UI for managing Claude Code sessions in git worktrees.
 - **Multiple coding agents**: run Claude, Pi, or Hermes per workspace. Set a global default with `coding_agent` or override per workspace with `--agent`. See [Coding agents](#coding-agents).
 - **Cross-session attention alerts**: terminal bell + `!` marker when a session is awaiting permission or has gone idle.
 - **Activity sub-line per workspace**: see the latest tool call or message from each session at a glance.
-- **Configurable Workspace Detail Bar**: Display up to four independent containers with built-in or custom modules.
+- **Configurable Workspace Detail Bar**: Display up to four independent containers with built-in or custom modules. See [Workspace detail bar](#workspace-detail-bar).
 - **Project Manager pane**: a dedicated agent session that summarizes what every workspace is for, where it's at, and what's next.
 - **Remote control**: attach from claude.ai/code or the mobile app; or run wsx in tmux+ssh for full-fidelity desktop access.
 - **Pinned commands**: define your `/pull-request`, `/feedback`, `/ultrareview` shortcuts once; fire them with `Ctrl-x <digit>` or a click while attached.
@@ -80,6 +80,7 @@ Press `n` to create your first workspace, then `enter` to attach. Claude Code sp
 | `enter` (or `i`) on a workspace   | Attach to its claude session (spawns or resumes)                                                             |
 | `enter` (or `i`) on a repo header | Open the New Workspace modal targeting that repo                                                             |
 | `n`                               | New workspace in the selected row's repo                                                                     |
+| `Shift + N`                       | New workspace in permissive mode (claude launches with `--dangerously-skip-permissions`)                     |
 | `e`                               | Open the selected workspace in your editor (no-op on repo header)                                            |
 | `t`                               | Open the selected workspace in a terminal (no-op on repo header)                                             |
 | `v`                               | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |

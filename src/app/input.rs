@@ -1446,7 +1446,10 @@ fn pane_under_cursor(
     app: &App,
     col: u16,
     row: u16,
-) -> Option<(std::sync::Arc<crate::pty::session::Session>, ratatui::layout::Rect)> {
+) -> Option<(
+    std::sync::Arc<crate::pty::session::Session>,
+    ratatui::layout::Rect,
+)> {
     app.attached_pane_rects.iter().find_map(|(session, r)| {
         let in_rect = col >= r.x
             && col < r.x.saturating_add(r.width)

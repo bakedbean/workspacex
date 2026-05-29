@@ -215,7 +215,10 @@ pub struct App {
     /// forward wheel events to a mouse-aware agent. Storing the `Arc<Session>`
     /// directly lets the PM pane (which lives in `app.pm`, not `app.sessions`)
     /// be recorded the same way as workspace panes. Cleared each frame.
-    pub attached_pane_rects: Vec<(std::sync::Arc<crate::pty::session::Session>, ratatui::layout::Rect)>,
+    pub attached_pane_rects: Vec<(
+        std::sync::Arc<crate::pty::session::Session>,
+        ratatui::layout::Rect,
+    )>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired

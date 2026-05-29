@@ -2206,8 +2206,14 @@ mod tests {
             let mut p = s.parser.lock().unwrap();
             p.process(b"\x1b[?1000h\x1b[?1006h"); // mouse on + SGR encoding
         }
-        assert_eq!(s.wheel_report_bytes(true, 5, 10), Some(b"\x1b[<64;5;10M".to_vec()));
-        assert_eq!(s.wheel_report_bytes(false, 5, 10), Some(b"\x1b[<65;5;10M".to_vec()));
+        assert_eq!(
+            s.wheel_report_bytes(true, 5, 10),
+            Some(b"\x1b[<64;5;10M".to_vec())
+        );
+        assert_eq!(
+            s.wheel_report_bytes(false, 5, 10),
+            Some(b"\x1b[<65;5;10M".to_vec())
+        );
         s.kill();
     }
 
@@ -2219,7 +2225,10 @@ mod tests {
             p.process(b"\x1b[?1000h"); // mouse on, default (non-SGR) encoding
         }
         // up=64 -> 32+64=96; col 1 -> 33; row 1 -> 33
-        assert_eq!(s.wheel_report_bytes(true, 1, 1), Some(vec![0x1b, b'[', b'M', 96, 33, 33]));
+        assert_eq!(
+            s.wheel_report_bytes(true, 1, 1),
+            Some(vec![0x1b, b'[', b'M', 96, 33, 33])
+        );
         s.kill();
     }
 

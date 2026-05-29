@@ -4436,7 +4436,12 @@ mod attached_wheel_forwarding {
     use std::sync::atomic::Ordering;
 
     fn mouse_at_mod(kind: MouseEventKind, col: u16, row: u16, mods: KeyModifiers) -> MouseEvent {
-        MouseEvent { kind, column: col, row, modifiers: mods }
+        MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: mods,
+        }
     }
 
     fn spawn_attached_workspace(app: &mut App) -> crate::store::WorkspaceId {
@@ -4489,7 +4494,15 @@ mod attached_wheel_forwarding {
             let mut p = session.parser.lock().unwrap();
             p.process(b"\x1b[?1000h\x1b[?1006h");
         }
-        app.attached_pane_rects = vec![(session, Rect { x: 0, y: 0, width: 80, height: 24 })];
+        app.attached_pane_rects = vec![(
+            session,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        )];
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4498,10 +4511,18 @@ mod attached_wheel_forwarding {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         arm_mouse_mode_and_pane(&mut app, ws_id);
-        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE)).await;
+        handle_mouse(
+            &mut app,
+            mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE),
+        )
+        .await;
         // Forwarded to the agent -> wsx scrollback must NOT move.
         assert_eq!(
-            app.sessions.get(ws_id).unwrap().scrollback_offset.load(Ordering::Relaxed),
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(Ordering::Relaxed),
             0,
             "plain wheel over a mouse-aware pane is forwarded, not scrolled locally"
         );
@@ -4513,10 +4534,18 @@ mod attached_wheel_forwarding {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         arm_mouse_mode_and_pane(&mut app, ws_id);
-        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::SHIFT)).await;
+        handle_mouse(
+            &mut app,
+            mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::SHIFT),
+        )
+        .await;
         // Shift bypasses the agent -> wsx scrollback moves.
         assert_eq!(
-            app.sessions.get(ws_id).unwrap().scrollback_offset.load(Ordering::Relaxed),
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(Ordering::Relaxed),
             3,
             "shift+wheel drives wsx scrollback even when the agent has mouse mode on"
         );
@@ -4529,10 +4558,26 @@ mod attached_wheel_forwarding {
         let ws_id = spawn_attached_workspace(&mut app);
         // Register the pane rect but do NOT enable mouse mode.
         let session = app.sessions.get(ws_id).unwrap();
-        app.attached_pane_rects = vec![(session, Rect { x: 0, y: 0, width: 80, height: 24 })];
-        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE)).await;
+        app.attached_pane_rects = vec![(
+            session,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        )];
+        handle_mouse(
+            &mut app,
+            mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE),
+        )
+        .await;
         assert_eq!(
-            app.sessions.get(ws_id).unwrap().scrollback_offset.load(Ordering::Relaxed),
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(Ordering::Relaxed),
             3,
             "without agent mouse mode, plain wheel falls through to wsx scrollback"
         );
@@ -4571,9 +4616,17 @@ mod attached_wheel_forwarding {
         // Pre-scroll so a fall-through ScrollDown would drop 5 -> 2; forwarding
         // leaves it at 5.
         app.sessions.get(ws_id).unwrap().scroll_up(5);
-        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollDown, 10, 10, KeyModifiers::NONE)).await;
+        handle_mouse(
+            &mut app,
+            mouse_at_mod(MouseEventKind::ScrollDown, 10, 10, KeyModifiers::NONE),
+        )
+        .await;
         assert_eq!(
-            app.sessions.get(ws_id).unwrap().scrollback_offset.load(Ordering::Relaxed),
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(Ordering::Relaxed),
             5,
             "scrolldown over a mouse-aware pane is forwarded, leaving wsx scrollback untouched"
         );
@@ -4587,9 +4640,17 @@ mod attached_wheel_forwarding {
         arm_mouse_mode_and_pane(&mut app, ws_id); // pane rect is height 24 (rows 0..23)
         // Row 30 is below the pane -> no pane under cursor -> scrollback even though
         // mouse mode is on.
-        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollUp, 10, 30, KeyModifiers::NONE)).await;
+        handle_mouse(
+            &mut app,
+            mouse_at_mod(MouseEventKind::ScrollUp, 10, 30, KeyModifiers::NONE),
+        )
+        .await;
         assert_eq!(
-            app.sessions.get(ws_id).unwrap().scrollback_offset.load(Ordering::Relaxed),
+            app.sessions
+                .get(ws_id)
+                .unwrap()
+                .scrollback_offset
+                .load(Ordering::Relaxed),
             3,
             "wheel over chrome (no pane under cursor) drives wsx scrollback"
         );
@@ -4606,8 +4667,20 @@ mod attached_wheel_forwarding {
             let mut p = pm.parser.lock().unwrap();
             p.process(b"\x1b[?1000h\x1b[?1006h");
         }
-        app.attached_pane_rects = vec![(pm.clone(), Rect { x: 0, y: 0, width: 80, height: 24 })];
-        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE)).await;
+        app.attached_pane_rects = vec![(
+            pm.clone(),
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        )];
+        handle_mouse(
+            &mut app,
+            mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE),
+        )
+        .await;
         assert_eq!(
             pm.scrollback_offset.load(Ordering::Relaxed),
             0,

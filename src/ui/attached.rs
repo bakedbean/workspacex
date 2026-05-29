@@ -83,7 +83,10 @@ pub fn render_panes(
     // Chips + inline rule filler. Always renders so the rule shows even
     // when there are no pinned commands.
     let chip_rects = render_chip_row(f, chip_area, pinned, theme);
-    PanesDrawOutput { chip_rects, pane_rects }
+    PanesDrawOutput {
+        chip_rects,
+        pane_rects,
+    }
 }
 
 fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: &Theme) -> Rect {

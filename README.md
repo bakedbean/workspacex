@@ -46,6 +46,7 @@ Terminal UI for managing Claude Code sessions in git worktrees.
 ### Key features
 
 - **Parallel Claude sessions in git worktrees** — every workspace is its own branch + worktree; switch with one key.
+- **Multiple coding agents** — not just Claude Code: run Claude, Pi, or Hermes per workspace. Set a global default with `coding_agent` or override per workspace with `--agent`. See [Coding agents](#coding-agents).
 - **Cross-session attention alerts** — terminal bell + `!` marker when a session is awaiting permission or has gone idle.
 - **Activity sub-line per workspace** — see the latest tool call or message from each session at a glance.
 - **Project Manager pane** — a dedicated Claude session that summarizes what every workspace is for, where it's at, and what's next.

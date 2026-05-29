@@ -855,17 +855,17 @@ pub fn build_pi_command(
     cmd.env("PI_OFFLINE", "1");
     cmd.env("npm_config_loglevel", "error");
 
-    let (rename_prompt, custom, add_continue) = match mode {
+    let (doctrine, rename_prompt, custom, add_continue) = match mode {
         SpawnMode::Continue {
             custom_instructions,
-            doctrine: _,
+            doctrine,
             additional_dirs: _,
             yolo: _,
-        } => (None, custom_instructions.clone(), true),
+        } => (doctrine.clone(), None, custom_instructions.clone(), true),
         SpawnMode::Fresh {
             rename_ctx,
             custom_instructions,
-            doctrine: _,
+            doctrine,
             additional_dirs: _,
             yolo: _,
         } => {
@@ -885,7 +885,7 @@ pub fn build_pi_command(
             } else {
                 None
             };
-            (rp, custom_instructions.clone(), false)
+            (doctrine.clone(), rp, custom_instructions.clone(), false)
         }
         SpawnMode::ProjectManager {
             workspaces_json_path: _,
@@ -894,6 +894,7 @@ pub fn build_pi_command(
             resume,
             fast_mode: _, // pi has no fast mode
         } => (
+            None,
             Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
             None,
             *resume,
@@ -940,11 +941,14 @@ pub fn build_pi_command(
         }
     }
 
-    let combined = match (rename_prompt, custom) {
-        (None, None) => None,
-        (Some(r), None) => Some(r),
-        (None, Some(c)) => Some(c),
-        (Some(r), Some(c)) => Some(format!("{r}\n\n{c}")),
+    let parts: Vec<String> = [doctrine, rename_prompt, custom]
+        .into_iter()
+        .flatten()
+        .collect();
+    let combined = if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     };
 
     if let Some(prompt) = combined {
@@ -3380,6 +3384,28 @@ mod tests {
             yolo: false,
         };
         let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+            .expect("expected --append-system-prompt");
+        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
+        let dpos = prompt.find("DOCTRINE_MARK").expect("doctrine present");
+        let cpos = prompt.find("CUSTOM_MARK").expect("custom present");
+        assert!(dpos < cpos, "doctrine must precede custom instructions: {prompt}");
+        assert!(prompt.starts_with("DOCTRINE_MARK"), "doctrine must lead: {prompt}");
+    }
+
+    #[test]
+    fn pi_prepends_doctrine_before_custom_instructions() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Continue {
+            custom_instructions: Some("CUSTOM_MARK".to_string()),
+            doctrine: Some("DOCTRINE_MARK".to_string()),
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()

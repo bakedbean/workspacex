@@ -798,7 +798,7 @@ pub(crate) fn apply_repo_setting(
             } else {
                 // Validate. Use DetailBarOverride (not DetailBarConfig)
                 // because per-repo entries are partial overrides.
-                match serde_json::from_str::<crate::detail_bar_config::DetailBarOverride>(trimmed) {
+                match serde_json::from_str::<crate::config::detail_bar_config::DetailBarOverride>(trimmed) {
                     Ok(_) => app.store.set_repo_detail_bar_config(repo_id, Some(trimmed)),
                     Err(e) => Err(crate::error::Error::UserInput(format!(
                         "detail_bar_config is not valid JSON: {e}"

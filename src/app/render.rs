@@ -3,7 +3,7 @@
 use crate::app::activity::classify_activity_with_events;
 use crate::app::bell::{COLD_START_WINDOW, alert_decision};
 use crate::app::{ActivityState, App, SelectionTarget};
-use crate::detail_bar_config::DetailBarConfig;
+use crate::config::detail_bar_config::DetailBarConfig;
 use crate::data::store::Store;
 use crate::ui::dashboard::row::ColumnWidths;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -593,11 +593,11 @@ pub(crate) fn resolve_dashboard_detail_cfg(app: &App) -> DetailBarConfig {
     if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
         if let Some((rid, _)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
             if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
-                return crate::detail_bar_config::resolve(repo, &app.store);
+                return crate::config::detail_bar_config::resolve(repo, &app.store);
             }
         }
     }
-    crate::detail_bar_config::resolve_global_only(&app.store)
+    crate::config::detail_bar_config::resolve_global_only(&app.store)
 }
 
 /// Carve the dashboard area into list / detail / pm regions based on

@@ -5,7 +5,7 @@
 //!
 //! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
 
-use crate::detail_bar_config::DetailBarConfig;
+use crate::config::detail_bar_config::DetailBarConfig;
 use crate::activity::events::WorkspaceEvents;
 use crate::git::forge::BranchLifecycle;
 use crate::git::DiffStats;

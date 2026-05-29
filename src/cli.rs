@@ -931,14 +931,14 @@ fn open_in_editor(key: &str, initial: &str) -> Result<String> {
 /// Seed text for the editor when the global `detail_bar_config`
 /// setting is empty — the pretty-printed default config.
 fn detail_bar_config_seed_for_empty() -> String {
-    serde_json::to_string_pretty(&crate::detail_bar_config::DetailBarConfig::default())
+    serde_json::to_string_pretty(&crate::config::detail_bar_config::DetailBarConfig::default())
         .unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Parse, sanitize, and re-serialize a global `detail_bar_config`
 /// blob. Returns the pretty-printed normalized JSON.
 fn detail_bar_config_validate_and_normalize(raw: &str) -> Result<String> {
-    let mut cfg: crate::detail_bar_config::DetailBarConfig = serde_json::from_str(raw)
+    let mut cfg: crate::config::detail_bar_config::DetailBarConfig = serde_json::from_str(raw)
         .map_err(|e| Error::UserInput(format!("detail_bar_config: invalid JSON: {e}")))?;
     cfg.sanitize();
     serde_json::to_string_pretty(&cfg)
@@ -1381,9 +1381,9 @@ mod tests {
     fn detail_bar_config_seed_returns_pretty_default_when_empty() {
         let seed = super::detail_bar_config_seed_for_empty();
         // Sanity: round-trips to default config.
-        let parsed: crate::detail_bar_config::DetailBarConfig =
+        let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&seed).unwrap();
-        assert_eq!(parsed, crate::detail_bar_config::DetailBarConfig::default());
+        assert_eq!(parsed, crate::config::detail_bar_config::DetailBarConfig::default());
         // Pretty-printed: contains newlines.
         assert!(seed.contains('\n'));
     }
@@ -1398,7 +1398,7 @@ mod tests {
     fn detail_bar_config_validate_clamps_out_of_range() {
         let json = r#"{"height": {"percent": 200}}"#;
         let normalized = super::detail_bar_config_validate_and_normalize(json).unwrap();
-        let parsed: crate::detail_bar_config::DetailBarConfig =
+        let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&normalized).unwrap();
         assert_eq!(parsed.height.percent, 80);
     }
@@ -1407,7 +1407,7 @@ mod tests {
     fn detail_bar_config_validate_accepts_partial() {
         let json = r#"{"visible": false}"#;
         let normalized = super::detail_bar_config_validate_and_normalize(json).unwrap();
-        let parsed: crate::detail_bar_config::DetailBarConfig =
+        let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&normalized).unwrap();
         assert!(!parsed.visible);
         assert_eq!(parsed.height.percent, 30);
@@ -1415,7 +1415,7 @@ mod tests {
 
     #[test]
     fn detail_bar_config_default_seed_round_trips() {
-        use crate::detail_bar_config::DetailBarConfig;
+        use crate::config::detail_bar_config::DetailBarConfig;
         let seed =
             serde_json::to_string_pretty(&DetailBarConfig::default()).expect("serialize default");
         let parsed: DetailBarConfig =
@@ -1443,7 +1443,7 @@ mod tests {
             .expect("valid JSON should normalize");
         // Truncation happens inside sanitize(); the normalized blob
         // should round-trip to exactly 4 containers.
-        let parsed: crate::detail_bar_config::DetailBarConfig =
+        let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&normalized).expect("re-parse normalized");
         assert_eq!(parsed.containers.len(), 4);
     }

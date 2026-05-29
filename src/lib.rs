@@ -5,7 +5,6 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod data;
-pub mod detail_bar_config;
 pub mod detail_modules;
 pub mod error;
 pub mod git;

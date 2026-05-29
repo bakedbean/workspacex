@@ -293,8 +293,12 @@ pub enum SpawnMode {
     Fresh {
         rename_ctx: Option<RenameContext>,
         custom_instructions: Option<String>,
-        /// Process doctrine to inject ahead of rename/custom content. `None`
-        /// only in tests; production always supplies it via `build_spawn_info`.
+        /// Process doctrine to inject ahead of rename/custom content.
+        /// `build_spawn_info` populates this in production via
+        /// `crate::doctrine::resolve_effective_doctrine`. `None` means "inject
+        /// no doctrine" — a real production state when the operator disables it
+        /// (`process_doctrine` set to `off`/`none`/`disabled`), as well as the
+        /// default in tests. It is never a placeholder to be filled in later.
         doctrine: Option<String>,
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,

@@ -1170,6 +1170,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn parse_repo_edit_related_repos() {
         match parse(&["repo", "edit-related-repos", "backend"]).unwrap() {
             CliAction::RepoEditRelatedRepos { name } => assert_eq!(name, "backend"),

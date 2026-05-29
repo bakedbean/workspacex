@@ -129,6 +129,7 @@ fn known_setting_key(k: &str) -> bool {
         k,
         "branch_prefix"
             | "custom_instructions"
+            | "process_doctrine"
             | "nerd_fonts"
             | "editor_cmd"
             | "terminal_cmd"
@@ -1418,6 +1419,11 @@ mod tests {
         // Spot-check: the new shape uses `containers`, not `sections`.
         assert!(seed.contains("\"containers\""));
         assert!(!seed.contains("\"sections\""));
+    }
+
+    #[test]
+    fn process_doctrine_is_a_known_setting() {
+        assert!(known_setting_key("process_doctrine"));
     }
 
     #[test]

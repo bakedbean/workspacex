@@ -691,7 +691,7 @@ honor the spawned process's cwd already so you typically don't need it.
 
 `[v]` spawns the configured difftool with the selected workspace's worktree path as `{path}` and the repo's main branch as `{base}`. Unlike editor/terminal, there's no env-var fallback — set `diff_cmd` explicitly.
 
-Examples (note the **three dots** — this anchors the diff at the merge base, so stale local `main` doesn't bleed extra commits into the diff):
+Examples (note the **three dots** — explained under "Why three dots?" below):
 
 ```
 # Terminal pager with delta-prettified diff
@@ -863,14 +863,14 @@ Running with no arguments opens the dashboard.
 
 ```
 wsx repo add <path> [--name <name>] [--prefix <prefix>]
-
-wsx repo set-name <name> <new-name>
 ```
 
 Registers a git repository. `<path>` must be an existing git working tree.
 
 - `--name <name>` — display name on the dashboard. Defaults to the directory basename.
 - `--prefix <prefix>` — per-repo branch prefix override. **Usually omit this** and use the global `branch_prefix` setting instead. Setting both means the per-repo value wins.
+
+Where a `set-*` command below takes a value, it accepts `@/path/to/file` to load that value from a file and `""` to clear it (clearing falls back to the global setting where one exists).
 
 ```
 wsx repo list
@@ -894,20 +894,20 @@ Renames the repo in the wsx registry. The new name appears on the dashboard and 
 wsx repo set-prefix <name> <prefix>
 ```
 
-Sets or changes the per-repo branch prefix override. Pass an empty string (`""`) to clear and fall back to the global setting.
+Sets or changes the per-repo branch prefix override.
 
 ```
 wsx repo set-instructions <name> <value-or-@file>
 ```
 
-Sets per-repo custom instructions appended to claude's system prompt for sessions in this repo. Pass `""` to clear. Use `@/path/to/file.md` to read the value from a file.
+Sets per-repo custom instructions appended to claude's system prompt for sessions in this repo.
 
 ```
 wsx repo set-pinned-commands <name> <value-or-@file>
 wsx repo edit-pinned-commands <name>
 ```
 
-Per-repo override of `pinned_commands`. Empty value clears the override; resolution then falls back to the global setting.
+Per-repo override of `pinned_commands`. Clearing falls back to the global setting.
 
 ```
 wsx repo set-related-repos <name> <value-or-@file>

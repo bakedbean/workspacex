@@ -27,6 +27,16 @@ const CLAUSE_WSX_SKILL: &str = "- Load and follow the wsx skill. It is authorita
     for workspace and cross-repo operations in this environment; consult it before \
     running wsx commands.";
 
+/// The effective doctrine for a spawn: the `process_doctrine` setting if set
+/// (replaces the default verbatim, for every agent), else the agent-tailored
+/// default. A blank/whitespace override is treated as unset.
+pub fn resolve_effective_doctrine(store: &crate::store::Store, agent: AgentKind) -> String {
+    match store.get_setting("process_doctrine") {
+        Ok(Some(v)) if !v.trim().is_empty() => v,
+        _ => process_doctrine(agent),
+    }
+}
+
 pub fn process_doctrine(agent: AgentKind) -> String {
     let include_superpowers = matches!(agent, AgentKind::Claude | AgentKind::Pi);
     let mut clauses = vec![CLAUSE_PLAN];
@@ -65,5 +75,34 @@ mod tests {
         assert!(d.contains("plan"), "hermes must still get planning clause: {d}");
         assert!(d.contains("commit"), "hermes must still get commits clause: {d}");
         assert!(d.contains("wsx skill"), "hermes must still get wsx skill clause: {d}");
+    }
+
+    #[test]
+    fn resolve_returns_default_when_unset() {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Claude),
+            process_doctrine(AgentKind::Claude)
+        );
+    }
+
+    #[test]
+    fn resolve_override_replaces_default_verbatim() {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        store.set_setting("process_doctrine", "CUSTOM DOCTRINE").unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Hermes),
+            "CUSTOM DOCTRINE"
+        );
+    }
+
+    #[test]
+    fn resolve_treats_blank_override_as_unset() {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        store.set_setting("process_doctrine", "   ").unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Pi),
+            process_doctrine(AgentKind::Pi)
+        );
     }
 }

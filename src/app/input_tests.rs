@@ -2025,6 +2025,14 @@ mod pm_state_tests {
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
+        // Remote-control defaults ON, which appends `--remote-control` to the
+        // spawned agent command. The real `claude` understands that flag; the
+        // `cat` stand-in does not — it errors out and exits immediately. The
+        // command then only lands on screen if the PTY's own echo wins the
+        // race against `cat`'s teardown, which flakes under CI load. Disable
+        // it so `cat` stays alive and deterministically echoes the dispatched
+        // command, mirroring the other fake-binary tests' RemoteOpts::disabled().
+        store.set_setting("remote_control", "off").unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let repo_id = app
             .store
@@ -2849,6 +2857,33 @@ mod pm_state_tests {
         dir
     }
 
+    /// Poll the shared `app` until `predicate` holds, re-acquiring the lock
+    /// on each tick and releasing it between ticks so the background
+    /// setup/archive task can make progress.
+    ///
+    /// This replaces fixed `sleep(…)` waits that assumed an async task
+    /// finishes within a hard-coded window. Those assumptions flake on
+    /// loaded CI runners (e.g. a `sleep 1` setup script not completing
+    /// inside a 1500ms budget), failing identically across unrelated
+    /// changes. Polling returns as soon as the condition is met — fast in
+    /// the common case — and only spends the full ~10s budget before
+    /// declaring a real failure.
+    async fn wait_until<F>(
+        app: &std::sync::Arc<tokio::sync::Mutex<App>>,
+        desc: &str,
+        mut predicate: F,
+    ) where
+        F: FnMut(&App) -> bool,
+    {
+        for _ in 0..400 {
+            if predicate(&app.lock().await as &App) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("timed out after ~10s waiting for: {desc}");
+    }
+
     #[tokio::test]
     async fn enter_in_new_workspace_modal_transitions_to_setup_running_and_spawns_task() {
         use crate::ui::modal::Modal;
@@ -2886,10 +2921,12 @@ mod pm_state_tests {
             );
             assert!(g.pending_create_gen.is_some());
         }
-        // Yield so the spawned task gets a chance to complete. 1500ms gives
-        // slow CI runners headroom over git init + fetch + worktree create.
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-        // Eventually, modal should be None and a workspace should exist.
+        // Wait for the spawned create task to finish: the modal clears, the
+        // pending generation is reset, and the workspace materializes.
+        wait_until(&app, "create to finish (modal cleared, 1 workspace)", |g| {
+            g.modal.is_none() && g.pending_create_gen.is_none() && g.workspaces.len() == 1
+        })
+        .await;
         let g = app.lock().await;
         assert!(
             g.modal.is_none(),
@@ -2949,8 +2986,12 @@ mod pm_state_tests {
             assert!(g.modal.is_none(), "modal should close immediately on Esc");
             assert!(g.pending_create_gen.is_none());
         }
-        // Wait for the spawned task to wind down.
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        // Wait for the spawned task to wind down and record the cancellation.
+        wait_until(&app, "setup task to record Cancelled status", |g| {
+            g.workspaces.len() == 1
+                && g.workspaces[0].1.setup_status == crate::data::store::SetupStatus::Cancelled
+        })
+        .await;
         let g = app.lock().await;
         assert_eq!(g.workspaces.len(), 1);
         assert_eq!(
@@ -3037,9 +3078,18 @@ mod pm_state_tests {
             }
             assert!(g.pending_archive_gen.is_some());
         }
-        // Yield so the spawned archive task can complete.
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-        // Eventually, modal should be None and the workspace should be gone.
+        // Wait for the spawned archive task to complete: the modal clears,
+        // the pending generation resets, and the workspace is removed.
+        wait_until(
+            &app,
+            "archive to finish (modal cleared, workspace gone)",
+            |g| {
+                g.modal.is_none()
+                    && g.pending_archive_gen.is_none()
+                    && g.workspaces.iter().all(|(_, w)| w.id != ws_id)
+            },
+        )
+        .await;
         let g = app.lock().await;
         assert!(
             g.modal.is_none(),
@@ -3128,7 +3178,12 @@ mod pm_state_tests {
             assert!(g.pending_archive_gen.is_some());
         }
         // Wait for the archive to actually finish.
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        wait_until(
+            &app,
+            "archive to finish (modal cleared, workspace gone)",
+            |g| g.modal.is_none() && g.workspaces.iter().all(|(_, w)| w.id != ws_id),
+        )
+        .await;
         let g = app.lock().await;
         assert!(
             g.modal.is_none(),
@@ -3180,8 +3235,13 @@ mod pm_state_tests {
                 .await
                 .unwrap();
         }
-        // Wait for the (single) setup to finish.
-        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        // Wait for the (single) setup to finish. Repeated Enter presses while
+        // a create is pending are rejected synchronously, so the count
+        // settles at exactly one rather than racing toward duplicates.
+        wait_until(&app, "exactly one workspace to be created", |g| {
+            g.workspaces.len() == 1
+        })
+        .await;
         let g = app.lock().await;
         assert_eq!(
             g.workspaces.len(),

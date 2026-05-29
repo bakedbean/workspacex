@@ -29,8 +29,9 @@ pub struct PanesDrawOutput {
 }
 
 /// Render one or more attached panes plus the shared chrome (optional
-/// chip row, optional attention line, footer). Returns the per-chip
-/// clickable Rects for mouse hit-testing.
+/// chip row, optional attention line, footer). Returns a [`PanesDrawOutput`]:
+/// the per-chip clickable rects plus each pane's `(session, content rect)`,
+/// both consumed by the input handler for mouse hit-testing.
 ///
 /// Layout (top to bottom):
 ///   - the pane area, subdivided per `panes[i].rect` (which the caller

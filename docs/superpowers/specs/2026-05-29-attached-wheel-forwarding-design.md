@@ -179,14 +179,22 @@ sequences into the parser):
 - Returns X10 bytes `ESC[M` + offset triplet after `ESC[?1000h` only (default
   encoding), with 223 clamping.
 
-Tests in `src/app/input_tests.rs` (constructing `View::Attached` with a session
-whose parser has mouse mode enabled):
+Tests in `src/app/input_tests.rs` (constructing `View::Attached` / `View::AttachedPm`
+with a session whose parser has mouse mode enabled). Forwarding has no directly
+observable effect in-test: the session writer's receiver is owned by the PTY pump
+task and can't be drained without a dedicated test hook, so forwarding is asserted
+*indirectly* via the differential effect on the wsx scrollback offset. `scroll_active`
+is the only path that moves the offset, so an unchanged offset proves the event was
+forwarded rather than scrolled locally.
 
-- Plain wheel + mouse mode ON → bytes delivered to the session writer (assert by
-  draining the writer channel), scrollback offset unchanged.
-- Plain wheel + mouse mode OFF → scrollback offset changes, nothing written.
-- Shift+wheel + mouse mode ON → scrollback offset changes (hatch), nothing
-  written.
+- Plain wheel + mouse mode ON → scrollback offset unchanged (forwarded).
+- Plain wheel + mouse mode OFF → scrollback offset increases by 3 (fell through).
+- Shift+wheel + mouse mode ON → scrollback offset increases by 3 (escape hatch).
+- Plain wheel-down + mouse mode ON, pre-scrolled to offset 5 → offset stays 5 (a
+  fall-through scroll-down would drop it to 2, so this proves forwarding for the
+  down direction too).
+- Plain wheel over chrome (no pane under cursor) → scrollback offset increases by 3.
+- Plain wheel + mouse mode ON in `View::AttachedPm` → PM session offset unchanged.
 
 ## Commit plan
 

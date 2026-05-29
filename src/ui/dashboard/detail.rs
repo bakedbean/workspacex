@@ -10,7 +10,7 @@ use crate::events::WorkspaceEvents;
 use crate::forge::BranchLifecycle;
 use crate::git::DiffStats;
 use crate::proc::ProcInfo;
-use crate::store::{Repo, Workspace};
+use crate::data::store::{Repo, Workspace};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::Frame;
@@ -724,11 +724,11 @@ mod tests {
     }
 
     fn seed_workspace() -> (
-        crate::store::Store,
-        crate::store::Repo,
-        crate::store::Workspace,
+        crate::data::store::Store,
+        crate::data::store::Repo,
+        crate::data::store::Workspace,
     ) {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")

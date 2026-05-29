@@ -8,7 +8,7 @@ use super::*;
 #[cfg(test)]
 mod pm_state_tests {
     use super::*;
-    use crate::store::Store;
+    use crate::data::store::Store;
     use crate::test_support::{EnvGuard, cat_path};
     use std::path::PathBuf;
 
@@ -129,9 +129,9 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.selectable = vec![
-            SelectionTarget::Repo(crate::store::RepoId(1)),
-            SelectionTarget::Repo(crate::store::RepoId(2)),
-            SelectionTarget::Repo(crate::store::RepoId(3)),
+            SelectionTarget::Repo(crate::data::store::RepoId(1)),
+            SelectionTarget::Repo(crate::data::store::RepoId(2)),
+            SelectionTarget::Repo(crate::data::store::RepoId(3)),
         ];
         app.dashboard.selected = 2;
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
@@ -148,9 +148,9 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.selectable = vec![
-            SelectionTarget::Repo(crate::store::RepoId(1)),
-            SelectionTarget::Repo(crate::store::RepoId(2)),
-            SelectionTarget::Repo(crate::store::RepoId(3)),
+            SelectionTarget::Repo(crate::data::store::RepoId(1)),
+            SelectionTarget::Repo(crate::data::store::RepoId(2)),
+            SelectionTarget::Repo(crate::data::store::RepoId(3)),
         ];
         app.dashboard.selected = 0;
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
@@ -165,9 +165,9 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.selectable = vec![
-            SelectionTarget::Repo(crate::store::RepoId(1)),
-            SelectionTarget::Repo(crate::store::RepoId(2)),
-            SelectionTarget::Repo(crate::store::RepoId(3)),
+            SelectionTarget::Repo(crate::data::store::RepoId(1)),
+            SelectionTarget::Repo(crate::data::store::RepoId(2)),
+            SelectionTarget::Repo(crate::data::store::RepoId(3)),
         ];
         app.dashboard.selected = 1;
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
@@ -200,7 +200,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_modal_down_advances_selection() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -278,7 +278,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_modal_j_k_aliases_down_up() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -394,7 +394,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_modal_enter_switches_view_and_clears_attention() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
@@ -446,7 +446,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_v_splits_attached_view_vertically() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
@@ -567,7 +567,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_d_closes_focused_pane_when_split() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
@@ -677,7 +677,7 @@ mod pm_state_tests {
         // attached session immediately — so detach handlers must clear
         // throttle stamps and queue the workspace for an out-of-band
         // events-tail refresh.
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
@@ -761,7 +761,7 @@ mod pm_state_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_esc_detach_schedules_refresh_for_attached_workspace() {
         // Same as the d-path test above, for the Ctrl-X Esc detach.
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
@@ -826,7 +826,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_arrow_moves_focus_in_split() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
@@ -923,7 +923,7 @@ mod pm_state_tests {
 
     #[test]
     fn updates_panel_render_shows_grouped_workspaces() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1000,7 +1000,7 @@ mod pm_state_tests {
 
     #[test]
     fn updates_panel_render_scrolls_to_keep_selected_visible() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1040,7 +1040,7 @@ mod pm_state_tests {
         // very last workspace — the one that would be clipped without
         // scroll support.
         let activity_translated: std::collections::HashMap<
-            crate::store::WorkspaceId,
+            crate::data::store::WorkspaceId,
             crate::ui::updates_bar::ActivityState,
         > = app
             .workspace_activity
@@ -1095,7 +1095,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn attached_view_shows_status_row_for_other_workspace_needing_attention() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1185,7 +1185,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn attached_view_no_status_row_when_no_other_activity() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1336,8 +1336,8 @@ mod pm_state_tests {
         app.pm = Some(s);
     }
 
-    fn spawn_attached_workspace(app: &mut App) -> crate::store::WorkspaceId {
-        use crate::store::NewWorkspace;
+    fn spawn_attached_workspace(app: &mut App) -> crate::data::store::WorkspaceId {
+        use crate::data::store::NewWorkspace;
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let repo_id = app
@@ -2019,7 +2019,7 @@ mod pm_state_tests {
     /// dropped. Mirrors the production fix for the inline-reply gap.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn click_chip_auto_spawns_session_when_missing() {
-        use crate::store::NewWorkspace;
+        use crate::data::store::NewWorkspace;
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
         let mut env = EnvGuard::new();
@@ -2290,7 +2290,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_spawn_info_resolves_related_repos_to_additional_dirs() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let backend_id = store
             .add_repo(std::path::Path::new("/work/backend"), "backend", "")
@@ -2346,7 +2346,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_spawn_info_populates_doctrine() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/work/backend"), "backend", "")
@@ -2384,7 +2384,7 @@ mod pm_state_tests {
         // Proves the agent-tailored doctrine flows through the call site for a
         // non-Claude agent: Hermes must get the doctrine but NOT the superpowers
         // clause (which is Claude/Pi-only), while keeping the wsx-skill clause.
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/work/backend"), "backend", "")
@@ -2423,7 +2423,7 @@ mod pm_state_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_spawn_info_filters_self_reference() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let backend_id = store
             .add_repo(std::path::Path::new("/work/backend"), "backend", "")
@@ -2469,7 +2469,7 @@ mod pm_state_tests {
     /// Test helper: create an App with N repos registered in the store
     /// and loaded into app.repos. Uses a unique tmpdir per call so paths
     /// don't collide.
-    fn make_app_with_n_repos(n: usize) -> (App, Vec<crate::store::RepoId>) {
+    fn make_app_with_n_repos(n: usize) -> (App, Vec<crate::data::store::RepoId>) {
         let store = Store::open_in_memory().unwrap();
         let mut ids = Vec::new();
         for i in 0..n {
@@ -2624,7 +2624,7 @@ mod pm_state_tests {
 
     #[tokio::test]
     async fn shift_k_opens_process_list_on_workspace() {
-        use crate::store::{NewWorkspace, WorkspaceState};
+        use crate::data::store::{NewWorkspace, WorkspaceState};
         let (mut app, ids) = make_app_with_n_repos(1);
         let ws_id = app
             .store
@@ -2852,9 +2852,9 @@ mod pm_state_tests {
     #[tokio::test]
     async fn enter_in_new_workspace_modal_transitions_to_setup_running_and_spawns_task() {
         use crate::ui::modal::Modal;
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
@@ -2906,9 +2906,9 @@ mod pm_state_tests {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         store
@@ -2955,7 +2955,7 @@ mod pm_state_tests {
         assert_eq!(g.workspaces.len(), 1);
         assert_eq!(
             g.workspaces[0].1.setup_status,
-            crate::store::SetupStatus::Cancelled
+            crate::data::store::SetupStatus::Cancelled
         );
         // Modal should still be None — the late reconcile must not pop an error.
         assert!(g.modal.is_none());
@@ -2966,9 +2966,9 @@ mod pm_state_tests {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
@@ -2980,7 +2980,7 @@ mod pm_state_tests {
             .into_iter()
             .find(|r| r.id == repo_id)
             .unwrap();
-        let created = crate::workspace::create(
+        let created = crate::data::workspace::create(
             &store,
             &repo,
             Some("doomed"),
@@ -3058,9 +3058,9 @@ mod pm_state_tests {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         // Give the archive a slow archive-script so it's still running
@@ -3076,7 +3076,7 @@ mod pm_state_tests {
             .into_iter()
             .find(|r| r.id == repo_id)
             .unwrap();
-        let created = crate::workspace::create(
+        let created = crate::data::workspace::create(
             &store,
             &repo,
             Some("doomed"),
@@ -3145,9 +3145,9 @@ mod pm_state_tests {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         store
@@ -3195,9 +3195,9 @@ mod pm_state_tests {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let repo_id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         // No setup script — create is very fast.
@@ -3238,7 +3238,7 @@ mod pm_state_tests {
     }
 
     fn seed_app_with_workspace() -> App {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -3322,7 +3322,7 @@ mod pm_state_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ensure_workspace_session_sets_modal_when_binary_missing() {
         use crate::pty::session::AgentKind;
-        use crate::store::{NewWorkspace, WorkspaceState};
+        use crate::data::store::{NewWorkspace, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_HERMES_BIN", "/nonexistent/wsx-test-hermes");
         let store = Store::open_in_memory().unwrap();
@@ -3366,7 +3366,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(Modal::AgentMissing {
-            ws_id: crate::store::WorkspaceId(1),
+            ws_id: crate::data::store::WorkspaceId(1),
             agent: AgentKind::Hermes,
             binary: "/nonexistent/hermes".to_string(),
         });
@@ -3404,7 +3404,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(Modal::AgentPicker {
-            ws_id: crate::store::WorkspaceId(1),
+            ws_id: crate::data::store::WorkspaceId(1),
             selected: 0,
             current: AgentKind::Hermes,
         });
@@ -3442,7 +3442,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(Modal::AgentMissing {
-            ws_id: crate::store::WorkspaceId(1),
+            ws_id: crate::data::store::WorkspaceId(1),
             agent: AgentKind::Hermes,
             binary: "hermes".to_string(),
         });
@@ -3469,7 +3469,7 @@ mod pm_state_tests {
         use crate::ui::modal::Modal;
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        let ws_id = crate::store::WorkspaceId(42);
+        let ws_id = crate::data::store::WorkspaceId(42);
         app.modal = Some(Modal::AgentMissing {
             ws_id,
             agent: AgentKind::Hermes,
@@ -3510,7 +3510,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.modal = Some(Modal::AgentPicker {
-            ws_id: crate::store::WorkspaceId(1),
+            ws_id: crate::data::store::WorkspaceId(1),
             selected: 0,
             current: AgentKind::Claude,
         });
@@ -3542,7 +3542,7 @@ mod pm_state_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn agent_picker_enter_persists_and_retries_attach() {
         use crate::pty::session::AgentKind;
-        use crate::store::{NewWorkspace, WorkspaceState};
+        use crate::data::store::{NewWorkspace, WorkspaceState};
         use crate::test_support::{EnvGuard, cat_path};
         use crate::ui::modal::Modal;
         // Switch from broken Hermes (won't spawn) to Claude (substituted with `cat`,
@@ -3619,7 +3619,7 @@ mod pm_state_tests {
 #[cfg(test)]
 mod detail_scroll {
     use super::*;
-    use crate::store::Store;
+    use crate::data::store::Store;
     use crate::ui::View;
     use crate::ui::split::AttachedState;
     use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
@@ -3689,7 +3689,7 @@ mod detail_scroll {
         // session is needed — `scroll_active` no-ops when the focused id has
         // no session, which is the behavior we want to verify (detail
         // offsets stay untouched regardless).
-        app.view = View::Attached(AttachedState::single(crate::store::WorkspaceId(1)));
+        app.view = View::Attached(AttachedState::single(crate::data::store::WorkspaceId(1)));
         app.detail_container_rects = [
             Some(Rect {
                 x: 0,
@@ -3736,7 +3736,7 @@ mod ctrl_x_esc_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_esc_saves_layout_and_returns_to_dashboard() {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use crate::ui::split::{AttachedState, SplitDirection};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
@@ -3853,8 +3853,8 @@ mod restore_layout_tests {
 
     fn setup_two_workspaces_with_sessions(
         slug: &str,
-    ) -> (App, crate::store::WorkspaceId, crate::store::WorkspaceId) {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+    ) -> (App, crate::data::store::WorkspaceId, crate::data::store::WorkspaceId) {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
         let store = Store::open_in_memory().unwrap();
@@ -3911,7 +3911,7 @@ mod restore_layout_tests {
         (app, first_id, second_id)
     }
 
-    fn select_workspace_in_app(app: &mut App, id: crate::store::WorkspaceId) {
+    fn select_workspace_in_app(app: &mut App, id: crate::data::store::WorkspaceId) {
         let idx = app
             .selectable
             .iter()
@@ -4052,7 +4052,7 @@ mod restore_layout_tests {
 #[cfg(test)]
 mod detail_bar_focus_tests {
     use super::*;
-    use crate::store::{NewWorkspace, Store, WorkspaceState};
+    use crate::data::store::{NewWorkspace, Store, WorkspaceState};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -4220,7 +4220,7 @@ mod detail_bar_focus_tests {
     /// arm) and cleared once the chip fires.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_digit_works_while_reply_focused() {
-        use crate::store::NewWorkspace;
+        use crate::data::store::NewWorkspace;
         use crate::test_support::{EnvGuard, cat_path};
 
         let mut env = EnvGuard::new();
@@ -4343,7 +4343,7 @@ mod detail_bar_focus_tests {
 #[cfg(test)]
 mod leader_view_transition_tests {
     use super::*;
-    use crate::store::{NewWorkspace, Store};
+    use crate::data::store::{NewWorkspace, Store};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -4444,8 +4444,8 @@ mod attached_wheel_forwarding {
         }
     }
 
-    fn spawn_attached_workspace(app: &mut App) -> crate::store::WorkspaceId {
-        use crate::store::NewWorkspace;
+    fn spawn_attached_workspace(app: &mut App) -> crate::data::store::WorkspaceId {
+        use crate::data::store::NewWorkspace;
         use crate::test_support::{EnvGuard, cat_path};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
@@ -4488,7 +4488,7 @@ mod attached_wheel_forwarding {
 
     // Enable SGR mouse reporting on the session's parser and register a
     // full-screen pane rect so the cursor at (10,10) is "over" the pane.
-    fn arm_mouse_mode_and_pane(app: &mut App, ws_id: crate::store::WorkspaceId) {
+    fn arm_mouse_mode_and_pane(app: &mut App, ws_id: crate::data::store::WorkspaceId) {
         let session = app.sessions.get(ws_id).unwrap();
         {
             let mut p = session.parser.lock().unwrap();
@@ -4507,7 +4507,7 @@ mod attached_wheel_forwarding {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn plain_wheel_forwards_when_mouse_mode_on() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         arm_mouse_mode_and_pane(&mut app, ws_id);
@@ -4530,7 +4530,7 @@ mod attached_wheel_forwarding {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shift_wheel_is_escape_hatch_to_scrollback() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         arm_mouse_mode_and_pane(&mut app, ws_id);
@@ -4553,7 +4553,7 @@ mod attached_wheel_forwarding {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn plain_wheel_scrolls_when_mouse_mode_off() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         // Register the pane rect but do NOT enable mouse mode.
@@ -4609,7 +4609,7 @@ mod attached_wheel_forwarding {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn plain_wheel_down_forwards_when_mouse_mode_on() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         arm_mouse_mode_and_pane(&mut app, ws_id);
@@ -4634,7 +4634,7 @@ mod attached_wheel_forwarding {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn plain_wheel_over_chrome_falls_through_to_scrollback() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         arm_mouse_mode_and_pane(&mut app, ws_id); // pane rect is height 24 (rows 0..23)
@@ -4658,7 +4658,7 @@ mod attached_wheel_forwarding {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn plain_wheel_forwards_in_attached_pm() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         spawn_pm_for_test_local(&mut app);
         app.view = crate::ui::View::AttachedPm;

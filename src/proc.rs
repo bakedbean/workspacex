@@ -4,7 +4,7 @@
 //! and offers a kill hook. See `docs/superpowers/specs/2026-05-15-process-tracking-design.md`.
 
 use crate::error::{Error, Result};
-use crate::store::WorkspaceId;
+use crate::data::store::WorkspaceId;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

@@ -1,7 +1,7 @@
 //! Related repos: parser, resolver, and read-only system-prompt builder
 //! for the per-repo `related_repos` config.
 
-use crate::store::Repo;
+use crate::data::store::Repo;
 use std::path::PathBuf;
 
 /// Parse a `related_repos` config value into trimmed, non-empty name strings.
@@ -74,7 +74,7 @@ pub fn build_read_only_prompt(resolved: &[(String, PathBuf)]) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{Repo, RepoId};
+    use crate::data::store::{Repo, RepoId};
 
     fn repo(id: i64, name: &str, path: &str) -> Repo {
         Repo {

@@ -5,7 +5,7 @@
 //! See `docs/superpowers/specs/2026-05-18-named-remotes-design.md`.
 
 use crate::error::Result;
-use crate::store::Store;
+use crate::data::store::Store;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Remote {
@@ -55,7 +55,7 @@ pub fn lookup(store: &Store, name: &str) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::Store;
+    use crate::data::store::Store;
 
     #[test]
     fn parse_labeled_line() {

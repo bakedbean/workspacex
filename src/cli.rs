@@ -494,7 +494,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         }
         return Ok(());
     }
-    let store = crate::store::Store::open(&dirs.db_path())?;
+    let store = crate::data::store::Store::open(&dirs.db_path())?;
     match action {
         CliAction::Tui => unreachable!("handled in main"),
         CliAction::RepoAdd {
@@ -502,25 +502,25 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             name,
             branch_prefix,
         } => {
-            crate::repo::add(&store, &path, &name, &branch_prefix).await?;
+            crate::data::repo::add(&store, &path, &name, &branch_prefix).await?;
             println!("added repo: {name}");
         }
         CliAction::RepoList => {
-            for r in crate::repo::list(&store)? {
+            for r in crate::data::repo::list(&store)? {
                 println!("{:<20} {}", r.name, r.path.display());
             }
         }
         CliAction::RepoRemove { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
                 .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
-            crate::repo::remove(&store, r.id)?;
+            crate::data::repo::remove(&store, r.id)?;
             println!("removed repo: {name}");
         }
         CliAction::RepoSetPrefix { name, prefix } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -533,7 +533,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetBaseBranch { name, value } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -548,7 +548,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetInstructions { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -563,7 +563,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetSetup { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -578,7 +578,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetArchive { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -593,7 +593,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditSetup { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -612,7 +612,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditArchive { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -631,7 +631,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetPinnedCommands { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -646,7 +646,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditPinnedCommands { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -665,7 +665,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetName { name, new_name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -675,7 +675,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             println!("renamed repo {name} to {trimmed}");
         }
         CliAction::RepoSetRelatedRepos { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -690,7 +690,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditRelatedRepos { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -809,7 +809,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let worktree_base = dirs.app_dir().join("worktrees");
             std::fs::create_dir_all(&worktree_base)?;
             let agent_kind = crate::pty::session::AgentKind::from_str_or_default(agent.as_deref());
-            let created = crate::workspace::create(
+            let created = crate::data::workspace::create(
                 &store,
                 &r,
                 name.as_deref(),
@@ -826,14 +826,14 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 created.workspace.name,
                 created.workspace.worktree_path.display()
             );
-            if let crate::setup::SetupResult::Failed { exit_code } = created.setup_result {
+            if let crate::data::setup::SetupResult::Failed { exit_code } = created.setup_result {
                 println!("warning: setup script exited with code {exit_code}");
             }
         }
         CliAction::WorkspaceList { repo } => {
             let filtered = match repo {
                 Some(name) => vec![lookup_repo(&store, &name)?],
-                None => crate::repo::list(&store)?,
+                None => crate::data::repo::list(&store)?,
             };
             for r in filtered {
                 for w in store.workspaces(r.id)? {
@@ -862,7 +862,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             if new_name == name {
                 println!("workspace {}/{} unchanged", r.name, name);
             } else {
-                crate::workspace::rename(&store, &r, &w, &new_name).await?;
+                crate::data::workspace::rename(&store, &r, &w, &new_name).await?;
                 println!(
                     "renamed workspace {}/{} to {}/{}",
                     r.name, name, r.name, new_name
@@ -877,11 +877,11 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         } => {
             let r = lookup_repo(&store, &repo)?;
             let w = lookup_workspace(&store, &r, &name)?;
-            let opts = crate::workspace::ArchiveOpts {
+            let opts = crate::data::workspace::ArchiveOpts {
                 keep_worktree,
                 force_branch_delete: force_delete_branch,
             };
-            crate::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
+            crate::data::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
             println!("archived workspace {}/{}", r.name, name);
         }
         CliAction::SetupInstallSkill => unreachable!("handled before store open"),
@@ -889,18 +889,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     Ok(())
 }
 
-fn lookup_repo(store: &crate::store::Store, name: &str) -> Result<crate::store::Repo> {
-    crate::repo::list(store)?
+fn lookup_repo(store: &crate::data::store::Store, name: &str) -> Result<crate::data::store::Repo> {
+    crate::data::repo::list(store)?
         .into_iter()
         .find(|r| r.name == name)
         .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))
 }
 
 fn lookup_workspace(
-    store: &crate::store::Store,
-    repo: &crate::store::Repo,
+    store: &crate::data::store::Store,
+    repo: &crate::data::store::Repo,
     name: &str,
-) -> Result<crate::store::Workspace> {
+) -> Result<crate::data::store::Workspace> {
     store
         .workspaces(repo.id)?
         .into_iter()

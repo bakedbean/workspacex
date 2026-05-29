@@ -14,7 +14,7 @@ pub mod spinner;
 pub mod status;
 
 use crate::app::SelectionTarget;
-use crate::store::Repo;
+use crate::data::store::Repo;
 use crate::ui::dashboard::by_attention::{FlatRow, QuietRepo};
 use crate::ui::dashboard::by_repo::RepoView;
 use crate::ui::dashboard::layout::GroupMode;
@@ -31,7 +31,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct WorkspaceItem<'a> {
     pub repo: &'a Repo,
-    pub workspace_id: crate::store::WorkspaceId,
+    pub workspace_id: crate::data::store::WorkspaceId,
     pub status: Status,
     pub row: RowInputs,
 }
@@ -177,15 +177,15 @@ pub fn visible_targets(
             // then noise-score ordering across repos.
             #[derive(Clone)]
             struct Pending {
-                repo_id: crate::store::RepoId,
+                repo_id: crate::data::store::RepoId,
                 counts: StatusCounts,
-                workspace_ids: Vec<crate::store::WorkspaceId>,
+                workspace_ids: Vec<crate::data::store::WorkspaceId>,
             }
             let mut pending: Vec<Pending> = inputs
                 .repos
                 .iter()
                 .map(|r| {
-                    let mut rows: Vec<(Status, crate::store::WorkspaceId)> = inputs
+                    let mut rows: Vec<(Status, crate::data::store::WorkspaceId)> = inputs
                         .workspaces
                         .iter()
                         .filter(|w| w.repo.id == r.id)

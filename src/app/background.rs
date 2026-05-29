@@ -3,7 +3,7 @@
 #[cfg(test)]
 use crate::app::App;
 use crate::app::SharedApp;
-use crate::store::WorkspaceId;
+use crate::data::store::WorkspaceId;
 
 /// Tail the agent session JSONL for `id` and merge any new events into
 /// `App::workspace_events`. Shared by `branch_drift_poll` (the periodic
@@ -28,7 +28,7 @@ use crate::store::WorkspaceId;
 /// past the newer offset.
 pub async fn tail_workspace_events(
     app: SharedApp,
-    id: crate::store::WorkspaceId,
+    id: crate::data::store::WorkspaceId,
     worktree_path: std::path::PathBuf,
     ws_agent: crate::pty::session::AgentKind,
 ) {
@@ -229,7 +229,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 .filter_map(|(_, w)| {
                     let repo = g.repos.iter().find(|r| r.id == w.repo_id)?;
                     let prefix =
-                        crate::repo::resolve_branch_prefix(repo, &g.store).unwrap_or_default();
+                        crate::data::repo::resolve_branch_prefix(repo, &g.store).unwrap_or_default();
                     Some((
                         w.id,
                         w.worktree_path.clone(),
@@ -365,14 +365,14 @@ pub async fn branch_drift_poll(app: SharedApp) {
         };
         if should_scan {
             let procs = crate::proc::scan().await;
-            let worktrees: Vec<(crate::store::WorkspaceId, std::path::PathBuf)> = {
+            let worktrees: Vec<(crate::data::store::WorkspaceId, std::path::PathBuf)> = {
                 let g = app.lock().await;
                 g.workspaces
                     .iter()
                     .map(|(_, w)| (w.id, w.worktree_path.clone()))
                     .collect()
             };
-            let worktree_refs: Vec<(crate::store::WorkspaceId, &std::path::Path)> = worktrees
+            let worktree_refs: Vec<(crate::data::store::WorkspaceId, &std::path::Path)> = worktrees
                 .iter()
                 .map(|(id, path)| (*id, path.as_path()))
                 .collect();
@@ -391,7 +391,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
 #[cfg(test)]
 mod external_change_polling_tests {
     use super::*;
-    use crate::store::{NewWorkspace, Store};
+    use crate::data::store::{NewWorkspace, Store};
 
     /// Simulates the bug from issue #70: the dashboard process is holding a
     /// snapshot of workspaces; a separate process (e.g. `wsx workspace

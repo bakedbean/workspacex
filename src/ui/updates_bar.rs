@@ -7,7 +7,7 @@
 //! the status row exclusively about workspaces that need user action.
 
 use crate::events::WorkspaceEvents;
-use crate::store::WorkspaceId;
+use crate::data::store::WorkspaceId;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::text::{Line, Span};
@@ -267,7 +267,7 @@ pub fn format_age(delta_ms: i64) -> String {
 mod tests {
     use super::*;
     use crate::events::{EventKind, EventSnapshot, WorkspaceEvents};
-    use crate::store::WorkspaceId;
+    use crate::data::store::WorkspaceId;
 
     type WsOwned = (
         WorkspaceId,

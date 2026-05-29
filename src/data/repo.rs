@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 use crate::git;
-use crate::store::{Repo, RepoId, Store};
+use crate::data::store::{Repo, RepoId, Store};
 use std::path::Path;
 
 pub async fn add(store: &Store, path: &Path, name: &str, branch_prefix: &str) -> Result<RepoId> {
@@ -91,7 +91,7 @@ mod tests {
 #[cfg(test)]
 mod settings_tests {
     use super::*;
-    use crate::store::RepoId;
+    use crate::data::store::RepoId;
     use std::path::PathBuf;
 
     fn repo(prefix: &str, instructions: Option<&str>) -> Repo {

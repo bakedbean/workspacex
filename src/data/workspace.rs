@@ -2,8 +2,8 @@ use crate::error::{Error, Result};
 use crate::git;
 use crate::names;
 use crate::pty::session::AgentKind;
-use crate::setup::{self, SetupLine, SetupResult};
-use crate::store::{
+use crate::data::setup::{self, SetupLine, SetupResult};
+use crate::data::store::{
     NewWorkspace, Repo, SetupStatus, Store, Workspace, WorkspaceId, WorkspaceState,
 };
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         Some(s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => names::generate(),
     };
-    let prefix = crate::repo::resolve_branch_prefix(repo, store)?;
+    let prefix = crate::data::repo::resolve_branch_prefix(repo, store)?;
     let branch = if prefix.is_empty() {
         name.clone()
     } else {
@@ -142,7 +142,7 @@ pub async fn create_with_app(
             Some(s) if !s.trim().is_empty() => s.trim().to_string(),
             _ => crate::names::generate(),
         };
-        let prefix = crate::repo::resolve_branch_prefix(&repo, &g.store)?;
+        let prefix = crate::data::repo::resolve_branch_prefix(&repo, &g.store)?;
         let branch = if prefix.is_empty() {
             resolved_name.clone()
         } else {
@@ -414,7 +414,7 @@ pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) 
     if new_name == ws.name {
         return Ok(());
     }
-    let prefix = crate::repo::resolve_branch_prefix(repo, store)?;
+    let prefix = crate::data::repo::resolve_branch_prefix(repo, store)?;
     let new_branch = if prefix.is_empty() {
         new_name.to_string()
     } else {
@@ -455,7 +455,7 @@ mod tests {
     async fn create_makes_worktree_and_inserts_row() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         let repo = store
@@ -490,7 +490,7 @@ mod tests {
     async fn create_with_yolo_sets_flag() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         let repo = store
@@ -520,7 +520,7 @@ mod tests {
     async fn create_generates_name_when_none_given() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         let repo = store
@@ -549,7 +549,7 @@ mod tests {
     async fn create_records_setup_failure_but_keeps_workspace_ready() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         store.set_repo_setup_script(id, Some("exit 1")).unwrap();
@@ -580,7 +580,7 @@ mod tests {
     async fn archive_removes_row_and_worktree() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         let repo = store
@@ -636,7 +636,7 @@ mod tests {
     async fn rename_updates_name_and_branch() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         let repo = store
@@ -689,7 +689,7 @@ mod tests {
     async fn discover_finds_untracked_worktree() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         let repo = store
@@ -718,7 +718,7 @@ mod tests {
     async fn create_runs_setup_script_when_set() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         let base = TempDir::new().unwrap();
@@ -758,7 +758,7 @@ mod tests {
     async fn archive_runs_archive_script_when_set() {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         let base = TempDir::new().unwrap();
@@ -805,7 +805,7 @@ mod tests {
         use tokio::sync::Mutex;
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         let base = TempDir::new().unwrap();
@@ -876,7 +876,7 @@ mod tests {
         use tokio::sync::Mutex;
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         let base = TempDir::new().unwrap();
@@ -936,7 +936,7 @@ mod tests {
         use tokio_util::sync::CancellationToken;
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         let repo = store
@@ -972,7 +972,7 @@ mod tests {
         use tokio_util::sync::CancellationToken;
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         // Configure a slow setup script via the store.
@@ -1020,7 +1020,7 @@ mod tests {
         use tokio_util::sync::CancellationToken;
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
-        crate::repo::add(&store, repo_dir.path(), "demo", "wsx")
+        crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
         let base = TempDir::new().unwrap();
@@ -1153,7 +1153,7 @@ mod tests {
         let prev_sha = String::from_utf8_lossy(&prev_out.stdout).trim().to_string();
         r(&["branch", "staging", &prev_sha]);
 
-        let id = crate::repo::add(&store, repo_dir.path(), "demo", "")
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
             .await
             .unwrap();
         store.set_repo_base_branch(id, Some("staging")).unwrap();

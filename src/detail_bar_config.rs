@@ -5,7 +5,7 @@
 //!
 //! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
 
-use crate::store::{Repo, Store};
+use crate::data::store::{Repo, Store};
 use serde::{Deserialize, Serialize};
 
 fn default_visible() -> bool {
@@ -215,7 +215,7 @@ pub fn resolve(repo: &Repo, store: &Store) -> DetailBarConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{Repo, RepoId, Store};
+    use crate::data::store::{Repo, RepoId, Store};
     use std::path::PathBuf;
 
     fn test_repo(detail_bar_config: Option<&str>) -> Repo {

@@ -4,7 +4,7 @@ use crate::app::activity::classify_activity_with_events;
 use crate::app::bell::{COLD_START_WINDOW, alert_decision};
 use crate::app::{ActivityState, App, SelectionTarget};
 use crate::detail_bar_config::DetailBarConfig;
-use crate::store::Store;
+use crate::data::store::Store;
 use crate::ui::dashboard::row::ColumnWidths;
 use ratatui::layout::{Constraint, Direction, Layout};
 
@@ -79,7 +79,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .workspace_events
                         .get(&ws.id)
                         .and_then(|e| e.latest.clone());
-                    let setup_failed = ws.setup_status == crate::store::SetupStatus::Failed;
+                    let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
                     let row = crate::ui::dashboard::row::RowInputs {
                         status,
                         name: ws.name.clone(),
@@ -504,7 +504,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
                 let mut awaiting: std::collections::HashMap<
-                    crate::store::WorkspaceId,
+                    crate::data::store::WorkspaceId,
                     (String, i64),
                 > = std::collections::HashMap::new();
                 for (_rid, w) in &app.workspaces {
@@ -513,7 +513,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     }
                 }
                 let activity_translated: std::collections::HashMap<
-                    crate::store::WorkspaceId,
+                    crate::data::store::WorkspaceId,
                     crate::ui::updates_bar::ActivityState,
                 > = app
                     .workspace_activity
@@ -521,7 +521,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .map(|(k, v)| (*k, translate_activity(*v)))
                     .collect();
                 let statuses: std::collections::HashMap<
-                    crate::store::WorkspaceId,
+                    crate::data::store::WorkspaceId,
                     crate::ui::dashboard::status::Status,
                 > = app
                     .workspaces
@@ -690,7 +690,7 @@ fn read_column_widths(store: &Store) -> ColumnWidths {
 
 fn compute_attention_line(
     app: &App,
-    attached_id: Option<crate::store::WorkspaceId>,
+    attached_id: Option<crate::data::store::WorkspaceId>,
     max_width: usize,
 ) -> Option<ratatui::text::Line<'static>> {
     let now_ms = std::time::SystemTime::now()
@@ -749,7 +749,7 @@ mod layout_indicator_cache_tests {
 
     #[tokio::test]
     async fn app_refresh_populates_layout_indicator_cache_from_store() {
-        use crate::store::{NewWorkspace, Store};
+        use crate::data::store::{NewWorkspace, Store};
         use crate::ui::split::{SplitDirection, SplitTree};
         let store = Store::open_in_memory().unwrap();
         let repo = store

@@ -1,7 +1,7 @@
 #![allow(clippy::collapsible_if, clippy::arc_with_non_send_sync)]
 
 use crate::error::{Error, Result};
-use crate::store::WorkspaceId;
+use crate::data::store::WorkspaceId;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -89,7 +89,7 @@ impl AgentKind {
         self.display_name()
     }
 
-    pub fn from_store(store: &crate::store::Store) -> Self {
+    pub fn from_store(store: &crate::data::store::Store) -> Self {
         Self::from_str_or_default(store.get_setting("coding_agent").ok().flatten().as_deref())
     }
 }
@@ -1463,7 +1463,7 @@ mod tests {
         env.set("WSX_CLAUDE_BIN", "/bin/sh");
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
-        let id = crate::store::WorkspaceId(1);
+        let id = crate::data::store::WorkspaceId(1);
         let session = mgr
             .spawn(
                 id,

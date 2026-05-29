@@ -11,7 +11,7 @@ use crate::app::{
     rescan_processes, restore_attached_state, save_layout_for, schedule_detach_refresh,
 };
 use crate::error::Result;
-use crate::store::WorkspaceId;
+use crate::data::store::WorkspaceId;
 use crate::ui::View;
 use crate::ui::modal::Modal;
 use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
@@ -204,7 +204,7 @@ async fn fire_chip(app: &mut App, idx: usize) {
 /// look up the same default-fold state the renderer would compute.
 fn current_repo_counts(
     app: &App,
-    rid: crate::store::RepoId,
+    rid: crate::data::store::RepoId,
 ) -> crate::ui::dashboard::sort::StatusCounts {
     let iter = app
         .workspaces
@@ -845,7 +845,7 @@ async fn handle_key_attached(
             KeyCode::Backspace => session.capture_backspace(),
             KeyCode::Enter => {
                 if let Some(prompt) = session.take_first_prompt() {
-                    if let Some(slug) = crate::workspace::slugify_prompt(&prompt) {
+                    if let Some(slug) = crate::data::workspace::slugify_prompt(&prompt) {
                         let ws_info = app
                             .workspaces
                             .iter()
@@ -856,7 +856,7 @@ async fn handle_key_attached(
                                 let repo = app.repos.iter().find(|r| r.id == ws.repo_id).cloned();
                                 if let Some(repo) = repo {
                                     // Fire-and-forget: rename failure shouldn't disrupt the keystroke.
-                                    let _ = crate::workspace::rename(&app.store, &repo, &ws, &slug)
+                                    let _ = crate::data::workspace::rename(&app.store, &repo, &ws, &slug)
                                         .await;
                                     app.refresh()?;
                                 }
@@ -956,7 +956,7 @@ async fn handle_key_modal(
                 });
                 let shared_clone = shared.clone();
                 tokio::spawn(async move {
-                    let result = crate::workspace::create_with_app(
+                    let result = crate::data::workspace::create_with_app(
                         shared_clone.clone(),
                         repo,
                         name,
@@ -1023,11 +1023,11 @@ async fn handle_key_modal(
                 });
                 let shared_clone = shared.clone();
                 tokio::spawn(async move {
-                    let result = crate::workspace::archive_with_app(
+                    let result = crate::data::workspace::archive_with_app(
                         shared_clone.clone(),
                         repo,
                         ws,
-                        crate::workspace::ArchiveOpts {
+                        crate::data::workspace::ArchiveOpts {
                             force_branch_delete: true,
                             ..Default::default()
                         },
@@ -1064,7 +1064,7 @@ async fn handle_key_modal(
             // Build the same ordered workspace list the renderer uses, so
             // arrow keys and Enter operate on the same indices.
             let activity_translated: std::collections::HashMap<
-                crate::store::WorkspaceId,
+                crate::data::store::WorkspaceId,
                 crate::ui::updates_bar::ActivityState,
             > = app
                 .workspace_activity

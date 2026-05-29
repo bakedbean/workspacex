@@ -1,6 +1,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod data;
 pub mod detail_bar_config;
 pub mod detail_modules;
 pub mod doctrine;
@@ -20,11 +21,7 @@ pub mod pty;
 pub mod related;
 pub mod remote_control;
 pub mod remotes;
-pub mod repo;
-pub mod setup;
 pub mod skill;
-pub mod store;
 #[doc(hidden)]
 pub mod test_support;
 pub mod ui;
-pub mod workspace;

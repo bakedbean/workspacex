@@ -78,7 +78,7 @@ pub struct RowInputs {
     pub has_multi_pane_layout: bool,
     pub lifecycle: Option<BranchLifecycle>,
     pub nerd_fonts: bool,
-    pub workspace_id: crate::store::WorkspaceId,
+    pub workspace_id: crate::data::store::WorkspaceId,
 }
 
 pub fn render(
@@ -325,7 +325,7 @@ mod tests {
             has_multi_pane_layout: false,
             lifecycle: None,
             nerd_fonts: false,
-            workspace_id: crate::store::WorkspaceId(0),
+            workspace_id: crate::data::store::WorkspaceId(0),
         }
     }
 

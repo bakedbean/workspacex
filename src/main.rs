@@ -12,7 +12,7 @@ use ratatui::backend::CrosstermBackend;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use wsx::{app, cli, config, error::Result, git, store};
+use wsx::{app, cli, config, data::store, error::Result, git};
 
 fn install_panic_hook() {
     let default = std::panic::take_hook();

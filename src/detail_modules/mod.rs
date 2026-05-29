@@ -9,7 +9,7 @@ use crate::events::WorkspaceEvents;
 use crate::forge::BranchLifecycle;
 use crate::git::DiffStats;
 use crate::proc::ProcInfo;
-use crate::store::{Repo, Workspace};
+use crate::data::store::{Repo, Workspace};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use std::collections::HashMap;
@@ -104,7 +104,7 @@ pub fn register_builtins(reg: &mut Registry) {
 #[cfg(test)]
 pub(crate) mod tests_helpers {
     use super::*;
-    use crate::store::{Repo, RepoId, SetupStatus, Workspace, WorkspaceId, WorkspaceState};
+    use crate::data::store::{Repo, RepoId, SetupStatus, Workspace, WorkspaceId, WorkspaceState};
     use std::path::PathBuf;
 
     /// Build a minimal `DetailContext` backed by leaked allocations.

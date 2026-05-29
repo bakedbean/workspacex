@@ -3,7 +3,7 @@
 //! vertically (`:vsplit`, children side-by-side) or horizontally
 //! (`:split`, children stacked) into a parent node.
 
-use crate::store::WorkspaceId;
+use crate::data::store::WorkspaceId;
 use ratatui::layout::{Constraint, Direction as LayoutDirection, Layout, Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -503,7 +503,7 @@ fn first_leaf_path(root: &SplitTree, base: &[usize]) -> FocusPath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::WorkspaceId;
+    use crate::data::store::WorkspaceId;
 
     fn wid(n: i64) -> WorkspaceId {
         WorkspaceId(n)
@@ -711,9 +711,9 @@ mod tests {
 
     #[test]
     fn workspaceid_serializes_as_bare_integer() {
-        let id = crate::store::WorkspaceId(42);
+        let id = crate::data::store::WorkspaceId(42);
         assert_eq!(serde_json::to_string(&id).unwrap(), "42");
-        let back: crate::store::WorkspaceId = serde_json::from_str("42").unwrap();
+        let back: crate::data::store::WorkspaceId = serde_json::from_str("42").unwrap();
         assert_eq!(back, id);
     }
 

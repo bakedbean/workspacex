@@ -153,11 +153,12 @@ fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::
 ///     have truncated some chips at narrow widths),
 ///   - the cache has no command at `idx` (defensive),
 ///   - no chip target can be resolved.
-///     When dispatched from `View::Dashboard`, also clears any in-flight
-///     reply draft and returns focus to the dashboard. In other views
-///     (attached, attached-PM) the dispatch is byte-only so it matches the
-///     attached-view keyboard chord and doesn't trample dashboard state the
-///     user can't see.
+///
+/// When dispatched from `View::Dashboard`, also clears any in-flight
+/// reply draft and returns focus to the dashboard. In other views
+/// (attached, attached-PM) the dispatch is byte-only so it matches the
+/// attached-view keyboard chord and doesn't trample dashboard state the
+/// user can't see.
 async fn fire_chip(app: &mut App, idx: usize) {
     if idx >= app.chip_rects.len() {
         return;

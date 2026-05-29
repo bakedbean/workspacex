@@ -45,15 +45,17 @@ Terminal UI for managing Claude Code sessions in git worktrees.
 
 ### Key features
 
-- **Parallel Claude sessions in git worktrees** — every workspace is its own branch + worktree; switch with one key.
-- **Multiple coding agents** — not just Claude Code: run Claude, Pi, or Hermes per workspace. Set a global default with `coding_agent` or override per workspace with `--agent`. See [Coding agents](#coding-agents).
-- **Cross-session attention alerts** — terminal bell + `!` marker when a session is awaiting permission or has gone idle.
-- **Activity sub-line per workspace** — see the latest tool call or message from each session at a glance.
-- **Project Manager pane** — a dedicated Claude session that summarizes what every workspace is for, where it's at, and what's next.
-- **Remote control** — attach from claude.ai/code or the mobile app; or run wsx in tmux+ssh for full-fidelity desktop access.
-- **Pinned commands** — define your `/pull-request`, `/feedback`, `/ultrareview` shortcuts once; fire them with `Ctrl-x <digit>` or a click while attached.
-- **Related repos** — declare related wsx repos per primary repo; workspaces spawn with `--add-dir` for each and a read-only system prompt so claude can read but won't edit them.
-- **Frictionless workflow** — auto-rename branches from your first prompt, per-repo setup/archive scripts, editor/terminal/diff hooks.
+- **Parallel agent sessions in git worktrees**: every workspace is its own branch + worktree; switch with one key.
+- **Multiple coding agents**: run Claude, Pi, or Hermes per workspace. Set a global default with `coding_agent` or override per workspace with `--agent`. See [Coding agents](#coding-agents).
+- **Cross-session attention alerts**: terminal bell + `!` marker when a session is awaiting permission or has gone idle.
+- **Activity sub-line per workspace**: see the latest tool call or message from each session at a glance.
+- **Configurable Workspace Detail Bar**: Display up to four independent containers with built-in or custom modules.
+- **Project Manager pane**: a dedicated agent session that summarizes what every workspace is for, where it's at, and what's next.
+- **Remote control**: attach from claude.ai/code or the mobile app; or run wsx in tmux+ssh for full-fidelity desktop access.
+- **Pinned commands**: define your `/pull-request`, `/feedback`, `/ultrareview` shortcuts once; fire them with `Ctrl-x <digit>` or a click while attached.
+- **Related repos**: declare related wsx repos per primary repo; workspaces spawn with `--add-dir` for each and a read-only system prompt so claude can read but won't edit them.
+- **Keyboard first navigation**: comprehensive keybindings for every action, from workspace creation to process killing to project manager refreshes.
+- **Frictionless workflow**: auto-rename branches from your first prompt, per-repo setup/archive scripts, editor/terminal/diff hooks.
 
 ### Quick start
 
@@ -71,51 +73,51 @@ Press `n` to create your first workspace, then `enter` to attach. Claude Code sp
 
 #### Dashboard
 
-| Key | Action |
-|---|---|
-| `Up` / `Down` (or `k` / `j`) | Move selection through repo headers and workspaces |
-| `h` / `l` | Fold / unfold the focused repo (idempotent; use `zz` to toggle) |
-| `enter` (or `i`) on a workspace | Attach to its claude session (spawns or resumes) |
-| `enter` (or `i`) on a repo header | Open the New Workspace modal targeting that repo |
-| `n` | New workspace in the selected row's repo |
-| `e` | Open the selected workspace in your editor (no-op on repo header) |
-| `t` | Open the selected workspace in a terminal (no-op on repo header) |
-| `v` | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |
-| `K` | Show processes running under the selected workspace's worktree (no-op on repo header) |
-| `s` | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected) |
-| `d` | Archive the selected workspace (no-op on repo header) |
-| `q` | Quit (kills all running sessions) |
-| `p` | Toggle the Project Manager pane (no-op when `pm_enabled` is off) |
-| `Tab` | Swap focus between dashboard and the PM pane (when visible) |
-| `z z` | Toggle fold on the focused repo |
-| `z a` | Expand all repos (override default-fold heuristic) |
-| `z M` | Fold all repos |
-| `r` (when PM focused) | Refresh `workspaces.json` and ask PM to re-summarize |
-| `Ctrl-O` (when PM focused) | Expand PM to full screen (use `Ctrl-x d` to detach back) |
+| Key                               | Action                                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `Up` / `Down` (or `k` / `j`)      | Move selection through repo headers and workspaces                                                           |
+| `h` / `l`                         | Fold / unfold the focused repo (idempotent; use `zz` to toggle)                                              |
+| `enter` (or `i`) on a workspace   | Attach to its claude session (spawns or resumes)                                                             |
+| `enter` (or `i`) on a repo header | Open the New Workspace modal targeting that repo                                                             |
+| `n`                               | New workspace in the selected row's repo                                                                     |
+| `e`                               | Open the selected workspace in your editor (no-op on repo header)                                            |
+| `t`                               | Open the selected workspace in a terminal (no-op on repo header)                                             |
+| `v`                               | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |
+| `K`                               | Show processes running under the selected workspace's worktree (no-op on repo header)                        |
+| `s`                               | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected)             |
+| `d`                               | Archive the selected workspace (no-op on repo header)                                                        |
+| `q`                               | Quit (kills all running sessions)                                                                            |
+| `p`                               | Toggle the Project Manager pane (no-op when `pm_enabled` is off)                                             |
+| `Tab`                             | Swap focus between dashboard and the PM pane (when visible)                                                  |
+| `z z`                             | Toggle fold on the focused repo                                                                              |
+| `z a`                             | Expand all repos (override default-fold heuristic)                                                           |
+| `z M`                             | Fold all repos                                                                                               |
+| `r` (when PM focused)             | Refresh `workspaces.json` and ask PM to re-summarize                                                         |
+| `Ctrl-O` (when PM focused)        | Expand PM to full screen (use `Ctrl-x d` to detach back)                                                     |
 
 #### New Workspace / Confirm Archive / Setup Running modals
 
-| Key | Action |
-|---|---|
-| `enter` | Confirm |
-| `esc` | Cancel |
-| `y` / `n` | Confirm/cancel on ConfirmArchive |
+| Key                           | Action                              |
+| ----------------------------- | ----------------------------------- |
+| `enter`                       | Confirm                             |
+| `esc`                         | Cancel                              |
+| `y` / `n`                     | Confirm/cancel on ConfirmArchive    |
 | Printable chars / `backspace` | Edit the name field on NewWorkspace |
 
 #### Attached workspace
 
 Keystrokes are forwarded to the running `claude` session, except:
 
-| Key | Action |
-|---|---|
-| `Ctrl-x d` | Close the focused pane. When only one pane is open, detaches back to the dashboard (session keeps running). |
-| `Ctrl-x ←/→/↑/↓` | Move focus between split panes in that direction (vim's `Ctrl-w` motions). |
-| `Ctrl-x u` | Open the floating updates panel (shows other workspaces' state; supports `v`/`s` to open in a split) |
-| `Ctrl-x e` | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard) |
-| `Ctrl-x t` | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`) |
-| `Ctrl-x v` | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`) |
-| `Ctrl-x k` | Show processes running under the attached workspace's worktree |
-| `Ctrl-x x` | Send a literal `Ctrl-x` to claude |
+| Key              | Action                                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| `Ctrl-x d`       | Close the focused pane. When only one pane is open, detaches back to the dashboard (session keeps running). |
+| `Ctrl-x ←/→/↑/↓` | Move focus between split panes in that direction (vim's `Ctrl-w` motions).                                  |
+| `Ctrl-x u`       | Open the floating updates panel (shows other workspaces' state; supports `v`/`s` to open in a split)        |
+| `Ctrl-x e`       | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard)                    |
+| `Ctrl-x t`       | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`)                                    |
+| `Ctrl-x v`       | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`)                  |
+| `Ctrl-x k`       | Show processes running under the attached workspace's worktree                                              |
+| `Ctrl-x x`       | Send a literal `Ctrl-x` to claude                                                                           |
 
 ### Pinned commands
 
@@ -165,13 +167,13 @@ as the modifier instead of Shift.
 
 ### Dashboard status indicators
 
-| Symbol | Meaning |
-|---|---|
-| `●` | Session is running in this wsx process |
-| `↻` | Resumable — a prior claude session exists for this worktree; attach to continue |
-| `○` | No session ever started here |
-| `✕` | Workspace state is `Failed` (worktree creation didn't succeed) |
-| `[setup-failed]` badge | Setup script exited non-zero; workspace is otherwise usable |
+| Symbol                 | Meaning                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------- |
+| `●`                    | Session is running in this wsx process                                          |
+| `↻`                    | Resumable — a prior claude session exists for this worktree; attach to continue |
+| `○`                    | No session ever started here                                                    |
+| `✕`                    | Workspace state is `Failed` (worktree creation didn't succeed)                  |
+| `[setup-failed]` badge | Setup script exited non-zero; workspace is otherwise usable                     |
 
 Activity column for running sessions:
 
@@ -205,12 +207,12 @@ Lines longer than ~70 characters are truncated with an ellipsis.
 
 Compact summary of `git status` per workspace, refreshed every 2 seconds:
 
-| Symbol (plain) | Symbol (nerd) | Meaning |
-|---|---|---|
-| `~N` |  `N` | Modified/staged/added/deleted tracked files |
-| `?N` |  `N` | Untracked files |
-| `↑N` | `N` | Commits ahead of upstream |
-| `↓N` | `N` | Commits behind upstream |
+| Symbol (plain) | Symbol (nerd) | Meaning                                     |
+| -------------- | ------------- | ------------------------------------------- |
+| `~N`           | `N`           | Modified/staged/added/deleted tracked files |
+| `?N`           | `N`           | Untracked files                             |
+| `↑N`           | `N`           | Commits ahead of upstream                   |
+| `↓N`           | `N`           | Commits behind upstream                     |
 
 Zero values omitted. Clean workspaces show nothing in this column.
 
@@ -304,13 +306,13 @@ clamped on save (see below).
 }
 ```
 
-| Field | Type | Default | Effect |
-|---|---|---|---|
-| `visible` | bool | `true` | Master toggle. When `false`, the bar is hidden entirely and `Tab` skips the reply input. |
-| `height.percent` | u8 | `30` | Target height as a percent of the terminal's rows. Clamped to `[5, 80]`. |
-| `height.min_rows` | u16 | `8` | Floor on the bar's height. Clamped to `[4, 40]`. |
-| `height.max_rows` | u16 | `18` | Ceiling on the bar's height. Clamped to `[4, 60]`. If `min_rows > max_rows`, the two are swapped on save. |
-| `containers` | list of lists | (see default above) | Outer length 1–4: one entry per equal-width column. Inner is a list of module IDs stacked vertically within the column. An empty inner list `[]` reserves an empty column. Empty outer list resets to default. Lengths > 4 are truncated to 4. |
+| Field             | Type          | Default             | Effect                                                                                                                                                                                                                                         |
+| ----------------- | ------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `visible`         | bool          | `true`              | Master toggle. When `false`, the bar is hidden entirely and `Tab` skips the reply input.                                                                                                                                                       |
+| `height.percent`  | u8            | `30`                | Target height as a percent of the terminal's rows. Clamped to `[5, 80]`.                                                                                                                                                                       |
+| `height.min_rows` | u16           | `8`                 | Floor on the bar's height. Clamped to `[4, 40]`.                                                                                                                                                                                               |
+| `height.max_rows` | u16           | `18`                | Ceiling on the bar's height. Clamped to `[4, 60]`. If `min_rows > max_rows`, the two are swapped on save.                                                                                                                                      |
+| `containers`      | list of lists | (see default above) | Outer length 1–4: one entry per equal-width column. Inner is a list of module IDs stacked vertically within the column. An empty inner list `[]` reserves an empty column. Empty outer list resets to default. Lengths > 4 are truncated to 4. |
 
 **Built-in module IDs:** `session_summary`, `recent_chat`, `processes`,
 `recent_files`. Unknown IDs render a `[unknown: <id>]` placeholder and
@@ -367,20 +369,20 @@ Override examples:
 Hide the bar entirely for this repo (global value can stay on):
 
 ```json
-{"visible": false}
+{ "visible": false }
 ```
 
 Single chat column for this repo; keep `visible` and `height` inherited from global:
 
 ```json
-{"containers": [["recent_chat"]]}
+{ "containers": [["recent_chat"]] }
 ```
 
 Taller bar for a repo where the session-summary text is usually long
 (CLI tools with verbose tool-call traces):
 
 ```json
-{"height": {"percent": 45, "max_rows": 28}}
+{ "height": { "percent": 45, "max_rows": 28 } }
 ```
 
 Merge precedence: bake-in defaults → global `detail_bar_config` →
@@ -415,12 +417,12 @@ workspaces in the background. Two affordances surface that:
 
   From the panel, the selected workspace can be opened three ways:
 
-  | Key | Action |
-  |---|---|
-  | `Up` / `Down` (or `k` / `j`) | Move selection within the panel. |
-  | `Enter` | Switch the current pane to the selected workspace (replaces it). |
-  | `v` | Open the selected workspace in a vertical split (panes side by side, vim's `:vsplit`). |
-  | `s` | Open the selected workspace in a horizontal split (panes stacked, vim's `:split`). |
+  | Key                          | Action                                                                                 |
+  | ---------------------------- | -------------------------------------------------------------------------------------- |
+  | `Up` / `Down` (or `k` / `j`) | Move selection within the panel.                                                       |
+  | `Enter`                      | Switch the current pane to the selected workspace (replaces it).                       |
+  | `v`                          | Open the selected workspace in a vertical split (panes side by side, vim's `:vsplit`). |
+  | `s`                          | Open the selected workspace in a horizontal split (panes stacked, vim's `:split`).     |
 
 ### Split panes
 
@@ -441,7 +443,7 @@ The flow:
 5. Close the focused pane with `Ctrl-x d`. The other panes keep
    running; when the last pane closes you detach back to the dashboard.
 
-When you split the *focused* pane again in the same direction as its
+When you split the _focused_ pane again in the same direction as its
 parent, the new pane is inserted as a sibling instead of nesting deeper —
 matches vim and keeps the tree shallow.
 
@@ -496,28 +498,28 @@ wsx config edit <key>          # opens $EDITOR (default: vi)
 
 Known keys:
 
-| Key | Effect |
-|---|---|
-| `branch_prefix` | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`. |
-| `custom_instructions` | Free-text appended to claude's system prompt on every workspace spawn. |
-| `process_doctrine` | Standing "operating doctrine" injected into every developer session (new and resumed) across all agents: think and plan before scope is set, use the superpowers skills by default (Claude/Pi only), break work into logical commits, and load the wsx skill. Not applied to the Project Manager session. Set this to replace the default text verbatim (`@file` supported); set it to `off` / `none` / `disabled` to suppress injection entirely. A blank value restores the default (it is not an off switch). |
-| `coding_agent` | Default coding agent for new workspaces: `claude` (default) / `pi` / `hermes`. Per-workspace override via `wsx workspace create <repo> --agent <agent>`. See [Coding agents](#coding-agents). |
-| `nerd_fonts` | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable. |
-| `editor_cmd` | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`. |
-| `terminal_cmd` | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`. |
-| `notifications` | Ring the terminal bell and show a `!` marker when a workspace transitions to `waiting` (claude paused for ≥30s). Default ON; set to `off` / `false` / `0` / `no` to disable. |
-| `theme` | Color theme. One of `default` (palette-adaptive ANSI), `dracula` (RGB), `jellybeans` (RGB), `nord` (RGB). Unknown values fall back to `default`. Restart wsx after changing. |
-| `pm_enabled` | Enable the Project Manager pane (`p` keybind). Default ON; set to `off` / `false` / `0` / `no` to disable. |
-| `pm_custom_instructions` | Free-text appended to the project manager's system prompt. Same `@file` / empty-clears semantics as `custom_instructions`. |
-| `pm_fast_mode` | Launch the Project Manager session with Claude Code's fast mode enabled (`--settings '{"fastMode":true}'`). PM is a status-summary session, so fast output is usually the right tradeoff. Default OFF; set to `on` / `true` / `1` / `yes` to enable. |
-| `mcp_mirror` | Inherit MCP servers from the source repo into worktrees (see [MCP server inheritance](#mcp-server-inheritance)). Default ON; set to `off` / `false` / `0` / `no` to disable. |
-| `remote_control` | Pass `--remote-control` to claude on every spawn so the session is reachable via [claude.ai/code](https://claude.ai/code) and the Claude mobile app (see [Remote control](#remote-control)). Default ON; set to `off` / `false` / `0` / `no` to disable. |
-| `remote_control_sandbox` | When `remote_control` is on, also pass `--sandbox` for an extra safety wrapper on remote-issued commands. Default OFF; set to `on` / `true` / `1` / `yes` to enable. |
-| `pinned_commands` | Newline-separated list of `Label=command` (or bare `command`) entries. Each becomes a chip in the attached view, fired via `Ctrl-x <digit>` or click. Max 9 visible/keyable. Per-repo override available via `wsx repo set-pinned-commands`. |
-| `remotes` | Newline-separated list of `name=command` entries — named shell commands run by `wsx remote <name>`, typically `ssh -t host '…tmux attach…'` for reattaching a wsx session running on another machine. List with `wsx remote`; add or edit with `wsx config edit remotes`. See [Named remote shortcuts](#named-remote-shortcuts). |
-| `dashboard_name_width` | Width (chars) of the workspace-name column on the dashboard. Default `24`. Clamped to `10..=60`. |
-| `dashboard_branch_width` | Width (chars) of the `⎇ branch` column on the dashboard. Default `28`. Clamped to `10..=80`. |
-| `detail_bar_config` | JSON blob controlling the per-workspace detail bar (visibility, height, and the container/module layout). See [Workspace detail bar](#workspace-detail-bar) for the schema, defaults, and per-repo override flow. Out-of-range values are clamped on save. |
+| Key                      | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branch_prefix`          | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`.                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `custom_instructions`    | Free-text appended to claude's system prompt on every workspace spawn.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `process_doctrine`       | Standing "operating doctrine" injected into every developer session (new and resumed) across all agents: think and plan before scope is set, use the superpowers skills by default (Claude/Pi only), break work into logical commits, and load the wsx skill. Not applied to the Project Manager session. Set this to replace the default text verbatim (`@file` supported); set it to `off` / `none` / `disabled` to suppress injection entirely. A blank value restores the default (it is not an off switch). |
+| `coding_agent`           | Default coding agent for new workspaces: `claude` (default) / `pi` / `hermes`. Per-workspace override via `wsx workspace create <repo> --agent <agent>`. See [Coding agents](#coding-agents).                                                                                                                                                                                                                                                                                                                    |
+| `nerd_fonts`             | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `editor_cmd`             | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`.                                                                                                                                                                                                                                                                         |
+| `terminal_cmd`           | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`.                                                                                                                                                                                                                                                                                                                                       |
+| `notifications`          | Ring the terminal bell and show a `!` marker when a workspace transitions to `waiting` (claude paused for ≥30s). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                     |
+| `theme`                  | Color theme. One of `default` (palette-adaptive ANSI), `dracula` (RGB), `jellybeans` (RGB), `nord` (RGB). Unknown values fall back to `default`. Restart wsx after changing.                                                                                                                                                                                                                                                                                                                                     |
+| `pm_enabled`             | Enable the Project Manager pane (`p` keybind). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `pm_custom_instructions` | Free-text appended to the project manager's system prompt. Same `@file` / empty-clears semantics as `custom_instructions`.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `pm_fast_mode`           | Launch the Project Manager session with Claude Code's fast mode enabled (`--settings '{"fastMode":true}'`). PM is a status-summary session, so fast output is usually the right tradeoff. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                                                                                                                             |
+| `mcp_mirror`             | Inherit MCP servers from the source repo into worktrees (see [MCP server inheritance](#mcp-server-inheritance)). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                     |
+| `remote_control`         | Pass `--remote-control` to claude on every spawn so the session is reachable via [claude.ai/code](https://claude.ai/code) and the Claude mobile app (see [Remote control](#remote-control)). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                         |
+| `remote_control_sandbox` | When `remote_control` is on, also pass `--sandbox` for an extra safety wrapper on remote-issued commands. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                                                                                                                                                                                                             |
+| `pinned_commands`        | Newline-separated list of `Label=command` (or bare `command`) entries. Each becomes a chip in the attached view, fired via `Ctrl-x <digit>` or click. Max 9 visible/keyable. Per-repo override available via `wsx repo set-pinned-commands`.                                                                                                                                                                                                                                                                     |
+| `remotes`                | Newline-separated list of `name=command` entries — named shell commands run by `wsx remote <name>`, typically `ssh -t host '…tmux attach…'` for reattaching a wsx session running on another machine. List with `wsx remote`; add or edit with `wsx config edit remotes`. See [Named remote shortcuts](#named-remote-shortcuts).                                                                                                                                                                                 |
+| `dashboard_name_width`   | Width (chars) of the workspace-name column on the dashboard. Default `24`. Clamped to `10..=60`.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `dashboard_branch_width` | Width (chars) of the `⎇ branch` column on the dashboard. Default `28`. Clamped to `10..=80`.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `detail_bar_config`      | JSON blob controlling the per-workspace detail bar (visibility, height, and the container/module layout). See [Workspace detail bar](#workspace-detail-bar) for the schema, defaults, and per-repo override flow. Out-of-range values are clamped on save.                                                                                                                                                                                                                                                       |
 
 Value sources:
 
@@ -551,11 +553,11 @@ Restart wsx after changing — themes are loaded once at startup.
 
 After your first prompt in a freshly-created workspace, wsx renames the workspace + git branch based on the conversation. Controlled by `WSX_RENAME_MODE`:
 
-| Mode | Behavior |
-|---|---|
+| Mode               | Behavior                                                                                                                                                                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `claude` (default) | Claude itself runs `git branch -m` as the first action in its response, based on your first message. A background poller propagates the rename to the wsx store. Higher-quality slugs at the cost of ~80 tokens per session start. |
-| `local` | wsx intercepts your first prompt's keystrokes locally and slugifies them. Zero tokens; literal text. |
-| `off` | No auto-rename. Workspaces keep their generated `<adjective>-<plant>` name forever. |
+| `local`            | wsx intercepts your first prompt's keystrokes locally and slugifies them. Zero tokens; literal text.                                                                                                                               |
+| `off`              | No auto-rename. Workspaces keep their generated `<adjective>-<plant>` name forever.                                                                                                                                                |
 
 The rename only fires on workspaces whose name still matches the generated `<adjective>-<plant>` pattern.
 
@@ -570,11 +572,11 @@ wsx workspace create backend --agent pi      # override for a single workspace
 
 Supported agents:
 
-| Agent | CLI option | Source | Config |
-|---|---|---|---|
-| `claude` (default) | `--agent claude` | `claude` binary (override via `WSX_CLAUDE_BIN`) | Environment + `~/.claude.json` MCP |
-| `pi` | `--agent pi` | `pi` binary (override via `WSX_PI_BIN`) | `~/.pi/` |
-| `hermes` | `--agent hermes` | [nousresearch/hermes-agent](https://github.com/nousresearch/hermes-agent) | `~/.hermes/config.yaml` (provider, model) |
+| Agent              | CLI option       | Source                                                                    | Config                                    |
+| ------------------ | ---------------- | ------------------------------------------------------------------------- | ----------------------------------------- |
+| `claude` (default) | `--agent claude` | `claude` binary (override via `WSX_CLAUDE_BIN`)                           | Environment + `~/.claude.json` MCP        |
+| `pi`               | `--agent pi`     | `pi` binary (override via `WSX_PI_BIN`)                                   | `~/.pi/`                                  |
+| `hermes`           | `--agent hermes` | [nousresearch/hermes-agent](https://github.com/nousresearch/hermes-agent) | `~/.hermes/config.yaml` (provider, model) |
 
 #### Hermes integration
 
@@ -584,7 +586,9 @@ When a workspace uses `coding_agent: hermes`, wsx spawns `hermes` (or the path i
 
 ```markdown
 <!-- BEGIN wsx-managed -->
+
 …injected instructions…
+
 <!-- END wsx-managed -->
 ```
 
@@ -962,29 +966,29 @@ A few command families live in their feature sections rather than here:
 
 ### Environment variables
 
-| Variable | Purpose |
-|---|---|
-| `WSX_RENAME_MODE` | Auto-rename mode: `claude` (default) / `local` / `off` |
-| `WSX_CLAUDE_BIN` | Path to the `claude` binary (default: looked up via `PATH`). Used by tests to substitute `cat`. |
-| `WSX_HERMES_BIN` | Path to the `hermes` binary (default: looked up via `PATH`). Only used when `coding_agent` is `hermes`. |
-| `WSX_HERMES_MODEL` | Model override for Hermes, passed as `HERMES_INFERENCE_MODEL` env var on the child Hermes process. When set, overrides the model in `~/.hermes/config.yaml`. |
+| Variable              | Purpose                                                                                                                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WSX_RENAME_MODE`     | Auto-rename mode: `claude` (default) / `local` / `off`                                                                                                                                                                                            |
+| `WSX_CLAUDE_BIN`      | Path to the `claude` binary (default: looked up via `PATH`). Used by tests to substitute `cat`.                                                                                                                                                   |
+| `WSX_HERMES_BIN`      | Path to the `hermes` binary (default: looked up via `PATH`). Only used when `coding_agent` is `hermes`.                                                                                                                                           |
+| `WSX_HERMES_MODEL`    | Model override for Hermes, passed as `HERMES_INFERENCE_MODEL` env var on the child Hermes process. When set, overrides the model in `~/.hermes/config.yaml`.                                                                                      |
 | `WSX_HERMES_PROVIDER` | Provider override for Hermes, passed as `--provider` to the Hermes CLI. Note: in classic REPL mode (the default), Hermes uses the persistent provider from `~/.hermes/config.yaml`; this flag primarily affects `-z/--oneshot` and `--tui` modes. |
-| `EDITOR` | Editor invoked by `wsx config edit` (default: `vi`) |
-| `VISUAL` / `EDITOR` | Fallback when `editor_cmd` is unset |
-| `TERMINAL` | Fallback when `terminal_cmd` is unset |
-| `XDG_STATE_HOME` | Base for the wsx state directory (default: `~/.local/state`) |
-| `RUST_LOG` | `tracing` filter (default: `info`); set `wsx=debug` for verbose logs |
-| `HOME` | Fallback for resolving the state directory |
+| `EDITOR`              | Editor invoked by `wsx config edit` (default: `vi`)                                                                                                                                                                                               |
+| `VISUAL` / `EDITOR`   | Fallback when `editor_cmd` is unset                                                                                                                                                                                                               |
+| `TERMINAL`            | Fallback when `terminal_cmd` is unset                                                                                                                                                                                                             |
+| `XDG_STATE_HOME`      | Base for the wsx state directory (default: `~/.local/state`)                                                                                                                                                                                      |
+| `RUST_LOG`            | `tracing` filter (default: `info`); set `wsx=debug` for verbose logs                                                                                                                                                                              |
+| `HOME`                | Fallback for resolving the state directory                                                                                                                                                                                                        |
 
 ### Storage and configuration files
 
-| Path | Contents |
-|---|---|
-| `$XDG_STATE_HOME/wsx/state.db` | SQLite database: repos, workspaces, settings |
-| `$XDG_STATE_HOME/wsx/worktrees/<repo>/<workspace>/` | Worktree directories created by `wsx` |
-| `$XDG_STATE_HOME/wsx/logs/wsx.log` | Daily-rotated `tracing` logs |
-| `$XDG_STATE_HOME/wsx/project-manager/` | PM Claude Code session cwd; contains `workspaces.json` and PM's own git init. Auto-created on first `p`. |
-| `~/.claude/projects/<encoded-cwd>/<session>.jsonl` | Claude Code's own session files (wsx probes these to detect resumable workspaces) |
+| Path                                                | Contents                                                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `$XDG_STATE_HOME/wsx/state.db`                      | SQLite database: repos, workspaces, settings                                                             |
+| `$XDG_STATE_HOME/wsx/worktrees/<repo>/<workspace>/` | Worktree directories created by `wsx`                                                                    |
+| `$XDG_STATE_HOME/wsx/logs/wsx.log`                  | Daily-rotated `tracing` logs                                                                             |
+| `$XDG_STATE_HOME/wsx/project-manager/`              | PM Claude Code session cwd; contains `workspaces.json` and PM's own git init. Auto-created on first `p`. |
+| `~/.claude/projects/<encoded-cwd>/<session>.jsonl`  | Claude Code's own session files (wsx probes these to detect resumable workspaces)                        |
 
 ## Development
 

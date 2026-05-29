@@ -259,7 +259,7 @@ fn step_ordinal(s: ArchiveStep) -> u8 {
 pub fn ordered_workspaces_for_panel(
     repos: &[crate::data::store::Repo],
     workspaces: &[(RepoId, crate::data::store::Workspace)],
-    events: &HashMap<crate::data::store::WorkspaceId, crate::events::WorkspaceEvents>,
+    events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
     activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
     needs_attention: &HashSet<crate::data::store::WorkspaceId>,
 ) -> Vec<crate::data::store::WorkspaceId> {
@@ -278,7 +278,7 @@ pub fn ordered_workspaces_for_panel(
 
 fn sort_key(
     w: &crate::data::store::Workspace,
-    events: &HashMap<crate::data::store::WorkspaceId, crate::events::WorkspaceEvents>,
+    events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
     activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
     needs_attention: &HashSet<crate::data::store::WorkspaceId>,
 ) -> (u8, u8, u8, i64) {
@@ -318,7 +318,7 @@ pub fn render_updates_panel(
     area: Rect,
     repos: &[crate::data::store::Repo],
     workspaces: &[(RepoId, crate::data::store::Workspace)],
-    events: &HashMap<crate::data::store::WorkspaceId, crate::events::WorkspaceEvents>,
+    events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
     activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
     needs_attention: &HashSet<crate::data::store::WorkspaceId>,
     awaiting: &HashMap<crate::data::store::WorkspaceId, (String, i64)>,
@@ -449,7 +449,7 @@ fn scroll_offset_for_selected(
 #[allow(clippy::too_many_arguments)]
 fn workspace_row<'a>(
     w: &'a crate::data::store::Workspace,
-    events: Option<&'a crate::events::WorkspaceEvents>,
+    events: Option<&'a crate::activity::events::WorkspaceEvents>,
     activity: Option<crate::ui::updates_bar::ActivityState>,
     needs_attention: bool,
     awaiting: Option<&'a (String, i64)>,
@@ -557,7 +557,7 @@ pub fn render_process_list(
     f: &mut Frame,
     area: Rect,
     workspace_name: &str,
-    procs: &[crate::proc::ProcInfo],
+    procs: &[crate::activity::proc::ProcInfo],
     selected: usize,
     theme: &Theme,
 ) {

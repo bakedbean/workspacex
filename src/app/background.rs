@@ -37,11 +37,11 @@ pub async fn tail_workspace_events(
     }
     let current_file = match ws_agent {
         crate::pty::session::AgentKind::Claude => {
-            crate::events::locate_session_file(&worktree_path)
+            crate::activity::events::locate_session_file(&worktree_path)
         }
-        crate::pty::session::AgentKind::Pi => crate::pi_events::locate_session_file(&worktree_path),
+        crate::pty::session::AgentKind::Pi => crate::activity::pi_events::locate_session_file(&worktree_path),
         crate::pty::session::AgentKind::Hermes => {
-            crate::hermes_events::locate_session_file(&worktree_path)
+            crate::activity::hermes_events::locate_session_file(&worktree_path)
         }
     };
     // Snapshot the FULL (file_path, byte_offset) pair so the commit can
@@ -64,16 +64,16 @@ pub async fn tail_workspace_events(
         return;
     };
     let tail_result = match ws_agent {
-        crate::pty::session::AgentKind::Claude => crate::events::tail_session(&file, tail_from),
-        crate::pty::session::AgentKind::Pi => crate::pi_events::tail_session(&file, tail_from),
+        crate::pty::session::AgentKind::Claude => crate::activity::events::tail_session(&file, tail_from),
+        crate::pty::session::AgentKind::Pi => crate::activity::pi_events::tail_session(&file, tail_from),
         crate::pty::session::AgentKind::Hermes => {
-            crate::hermes_events::tail_session(&file, tail_from)
+            crate::activity::hermes_events::tail_session(&file, tail_from)
         }
     };
     let Ok(update) = tail_result else {
         return;
     };
-    let crate::events::TailUpdate {
+    let crate::activity::events::TailUpdate {
         new_offset,
         events,
         tool_use_starts,
@@ -199,7 +199,7 @@ pub async fn tail_workspace_events(
         evt.last_user_interrupted = v;
     }
     for e in events {
-        crate::events::push_event(evt, e);
+        crate::activity::events::push_event(evt, e);
     }
     // First successful tail of this workspace's JSONL.
     // After this point the classifier sees the agent's
@@ -364,7 +364,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
             now_ms.saturating_sub(g.last_proc_scan_ms) >= 10_000
         };
         if should_scan {
-            let procs = crate::proc::scan().await;
+            let procs = crate::activity::proc::scan().await;
             let worktrees: Vec<(crate::data::store::WorkspaceId, std::path::PathBuf)> = {
                 let g = app.lock().await;
                 g.workspaces
@@ -376,7 +376,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 .iter()
                 .map(|(id, path)| (*id, path.as_path()))
                 .collect();
-            let bucketed = crate::proc::bucket_by_worktree(&procs, &worktree_refs);
+            let bucketed = crate::activity::proc::bucket_by_worktree(&procs, &worktree_refs);
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)

@@ -99,11 +99,11 @@ fn compute_session_log_dir(worktree: &Path, agent: crate::pty::session::AgentKin
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
     match agent {
         crate::pty::session::AgentKind::Claude => {
-            let encoded = crate::events::encode_cwd(&abs);
+            let encoded = crate::activity::events::encode_cwd(&abs);
             home.join(".claude/projects").join(encoded)
         }
         crate::pty::session::AgentKind::Pi => {
-            let encoded = crate::pi_events::encode_cwd(&abs);
+            let encoded = crate::activity::pi_events::encode_cwd(&abs);
             home.join(".pi/agent/sessions").join(encoded)
         }
         crate::pty::session::AgentKind::Hermes => {

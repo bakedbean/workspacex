@@ -144,7 +144,7 @@ pub struct App {
     /// `+N −N` cell fresh without re-running diff on every 2s tick.
     pub diff_last_poll_ms: std::collections::HashMap<crate::data::store::WorkspaceId, i64>,
     pub workspace_events:
-        std::collections::HashMap<crate::data::store::WorkspaceId, crate::events::WorkspaceEvents>,
+        std::collections::HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity: std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
     /// Workspaces whose JSONL events have been read at least once by the
@@ -164,7 +164,7 @@ pub struct App {
     /// Processes detected per workspace (cwd inside the workspace's
     /// worktree). Refreshed every ~10s by branch_drift_poll.
     pub workspace_processes:
-        std::collections::HashMap<crate::data::store::WorkspaceId, Vec<crate::proc::ProcInfo>>,
+        std::collections::HashMap<crate::data::store::WorkspaceId, Vec<crate::activity::proc::ProcInfo>>,
     /// Monotonic counter incremented every animation tick. Drives
     /// dashboard spinner phase + any other tick-driven UI animation.
     pub tick: u32,
@@ -493,7 +493,7 @@ pub(crate) fn reset_detail_scroll_on_workspace_change(
 /// Returns Some when the agent is paused waiting on the user (either
 /// mid-turn with a pending question tool, or end-of-turn with a
 /// trailing question / completion).
-pub(crate) fn derive_stopped_kind(e: &crate::events::WorkspaceEvents) -> Option<StoppedKind> {
+pub(crate) fn derive_stopped_kind(e: &crate::activity::events::WorkspaceEvents) -> Option<StoppedKind> {
     // Question tools fire even without a terminal stop_reason — the model
     // is mid-turn but has explicitly asked the user something.
     if e.pending_question_tool().is_some() {
@@ -728,7 +728,7 @@ pub async fn run<B: Backend + std::io::Write>(
 /// so the modal reflects the new state without waiting for the
 /// next 10s poll tick.
 pub(crate) async fn rescan_processes(app: &mut App) {
-    let procs = crate::proc::scan().await;
+    let procs = crate::activity::proc::scan().await;
     let worktrees: Vec<(crate::data::store::WorkspaceId, std::path::PathBuf)> = app
         .workspaces
         .iter()
@@ -738,7 +738,7 @@ pub(crate) async fn rescan_processes(app: &mut App) {
         .iter()
         .map(|(id, path)| (*id, path.as_path()))
         .collect();
-    app.workspace_processes = crate::proc::bucket_by_worktree(&procs, &worktree_refs);
+    app.workspace_processes = crate::activity::proc::bucket_by_worktree(&procs, &worktree_refs);
     app.last_proc_scan_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -1212,7 +1212,7 @@ mod reconcile_archive_tests {
 #[cfg(test)]
 mod derive_stopped_kind_tests {
     use super::*;
-    use crate::events::{StopReason, WorkspaceEvents};
+    use crate::activity::events::{StopReason, WorkspaceEvents};
 
     #[test]
     fn returns_none_when_idle() {

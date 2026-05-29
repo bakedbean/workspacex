@@ -1208,13 +1208,13 @@ async fn handle_key_modal(
                 // verbs. Arrow keys are the only navigation.
                 KeyCode::Char('k') => {
                     if let Some(p) = procs.get(selected) {
-                        let _ = crate::proc::kill_pid(p.pid, "TERM").await;
+                        let _ = crate::activity::proc::kill_pid(p.pid, "TERM").await;
                         rescan_processes(app).await;
                     }
                 }
                 KeyCode::Char('K') => {
                     if let Some(p) = procs.get(selected) {
-                        let _ = crate::proc::kill_pid(p.pid, "KILL").await;
+                        let _ = crate::activity::proc::kill_pid(p.pid, "KILL").await;
                         rescan_processes(app).await;
                     }
                 }

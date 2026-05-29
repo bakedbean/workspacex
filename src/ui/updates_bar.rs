@@ -6,7 +6,7 @@
 //! previously surfaced "most recent event" was removed — issue #18 makes
 //! the status row exclusively about workspaces that need user action.
 
-use crate::events::WorkspaceEvents;
+use crate::activity::events::WorkspaceEvents;
 use crate::data::store::WorkspaceId;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
@@ -266,7 +266,7 @@ pub fn format_age(delta_ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{EventKind, EventSnapshot, WorkspaceEvents};
+    use crate::activity::events::{EventKind, EventSnapshot, WorkspaceEvents};
     use crate::data::store::WorkspaceId;
 
     type WsOwned = (

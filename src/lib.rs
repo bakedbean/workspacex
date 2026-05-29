@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod agent;
 pub mod app;
 pub mod cli;
@@ -6,14 +7,10 @@ pub mod data;
 pub mod detail_bar_config;
 pub mod detail_modules;
 pub mod error;
-pub mod events;
 pub mod external;
 pub mod git;
-pub mod hermes_events;
 pub mod names;
-pub mod pi_events;
 pub mod pinned;
-pub mod proc;
 pub mod pty;
 pub mod remotes;
 #[doc(hidden)]

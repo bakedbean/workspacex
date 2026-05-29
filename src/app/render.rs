@@ -271,7 +271,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             Some(((now_ms - last_ms).max(0) / 1000) as u64)
                         };
                         let status = app.classify_status(ws);
-                        let procs: &[crate::proc::ProcInfo] = app
+                        let procs: &[crate::activity::proc::ProcInfo] = app
                             .workspace_processes
                             .get(&ws.id)
                             .map(Vec::as_slice)

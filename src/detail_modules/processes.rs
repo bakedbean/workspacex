@@ -25,7 +25,7 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
 mod tests {
     use super::*;
     use crate::detail_modules::tests_helpers::stub_context;
-    use crate::proc::ProcInfo;
+    use crate::activity::proc::ProcInfo;
     use std::path::PathBuf;
 
     fn proc(pid: i32, cmd: &str) -> ProcInfo {

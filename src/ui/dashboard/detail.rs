@@ -6,10 +6,10 @@
 //! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
 
 use crate::detail_bar_config::DetailBarConfig;
-use crate::events::WorkspaceEvents;
+use crate::activity::events::WorkspaceEvents;
 use crate::git::forge::BranchLifecycle;
 use crate::git::DiffStats;
-use crate::proc::ProcInfo;
+use crate::activity::proc::ProcInfo;
 use crate::data::store::{Repo, Workspace};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
@@ -909,9 +909,9 @@ mod tests {
     #[test]
     fn full_render_paints_header_body_and_reply_row() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             first_user_text: Some("give me a tour".into()),
-            tool_use_counts: crate::events::ToolUseCounts {
+            tool_use_counts: crate::activity::events::ToolUseCounts {
                 read: 14,
                 bash: 2,
                 ..Default::default()
@@ -959,7 +959,7 @@ mod tests {
     #[test]
     fn chrome_only_mode_renders_header_and_reply_no_body_labels() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             first_user_text: Some("hi".into()),
             last_assistant_text: Some("ack".into()),
             ..Default::default()
@@ -1012,7 +1012,7 @@ mod tests {
     #[test]
     fn narrow_terminal_drops_chat_and_procs_columns() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             first_user_text: Some("hi".into()),
             last_assistant_text: Some("ack".into()),
             ..Default::default()
@@ -1102,7 +1102,7 @@ mod tests {
     #[test]
     fn render_one_container_fills_full_width() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             last_assistant_text: Some("hello".into()),
             ..Default::default()
         };
@@ -1329,7 +1329,7 @@ mod tests {
         // rule rows. Every row between the header and reply must show
         // exactly two `│` glyphs.
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             first_user_text: Some("hi".into()),
             last_assistant_text: Some("ack".into()),
             ..Default::default()

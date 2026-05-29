@@ -2,6 +2,10 @@
 name = "wsx"
 version = "0.1.0"
 edition = "2024"
+# Minimum supported Rust version. Edition 2024 was stabilized in 1.85, so that
+# is the hard floor; declaring it makes cargo fail with a clear message on
+# older toolchains instead of a cryptic edition error.
+rust-version = "1.85"
 
 [lib]
 name = "wsx"

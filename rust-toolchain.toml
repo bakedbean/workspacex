@@ -1,0 +1,10 @@
+# Pin the toolchain so formatting and lints are reproducible across every
+# contributor and CI runner. rustfmt and clippy output can differ between
+# Rust releases, so a floating toolchain makes the `cargo fmt --check` and
+# `clippy -D warnings` gates non-deterministic.
+#
+# This is the *development/CI* toolchain. The project's minimum supported
+# Rust version (MSRV) is declared separately via `rust-version` in Cargo.toml.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

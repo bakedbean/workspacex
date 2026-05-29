@@ -1086,38 +1086,47 @@ fn render_rename_system_prompt_hermes(
 /// Decide what text to inject into the wsx-managed block of AGENTS.md for a
 /// given Hermes spawn mode. Returns None when nothing needs injecting.
 fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
-    fn combine(rename: String, custom: Option<String>) -> String {
-        match custom {
-            None => rename,
-            Some(c) => format!("{rename}\n\n{c}"),
-        }
-    }
-
-    match mode {
+    let (doctrine, rename, custom) = match mode {
         SpawnMode::Fresh {
             rename_ctx: Some(ctx),
             custom_instructions,
+            doctrine,
             ..
-        } => Some(combine(
-            render_rename_system_prompt_hermes(
+        } => (
+            doctrine.clone(),
+            Some(render_rename_system_prompt_hermes(
                 &ctx.current_branch,
                 &ctx.branch_prefix,
                 &ctx.repo_name,
                 &ctx.current_slug,
-            ),
+            )),
             custom_instructions.clone(),
-        )),
+        ),
         SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions,
+            doctrine,
             ..
         }
         | SpawnMode::Continue {
-            custom_instructions, ..
-        } => custom_instructions.clone(),
+            custom_instructions,
+            doctrine,
+            ..
+        } => (doctrine.clone(), None, custom_instructions.clone()),
         SpawnMode::ProjectManager {
             custom_instructions, ..
-        } => Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+        } => (
+            None,
+            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+            None,
+        ),
+    };
+
+    let parts: Vec<String> = [doctrine, rename, custom].into_iter().flatten().collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     }
 }
 
@@ -2830,6 +2839,34 @@ mod tests {
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
             assert!(!result.is_empty());
+        }
+
+        #[test]
+        fn hermes_prepends_doctrine_before_custom() {
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: Some("CUSTOM_MARK".to_string()),
+                doctrine: Some("DOCTRINE_MARK".to_string()),
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            let dpos = result.find("DOCTRINE_MARK").expect("doctrine present");
+            let cpos = result.find("CUSTOM_MARK").expect("custom present");
+            assert!(dpos < cpos, "doctrine must precede custom: {result}");
+            assert!(result.starts_with("DOCTRINE_MARK"), "doctrine must lead: {result}");
+        }
+
+        #[test]
+        fn hermes_pm_mode_has_no_doctrine() {
+            let mode = super::SpawnMode::ProjectManager {
+                workspaces_json_path: std::path::PathBuf::from("/tmp/x/workspaces.json"),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                resume: false,
+                fast_mode: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("PM still injects its prompt");
+            assert!(!result.contains("DOCTRINE_MARK"), "PM must not get doctrine: {result}");
         }
     }
 

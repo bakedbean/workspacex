@@ -2345,6 +2345,36 @@ mod pm_state_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_spawn_info_populates_doctrine() {
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/work/backend"), "backend", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "test-ws",
+                branch: "backend/test-ws",
+                worktree_path: std::path::Path::new("/wt/test-ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store.set_workspace_state(ws_id, WorkspaceState::Ready).unwrap();
+
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let (_id, _path, mode, _repo_path, _agent) = build_spawn_info(&app, ws_id).unwrap();
+        match mode {
+            crate::pty::session::SpawnMode::Fresh { doctrine, .. } => {
+                let d = doctrine.expect("doctrine must be populated");
+                assert!(d.contains("superpowers"), "claude doctrine includes superpowers: {d}");
+            }
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_spawn_info_filters_self_reference() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();

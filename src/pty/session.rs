@@ -293,6 +293,9 @@ pub enum SpawnMode {
     Fresh {
         rename_ctx: Option<RenameContext>,
         custom_instructions: Option<String>,
+        /// Process doctrine to inject ahead of rename/custom content. `None`
+        /// only in tests; production always supplies it via `build_spawn_info`.
+        doctrine: Option<String>,
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
     },
@@ -300,6 +303,7 @@ pub enum SpawnMode {
     /// `yolo` adds `--dangerously-skip-permissions`.
     Continue {
         custom_instructions: Option<String>,
+        doctrine: Option<String>,
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
     },
@@ -674,6 +678,7 @@ pub fn build_claude_command(
         match mode {
             SpawnMode::Continue {
                 custom_instructions,
+                doctrine: _,
                 additional_dirs,
                 yolo,
             } => (
@@ -687,6 +692,7 @@ pub fn build_claude_command(
             SpawnMode::Fresh {
                 rename_ctx,
                 custom_instructions,
+                doctrine: _,
                 additional_dirs,
                 yolo,
             } => {
@@ -846,12 +852,14 @@ pub fn build_pi_command(
     let (rename_prompt, custom, add_continue) = match mode {
         SpawnMode::Continue {
             custom_instructions,
+            doctrine: _,
             additional_dirs: _,
             yolo: _,
         } => (None, custom_instructions.clone(), true),
         SpawnMode::Fresh {
             rename_ctx,
             custom_instructions,
+            doctrine: _,
             additional_dirs: _,
             yolo: _,
         } => {
@@ -1346,6 +1354,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -1404,6 +1413,7 @@ mod tests {
                 SpawnMode::Fresh {
                     rename_ctx: None,
                     custom_instructions: None,
+                    doctrine: None,
                     additional_dirs: vec![],
                     yolo: false,
                 },
@@ -1442,6 +1452,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -1475,6 +1486,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(ctx),
             custom_instructions: Some("Use tabs not spaces".into()),
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1509,6 +1521,7 @@ mod tests {
     fn system_prompt_continue_passes_custom_only() {
         let mode = SpawnMode::Continue {
             custom_instructions: Some("Use ruff".into()),
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1539,6 +1552,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(ctx),
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1559,6 +1573,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1578,6 +1593,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: true,
         };
@@ -1595,6 +1611,7 @@ mod tests {
     fn yolo_continue_emits_skip_permissions() {
         let mode = SpawnMode::Continue {
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: true,
         };
@@ -1614,6 +1631,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1781,6 +1799,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1797,6 +1816,7 @@ mod tests {
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::Continue {
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1814,6 +1834,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1840,6 +1861,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1862,6 +1884,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1905,6 +1928,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![
                 PathBuf::from("/work/frontend"),
                 PathBuf::from("/work/marketing"),
@@ -1939,6 +1963,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1963,6 +1988,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -2049,6 +2075,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -2081,6 +2108,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -2187,6 +2215,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -2257,6 +2286,7 @@ mod tests {
             env.set("WSX_PI_MODEL", "claude-opus-4-7");
             let cont_mode = SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2706,6 +2736,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: Some(rename_ctx()),
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2718,6 +2749,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: Some(rename_ctx()),
                 custom_instructions: Some("Use ruff.".into()),
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2734,6 +2766,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: Some("Use ruff.".into()),
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2746,6 +2779,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2756,6 +2790,7 @@ mod tests {
         fn continue_with_custom_returns_custom() {
             let mode = super::SpawnMode::Continue {
                 custom_instructions: Some("Be terse.".into()),
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2767,6 +2802,7 @@ mod tests {
         fn continue_without_custom_returns_none() {
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2806,6 +2842,7 @@ mod tests {
                     current_slug: "bold-fern".into(),
                 }),
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2832,6 +2869,7 @@ mod tests {
                     current_slug: "bold-fern".into(),
                 }),
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2839,6 +2877,7 @@ mod tests {
             // Now spawn Continue with nothing to inject.
             let cont = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2856,6 +2895,7 @@ mod tests {
             init_gitdir(tmp.path());
             let cont = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2877,6 +2917,7 @@ mod tests {
             let fresh_mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2904,6 +2945,7 @@ mod tests {
             super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             }
@@ -2943,6 +2985,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: true,
             };
@@ -2955,6 +2998,7 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: true,
             };
@@ -3018,7 +3062,7 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             for mode in &[
                 fresh_no_rename(),
-                super::SpawnMode::Continue { custom_instructions: None, additional_dirs: vec![], yolo: true },
+                super::SpawnMode::Continue { custom_instructions: None, doctrine: None, additional_dirs: vec![], yolo: true },
                 super::SpawnMode::ProjectManager {
                     workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
                     custom_instructions: None,
@@ -3058,6 +3102,7 @@ mod tests {
             env.set("HOME", tmp.path().to_string_lossy().as_ref());
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -3093,6 +3138,7 @@ mod tests {
             env.set("HOME", home.path().to_string_lossy().as_ref());
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -3138,6 +3184,7 @@ mod tests {
             env.set("HOME", home.path().to_string_lossy().as_ref());
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -3297,6 +3344,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },

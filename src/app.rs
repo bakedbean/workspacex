@@ -837,6 +837,7 @@ pub(crate) fn build_spawn_info(
     let mode = if crate::pty::session::has_prior_session_for(&ws.worktree_path, agent) {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
+            doctrine: None,
             additional_dirs,
             yolo,
         }
@@ -856,6 +857,7 @@ pub(crate) fn build_spawn_info(
         crate::pty::session::SpawnMode::Fresh {
             rename_ctx,
             custom_instructions: custom,
+            doctrine: None,
             additional_dirs,
             yolo,
         }

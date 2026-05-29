@@ -487,6 +487,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -504,6 +505,7 @@ mod pm_state_tests {
         let second_mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -603,6 +605,7 @@ mod pm_state_tests {
             let mode = crate::pty::session::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -698,6 +701,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -781,6 +785,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -850,6 +855,7 @@ mod pm_state_tests {
             let mode = crate::pty::session::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -1130,6 +1136,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1205,6 +1212,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1254,6 +1262,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1309,6 +1318,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1348,6 +1358,7 @@ mod pm_state_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -3671,6 +3682,7 @@ mod ctrl_x_esc_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -3688,6 +3700,7 @@ mod ctrl_x_esc_tests {
         let second_mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -3786,6 +3799,7 @@ mod restore_layout_tests {
             let mode = crate::pty::session::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -4142,6 +4156,7 @@ mod detail_bar_focus_tests {
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };

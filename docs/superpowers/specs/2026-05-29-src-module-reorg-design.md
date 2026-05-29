@@ -1,7 +1,7 @@
 # src/ module reorganization
 
 **Date:** 2026-05-29
-**Status:** Approved design, pending implementation
+**Status:** Implemented (PR #123)
 
 ## Problem
 
@@ -138,4 +138,3 @@ Each step keeps `cargo build` + `cargo test` passing before committing:
 - The TUI dirs (`app/`, `ui/`, `pty/`, `detail_modules/`) are untouched.
 - Splitting large files (`events.rs`, `store.rs`, `cli.rs`) is deferred.
 - No re-export shims; old paths are fully removed.
-```

@@ -4537,4 +4537,81 @@ mod attached_wheel_forwarding {
             "without agent mouse mode, plain wheel falls through to wsx scrollback"
         );
     }
+
+    fn spawn_pm_for_test_local(app: &mut App) {
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", crate::test_support::cat_path());
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let s = app
+            .sessions
+            .spawn_pm(
+                &PathBuf::from("."),
+                80,
+                24,
+                mode,
+                crate::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.pm = Some(s);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_wheel_down_forwards_when_mouse_mode_on() {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        arm_mouse_mode_and_pane(&mut app, ws_id);
+        // Pre-scroll so a fall-through ScrollDown would drop 5 -> 2; forwarding
+        // leaves it at 5.
+        app.sessions.get(ws_id).unwrap().scroll_up(5);
+        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollDown, 10, 10, KeyModifiers::NONE)).await;
+        assert_eq!(
+            app.sessions.get(ws_id).unwrap().scrollback_offset.load(Ordering::Relaxed),
+            5,
+            "scrolldown over a mouse-aware pane is forwarded, leaving wsx scrollback untouched"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_wheel_over_chrome_falls_through_to_scrollback() {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        arm_mouse_mode_and_pane(&mut app, ws_id); // pane rect is height 24 (rows 0..23)
+        // Row 30 is below the pane -> no pane under cursor -> scrollback even though
+        // mouse mode is on.
+        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollUp, 10, 30, KeyModifiers::NONE)).await;
+        assert_eq!(
+            app.sessions.get(ws_id).unwrap().scrollback_offset.load(Ordering::Relaxed),
+            3,
+            "wheel over chrome (no pane under cursor) drives wsx scrollback"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_wheel_forwards_in_attached_pm() {
+        let store = crate::store::Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        spawn_pm_for_test_local(&mut app);
+        app.view = crate::ui::View::AttachedPm;
+        let pm = app.pm.as_ref().unwrap().clone();
+        {
+            let mut p = pm.parser.lock().unwrap();
+            p.process(b"\x1b[?1000h\x1b[?1006h");
+        }
+        app.attached_pane_rects = vec![(pm.clone(), Rect { x: 0, y: 0, width: 80, height: 24 })];
+        handle_mouse(&mut app, mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE)).await;
+        assert_eq!(
+            pm.scrollback_offset.load(Ordering::Relaxed),
+            0,
+            "wheel over the PM pane with mouse mode on is forwarded, not scrolled locally"
+        );
+    }
 }

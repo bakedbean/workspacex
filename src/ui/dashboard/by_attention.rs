@@ -265,7 +265,7 @@ mod tests {
                         setup_failed: false,
                         lifecycle: None,
                         nerd_fonts: false,
-                        workspace_id: crate::store::WorkspaceId(i as i64),
+                        workspace_id: crate::data::store::WorkspaceId(i as i64),
                         has_multi_pane_layout: false,
                     },
                 });
@@ -421,7 +421,7 @@ mod tests {
                 setup_failed: false,
                 lifecycle: None,
                 nerd_fonts: false,
-                workspace_id: crate::store::WorkspaceId(0),
+                workspace_id: crate::data::store::WorkspaceId(0),
                 has_multi_pane_layout: false,
             },
         };

@@ -1,4 +1,10 @@
 #![allow(clippy::collapsible_if)]
+//! Version control wrappers and git-host (forge) integration.
+//!
+//! This module is the `git -C <cwd>` command wrapper; the `forge` submodule
+//! handles GitHub PR-lifecycle detection via `gh`.
+
+pub mod forge;
 
 use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};

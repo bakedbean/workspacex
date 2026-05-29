@@ -364,7 +364,7 @@ impl Store {
             };
         drop(stmt);
         for (other_id, spec) in rows {
-            let names = crate::related::parse(&spec);
+            let names = crate::agent::related::parse(&spec);
             if !names.iter().any(|n| n == &old_name) {
                 continue;
             }

@@ -40,7 +40,10 @@ const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
 /// - a disable sentinel (`off` / `none` / `disabled`, case-insensitive) →
 ///   `None`, suppressing injection for that install.
 /// - any other value → that value verbatim, for every agent.
-pub fn resolve_effective_doctrine(store: &crate::store::Store, agent: AgentKind) -> Option<String> {
+pub fn resolve_effective_doctrine(
+    store: &crate::data::store::Store,
+    agent: AgentKind,
+) -> Option<String> {
     match store.get_setting("process_doctrine") {
         Ok(Some(v)) => {
             let trimmed = v.trim();
@@ -116,7 +119,7 @@ mod tests {
 
     #[test]
     fn resolve_returns_default_when_unset() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         assert_eq!(
             resolve_effective_doctrine(&store, AgentKind::Claude),
             Some(process_doctrine(AgentKind::Claude))
@@ -125,7 +128,7 @@ mod tests {
 
     #[test]
     fn resolve_override_replaces_default_verbatim() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         store
             .set_setting("process_doctrine", "CUSTOM DOCTRINE")
             .unwrap();
@@ -137,7 +140,7 @@ mod tests {
 
     #[test]
     fn resolve_treats_blank_override_as_unset() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         store.set_setting("process_doctrine", "   ").unwrap();
         assert_eq!(
             resolve_effective_doctrine(&store, AgentKind::Pi),
@@ -148,7 +151,7 @@ mod tests {
     #[test]
     fn resolve_disable_sentinel_suppresses_doctrine() {
         for sentinel in ["off", "none", "disabled", "OFF", "None", " disabled "] {
-            let store = crate::store::Store::open_in_memory().unwrap();
+            let store = crate::data::store::Store::open_in_memory().unwrap();
             store.set_setting("process_doctrine", sentinel).unwrap();
             assert_eq!(
                 resolve_effective_doctrine(&store, AgentKind::Claude),

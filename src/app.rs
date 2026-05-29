@@ -1,8 +1,8 @@
 #![allow(clippy::collapsible_if)]
 
+use crate::data::store::{Repo, Store, Workspace, WorkspaceId};
 use crate::error::Result;
 use crate::pty::session::SessionManager;
-use crate::store::{Repo, Store, Workspace, WorkspaceId};
 use crate::ui::View;
 use crate::ui::dashboard::DashboardState;
 use crate::ui::modal::Modal;
@@ -33,8 +33,8 @@ pub enum AppEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionTarget {
-    Repo(crate::store::RepoId),
-    Workspace(crate::store::WorkspaceId),
+    Repo(crate::data::store::RepoId),
+    Workspace(crate::data::store::WorkspaceId),
 }
 
 /// Outcome of `ensure_workspace_session`. `AgentMissing` signals to callers
@@ -90,7 +90,7 @@ impl RepoSettingField {
 
 #[derive(Debug, Clone)]
 pub struct PendingEdit {
-    pub repo_id: crate::store::RepoId,
+    pub repo_id: crate::data::store::RepoId,
     pub field: RepoSettingField,
 }
 
@@ -125,28 +125,33 @@ pub struct App {
     pub pending_archive_gen: Option<u64>,
     pub dashboard: DashboardState,
     pub repos: Vec<Repo>,
-    pub workspaces: Vec<(crate::store::RepoId, Workspace)>,
+    pub workspaces: Vec<(crate::data::store::RepoId, Workspace)>,
     pub selectable: Vec<SelectionTarget>,
     pub worktree_base: PathBuf,
     pub leader_pending: bool,
     pub z_leader_pending: bool,
     pub quit: bool,
     pub workspace_status:
-        std::collections::HashMap<crate::store::WorkspaceId, crate::git::WorkspaceStatus>,
+        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::WorkspaceStatus>,
     /// Cached PR lifecycle per workspace. Absent key = never polled; present
     /// key = last successful poll's result.
-    pub pr_lifecycle:
-        std::collections::HashMap<crate::store::WorkspaceId, crate::forge::BranchLifecycle>,
+    pub pr_lifecycle: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::git::forge::BranchLifecycle,
+    >,
     /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
-    pub pr_last_poll_ms: std::collections::HashMap<crate::store::WorkspaceId, i64>,
+    pub pr_last_poll_ms: std::collections::HashMap<crate::data::store::WorkspaceId, i64>,
     /// Last epoch-ms we attempted a `git diff --shortstat` per workspace
     /// (throttle key). 10s minimum interval keeps the dashboard
     /// `+N −N` cell fresh without re-running diff on every 2s tick.
-    pub diff_last_poll_ms: std::collections::HashMap<crate::store::WorkspaceId, i64>,
-    pub workspace_events:
-        std::collections::HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
+    pub diff_last_poll_ms: std::collections::HashMap<crate::data::store::WorkspaceId, i64>,
+    pub workspace_events: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::activity::events::WorkspaceEvents,
+    >,
     /// Per-workspace tracking for attention-alert state.
-    pub workspace_activity: std::collections::HashMap<crate::store::WorkspaceId, ActivityState>,
+    pub workspace_activity:
+        std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
     /// Workspaces whose JSONL events have been read at least once by the
     /// tail loop. Until a workspace is in this set the classifier's output
     /// is provisional (it can only see session-liveness, not stop_reason),
@@ -154,30 +159,34 @@ pub struct App {
     /// this gate the classifier flickers from Active → AwaitingAnswer the
     /// instant the tail loop catches up, which the bell loop would treat
     /// as a legitimate transition and ring on cold start.
-    pub workspace_events_scanned: std::collections::HashSet<crate::store::WorkspaceId>,
+    pub workspace_events_scanned: std::collections::HashSet<crate::data::store::WorkspaceId>,
     /// Workspaces whose alert hasn't been acknowledged (cleared on attach).
-    pub workspace_needs_attention: std::collections::HashSet<crate::store::WorkspaceId>,
+    pub workspace_needs_attention: std::collections::HashSet<crate::data::store::WorkspaceId>,
     /// Anchors whose saved layout has more than one pane. Used by the
     /// dashboard to render the split-layout indicator. Recomputed by
     /// `App::refresh`.
-    pub workspaces_with_multi_pane_layouts: std::collections::HashSet<crate::store::WorkspaceId>,
+    pub workspaces_with_multi_pane_layouts:
+        std::collections::HashSet<crate::data::store::WorkspaceId>,
     /// Processes detected per workspace (cwd inside the workspace's
     /// worktree). Refreshed every ~10s by branch_drift_poll.
-    pub workspace_processes:
-        std::collections::HashMap<crate::store::WorkspaceId, Vec<crate::proc::ProcInfo>>,
+    pub workspace_processes: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        Vec<crate::activity::proc::ProcInfo>,
+    >,
     /// Monotonic counter incremented every animation tick. Drives
     /// dashboard spinner phase + any other tick-driven UI animation.
     pub tick: u32,
     /// Cached `git diff --shortstat` output per workspace (added/deleted).
     /// Populated lazily by the workspace-status poller.
-    pub workspace_diff: std::collections::HashMap<crate::store::WorkspaceId, crate::git::DiffStats>,
+    pub workspace_diff:
+        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::DiffStats>,
     /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
     /// to the worktree root (as `git diff --numstat` emits them).
     /// Populated by the same poller that maintains `workspace_diff`.
     /// Used by the detail bar's RECENT FILES section to annotate each
     /// file with its `+X −Y` delta.
     pub workspace_diff_per_file: std::collections::HashMap<
-        crate::store::WorkspaceId,
+        crate::data::store::WorkspaceId,
         std::collections::HashMap<String, crate::git::DiffStats>,
     >,
     /// Rolling 24-hour history of `(hour_epoch_secs, max_live_count)` for
@@ -205,7 +214,7 @@ pub struct App {
     /// Sentinel for reset-on-workspace-switch. When the selected
     /// workspace changes, `detail_scroll_offsets` zeroes out and this
     /// updates. See `src/ui/dashboard/detail.rs::render`.
-    pub detail_scroll_last_workspace: Option<crate::store::WorkspaceId>,
+    pub detail_scroll_last_workspace: Option<crate::data::store::WorkspaceId>,
     /// Rect for each rendered detail-bar container slot, populated each
     /// draw and consumed by `handle_mouse` for hit-testing wheel events.
     /// Mirrors the `chip_rects` draw-populates-input-reads pattern.
@@ -220,7 +229,7 @@ pub struct App {
         ratatui::layout::Rect,
     )>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
-    pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
+    pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
     /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
     /// with ratatui's escape sequences. See Task 4 / Critical review.
@@ -238,7 +247,7 @@ pub struct App {
     /// dashboard shows fresh JSONL events the moment the user returns
     /// from attached view instead of waiting for the next 2s poll.
     /// Drained by `run_loop` after each handled event.
-    pub pending_workspace_refresh: std::collections::HashSet<crate::store::WorkspaceId>,
+    pub pending_workspace_refresh: std::collections::HashSet<crate::data::store::WorkspaceId>,
     pub registry: crate::detail_modules::Registry,
 }
 
@@ -400,7 +409,10 @@ impl App {
     /// signal when the PTY is still actively streaming (see
     /// `Status::classify`) to avoid false positives from long-running
     /// shell commands.
-    pub fn awaiting_permission(&self, ws_id: crate::store::WorkspaceId) -> Option<(String, i64)> {
+    pub fn awaiting_permission(
+        &self,
+        ws_id: crate::data::store::WorkspaceId,
+    ) -> Option<(String, i64)> {
         let evt = self.workspace_events.get(&ws_id)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -414,7 +426,7 @@ impl App {
     /// pending tool_use into one canonical state used by the renderer.
     pub fn classify_status(
         &self,
-        ws: &crate::store::Workspace,
+        ws: &crate::data::store::Workspace,
     ) -> crate::ui::dashboard::status::Status {
         let session = self.sessions.get(ws.id);
         let running = session.as_ref().is_some_and(|s| {
@@ -480,8 +492,8 @@ impl App {
 /// method on `&mut App` cannot.
 pub(crate) fn reset_detail_scroll_on_workspace_change(
     offsets: &mut [u16; 4],
-    last_workspace: &mut Option<crate::store::WorkspaceId>,
-    current: Option<crate::store::WorkspaceId>,
+    last_workspace: &mut Option<crate::data::store::WorkspaceId>,
+    current: Option<crate::data::store::WorkspaceId>,
 ) {
     if *last_workspace != current {
         *offsets = [0; 4];
@@ -493,7 +505,9 @@ pub(crate) fn reset_detail_scroll_on_workspace_change(
 /// Returns Some when the agent is paused waiting on the user (either
 /// mid-turn with a pending question tool, or end-of-turn with a
 /// trailing question / completion).
-pub(crate) fn derive_stopped_kind(e: &crate::events::WorkspaceEvents) -> Option<StoppedKind> {
+pub(crate) fn derive_stopped_kind(
+    e: &crate::activity::events::WorkspaceEvents,
+) -> Option<StoppedKind> {
     // Question tools fire even without a terminal stop_reason — the model
     // is mid-turn but has explicitly asked the user something.
     if e.pending_question_tool().is_some() {
@@ -574,7 +588,7 @@ where
         crossterm::terminal::LeaveAlternateScreen
     )?;
 
-    let result = crate::external::edit_in_editor(&current, ext);
+    let result = crate::commands::external::edit_in_editor(&current, ext);
 
     // Resume the TUI.
     crossterm::execute!(
@@ -728,17 +742,17 @@ pub async fn run<B: Backend + std::io::Write>(
 /// so the modal reflects the new state without waiting for the
 /// next 10s poll tick.
 pub(crate) async fn rescan_processes(app: &mut App) {
-    let procs = crate::proc::scan().await;
-    let worktrees: Vec<(crate::store::WorkspaceId, std::path::PathBuf)> = app
+    let procs = crate::activity::proc::scan().await;
+    let worktrees: Vec<(crate::data::store::WorkspaceId, std::path::PathBuf)> = app
         .workspaces
         .iter()
         .map(|(_, w)| (w.id, w.worktree_path.clone()))
         .collect();
-    let worktree_refs: Vec<(crate::store::WorkspaceId, &std::path::Path)> = worktrees
+    let worktree_refs: Vec<(crate::data::store::WorkspaceId, &std::path::Path)> = worktrees
         .iter()
         .map(|(id, path)| (*id, path.as_path()))
         .collect();
-    app.workspace_processes = crate::proc::bucket_by_worktree(&procs, &worktree_refs);
+    app.workspace_processes = crate::activity::proc::bucket_by_worktree(&procs, &worktree_refs);
     app.last_proc_scan_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -768,7 +782,7 @@ pub(crate) async fn rescan_processes(app: &mut App) {
 
 pub(crate) fn apply_repo_setting(
     app: &mut App,
-    repo_id: crate::store::RepoId,
+    repo_id: crate::data::store::RepoId,
     field: RepoSettingField,
     value: &str,
 ) -> Result<()> {
@@ -798,7 +812,9 @@ pub(crate) fn apply_repo_setting(
             } else {
                 // Validate. Use DetailBarOverride (not DetailBarConfig)
                 // because per-repo entries are partial overrides.
-                match serde_json::from_str::<crate::detail_bar_config::DetailBarOverride>(trimmed) {
+                match serde_json::from_str::<crate::config::detail_bar_config::DetailBarOverride>(
+                    trimmed,
+                ) {
                     Ok(_) => app.store.set_repo_detail_bar_config(repo_id, Some(trimmed)),
                     Err(e) => Err(crate::error::Error::UserInput(format!(
                         "detail_bar_config is not valid JSON: {e}"
@@ -811,9 +827,9 @@ pub(crate) fn apply_repo_setting(
 
 pub(crate) fn build_spawn_info(
     app: &App,
-    ws_id: crate::store::WorkspaceId,
+    ws_id: crate::data::store::WorkspaceId,
 ) -> Option<(
-    crate::store::WorkspaceId,
+    crate::data::store::WorkspaceId,
     std::path::PathBuf,
     crate::pty::session::SpawnMode,
     std::path::PathBuf,
@@ -821,23 +837,23 @@ pub(crate) fn build_spawn_info(
 )> {
     let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
     let repo = app.repos.iter().find(|r| r.id == *rid)?;
-    let custom = crate::repo::resolve_custom_instructions(repo, &app.store)
+    let custom = crate::data::repo::resolve_custom_instructions(repo, &app.store)
         .ok()
         .flatten();
     let yolo = ws.yolo;
     let agent = ws.agent;
-    let doctrine = crate::doctrine::resolve_effective_doctrine(&app.store, agent);
+    let doctrine = crate::agent::doctrine::resolve_effective_doctrine(&app.store, agent);
     // Resolve related repos (per-repo names → source paths), filter out
     // the spawning repo itself, build the read-only system-prompt
     // fragment, and fold it into custom_instructions before the agent sees it.
-    let resolved = crate::related::resolve(repo.related_repos.as_deref(), &app.repos);
+    let resolved = crate::agent::related::resolve(repo.related_repos.as_deref(), &app.repos);
     let resolved: Vec<(String, std::path::PathBuf)> = resolved
         .into_iter()
         .filter(|(_, p)| p != &repo.path)
         .collect();
     let additional_dirs: Vec<std::path::PathBuf> =
         resolved.iter().map(|(_, p)| p.clone()).collect();
-    let related_prompt = crate::related::build_read_only_prompt(&resolved);
+    let related_prompt = crate::agent::related::build_read_only_prompt(&resolved);
     let custom = match (custom, related_prompt) {
         (None, None) => None,
         (Some(c), None) => Some(c),
@@ -854,7 +870,7 @@ pub(crate) fn build_spawn_info(
     } else {
         let rename_ctx = if crate::names::is_generated_slug(&ws.name) {
             let resolved_prefix =
-                crate::repo::resolve_branch_prefix(repo, &app.store).unwrap_or_default();
+                crate::data::repo::resolve_branch_prefix(repo, &app.store).unwrap_or_default();
             Some(crate::pty::session::RenameContext {
                 current_branch: ws.branch.clone(),
                 branch_prefix: resolved_prefix,
@@ -901,7 +917,7 @@ pub(crate) fn save_layout_for(app: &mut App, state: crate::ui::AttachedState) {
 /// single-pane view if no layout is saved or all panes were pruned.
 pub(crate) fn restore_attached_state(
     app: &mut App,
-    anchor: crate::store::WorkspaceId,
+    anchor: crate::data::store::WorkspaceId,
 ) -> crate::ui::AttachedState {
     let Some((mut tree, mut focus)) = app.store.get_workspace_layout(anchor).ok().flatten() else {
         return crate::ui::AttachedState::single(anchor);
@@ -928,7 +944,7 @@ pub(crate) fn restore_attached_state(
                 }
                 if let Some((sid, sp, mode, repo_path, agent)) = build_spawn_info(app, leaf_id) {
                     maybe_mirror_mcp(app, &repo_path, &sp);
-                    let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+                    let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
                     let _ = app.sessions.spawn(sid, &sp, 80, 24, mode, remote, agent);
                 }
             }
@@ -945,14 +961,14 @@ pub(crate) fn restore_attached_state(
 /// `build_spawn_info` returns `None` (e.g., setup hasn't completed).
 pub(crate) fn ensure_workspace_session(
     app: &mut App,
-    ws_id: crate::store::WorkspaceId,
+    ws_id: crate::data::store::WorkspaceId,
 ) -> Result<AttachReady> {
     if app.sessions.get(ws_id).is_some() {
         return Ok(AttachReady::Ok);
     }
     if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
         maybe_mirror_mcp(app, &repo_path, &path);
-        let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+        let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
         match app.sessions.spawn(id, &path, 80, 24, mode, remote, agent) {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
@@ -971,7 +987,10 @@ pub(crate) fn ensure_workspace_session(
 
 /// Attach to a workspace: ensure a session, restore layout, and switch
 /// to attached view. Shared by the `Enter` / `i` / `l` key handlers.
-pub(crate) fn attach_workspace(app: &mut App, ws_id: crate::store::WorkspaceId) -> Result<()> {
+pub(crate) fn attach_workspace(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Result<()> {
     app.workspace_needs_attention.remove(&ws_id);
     match ensure_workspace_session(app, ws_id)? {
         AttachReady::Ok => {}
@@ -990,10 +1009,10 @@ pub(crate) fn maybe_mirror_mcp(
     repo_path: &std::path::Path,
     worktree_path: &std::path::Path,
 ) {
-    if !crate::mcp::enabled(&app.store) {
+    if !crate::agent::mcp::enabled(&app.store) {
         return;
     }
-    if let Err(e) = crate::mcp::mirror_mcp_servers(repo_path, worktree_path) {
+    if let Err(e) = crate::agent::mcp::mirror_mcp_servers(repo_path, worktree_path) {
         tracing::warn!(error = %e, "failed to mirror MCP servers; continuing");
     }
 }
@@ -1022,7 +1041,7 @@ pub(crate) fn schedule_detach_refresh(app: &mut App, ids: impl IntoIterator<Item
 pub(crate) async fn reconcile_create_result(
     app: SharedApp,
     my_gen: u64,
-    result: Result<crate::workspace::CreatedWorkspace>,
+    result: Result<crate::data::workspace::CreatedWorkspace>,
 ) {
     let mut g = app.lock().await;
     let is_mine = g.pending_create_gen == Some(my_gen);
@@ -1072,7 +1091,7 @@ pub(crate) async fn reconcile_create_result(
 pub(crate) async fn reconcile_archive_result(
     app: SharedApp,
     my_gen: u64,
-    result: Result<crate::setup::SetupResult>,
+    result: Result<crate::data::setup::SetupResult>,
 ) {
     let mut g = app.lock().await;
     let is_mine = g.pending_archive_gen == Some(my_gen);
@@ -1110,14 +1129,14 @@ pub(crate) async fn reconcile_archive_result(
 #[cfg(test)]
 mod reconcile_archive_tests {
     use super::*;
+    use crate::data::setup::SetupResult;
     use crate::error::Error;
-    use crate::setup::SetupResult;
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::Mutex;
 
     fn make_app() -> (App, TempDir) {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         let tmp = TempDir::new().unwrap();
         let app = App::new(store, tmp.path().to_path_buf()).unwrap();
         (app, tmp)
@@ -1212,7 +1231,7 @@ mod reconcile_archive_tests {
 #[cfg(test)]
 mod derive_stopped_kind_tests {
     use super::*;
-    use crate::events::{StopReason, WorkspaceEvents};
+    use crate::activity::events::{StopReason, WorkspaceEvents};
 
     #[test]
     fn returns_none_when_idle() {
@@ -1309,7 +1328,7 @@ mod derive_stopped_kind_tests {
 
     #[test]
     fn reset_detail_scroll_zeroes_offsets_on_workspace_change() {
-        use crate::store::WorkspaceId;
+        use crate::data::store::WorkspaceId;
         let mut offsets = [3u16, 7, 0, 2];
         let mut last = Some(WorkspaceId(100));
 
@@ -1325,7 +1344,7 @@ mod derive_stopped_kind_tests {
 
     #[test]
     fn reset_detail_scroll_preserves_offsets_on_same_workspace() {
-        use crate::store::WorkspaceId;
+        use crate::data::store::WorkspaceId;
         let mut offsets = [3u16, 7, 0, 2];
         let mut last = Some(WorkspaceId(100));
 
@@ -1341,7 +1360,7 @@ mod derive_stopped_kind_tests {
 
     #[test]
     fn reset_detail_scroll_handles_initial_none_to_some() {
-        use crate::store::WorkspaceId;
+        use crate::data::store::WorkspaceId;
         // App starts with detail_scroll_last_workspace = None and offsets
         // already zero; first draw with a selected workspace should update
         // the sentinel even though the offsets are technically unchanged.

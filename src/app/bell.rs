@@ -1,7 +1,7 @@
 // bell — extracted from src/app.rs (see docs/superpowers/specs/2026-05-25-app-rs-refactor-design.md)
 
 use crate::app::activity::ActivityState;
-use crate::store::Store;
+use crate::data::store::Store;
 use std::io::Write;
 
 #[derive(Debug, Clone, Copy)]
@@ -112,7 +112,7 @@ mod bell_tests {
 
     #[test]
     fn bell_pattern_off_for_non_alertable() {
-        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        let store = crate::data::store::Store::open_in_memory().expect("in-memory store");
         assert!(matches!(
             bell_pattern_for(ActivityState::Active, &store),
             BellPattern::Off
@@ -121,7 +121,7 @@ mod bell_tests {
 
     #[test]
     fn bell_pattern_defaults_match_spec() {
-        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        let store = crate::data::store::Store::open_in_memory().expect("in-memory store");
         assert!(matches!(
             bell_pattern_for(ActivityState::AwaitingAnswer, &store),
             BellPattern::Double
@@ -142,7 +142,7 @@ mod bell_tests {
 
     #[test]
     fn bell_pattern_override_off_suppresses_default() {
-        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        let store = crate::data::store::Store::open_in_memory().expect("in-memory store");
         store
             .set_setting("notification_bell_question", "off")
             .unwrap();
@@ -154,7 +154,7 @@ mod bell_tests {
 
     #[test]
     fn bell_pattern_override_single_replaces_default_double() {
-        let store = crate::store::Store::open_in_memory().expect("in-memory store");
+        let store = crate::data::store::Store::open_in_memory().expect("in-memory store");
         store
             .set_setting("notification_bell_question", "single")
             .unwrap();

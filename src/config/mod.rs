@@ -1,3 +1,11 @@
+//! App settings and filesystem layout.
+//!
+//! This module owns the `Dirs` state/db/log path layout; the
+//! `detail_bar_config` submodule resolves the workspace detail-bar display
+//! config from global + per-repo JSON.
+
+pub mod detail_bar_config;
+
 use std::path::PathBuf;
 
 #[cfg(test)]

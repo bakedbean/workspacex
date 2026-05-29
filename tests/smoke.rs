@@ -29,8 +29,8 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
     r(&["config", "user.name", "t"]);
     r(&["commit", "--allow-empty", "-q", "-m", "init"]);
 
-    let store = wsx::store::Store::open_in_memory().unwrap();
-    let repo_id = wsx::repo::add(&store, repo_dir.path(), "demo", "wsx")
+    let store = wsx::data::store::Store::open_in_memory().unwrap();
+    let repo_id = wsx::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
         .await
         .unwrap();
     let repo = store
@@ -40,7 +40,7 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
         .find(|r| r.id == repo_id)
         .unwrap();
     let base = TempDir::new().unwrap();
-    wsx::workspace::create(
+    wsx::data::workspace::create(
         &store,
         &repo,
         Some("alpha"),

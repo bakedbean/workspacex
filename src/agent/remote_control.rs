@@ -9,7 +9,7 @@ pub struct RemoteOpts {
 }
 
 impl RemoteOpts {
-    pub fn from_store(store: &crate::store::Store) -> Self {
+    pub fn from_store(store: &crate::data::store::Store) -> Self {
         Self {
             enabled: enabled(store),
             sandbox: sandbox_enabled(store),
@@ -27,7 +27,7 @@ impl RemoteOpts {
 }
 
 /// Defaults ON. Off-values: `false` / `off` / `0` / `no`.
-pub fn enabled(store: &crate::store::Store) -> bool {
+pub fn enabled(store: &crate::data::store::Store) -> bool {
     !matches!(
         store
             .get_setting("remote_control")
@@ -39,7 +39,7 @@ pub fn enabled(store: &crate::store::Store) -> bool {
 }
 
 /// Defaults OFF. On-values: `true` / `on` / `1` / `yes`.
-pub fn sandbox_enabled(store: &crate::store::Store) -> bool {
+pub fn sandbox_enabled(store: &crate::data::store::Store) -> bool {
     matches!(
         store
             .get_setting("remote_control_sandbox")
@@ -56,13 +56,13 @@ mod tests {
 
     #[test]
     fn enabled_defaults_true_when_unset() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         assert!(enabled(&store));
     }
 
     #[test]
     fn enabled_false_for_off_values() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         for v in ["false", "off", "0", "no"] {
             store.set_setting("remote_control", v).unwrap();
             assert!(!enabled(&store), "expected disabled for {v:?}");
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn enabled_true_for_other_values() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         for v in ["true", "yes", "on", "1", "anything"] {
             store.set_setting("remote_control", v).unwrap();
             assert!(enabled(&store), "expected enabled for {v:?}");
@@ -80,13 +80,13 @@ mod tests {
 
     #[test]
     fn sandbox_defaults_false_when_unset() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         assert!(!sandbox_enabled(&store));
     }
 
     #[test]
     fn sandbox_true_for_on_values() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         for v in ["true", "on", "1", "yes"] {
             store.set_setting("remote_control_sandbox", v).unwrap();
             assert!(sandbox_enabled(&store), "expected enabled for {v:?}");
@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn from_store_combines_both_settings() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         store.set_setting("remote_control", "false").unwrap();
         store.set_setting("remote_control_sandbox", "on").unwrap();
         let opts = RemoteOpts::from_store(&store);

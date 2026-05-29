@@ -5,12 +5,12 @@
 //!
 //! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
 
-use crate::detail_bar_config::DetailBarConfig;
-use crate::events::WorkspaceEvents;
-use crate::forge::BranchLifecycle;
+use crate::activity::events::WorkspaceEvents;
+use crate::activity::proc::ProcInfo;
+use crate::config::detail_bar_config::DetailBarConfig;
+use crate::data::store::{Repo, Workspace};
 use crate::git::DiffStats;
-use crate::proc::ProcInfo;
-use crate::store::{Repo, Workspace};
+use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::Frame;
@@ -44,7 +44,7 @@ pub struct DetailInputs<'a> {
     pub registry: &'a crate::detail_modules::Registry,
     /// Pinned commands resolved for the selected workspace's repo. When
     /// empty, no chip row is rendered.
-    pub pinned: &'a [crate::pinned::PinnedCommand],
+    pub pinned: &'a [crate::commands::pinned::PinnedCommand],
     /// Per-slot scroll offsets. Borrowed mutably so the container can
     /// clamp them to the current content height during render.
     pub scroll_offsets: &'a mut [u16; 4],
@@ -724,11 +724,11 @@ mod tests {
     }
 
     fn seed_workspace() -> (
-        crate::store::Store,
-        crate::store::Repo,
-        crate::store::Workspace,
+        crate::data::store::Store,
+        crate::data::store::Repo,
+        crate::data::store::Workspace,
     ) {
-        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -909,9 +909,9 @@ mod tests {
     #[test]
     fn full_render_paints_header_body_and_reply_row() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             first_user_text: Some("give me a tour".into()),
-            tool_use_counts: crate::events::ToolUseCounts {
+            tool_use_counts: crate::activity::events::ToolUseCounts {
                 read: 14,
                 bash: 2,
                 ..Default::default()
@@ -959,7 +959,7 @@ mod tests {
     #[test]
     fn chrome_only_mode_renders_header_and_reply_no_body_labels() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             first_user_text: Some("hi".into()),
             last_assistant_text: Some("ack".into()),
             ..Default::default()
@@ -1012,7 +1012,7 @@ mod tests {
     #[test]
     fn narrow_terminal_drops_chat_and_procs_columns() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             first_user_text: Some("hi".into()),
             last_assistant_text: Some("ack".into()),
             ..Default::default()
@@ -1102,7 +1102,7 @@ mod tests {
     #[test]
     fn render_one_container_fills_full_width() {
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             last_assistant_text: Some("hello".into()),
             ..Default::default()
         };
@@ -1149,11 +1149,11 @@ mod tests {
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
         let pinned = vec![
-            crate::pinned::PinnedCommand {
+            crate::commands::pinned::PinnedCommand {
                 label: "PR".into(),
                 command: "/pull-request".into(),
             },
-            crate::pinned::PinnedCommand {
+            crate::commands::pinned::PinnedCommand {
                 label: "FB".into(),
                 command: "/feedback".into(),
             },
@@ -1259,7 +1259,7 @@ mod tests {
             ..DetailBarConfig::default()
         };
         let reg = make_registry();
-        let pinned = vec![crate::pinned::PinnedCommand {
+        let pinned = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pr".into(),
         }];
@@ -1329,7 +1329,7 @@ mod tests {
         // rule rows. Every row between the header and reply must show
         // exactly two `│` glyphs.
         let (_store, repo, ws) = seed_workspace();
-        let evt = crate::events::WorkspaceEvents {
+        let evt = crate::activity::events::WorkspaceEvents {
             first_user_text: Some("hi".into()),
             last_assistant_text: Some("ack".into()),
             ..Default::default()

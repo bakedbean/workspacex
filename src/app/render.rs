@@ -3,8 +3,8 @@
 use crate::app::activity::classify_activity_with_events;
 use crate::app::bell::{COLD_START_WINDOW, alert_decision};
 use crate::app::{ActivityState, App, SelectionTarget};
-use crate::detail_bar_config::DetailBarConfig;
-use crate::store::Store;
+use crate::config::detail_bar_config::DetailBarConfig;
+use crate::data::store::Store;
 use crate::ui::dashboard::row::ColumnWidths;
 use ratatui::layout::{Constraint, Direction, Layout};
 
@@ -79,7 +79,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .workspace_events
                         .get(&ws.id)
                         .and_then(|e| e.latest.clone());
-                    let setup_failed = ws.setup_status == crate::store::SetupStatus::Failed;
+                    let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
                     let row = crate::ui::dashboard::row::RowInputs {
                         status,
                         name: ws.name.clone(),
@@ -271,13 +271,13 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             Some(((now_ms - last_ms).max(0) / 1000) as u64)
                         };
                         let status = app.classify_status(ws);
-                        let procs: &[crate::proc::ProcInfo] = app
+                        let procs: &[crate::activity::proc::ProcInfo] = app
                             .workspace_processes
                             .get(&ws.id)
                             .map(Vec::as_slice)
                             .unwrap_or(&[]);
                         let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
-                        let pinned = crate::pinned::resolve(
+                        let pinned = crate::commands::pinned::resolve(
                             global_pinned.as_deref(),
                             repo.pinned_commands.as_deref(),
                         );
@@ -391,7 +391,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .find(|r| r.id == w.repo_id)
                         .and_then(|r| r.pinned_commands.clone())
                 });
-            let pinned = crate::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
+            let pinned =
+                crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
 
             let (pane_area, chip_area, status_area, footer_area) =
                 attached::layout_chrome(area, line.is_some(), !pinned.is_empty());
@@ -465,7 +466,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     compute_attention_line(app, None, max_width)
                 };
                 // PM pane is out of scope for pinned commands per spec.
-                let pinned: &[crate::pinned::PinnedCommand] = &[];
+                let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
                 let (pane_area, chip_area, status_area, footer_area) =
                     attached::layout_chrome(area, line.is_some(), false);
                 attached::resize_pane(session, pane_area, false);
@@ -504,7 +505,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
                 let mut awaiting: std::collections::HashMap<
-                    crate::store::WorkspaceId,
+                    crate::data::store::WorkspaceId,
                     (String, i64),
                 > = std::collections::HashMap::new();
                 for (_rid, w) in &app.workspaces {
@@ -513,7 +514,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     }
                 }
                 let activity_translated: std::collections::HashMap<
-                    crate::store::WorkspaceId,
+                    crate::data::store::WorkspaceId,
                     crate::ui::updates_bar::ActivityState,
                 > = app
                     .workspace_activity
@@ -521,7 +522,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .map(|(k, v)| (*k, translate_activity(*v)))
                     .collect();
                 let statuses: std::collections::HashMap<
-                    crate::store::WorkspaceId,
+                    crate::data::store::WorkspaceId,
                     crate::ui::dashboard::status::Status,
                 > = app
                     .workspaces
@@ -593,11 +594,11 @@ pub(crate) fn resolve_dashboard_detail_cfg(app: &App) -> DetailBarConfig {
     if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
         if let Some((rid, _)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
             if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
-                return crate::detail_bar_config::resolve(repo, &app.store);
+                return crate::config::detail_bar_config::resolve(repo, &app.store);
             }
         }
     }
-    crate::detail_bar_config::resolve_global_only(&app.store)
+    crate::config::detail_bar_config::resolve_global_only(&app.store)
 }
 
 /// Carve the dashboard area into list / detail / pm regions based on
@@ -690,7 +691,7 @@ fn read_column_widths(store: &Store) -> ColumnWidths {
 
 fn compute_attention_line(
     app: &App,
-    attached_id: Option<crate::store::WorkspaceId>,
+    attached_id: Option<crate::data::store::WorkspaceId>,
     max_width: usize,
 ) -> Option<ratatui::text::Line<'static>> {
     let now_ms = std::time::SystemTime::now()
@@ -749,7 +750,7 @@ mod layout_indicator_cache_tests {
 
     #[tokio::test]
     async fn app_refresh_populates_layout_indicator_cache_from_store() {
-        use crate::store::{NewWorkspace, Store};
+        use crate::data::store::{NewWorkspace, Store};
         use crate::ui::split::{SplitDirection, SplitTree};
         let store = Store::open_in_memory().unwrap();
         let repo = store

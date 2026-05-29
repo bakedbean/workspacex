@@ -53,8 +53,8 @@
 //! Other top-level `type` values: `session`, `model_change`,
 //! `thinking_level_change`, `compaction_summary`, `branch_summary`. We skip those.
 
+use crate::activity::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
 use crate::error::Result;
-use crate::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
 use std::path::{Path, PathBuf};
 
 /// Encode an absolute path the way pi does for `~/.pi/agent/sessions/`.
@@ -168,7 +168,7 @@ pub struct ParsedLine {
     pub is_user_text: bool,
     pub last_assistant_text: Option<String>,
     /// Longest `text` content block (by char count) in this message.
-    /// See `crate::events::ParsedLine::longest_text_in_message`.
+    /// See `crate::activity::events::ParsedLine::longest_text_in_message`.
     pub longest_text_in_message: Option<String>,
 }
 
@@ -410,7 +410,7 @@ fn parse_pi_timestamp(v: Option<&serde_json::Value>) -> i64 {
         return if n > 1_000_000_000_000 { n } else { n * 1000 };
     }
     let Some(s) = v.as_str() else { return now_ms() };
-    crate::events::parse_iso8601_ms(s).unwrap_or_else(now_ms)
+    crate::activity::events::parse_iso8601_ms(s).unwrap_or_else(now_ms)
 }
 
 #[cfg(test)]

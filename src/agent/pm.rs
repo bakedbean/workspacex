@@ -1,7 +1,7 @@
 //! Project Manager pane: dossier file + PM Claude Code session orchestration.
 
+use crate::data::store::{Store, WorkspaceState};
 use crate::error::{Error, Result};
-use crate::store::{Store, WorkspaceState};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -99,11 +99,11 @@ fn compute_session_log_dir(worktree: &Path, agent: crate::pty::session::AgentKin
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
     match agent {
         crate::pty::session::AgentKind::Claude => {
-            let encoded = crate::events::encode_cwd(&abs);
+            let encoded = crate::activity::events::encode_cwd(&abs);
             home.join(".claude/projects").join(encoded)
         }
         crate::pty::session::AgentKind::Pi => {
-            let encoded = crate::pi_events::encode_cwd(&abs);
+            let encoded = crate::activity::pi_events::encode_cwd(&abs);
             home.join(".pi/agent/sessions").join(encoded)
         }
         crate::pty::session::AgentKind::Hermes => {
@@ -171,7 +171,7 @@ pub fn pm_system_prompt(custom: Option<&str>) -> String {
 
 /// Defaults OFF. On-values: `true` / `on` / `1` / `yes`. Anything else is
 /// off. PM-only: workspace sessions never look at this setting.
-pub fn pm_fast_mode_enabled(store: &crate::store::Store) -> bool {
+pub fn pm_fast_mode_enabled(store: &crate::data::store::Store) -> bool {
     matches!(
         store.get_setting("pm_fast_mode").ok().flatten().as_deref(),
         Some("true" | "on" | "1" | "yes")
@@ -208,7 +208,7 @@ pub async fn open_pm(
         resume,
         fast_mode: pm_fast_mode_enabled(store),
     };
-    let remote = crate::remote_control::RemoteOpts::from_store(store);
+    let remote = crate::agent::remote_control::RemoteOpts::from_store(store);
     mgr.spawn_pm(pm_dir, 80, 24, mode, remote, agent)?;
     Ok(())
 }
@@ -277,7 +277,7 @@ pub async fn open_pm_with_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{NewWorkspace, Store, WorkspaceState};
+    use crate::data::store::{NewWorkspace, Store, WorkspaceState};
     use crate::test_support::{EnvGuard, cat_path};
     use tempfile::TempDir;
 

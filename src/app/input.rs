@@ -10,8 +10,8 @@ use crate::app::{
     apply_repo_setting, attach_workspace, ensure_workspace_session, reconcile_create_result,
     rescan_processes, restore_attached_state, save_layout_for, schedule_detach_refresh,
 };
+use crate::data::store::WorkspaceId;
 use crate::error::Result;
-use crate::store::WorkspaceId;
 use crate::ui::View;
 use crate::ui::modal::Modal;
 use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
@@ -204,7 +204,7 @@ async fn fire_chip(app: &mut App, idx: usize) {
 /// look up the same default-fold state the renderer would compute.
 fn current_repo_counts(
     app: &App,
-    rid: crate::store::RepoId,
+    rid: crate::data::store::RepoId,
 ) -> crate::ui::dashboard::sort::StatusCounts {
     let iter = app
         .workspaces
@@ -480,7 +480,8 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     .map(|(rid, w)| (*rid, w.worktree_path.clone()));
                 if let Some((_, path)) = info {
                     let cmd = app.store.get_setting("editor_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_editor(&path, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_in_editor(&path, cmd.as_deref())
+                    {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -497,7 +498,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     .map(|(rid, w)| (*rid, w.worktree_path.clone()));
                 if let Some((_, path)) = info {
                     let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_terminal(&path, cmd.as_deref()) {
+                    if let Err(e) =
+                        crate::commands::external::open_in_terminal(&path, cmd.as_deref())
+                    {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -515,7 +518,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 if let Some(path) = info {
                     let cmd = app.store.get_setting("diff_cmd").ok().flatten();
                     let base = crate::git::resolve_base_branch(&path).await;
-                    if let Err(e) = crate::external::open_diff(&path, &base, cmd.as_deref()) {
+                    if let Err(e) =
+                        crate::commands::external::open_diff(&path, &base, cmd.as_deref())
+                    {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -533,7 +538,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     .map(|(_, w)| w.worktree_path.clone());
                 if let Some(path) = info {
                     let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_lazygit(&path, cmd.as_deref()) {
+                    if let Err(e) =
+                        crate::commands::external::open_in_lazygit(&path, cmd.as_deref())
+                    {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -591,7 +598,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             // so 'r' typed inside PM (when PM is focused) goes to the PTY.
             let dirs = crate::config::Dirs::discover();
             let pm_dir = dirs.pm_dir();
-            if let Err(e) = crate::pm::refresh_pm(&mut app.sessions, &app.store, &pm_dir).await {
+            if let Err(e) =
+                crate::agent::pm::refresh_pm(&mut app.sessions, &app.store, &pm_dir).await
+            {
                 app.modal = Some(Modal::Error {
                     message: e.to_string(),
                 });
@@ -627,10 +636,15 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 let result = if app.pm_auto_summary_sent {
                     // Reopen path: refresh so PM picks up workspace
                     // changes that happened while the pane was hidden.
-                    crate::pm::open_pm_with_refresh(&mut app.sessions, &app.store, &pm_dir, custom)
-                        .await
+                    crate::agent::pm::open_pm_with_refresh(
+                        &mut app.sessions,
+                        &app.store,
+                        &pm_dir,
+                        custom,
+                    )
+                    .await
                 } else {
-                    crate::pm::open_pm_with_auto_summary(
+                    crate::agent::pm::open_pm_with_auto_summary(
                         &mut app.sessions,
                         &app.store,
                         &pm_dir,
@@ -746,7 +760,8 @@ async fn handle_key_attached(
                     .map(|(_, w)| w.worktree_path.clone());
                 if let Some(path) = path {
                     let cmd = app.store.get_setting("editor_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_editor(&path, cmd.as_deref()) {
+                    if let Err(e) = crate::commands::external::open_in_editor(&path, cmd.as_deref())
+                    {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -762,7 +777,9 @@ async fn handle_key_attached(
                     .map(|(_, w)| w.worktree_path.clone());
                 if let Some(path) = path {
                     let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_terminal(&path, cmd.as_deref()) {
+                    if let Err(e) =
+                        crate::commands::external::open_in_terminal(&path, cmd.as_deref())
+                    {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -779,7 +796,9 @@ async fn handle_key_attached(
                 if let Some(path) = path {
                     let cmd = app.store.get_setting("diff_cmd").ok().flatten();
                     let base = crate::git::resolve_base_branch(&path).await;
-                    if let Err(e) = crate::external::open_diff(&path, &base, cmd.as_deref()) {
+                    if let Err(e) =
+                        crate::commands::external::open_diff(&path, &base, cmd.as_deref())
+                    {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -795,7 +814,9 @@ async fn handle_key_attached(
                     .map(|(_, w)| w.worktree_path.clone());
                 if let Some(path) = path {
                     let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
-                    if let Err(e) = crate::external::open_in_lazygit(&path, cmd.as_deref()) {
+                    if let Err(e) =
+                        crate::commands::external::open_in_lazygit(&path, cmd.as_deref())
+                    {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),
                         });
@@ -845,7 +866,7 @@ async fn handle_key_attached(
             KeyCode::Backspace => session.capture_backspace(),
             KeyCode::Enter => {
                 if let Some(prompt) = session.take_first_prompt() {
-                    if let Some(slug) = crate::workspace::slugify_prompt(&prompt) {
+                    if let Some(slug) = crate::data::workspace::slugify_prompt(&prompt) {
                         let ws_info = app
                             .workspaces
                             .iter()
@@ -856,8 +877,10 @@ async fn handle_key_attached(
                                 let repo = app.repos.iter().find(|r| r.id == ws.repo_id).cloned();
                                 if let Some(repo) = repo {
                                     // Fire-and-forget: rename failure shouldn't disrupt the keystroke.
-                                    let _ = crate::workspace::rename(&app.store, &repo, &ws, &slug)
-                                        .await;
+                                    let _ = crate::data::workspace::rename(
+                                        &app.store, &repo, &ws, &slug,
+                                    )
+                                    .await;
                                     app.refresh()?;
                                 }
                             }
@@ -956,7 +979,7 @@ async fn handle_key_modal(
                 });
                 let shared_clone = shared.clone();
                 tokio::spawn(async move {
-                    let result = crate::workspace::create_with_app(
+                    let result = crate::data::workspace::create_with_app(
                         shared_clone.clone(),
                         repo,
                         name,
@@ -1023,11 +1046,11 @@ async fn handle_key_modal(
                 });
                 let shared_clone = shared.clone();
                 tokio::spawn(async move {
-                    let result = crate::workspace::archive_with_app(
+                    let result = crate::data::workspace::archive_with_app(
                         shared_clone.clone(),
                         repo,
                         ws,
-                        crate::workspace::ArchiveOpts {
+                        crate::data::workspace::ArchiveOpts {
                             force_branch_delete: true,
                             ..Default::default()
                         },
@@ -1064,7 +1087,7 @@ async fn handle_key_modal(
             // Build the same ordered workspace list the renderer uses, so
             // arrow keys and Enter operate on the same indices.
             let activity_translated: std::collections::HashMap<
-                crate::store::WorkspaceId,
+                crate::data::store::WorkspaceId,
                 crate::ui::updates_bar::ActivityState,
             > = app
                 .workspace_activity
@@ -1208,13 +1231,13 @@ async fn handle_key_modal(
                 // verbs. Arrow keys are the only navigation.
                 KeyCode::Char('k') => {
                     if let Some(p) = procs.get(selected) {
-                        let _ = crate::proc::kill_pid(p.pid, "TERM").await;
+                        let _ = crate::activity::proc::kill_pid(p.pid, "TERM").await;
                         rescan_processes(app).await;
                     }
                 }
                 KeyCode::Char('K') => {
                     if let Some(p) = procs.get(selected) {
-                        let _ = crate::proc::kill_pid(p.pid, "KILL").await;
+                        let _ = crate::activity::proc::kill_pid(p.pid, "KILL").await;
                         rescan_processes(app).await;
                     }
                 }

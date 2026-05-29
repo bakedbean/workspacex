@@ -137,7 +137,7 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
 /// `Stalled`. Other states use the bare label.
 fn format_state_line(
     status: crate::ui::dashboard::status::Status,
-    evt: &crate::events::WorkspaceEvents,
+    evt: &crate::activity::events::WorkspaceEvents,
     now_ms: i64,
 ) -> String {
     use crate::ui::dashboard::status::Status;
@@ -202,7 +202,7 @@ fn format_ago_short(secs: Option<u64>) -> String {
     }
 }
 
-fn format_tool_trace(counts: &crate::events::ToolUseCounts) -> String {
+fn format_tool_trace(counts: &crate::activity::events::ToolUseCounts) -> String {
     let mut parts: Vec<String> = Vec::new();
     if counts.read > 0 {
         parts.push(format!(
@@ -313,8 +313,8 @@ fn wrap_lines(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity::events::{StopReason, WorkspaceEvents};
     use crate::detail_modules::tests_helpers::stub_context;
-    use crate::events::{StopReason, WorkspaceEvents};
     use crate::ui::dashboard::status::Status;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

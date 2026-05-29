@@ -29,7 +29,7 @@ fn read_claude_json(path: &Path) -> Result<Option<Value>> {
 
 /// Whether the mirror feature is enabled. Defaults to ON; the user can
 /// opt out with `wsx settings set mcp_mirror false`.
-pub fn enabled(store: &crate::store::Store) -> bool {
+pub fn enabled(store: &crate::data::store::Store) -> bool {
     !matches!(
         store.get_setting("mcp_mirror").ok().flatten().as_deref(),
         Some("false" | "off" | "0" | "no")
@@ -236,13 +236,13 @@ mod tests {
 
     #[test]
     fn enabled_defaults_true_when_unset() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         assert!(enabled(&store));
     }
 
     #[test]
     fn enabled_false_when_setting_off() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         for v in ["false", "off", "0", "no"] {
             store.set_setting("mcp_mirror", v).unwrap();
             assert!(!enabled(&store), "expected disabled for {v:?}");
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn enabled_true_for_unrecognized_truthy_values() {
-        let store = crate::store::Store::open_in_memory().unwrap();
+        let store = crate::data::store::Store::open_in_memory().unwrap();
         for v in ["true", "yes", "1", "anything-else"] {
             store.set_setting("mcp_mirror", v).unwrap();
             assert!(enabled(&store), "expected enabled for {v:?}");

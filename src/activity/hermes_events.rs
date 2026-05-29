@@ -17,8 +17,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::activity::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
 use crate::error::Result;
-use crate::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
 
 const HERMES_PREFIX: &str = "hermes:";
 
@@ -141,9 +141,9 @@ fn tail_session_from_db(db_path: &Path, session_id: &str, from_offset: u64) -> R
                 if let Some(text) = content.as_deref() {
                     let trimmed = text.trim();
                     if !trimmed.is_empty() {
-                        let display = crate::events::truncate_display(
-                            &format!("user: {}", crate::events::collapse_ws(trimmed)),
-                            crate::events::MAX_DISPLAY_CHARS,
+                        let display = crate::activity::events::truncate_display(
+                            &format!("user: {}", crate::activity::events::collapse_ws(trimmed)),
+                            crate::activity::events::MAX_DISPLAY_CHARS,
                         );
                         update.events.push(EventSnapshot {
                             kind: EventKind::UserMessage,
@@ -180,9 +180,9 @@ fn tail_session_from_db(db_path: &Path, session_id: &str, from_offset: u64) -> R
                 // Emit EventSnapshot: prefer tool_calls when content is empty.
                 let content_trimmed = content.as_deref().map(str::trim).unwrap_or("").to_string();
                 if !content_trimmed.is_empty() {
-                    let display = crate::events::truncate_display(
-                        &crate::events::collapse_ws(&content_trimmed),
-                        crate::events::MAX_DISPLAY_CHARS,
+                    let display = crate::activity::events::truncate_display(
+                        &crate::activity::events::collapse_ws(&content_trimmed),
+                        crate::activity::events::MAX_DISPLAY_CHARS,
                     );
                     update.events.push(EventSnapshot {
                         kind: EventKind::AssistantText,
@@ -259,13 +259,16 @@ fn format_tool_use_display(tool_calls_json: &str) -> String {
             .and_then(|v| v.get("command").cloned())
             .and_then(|c| c.as_str().map(str::to_string));
         if let Some(cmd) = cmd {
-            return crate::events::truncate_display(
-                &format!("ran `{}`", crate::events::collapse_ws(&cmd)),
-                crate::events::MAX_DISPLAY_CHARS,
+            return crate::activity::events::truncate_display(
+                &format!("ran `{}`", crate::activity::events::collapse_ws(&cmd)),
+                crate::activity::events::MAX_DISPLAY_CHARS,
             );
         }
     }
-    crate::events::truncate_display(&format!("using {}", name), crate::events::MAX_DISPLAY_CHARS)
+    crate::activity::events::truncate_display(
+        &format!("using {}", name),
+        crate::activity::events::MAX_DISPLAY_CHARS,
+    )
 }
 
 #[cfg(test)]

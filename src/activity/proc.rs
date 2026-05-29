@@ -3,8 +3,8 @@
 //! wsx never spawns these processes; it observes the system via `lsof`
 //! and offers a kill hook. See `docs/superpowers/specs/2026-05-15-process-tracking-design.md`.
 
+use crate::data::store::WorkspaceId;
 use crate::error::{Error, Result};
-use crate::store::WorkspaceId;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

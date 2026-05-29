@@ -13,8 +13,8 @@
 //!   flex └ message (or em-dash)
 //!   10ch right-aligned Ns ago
 
-use crate::forge::BranchLifecycle;
 use crate::git::DiffStats;
+use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
@@ -78,7 +78,7 @@ pub struct RowInputs {
     pub has_multi_pane_layout: bool,
     pub lifecycle: Option<BranchLifecycle>,
     pub nerd_fonts: bool,
-    pub workspace_id: crate::store::WorkspaceId,
+    pub workspace_id: crate::data::store::WorkspaceId,
 }
 
 pub fn render(
@@ -325,7 +325,7 @@ mod tests {
             has_multi_pane_layout: false,
             lifecycle: None,
             nerd_fonts: false,
-            workspace_id: crate::store::WorkspaceId(0),
+            workspace_id: crate::data::store::WorkspaceId(0),
         }
     }
 

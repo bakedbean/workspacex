@@ -26,8 +26,8 @@ async fn branch_rename_propagates_to_store() {
     r(&["config", "user.name", "t"]);
     r(&["commit", "--allow-empty", "-q", "-m", "init"]);
 
-    let store = wsx::store::Store::open_in_memory().unwrap();
-    let repo_id = wsx::repo::add(&store, repo_dir.path(), "demo", "wsx")
+    let store = wsx::data::store::Store::open_in_memory().unwrap();
+    let repo_id = wsx::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
         .await
         .unwrap();
     let repo = store
@@ -37,7 +37,7 @@ async fn branch_rename_propagates_to_store() {
         .find(|r| r.id == repo_id)
         .unwrap();
     let base = TempDir::new().unwrap();
-    let created = wsx::workspace::create(
+    let created = wsx::data::workspace::create(
         &store,
         &repo,
         Some("placeholder"),

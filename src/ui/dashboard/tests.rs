@@ -2,7 +2,7 @@
 //! V5 render path against the design fixture.
 
 use super::*;
-use crate::store::{Repo, RepoId, WorkspaceId};
+use crate::data::store::{Repo, RepoId, WorkspaceId};
 use crate::ui::dashboard::fixture;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::theme::Theme;
@@ -268,7 +268,7 @@ fn visible_targets_by_repo_matches_render_order() {
         .collect();
     let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
     // Map workspace name → workspace_id so we can assert on names.
-    let id_for: std::collections::HashMap<String, crate::store::WorkspaceId> = workspaces
+    let id_for: std::collections::HashMap<String, crate::data::store::WorkspaceId> = workspaces
         .iter()
         .map(|w| (w.row.name.clone(), w.workspace_id))
         .collect();

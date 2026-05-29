@@ -476,25 +476,25 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     // pure `wsx setup install-skill` on a fresh machine doesn't create
     // `~/.local/state/wsx/state.db` as a side effect.
     if matches!(action, CliAction::SetupInstallSkill) {
-        let target = crate::skill::default_install_path().ok_or_else(|| {
+        let target = crate::agent::skill::default_install_path().ok_or_else(|| {
             Error::UserInput("could not resolve home directory for skill install".into())
         })?;
-        let outcome = crate::skill::install_to(&target)?;
+        let outcome = crate::agent::skill::install_to(&target)?;
         let path = target.display();
         match outcome {
-            crate::skill::InstallOutcome::Created => {
+            crate::agent::skill::InstallOutcome::Created => {
                 println!("installed wsx skill to {path}");
             }
-            crate::skill::InstallOutcome::Updated => {
+            crate::agent::skill::InstallOutcome::Updated => {
                 println!("updated wsx skill at {path}");
             }
-            crate::skill::InstallOutcome::Unchanged => {
+            crate::agent::skill::InstallOutcome::Unchanged => {
                 println!("wsx skill already up to date at {path}");
             }
         }
         return Ok(());
     }
-    let store = crate::store::Store::open(&dirs.db_path())?;
+    let store = crate::data::store::Store::open(&dirs.db_path())?;
     match action {
         CliAction::Tui => unreachable!("handled in main"),
         CliAction::RepoAdd {
@@ -502,25 +502,25 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             name,
             branch_prefix,
         } => {
-            crate::repo::add(&store, &path, &name, &branch_prefix).await?;
+            crate::data::repo::add(&store, &path, &name, &branch_prefix).await?;
             println!("added repo: {name}");
         }
         CliAction::RepoList => {
-            for r in crate::repo::list(&store)? {
+            for r in crate::data::repo::list(&store)? {
                 println!("{:<20} {}", r.name, r.path.display());
             }
         }
         CliAction::RepoRemove { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
                 .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
-            crate::repo::remove(&store, r.id)?;
+            crate::data::repo::remove(&store, r.id)?;
             println!("removed repo: {name}");
         }
         CliAction::RepoSetPrefix { name, prefix } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -533,7 +533,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetBaseBranch { name, value } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -548,7 +548,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetInstructions { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -563,7 +563,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetSetup { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -578,7 +578,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetArchive { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -593,7 +593,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditSetup { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -612,7 +612,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditArchive { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -631,7 +631,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetPinnedCommands { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -646,7 +646,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditPinnedCommands { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -665,7 +665,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetName { name, new_name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -675,7 +675,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             println!("renamed repo {name} to {trimmed}");
         }
         CliAction::RepoSetRelatedRepos { name, source } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -690,7 +690,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditRelatedRepos { name } => {
-            let repos = crate::repo::list(&store)?;
+            let repos = crate::data::repo::list(&store)?;
             let r = repos
                 .into_iter()
                 .find(|r| r.name == name)
@@ -767,7 +767,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RemoteList => {
-            let remotes = crate::remotes::list(&store)?;
+            let remotes = crate::commands::remotes::list(&store)?;
             if remotes.is_empty() {
                 println!("no remotes configured. add one with: wsx config edit remotes");
                 return Ok(());
@@ -777,8 +777,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RemoteRun { name } => {
-            let command = crate::remotes::lookup(&store, &name)?.ok_or_else(|| {
-                let available = crate::remotes::list(&store)
+            let command = crate::commands::remotes::lookup(&store, &name)?.ok_or_else(|| {
+                let available = crate::commands::remotes::list(&store)
                     .ok()
                     .map(|v| v.into_iter().map(|r| r.name).collect::<Vec<_>>().join(", "))
                     .unwrap_or_default();
@@ -809,7 +809,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let worktree_base = dirs.app_dir().join("worktrees");
             std::fs::create_dir_all(&worktree_base)?;
             let agent_kind = crate::pty::session::AgentKind::from_str_or_default(agent.as_deref());
-            let created = crate::workspace::create(
+            let created = crate::data::workspace::create(
                 &store,
                 &r,
                 name.as_deref(),
@@ -826,14 +826,14 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 created.workspace.name,
                 created.workspace.worktree_path.display()
             );
-            if let crate::setup::SetupResult::Failed { exit_code } = created.setup_result {
+            if let crate::data::setup::SetupResult::Failed { exit_code } = created.setup_result {
                 println!("warning: setup script exited with code {exit_code}");
             }
         }
         CliAction::WorkspaceList { repo } => {
             let filtered = match repo {
                 Some(name) => vec![lookup_repo(&store, &name)?],
-                None => crate::repo::list(&store)?,
+                None => crate::data::repo::list(&store)?,
             };
             for r in filtered {
                 for w in store.workspaces(r.id)? {
@@ -862,7 +862,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             if new_name == name {
                 println!("workspace {}/{} unchanged", r.name, name);
             } else {
-                crate::workspace::rename(&store, &r, &w, &new_name).await?;
+                crate::data::workspace::rename(&store, &r, &w, &new_name).await?;
                 println!(
                     "renamed workspace {}/{} to {}/{}",
                     r.name, name, r.name, new_name
@@ -877,11 +877,11 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         } => {
             let r = lookup_repo(&store, &repo)?;
             let w = lookup_workspace(&store, &r, &name)?;
-            let opts = crate::workspace::ArchiveOpts {
+            let opts = crate::data::workspace::ArchiveOpts {
                 keep_worktree,
                 force_branch_delete: force_delete_branch,
             };
-            crate::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
+            crate::data::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
             println!("archived workspace {}/{}", r.name, name);
         }
         CliAction::SetupInstallSkill => unreachable!("handled before store open"),
@@ -889,18 +889,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     Ok(())
 }
 
-fn lookup_repo(store: &crate::store::Store, name: &str) -> Result<crate::store::Repo> {
-    crate::repo::list(store)?
+fn lookup_repo(store: &crate::data::store::Store, name: &str) -> Result<crate::data::store::Repo> {
+    crate::data::repo::list(store)?
         .into_iter()
         .find(|r| r.name == name)
         .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))
 }
 
 fn lookup_workspace(
-    store: &crate::store::Store,
-    repo: &crate::store::Repo,
+    store: &crate::data::store::Store,
+    repo: &crate::data::store::Repo,
     name: &str,
-) -> Result<crate::store::Workspace> {
+) -> Result<crate::data::store::Workspace> {
     store
         .workspaces(repo.id)?
         .into_iter()
@@ -931,14 +931,14 @@ fn open_in_editor(key: &str, initial: &str) -> Result<String> {
 /// Seed text for the editor when the global `detail_bar_config`
 /// setting is empty — the pretty-printed default config.
 fn detail_bar_config_seed_for_empty() -> String {
-    serde_json::to_string_pretty(&crate::detail_bar_config::DetailBarConfig::default())
+    serde_json::to_string_pretty(&crate::config::detail_bar_config::DetailBarConfig::default())
         .unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Parse, sanitize, and re-serialize a global `detail_bar_config`
 /// blob. Returns the pretty-printed normalized JSON.
 fn detail_bar_config_validate_and_normalize(raw: &str) -> Result<String> {
-    let mut cfg: crate::detail_bar_config::DetailBarConfig = serde_json::from_str(raw)
+    let mut cfg: crate::config::detail_bar_config::DetailBarConfig = serde_json::from_str(raw)
         .map_err(|e| Error::UserInput(format!("detail_bar_config: invalid JSON: {e}")))?;
     cfg.sanitize();
     serde_json::to_string_pretty(&cfg)
@@ -1381,9 +1381,12 @@ mod tests {
     fn detail_bar_config_seed_returns_pretty_default_when_empty() {
         let seed = super::detail_bar_config_seed_for_empty();
         // Sanity: round-trips to default config.
-        let parsed: crate::detail_bar_config::DetailBarConfig =
+        let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&seed).unwrap();
-        assert_eq!(parsed, crate::detail_bar_config::DetailBarConfig::default());
+        assert_eq!(
+            parsed,
+            crate::config::detail_bar_config::DetailBarConfig::default()
+        );
         // Pretty-printed: contains newlines.
         assert!(seed.contains('\n'));
     }
@@ -1398,7 +1401,7 @@ mod tests {
     fn detail_bar_config_validate_clamps_out_of_range() {
         let json = r#"{"height": {"percent": 200}}"#;
         let normalized = super::detail_bar_config_validate_and_normalize(json).unwrap();
-        let parsed: crate::detail_bar_config::DetailBarConfig =
+        let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&normalized).unwrap();
         assert_eq!(parsed.height.percent, 80);
     }
@@ -1407,7 +1410,7 @@ mod tests {
     fn detail_bar_config_validate_accepts_partial() {
         let json = r#"{"visible": false}"#;
         let normalized = super::detail_bar_config_validate_and_normalize(json).unwrap();
-        let parsed: crate::detail_bar_config::DetailBarConfig =
+        let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&normalized).unwrap();
         assert!(!parsed.visible);
         assert_eq!(parsed.height.percent, 30);
@@ -1415,7 +1418,7 @@ mod tests {
 
     #[test]
     fn detail_bar_config_default_seed_round_trips() {
-        use crate::detail_bar_config::DetailBarConfig;
+        use crate::config::detail_bar_config::DetailBarConfig;
         let seed =
             serde_json::to_string_pretty(&DetailBarConfig::default()).expect("serialize default");
         let parsed: DetailBarConfig =
@@ -1443,7 +1446,7 @@ mod tests {
             .expect("valid JSON should normalize");
         // Truncation happens inside sanitize(); the normalized blob
         // should round-trip to exactly 4 containers.
-        let parsed: crate::detail_bar_config::DetailBarConfig =
+        let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&normalized).expect("re-parse normalized");
         assert_eq!(parsed.containers.len(), 4);
     }

@@ -1,5 +1,5 @@
-use crate::forge::BranchLifecycle;
-use crate::store::RepoId;
+use crate::data::store::RepoId;
+use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -31,7 +31,7 @@ pub enum Modal {
         agent: crate::pty::session::AgentKind,
     },
     ConfirmArchive {
-        workspace_id: crate::store::WorkspaceId,
+        workspace_id: crate::data::store::WorkspaceId,
         name: String,
     },
     SetupRunning {
@@ -53,20 +53,20 @@ pub enum Modal {
         selected: usize,
     },
     ProcessList {
-        workspace_id: crate::store::WorkspaceId,
+        workspace_id: crate::data::store::WorkspaceId,
         selected: usize,
     },
     RepoSettings {
-        repo_id: crate::store::RepoId,
+        repo_id: crate::data::store::RepoId,
         selected: usize,
     },
     AgentMissing {
-        ws_id: crate::store::WorkspaceId,
+        ws_id: crate::data::store::WorkspaceId,
         agent: crate::pty::session::AgentKind,
         binary: String,
     },
     AgentPicker {
-        ws_id: crate::store::WorkspaceId,
+        ws_id: crate::data::store::WorkspaceId,
         selected: usize,
         current: crate::pty::session::AgentKind,
     },
@@ -257,15 +257,15 @@ fn step_ordinal(s: ArchiveStep) -> u8 {
 /// Used by both the renderer (to draw rows) and the key handler (to map
 /// the selected index back to a workspace id).
 pub fn ordered_workspaces_for_panel(
-    repos: &[crate::store::Repo],
-    workspaces: &[(RepoId, crate::store::Workspace)],
-    events: &HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
-    activity: &HashMap<crate::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
-    needs_attention: &HashSet<crate::store::WorkspaceId>,
-) -> Vec<crate::store::WorkspaceId> {
+    repos: &[crate::data::store::Repo],
+    workspaces: &[(RepoId, crate::data::store::Workspace)],
+    events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
+    activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
+    needs_attention: &HashSet<crate::data::store::WorkspaceId>,
+) -> Vec<crate::data::store::WorkspaceId> {
     let mut out = Vec::new();
     for repo in repos {
-        let mut ws_for_repo: Vec<&crate::store::Workspace> = workspaces
+        let mut ws_for_repo: Vec<&crate::data::store::Workspace> = workspaces
             .iter()
             .filter(|(rid, _)| *rid == repo.id)
             .map(|(_, w)| w)
@@ -277,10 +277,10 @@ pub fn ordered_workspaces_for_panel(
 }
 
 fn sort_key(
-    w: &crate::store::Workspace,
-    events: &HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
-    activity: &HashMap<crate::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
-    needs_attention: &HashSet<crate::store::WorkspaceId>,
+    w: &crate::data::store::Workspace,
+    events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
+    activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
+    needs_attention: &HashSet<crate::data::store::WorkspaceId>,
 ) -> (u8, u8, u8, i64) {
     let attention = if needs_attention.contains(&w.id) {
         0
@@ -298,7 +298,7 @@ fn sort_key(
         Some(crate::ui::updates_bar::ActivityState::Off) => 2,
         None => 3,
     };
-    let failed = if w.state == crate::store::WorkspaceState::Failed {
+    let failed = if w.state == crate::data::store::WorkspaceState::Failed {
         1
     } else {
         0
@@ -316,14 +316,14 @@ fn sort_key(
 pub fn render_updates_panel(
     f: &mut Frame,
     area: Rect,
-    repos: &[crate::store::Repo],
-    workspaces: &[(RepoId, crate::store::Workspace)],
-    events: &HashMap<crate::store::WorkspaceId, crate::events::WorkspaceEvents>,
-    activity: &HashMap<crate::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
-    needs_attention: &HashSet<crate::store::WorkspaceId>,
-    awaiting: &HashMap<crate::store::WorkspaceId, (String, i64)>,
-    statuses: &HashMap<crate::store::WorkspaceId, Status>,
-    lifecycles: &HashMap<crate::store::WorkspaceId, BranchLifecycle>,
+    repos: &[crate::data::store::Repo],
+    workspaces: &[(RepoId, crate::data::store::Workspace)],
+    events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
+    activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
+    needs_attention: &HashSet<crate::data::store::WorkspaceId>,
+    awaiting: &HashMap<crate::data::store::WorkspaceId, (String, i64)>,
+    statuses: &HashMap<crate::data::store::WorkspaceId, Status>,
+    lifecycles: &HashMap<crate::data::store::WorkspaceId, BranchLifecycle>,
     selected: usize,
     now_ms: i64,
     theme: &Theme,
@@ -350,7 +350,7 @@ pub fn render_updates_panel(
 
     let order = ordered_workspaces_for_panel(repos, workspaces, events, activity, needs_attention);
     // workspace_id -> position in `order` so we can match against `selected`.
-    let pos_of: HashMap<crate::store::WorkspaceId, usize> =
+    let pos_of: HashMap<crate::data::store::WorkspaceId, usize> =
         order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
 
     let mut lines: Vec<Line> = Vec::new();
@@ -360,7 +360,7 @@ pub fn render_updates_panel(
             repo.name.clone(),
             theme.header_style(),
         )));
-        let ws_for_repo: Vec<&crate::store::Workspace> = workspaces
+        let ws_for_repo: Vec<&crate::data::store::Workspace> = workspaces
             .iter()
             .filter(|(rid, _)| *rid == repo.id)
             .map(|(_, w)| w)
@@ -448,8 +448,8 @@ fn scroll_offset_for_selected(
 
 #[allow(clippy::too_many_arguments)]
 fn workspace_row<'a>(
-    w: &'a crate::store::Workspace,
-    events: Option<&'a crate::events::WorkspaceEvents>,
+    w: &'a crate::data::store::Workspace,
+    events: Option<&'a crate::activity::events::WorkspaceEvents>,
     activity: Option<crate::ui::updates_bar::ActivityState>,
     needs_attention: bool,
     awaiting: Option<&'a (String, i64)>,
@@ -460,7 +460,7 @@ fn workspace_row<'a>(
     theme: &Theme,
 ) -> Line<'a> {
     use crate::ui::updates_bar::{ActivityState, format_age, glyph_for_activity};
-    let failed = w.state == crate::store::WorkspaceState::Failed;
+    let failed = w.state == crate::data::store::WorkspaceState::Failed;
     let glyph = if failed {
         '✕'
     } else if needs_attention {
@@ -557,7 +557,7 @@ pub fn render_process_list(
     f: &mut Frame,
     area: Rect,
     workspace_name: &str,
-    procs: &[crate::proc::ProcInfo],
+    procs: &[crate::activity::proc::ProcInfo],
     selected: usize,
     theme: &Theme,
 ) {
@@ -630,7 +630,7 @@ pub fn render_repo_settings(
     f: &mut Frame,
     area: Rect,
     repo_name: &str,
-    repo: &crate::store::Repo,
+    repo: &crate::data::store::Repo,
     selected: usize,
     theme: &Theme,
 ) {
@@ -901,19 +901,19 @@ mod render_archive_steps_tests {
 #[cfg(test)]
 mod workspace_row_tests {
     use super::*;
-    use crate::store::{Workspace, WorkspaceId, WorkspaceState};
+    use crate::data::store::{Workspace, WorkspaceId, WorkspaceState};
     use crate::ui::updates_bar::ActivityState;
     use std::path::PathBuf;
 
     fn fixture_workspace(name: &str) -> Workspace {
         Workspace {
             id: WorkspaceId(1),
-            repo_id: crate::store::RepoId(1),
+            repo_id: crate::data::store::RepoId(1),
             name: name.to_string(),
             branch: "main".to_string(),
             worktree_path: PathBuf::from("/tmp/ws"),
             state: WorkspaceState::Ready,
-            setup_status: crate::store::SetupStatus::Ok,
+            setup_status: crate::data::store::SetupStatus::Ok,
             created_at: 0,
             yolo: false,
             agent: crate::pty::session::AgentKind::Claude,
@@ -1108,7 +1108,7 @@ mod workspace_row_tests {
     /// about PR state.
     #[test]
     fn workspace_row_paints_name_with_lifecycle_color() {
-        use crate::forge::BranchLifecycle::*;
+        use crate::git::forge::BranchLifecycle::*;
         let theme = Theme::ansi();
         let w = fixture_workspace("alpha");
         // Lifecycles without a hue (NoPr, PrDraft, None) fall back to
@@ -1164,7 +1164,7 @@ mod workspace_row_tests {
             None,
             true, // selected
             Status::Complete,
-            Some(crate::forge::BranchLifecycle::PrOpen),
+            Some(crate::git::forge::BranchLifecycle::PrOpen),
             10_000,
             &theme,
         );

@@ -8,8 +8,9 @@ use crate::ui::theme::Theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GroupMode {
+    #[default]
     Repo,
     Attention,
 }
@@ -21,17 +22,15 @@ pub fn top_chrome(
     width: usize,
     theme: &Theme,
 ) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::styled("wsx", theme.header_style()));
-    spans.push(Span::styled(" · dashboard".to_string(), theme.dim_style()));
-    spans.push(Span::raw(" ".repeat(6)));
-    spans.push(Span::styled(
-        "group: ".to_string(),
-        Style::default().fg(theme.path),
-    ));
-    spans.push(tab_span("repo", group == GroupMode::Repo, theme));
-    spans.push(Span::raw(" ".to_string()));
-    spans.push(tab_span("attention", group == GroupMode::Attention, theme));
+    let mut spans: Vec<Span<'static>> = vec![
+        Span::styled("wsx", theme.header_style()),
+        Span::styled(" · dashboard".to_string(), theme.dim_style()),
+        Span::raw(" ".repeat(6)),
+        Span::styled("group: ".to_string(), Style::default().fg(theme.path)),
+        tab_span("repo", group == GroupMode::Repo, theme),
+        Span::raw(" ".to_string()),
+        tab_span("attention", group == GroupMode::Attention, theme),
+    ];
 
     let right = format!("{repos} repos · {workspaces} workspaces");
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();

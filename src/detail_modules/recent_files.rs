@@ -12,11 +12,7 @@ impl DetailModule for RecentFiles {
     fn title(&self) -> &'static str {
         "RECENT FILES"
     }
-    fn lines(
-        &self,
-        ctx: &DetailContext<'_>,
-        width: u16,
-    ) -> Vec<ratatui::text::Line<'static>> {
+    fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
         crate::ui::dashboard::detail::build_recent_files(
             ctx.events,
             ctx.diff_per_file,

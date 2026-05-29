@@ -26,6 +26,9 @@ pub struct FixtureRepo {
 
 pub fn repos() -> Vec<FixtureRepo> {
     use Status::*;
+    // This test fixture builder takes one arg per workspace field on purpose; a
+    // params struct would not improve clarity here.
+    #[allow(clippy::too_many_arguments)]
     fn ws(
         name: &str,
         branch: &str,

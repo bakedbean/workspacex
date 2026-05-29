@@ -46,11 +46,7 @@ pub trait DetailModule: Send + Sync {
     /// these via `Paragraph` and slice them by scroll offset. `width`
     /// is the column width the content will be drawn into (use for
     /// wrapping/truncation decisions).
-    fn lines(
-        &self,
-        ctx: &DetailContext<'_>,
-        width: u16,
-    ) -> Vec<ratatui::text::Line<'static>>;
+    fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>>;
 }
 
 pub struct Registry {

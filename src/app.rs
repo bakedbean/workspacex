@@ -459,7 +459,6 @@ impl App {
             has_prior,
         )
     }
-
 }
 
 /// Zero detail-bar scroll offsets and update the sentinel when the
@@ -1072,13 +1071,23 @@ pub(crate) async fn reconcile_archive_result(
     }
     match result {
         Ok(_) => {
-            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::ArchiveRunning { .. })) {
+            if is_mine
+                && matches!(
+                    g.modal,
+                    Some(crate::ui::modal::Modal::ArchiveRunning { .. })
+                )
+            {
                 g.modal = None;
             }
             let _ = g.refresh();
         }
         Err(e) => {
-            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::ArchiveRunning { .. })) {
+            if is_mine
+                && matches!(
+                    g.modal,
+                    Some(crate::ui::modal::Modal::ArchiveRunning { .. })
+                )
+            {
                 g.modal = Some(crate::ui::modal::Modal::Error {
                     message: e.to_string(),
                 });
@@ -1116,8 +1125,15 @@ mod reconcile_archive_tests {
         let shared = Arc::new(Mutex::new(app));
         reconcile_archive_result(shared.clone(), 7, Ok(SetupResult::Ok)).await;
         let g = shared.lock().await;
-        assert!(g.modal.is_none(), "modal should clear on Ok; got {:?}", g.modal);
-        assert!(g.pending_archive_gen.is_none(), "pending_archive_gen should clear after matching reconcile");
+        assert!(
+            g.modal.is_none(),
+            "modal should clear on Ok; got {:?}",
+            g.modal
+        );
+        assert!(
+            g.pending_archive_gen.is_none(),
+            "pending_archive_gen should clear after matching reconcile"
+        );
     }
 
     #[tokio::test]
@@ -1130,20 +1146,21 @@ mod reconcile_archive_tests {
         app.pending_archive_gen = Some(7);
         app.next_archive_gen = 8;
         let shared = Arc::new(Mutex::new(app));
-        reconcile_archive_result(
-            shared.clone(),
-            7,
-            Err(Error::Setup("boom".into())),
-        )
-        .await;
+        reconcile_archive_result(shared.clone(), 7, Err(Error::Setup("boom".into()))).await;
         let g = shared.lock().await;
         match &g.modal {
             Some(crate::ui::modal::Modal::Error { message }) => {
-                assert!(message.contains("boom"), "error message should contain failure detail; got {message:?}");
+                assert!(
+                    message.contains("boom"),
+                    "error message should contain failure detail; got {message:?}"
+                );
             }
             other => panic!("expected Modal::Error, got {other:?}"),
         }
-        assert!(g.pending_archive_gen.is_none(), "pending_archive_gen should clear after matching reconcile");
+        assert!(
+            g.pending_archive_gen.is_none(),
+            "pending_archive_gen should clear after matching reconcile"
+        );
     }
 
     #[tokio::test]
@@ -1167,11 +1184,18 @@ mod reconcile_archive_tests {
         let g = shared.lock().await;
         match &g.modal {
             Some(crate::ui::modal::Modal::Error { message }) => {
-                assert_eq!(message, "untouched", "stale reconcile must not overwrite modal");
+                assert_eq!(
+                    message, "untouched",
+                    "stale reconcile must not overwrite modal"
+                );
             }
             other => panic!("expected the pre-existing Error modal to survive, got {other:?}"),
         }
-        assert_eq!(g.pending_archive_gen, Some(99), "stale reconcile must not clear pending_archive_gen");
+        assert_eq!(
+            g.pending_archive_gen,
+            Some(99),
+            "stale reconcile must not clear pending_archive_gen"
+        );
     }
 }
 
@@ -1279,7 +1303,11 @@ mod derive_stopped_kind_tests {
         let mut offsets = [3u16, 7, 0, 2];
         let mut last = Some(WorkspaceId(100));
 
-        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(200)));
+        super::reset_detail_scroll_on_workspace_change(
+            &mut offsets,
+            &mut last,
+            Some(WorkspaceId(200)),
+        );
 
         assert_eq!(offsets, [0; 4]);
         assert_eq!(last, Some(WorkspaceId(200)));
@@ -1291,7 +1319,11 @@ mod derive_stopped_kind_tests {
         let mut offsets = [3u16, 7, 0, 2];
         let mut last = Some(WorkspaceId(100));
 
-        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(100)));
+        super::reset_detail_scroll_on_workspace_change(
+            &mut offsets,
+            &mut last,
+            Some(WorkspaceId(100)),
+        );
 
         assert_eq!(offsets, [3, 7, 0, 2]);
         assert_eq!(last, Some(WorkspaceId(100)));
@@ -1306,7 +1338,11 @@ mod derive_stopped_kind_tests {
         let mut offsets = [5u16, 0, 0, 0]; // seeded non-zero
         let mut last: Option<WorkspaceId> = None;
 
-        super::reset_detail_scroll_on_workspace_change(&mut offsets, &mut last, Some(WorkspaceId(42)));
+        super::reset_detail_scroll_on_workspace_change(
+            &mut offsets,
+            &mut last,
+            Some(WorkspaceId(42)),
+        );
 
         assert_eq!(offsets, [0; 4]);
         assert_eq!(last, Some(WorkspaceId(42)));

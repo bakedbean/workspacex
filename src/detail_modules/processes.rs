@@ -12,24 +12,13 @@ impl DetailModule for Processes {
     fn title(&self) -> &'static str {
         "PROCESSES"
     }
-    fn lines(
-        &self,
-        ctx: &DetailContext<'_>,
-        width: u16,
-    ) -> Vec<ratatui::text::Line<'static>> {
+    fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
         build_lines(ctx, width)
     }
 }
 
-fn build_lines(
-    ctx: &DetailContext<'_>,
-    width: u16,
-) -> Vec<ratatui::text::Line<'static>> {
-    crate::ui::dashboard::detail::build_processes(
-        ctx.procs,
-        ctx.theme,
-        width as usize,
-    )
+fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
+    crate::ui::dashboard::detail::build_processes(ctx.procs, ctx.theme, width as usize)
 }
 
 #[cfg(test)]

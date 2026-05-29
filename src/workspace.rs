@@ -16,6 +16,9 @@ pub struct CreatedWorkspace {
 
 /// Create a new workspace: insert pending row, create worktree, mark
 /// ready, run setup script, record setup status.
+// Workspace creation genuinely needs all these inputs; a params struct would
+// not improve clarity here.
+#[allow(clippy::too_many_arguments)]
 pub async fn create<F: FnMut(SetupLine) + Send>(
     store: &Store,
     repo: &Repo,
@@ -282,10 +285,7 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
 /// `archive_with_app`. The check guards against a stale archive task
 /// updating a modal that was replaced (e.g. by `Modal::Error` or by a
 /// second archive flow).
-async fn advance_archive_step(
-    app: &crate::app::SharedApp,
-    next: crate::ui::modal::ArchiveStep,
-) {
+async fn advance_archive_step(app: &crate::app::SharedApp, next: crate::ui::modal::ArchiveStep) {
     let mut g = app.lock().await;
     if let Some(crate::ui::modal::Modal::ArchiveRunning { step, .. }) = &mut g.modal {
         *step = next;
@@ -845,11 +845,18 @@ mod tests {
         .await;
         assert!(result.is_ok(), "archive_with_app failed: {result:?}");
         // Worktree is gone from disk.
-        assert!(!worktree_path.exists(), "worktree still present after archive");
+        assert!(
+            !worktree_path.exists(),
+            "worktree still present after archive"
+        );
         // Workspace row is gone from the store.
         let g = shared.lock().await;
         assert!(
-            g.store.workspaces(repo.id).unwrap().iter().all(|w| w.id != ws_id),
+            g.store
+                .workspaces(repo.id)
+                .unwrap()
+                .iter()
+                .all(|w| w.id != ws_id),
             "workspace row still present after archive"
         );
     }
@@ -1063,8 +1070,15 @@ mod tests {
         super::advance_archive_step(&app, ArchiveStep::RemoveWorktree).await;
         let g = app.lock().await;
         match &g.modal {
-            Some(Modal::ArchiveRunning { step, script_present }) => {
-                assert_eq!(*step, ArchiveStep::RemoveWorktree, "step should be advanced");
+            Some(Modal::ArchiveRunning {
+                step,
+                script_present,
+            }) => {
+                assert_eq!(
+                    *step,
+                    ArchiveStep::RemoveWorktree,
+                    "step should be advanced"
+                );
                 assert!(*script_present, "script_present should not change");
             }
             other => panic!("expected ArchiveRunning, got {other:?}"),

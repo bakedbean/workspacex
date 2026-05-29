@@ -373,7 +373,9 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                         "--yolo" => yolo = true,
                         "--agent" => {
                             agent = Some(it.next().ok_or_else(|| {
-                                Error::UserInput("--agent needs value (pi, claude, or hermes)".into())
+                                Error::UserInput(
+                                    "--agent needs value (pi, claude, or hermes)".into(),
+                                )
                             })?);
                         }
                         other => {
@@ -382,7 +384,9 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                     }
                 }
                 if let Some(ref a) = agent
-                    && a != "pi" && a != "claude" && a != "hermes"
+                    && a != "pi"
+                    && a != "claude"
+                    && a != "hermes"
                 {
                     return Err(Error::UserInput(format!(
                         "--agent must be 'pi', 'claude', or 'hermes', got '{a}'"
@@ -1170,6 +1174,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn parse_repo_edit_related_repos() {
         match parse(&["repo", "edit-related-repos", "backend"]).unwrap() {
             CliAction::RepoEditRelatedRepos { name } => assert_eq!(name, "backend"),

@@ -66,7 +66,9 @@ pub async fn tail_workspace_events(
     let tail_result = match ws_agent {
         crate::pty::session::AgentKind::Claude => crate::events::tail_session(&file, tail_from),
         crate::pty::session::AgentKind::Pi => crate::pi_events::tail_session(&file, tail_from),
-        crate::pty::session::AgentKind::Hermes => crate::hermes_events::tail_session(&file, tail_from),
+        crate::pty::session::AgentKind::Hermes => {
+            crate::hermes_events::tail_session(&file, tail_from)
+        }
     };
     let Ok(update) = tail_result else {
         return;

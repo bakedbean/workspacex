@@ -57,7 +57,7 @@ pub fn partition(rows: Vec<FlatRow>, quiet_repos: Vec<QuietRepo>) -> AttentionDa
     });
     // WORKING / RECENT / IDLE: most-recent first by `ago_secs`.
     for section in [&mut working, &mut recent, &mut idle] {
-        section.sort_by(|a, b| ago_key(a.row.ago_secs).cmp(&ago_key(b.row.ago_secs)));
+        section.sort_by_key(|a| ago_key(a.row.ago_secs));
     }
     AttentionData {
         needs_attention: needs,
@@ -106,14 +106,15 @@ fn section_header(
 }
 
 fn quiet_line(q: &QuietRepo, width: usize, theme: &Theme) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::styled("▎".to_string(), theme.dim_style()));
-    spans.push(Span::raw("  ·  ".to_string()));
-    spans.push(Span::styled(
-        truncate_pad(&q.name, 18),
-        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
-    ));
-    spans.push(Span::styled(truncate_pad(&q.path, 36), theme.dim_style()));
+    let mut spans: Vec<Span<'static>> = vec![
+        Span::styled("▎".to_string(), theme.dim_style()),
+        Span::raw("  ·  ".to_string()),
+        Span::styled(
+            truncate_pad(&q.name, 18),
+            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(truncate_pad(&q.path, 36), theme.dim_style()),
+    ];
     let suffix = if q.workspace_count == 0 {
         "no workspaces · press n to create".to_string()
     } else {

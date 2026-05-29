@@ -2361,14 +2361,19 @@ mod pm_state_tests {
                 agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
-        store.set_workspace_state(ws_id, WorkspaceState::Ready).unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
 
         let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let (_id, _path, mode, _repo_path, _agent) = build_spawn_info(&app, ws_id).unwrap();
         match mode {
             crate::pty::session::SpawnMode::Fresh { doctrine, .. } => {
                 let d = doctrine.expect("doctrine must be populated");
-                assert!(d.contains("superpowers"), "claude doctrine includes superpowers: {d}");
+                assert!(
+                    d.contains("superpowers"),
+                    "claude doctrine includes superpowers: {d}"
+                );
             }
             other => panic!("expected Fresh, got {other:?}"),
         }
@@ -2394,15 +2399,23 @@ mod pm_state_tests {
                 agent: crate::pty::session::AgentKind::Hermes,
             })
             .unwrap();
-        store.set_workspace_state(ws_id, WorkspaceState::Ready).unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
 
         let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let (_id, _path, mode, _repo_path, _agent) = build_spawn_info(&app, ws_id).unwrap();
         match mode {
             crate::pty::session::SpawnMode::Fresh { doctrine, .. } => {
                 let d = doctrine.expect("doctrine must be populated");
-                assert!(!d.contains("superpowers"), "hermes doctrine must omit superpowers: {d}");
-                assert!(d.contains("wsx skill"), "hermes doctrine keeps wsx skill clause: {d}");
+                assert!(
+                    !d.contains("superpowers"),
+                    "hermes doctrine must omit superpowers: {d}"
+                );
+                assert!(
+                    d.contains("wsx skill"),
+                    "hermes doctrine keeps wsx skill clause: {d}"
+                );
             }
             other => panic!("expected Fresh, got {other:?}"),
         }
@@ -3001,7 +3014,10 @@ mod pm_state_tests {
             handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
             // Immediately after 'y', modal should be ArchiveRunning.
             match &g.modal {
-                Some(Modal::ArchiveRunning { step, script_present }) => {
+                Some(Modal::ArchiveRunning {
+                    step,
+                    script_present,
+                }) => {
                     assert_eq!(
                         *step,
                         crate::ui::modal::ArchiveStep::Script,
@@ -3015,9 +3031,9 @@ mod pm_state_tests {
                         "fixture has no archive script; script_present should be false"
                     );
                 }
-                other => panic!(
-                    "modal should transition to ArchiveRunning immediately; got {other:?}"
-                ),
+                other => {
+                    panic!("modal should transition to ArchiveRunning immediately; got {other:?}")
+                }
             }
             assert!(g.pending_archive_gen.is_some());
         }
@@ -3330,7 +3346,11 @@ mod pm_state_tests {
         let outcome = crate::app::ensure_workspace_session(&mut app, id).unwrap();
         assert!(matches!(outcome, crate::app::AttachReady::AgentMissing));
         match app.modal {
-            Some(crate::ui::modal::Modal::AgentMissing { ws_id, agent, ref binary }) => {
+            Some(crate::ui::modal::Modal::AgentMissing {
+                ws_id,
+                agent,
+                ref binary,
+            }) => {
                 assert_eq!(ws_id, id);
                 assert_eq!(agent, AgentKind::Hermes);
                 assert_eq!(binary, "/nonexistent/wsx-test-hermes");
@@ -3400,10 +3420,19 @@ mod pm_state_tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("claude"), "expected claude row: {rendered}");
+        assert!(
+            rendered.contains("claude"),
+            "expected claude row: {rendered}"
+        );
         assert!(rendered.contains("pi"), "expected pi row: {rendered}");
-        assert!(rendered.contains("hermes"), "expected hermes row: {rendered}");
-        assert!(rendered.contains("current"), "expected current marker: {rendered}");
+        assert!(
+            rendered.contains("hermes"),
+            "expected hermes row: {rendered}"
+        );
+        assert!(
+            rendered.contains("current"),
+            "expected current marker: {rendered}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4309,7 +4338,6 @@ mod detail_bar_focus_tests {
             "Ctrl-X+1 while reply focused must dispatch /pull-request to PTY; got: {screen_text:?}"
         );
     }
-
 }
 
 #[cfg(test)]

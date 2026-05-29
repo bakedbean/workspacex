@@ -70,12 +70,6 @@ pub struct DashboardState {
     pub reply_draft_clear_at_ms: Option<u64>,
 }
 
-impl Default for GroupMode {
-    fn default() -> Self {
-        GroupMode::Repo
-    }
-}
-
 pub fn render(
     f: &mut Frame,
     area: Rect,
@@ -198,7 +192,7 @@ pub fn visible_targets(
                         .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
                         .map(|w| (w.status, w.workspace_id))
                         .collect();
-                    rows.sort_by(|a, b| b.0.priority().cmp(&a.0.priority()));
+                    rows.sort_by_key(|r| std::cmp::Reverse(r.0.priority()));
                     let counts = StatusCounts::from_iter(rows.iter().map(|(s, _)| *s));
                     Pending {
                         repo_id: r.id,
@@ -322,7 +316,7 @@ fn render_by_repo<'a>(
                 .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
                 .map(|w| w.row.clone())
                 .collect();
-            workspaces.sort_by(|a, b| b.status.priority().cmp(&a.status.priority()));
+            workspaces.sort_by_key(|w| std::cmp::Reverse(w.status.priority()));
             let counts = StatusCounts::from_iter(workspaces.iter().map(|w| w.status));
             let repo_id_u64 = r.id.0 as u64;
             let expanded = match state.folded.get(&repo_id_u64).copied() {

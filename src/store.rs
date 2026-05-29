@@ -370,13 +370,7 @@ impl Store {
             }
             let mut new_parts: Vec<&str> = names
                 .iter()
-                .map(|n| {
-                    if n == &old_name {
-                        name.as_ref()
-                    } else {
-                        n.as_str()
-                    }
-                })
+                .map(|n| if n == &old_name { name } else { n.as_str() })
                 .collect();
             new_parts.dedup();
             let new_spec = new_parts.join(", ");

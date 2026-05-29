@@ -296,15 +296,19 @@ mod tests {
 
     #[test]
     fn has_body_true_when_any_container_non_empty() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![vec![], vec!["x".into()]];
+        let cfg = DetailBarConfig {
+            containers: vec![vec![], vec!["x".into()]],
+            ..Default::default()
+        };
         assert!(cfg.has_body());
     }
 
     #[test]
     fn has_body_false_when_all_containers_empty() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![vec![], vec![]];
+        let cfg = DetailBarConfig {
+            containers: vec![vec![], vec![]],
+            ..Default::default()
+        };
         assert!(!cfg.has_body());
     }
 
@@ -325,16 +329,20 @@ mod tests {
 
     #[test]
     fn preferred_height_returns_chrome_when_no_body() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![vec![], vec![]];
+        let cfg = DetailBarConfig {
+            containers: vec![vec![], vec![]],
+            ..Default::default()
+        };
         assert_eq!(cfg.preferred_height(20), DetailBarConfig::CHROME_ROWS);
         assert_eq!(cfg.preferred_height(100), DetailBarConfig::CHROME_ROWS);
     }
 
     #[test]
     fn minimum_height_chrome_only_when_no_body() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![vec![]];
+        let cfg = DetailBarConfig {
+            containers: vec![vec![]],
+            ..Default::default()
+        };
         assert_eq!(cfg.minimum_height(), DetailBarConfig::CHROME_ROWS);
     }
 
@@ -388,23 +396,27 @@ mod tests {
 
     #[test]
     fn sanitize_resets_default_when_containers_empty() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![];
+        let mut cfg = DetailBarConfig {
+            containers: vec![],
+            ..Default::default()
+        };
         cfg.sanitize();
         assert_eq!(cfg.containers, DetailBarConfig::default().containers);
     }
 
     #[test]
     fn sanitize_truncates_containers_to_four() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![
-            vec!["a".into()],
-            vec!["b".into()],
-            vec!["c".into()],
-            vec!["d".into()],
-            vec!["e".into()],
-            vec!["f".into()],
-        ];
+        let mut cfg = DetailBarConfig {
+            containers: vec![
+                vec!["a".into()],
+                vec!["b".into()],
+                vec!["c".into()],
+                vec!["d".into()],
+                vec!["e".into()],
+                vec!["f".into()],
+            ],
+            ..Default::default()
+        };
         cfg.sanitize();
         assert_eq!(cfg.containers.len(), 4);
         assert_eq!(cfg.containers[0], vec!["a".to_string()]);
@@ -413,8 +425,10 @@ mod tests {
 
     #[test]
     fn sanitize_leaves_empty_inner_lists_alone() {
-        let mut cfg = DetailBarConfig::default();
-        cfg.containers = vec![vec!["a".into()], vec![], vec!["b".into()]];
+        let mut cfg = DetailBarConfig {
+            containers: vec![vec!["a".into()], vec![], vec!["b".into()]],
+            ..Default::default()
+        };
         cfg.sanitize();
         assert_eq!(cfg.containers.len(), 3);
         assert!(cfg.containers[1].is_empty());

@@ -150,7 +150,7 @@ mod tests {
                 has_multi_pane_layout: false,
             })
             .collect();
-        workspaces.sort_by(|a, b| b.status.priority().cmp(&a.status.priority()));
+        workspaces.sort_by_key(|w| std::cmp::Reverse(w.status.priority()));
         let counts = StatusCounts::from_iter(workspaces.iter().map(|w| w.status));
         RepoView {
             id,

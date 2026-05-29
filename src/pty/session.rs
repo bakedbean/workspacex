@@ -349,8 +349,7 @@ struct HermesSpawnMarker {
 /// Read the spawn marker for this worktree.
 /// Returns None if absent or unparseable (best-effort: silent on IO/parse errors).
 fn read_hermes_spawn_marker(worktree: &Path) -> Option<HermesSpawnMarker> {
-    let path = resolve_gitdir(&worktree.join(".git"), worktree)?
-        .join("info/wsx-hermes-spawn-at");
+    let path = resolve_gitdir(&worktree.join(".git"), worktree)?.join("info/wsx-hermes-spawn-at");
     let contents = std::fs::read_to_string(&path).ok()?;
     let mut lines = contents.lines();
     let start_ts: f64 = lines.next()?.trim().parse().ok()?;
@@ -456,12 +455,14 @@ fn latest_hermes_session_id(db_path: &Path, spawn_ts: f64) -> Option<String> {
     let conn = rusqlite::Connection::open_with_flags(
         &uri,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-    ).ok()?;
+    )
+    .ok()?;
     conn.query_row(
         "SELECT id FROM sessions WHERE started_at >= ?1 - 2.0 ORDER BY started_at DESC LIMIT 1",
         [&spawn_ts],
         |row| row.get::<_, String>(0),
-    ).ok()
+    )
+    .ok()
 }
 
 /// Production wrapper for `latest_hermes_session_id` that resolves
@@ -507,11 +508,9 @@ fn session_exists(db_path: &Path, session_id: &str) -> bool {
     ) else {
         return false;
     };
-    conn.query_row(
-        "SELECT 1 FROM sessions WHERE id = ?1",
-        [session_id],
-        |_| Ok(()),
-    )
+    conn.query_row("SELECT 1 FROM sessions WHERE id = ?1", [session_id], |_| {
+        Ok(())
+    })
     .is_ok()
 }
 
@@ -678,74 +677,81 @@ pub fn build_claude_command(
         cmd.env(k, v);
     }
 
-    let (doctrine, rename_prompt, custom, allow_wsx_rename, add_continue, skip_permissions, add_dirs) =
-        match mode {
-            SpawnMode::Continue {
-                custom_instructions,
-                doctrine,
-                additional_dirs,
-                yolo,
-            } => (
-                doctrine.clone(),
-                None,
-                custom_instructions.clone(),
-                false,
-                true,
-                *yolo,
-                additional_dirs.clone(),
-            ),
-            SpawnMode::Fresh {
-                rename_ctx,
-                custom_instructions,
-                doctrine,
-                additional_dirs,
-                yolo,
-            } => {
-                let rename_mode =
-                    std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
-                let (rp, allow) = if let Some(ctx) = rename_ctx {
-                    if rename_mode == "claude" {
-                        (
-                            Some(render_rename_system_prompt(
-                                &ctx.current_branch,
-                                &ctx.branch_prefix,
-                                &ctx.repo_name,
-                                &ctx.current_slug,
-                            )),
-                            true,
-                        )
-                    } else {
-                        (None, false)
-                    }
+    let (
+        doctrine,
+        rename_prompt,
+        custom,
+        allow_wsx_rename,
+        add_continue,
+        skip_permissions,
+        add_dirs,
+    ) = match mode {
+        SpawnMode::Continue {
+            custom_instructions,
+            doctrine,
+            additional_dirs,
+            yolo,
+        } => (
+            doctrine.clone(),
+            None,
+            custom_instructions.clone(),
+            false,
+            true,
+            *yolo,
+            additional_dirs.clone(),
+        ),
+        SpawnMode::Fresh {
+            rename_ctx,
+            custom_instructions,
+            doctrine,
+            additional_dirs,
+            yolo,
+        } => {
+            let rename_mode =
+                std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
+            let (rp, allow) = if let Some(ctx) = rename_ctx {
+                if rename_mode == "claude" {
+                    (
+                        Some(render_rename_system_prompt(
+                            &ctx.current_branch,
+                            &ctx.branch_prefix,
+                            &ctx.repo_name,
+                            &ctx.current_slug,
+                        )),
+                        true,
+                    )
                 } else {
                     (None, false)
-                };
-                (
-                    doctrine.clone(),
-                    rp,
-                    custom_instructions.clone(),
-                    allow,
-                    false,
-                    *yolo,
-                    additional_dirs.clone(),
-                )
-            }
-            SpawnMode::ProjectManager {
-                workspaces_json_path: _,
-                custom_instructions,
-                additional_dirs,
-                resume,
-                fast_mode: _, // emitted below, after the match
-            } => (
-                None,
-                Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
-                None,
+                }
+            } else {
+                (None, false)
+            };
+            (
+                doctrine.clone(),
+                rp,
+                custom_instructions.clone(),
+                allow,
                 false,
-                *resume,
-                true,
+                *yolo,
                 additional_dirs.clone(),
-            ),
-        };
+            )
+        }
+        SpawnMode::ProjectManager {
+            workspaces_json_path: _,
+            custom_instructions,
+            additional_dirs,
+            resume,
+            fast_mode: _, // emitted below, after the match
+        } => (
+            None,
+            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+            None,
+            false,
+            *resume,
+            true,
+            additional_dirs.clone(),
+        ),
+    };
 
     for dir in &add_dirs {
         cmd.arg("--add-dir");
@@ -1118,7 +1124,8 @@ fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
             ..
         } => (doctrine.clone(), None, custom_instructions.clone()),
         SpawnMode::ProjectManager {
-            custom_instructions, ..
+            custom_instructions,
+            ..
         } => (
             None,
             Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
@@ -1160,16 +1167,13 @@ pub fn spawn_session(
             build_hermes_command(cwd, &mode, remote)
         }
     };
-    let mut child = pair
-        .slave
-        .spawn_command(child_cmd)
-        .map_err(|e| {
-            if is_binary_not_found(&e) {
-                Error::AgentBinaryMissing(resolved_binary(agent))
-            } else {
-                Error::Pty(format!("spawn: {e}"))
-            }
-        })?;
+    let mut child = pair.slave.spawn_command(child_cmd).map_err(|e| {
+        if is_binary_not_found(&e) {
+            Error::AgentBinaryMissing(resolved_binary(agent))
+        } else {
+            Error::Pty(format!("spawn: {e}"))
+        }
+    })?;
     drop(pair.slave);
 
     let killer = child.clone_killer();
@@ -1264,6 +1268,9 @@ impl SessionManager {
         }
     }
 
+    // Spawning a session genuinely needs all these inputs; bundling them into a
+    // params struct would not improve clarity here.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         &mut self,
         id: WorkspaceId,
@@ -1586,9 +1593,14 @@ mod tests {
             .iter()
             .position(|a| a == std::ffi::OsStr::new("--allowedTools"))
             .expect("--allowedTools should be present when rename_ctx is set and yolo=false");
-        let value = argv.get(idx + 1).expect("value should follow --allowedTools").to_string_lossy();
-        assert_eq!(value, "Bash(wsx workspace rename:*)",
-            "expected wsx-workspace-rename pre-authorization, got: {value}");
+        let value = argv
+            .get(idx + 1)
+            .expect("value should follow --allowedTools")
+            .to_string_lossy();
+        assert_eq!(
+            value, "Bash(wsx workspace rename:*)",
+            "expected wsx-workspace-rename pre-authorization, got: {value}"
+        );
     }
 
     #[test]
@@ -1687,7 +1699,12 @@ mod tests {
 
     #[test]
     fn render_rename_prompt_hermes_includes_branch_and_prefix() {
-        let prompt = super::render_rename_system_prompt_hermes("wsx/bold-fern", "wsx", "myrepo", "bold-fern");
+        let prompt = super::render_rename_system_prompt_hermes(
+            "wsx/bold-fern",
+            "wsx",
+            "myrepo",
+            "bold-fern",
+        );
         assert!(prompt.contains("wsx workspace rename 'myrepo' 'bold-fern'"));
         // No "Keep the prefix" constraint — wsx handles that automatically.
         assert!(!prompt.contains("Keep the `wsx/` prefix"));
@@ -1695,9 +1712,13 @@ mod tests {
 
     #[test]
     fn render_rename_prompt_hermes_handles_empty_prefix() {
-        let prompt = super::render_rename_system_prompt_hermes("bold-fern", "", "myrepo", "bold-fern");
+        let prompt =
+            super::render_rename_system_prompt_hermes("bold-fern", "", "myrepo", "bold-fern");
         assert!(prompt.contains("wsx workspace rename 'myrepo' 'bold-fern'"));
-        assert!(!prompt.contains("//"), "prompt should not contain double-slash: {prompt}");
+        assert!(
+            !prompt.contains("//"),
+            "prompt should not contain double-slash: {prompt}"
+        );
     }
 
     #[test]
@@ -2339,7 +2360,8 @@ mod tests {
                     source TEXT NOT NULL,
                     started_at REAL NOT NULL
                 );",
-            ).unwrap();
+            )
+            .unwrap();
             conn
         }
 
@@ -2347,7 +2369,8 @@ mod tests {
             conn.execute(
                 "INSERT INTO sessions (id, source, started_at) VALUES (?1, ?2, ?3)",
                 rusqlite::params![id, source, started_at],
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         #[test]
@@ -2441,8 +2464,11 @@ mod tests {
             // Our reader should see the committed row (the WAL pages from earlier commits
             // are visible) but NOT the uncommitted one. spawn_ts=0 sweeps everything.
             let result = latest_hermes_session_id(&db_path, 0.0);
-            assert_eq!(result.as_deref(), Some("committed"),
-                "expected to see committed row, not uncommitted; got: {result:?}");
+            assert_eq!(
+                result.as_deref(),
+                Some("committed"),
+                "expected to see committed row, not uncommitted; got: {result:?}"
+            );
 
             writer.execute_batch("ROLLBACK;").unwrap();
         }
@@ -2461,8 +2487,11 @@ mod tests {
             // Without a manual checkpoint, "second" and "third" are WAL-pending.
             // The reader must still see them all.
             let result = latest_hermes_session_id(&db_path, 0.0);
-            assert_eq!(result.as_deref(), Some("third"),
-                "expected newest WAL-committed row; got: {result:?}");
+            assert_eq!(
+                result.as_deref(),
+                Some("third"),
+                "expected newest WAL-committed row; got: {result:?}"
+            );
         }
     }
 
@@ -2472,12 +2501,22 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
             super::write_hermes_spawn_marker(tmp.path());
-            let marker = super::read_hermes_spawn_marker(tmp.path()).expect("marker should be present");
+            let marker =
+                super::read_hermes_spawn_marker(tmp.path()).expect("marker should be present");
             // Within 60s of now (sanity check).
             let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-            assert!((now - marker.start_ts).abs() < 60.0, "marker ts {} too far from now {now}", marker.start_ts);
-            assert!(marker.session_id.is_none(), "fresh marker should have no session_id");
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+            assert!(
+                (now - marker.start_ts).abs() < 60.0,
+                "marker ts {} too far from now {now}",
+                marker.start_ts
+            );
+            assert!(
+                marker.session_id.is_none(),
+                "fresh marker should have no session_id"
+            );
         }
 
         #[test]
@@ -2503,7 +2542,11 @@ mod tests {
             let external = tempfile::tempdir().unwrap();
             let gitdir = external.path().join("worktrees/feature-x");
             std::fs::create_dir_all(&gitdir).unwrap();
-            std::fs::write(tmp.path().join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+            std::fs::write(
+                tmp.path().join(".git"),
+                format!("gitdir: {}\n", gitdir.display()),
+            )
+            .unwrap();
             super::write_hermes_spawn_marker(tmp.path());
             let marker = gitdir.join("info/wsx-hermes-spawn-at");
             assert!(marker.exists(), "expected marker at {}", marker.display());
@@ -2519,8 +2562,15 @@ mod tests {
             std::fs::write(info.join("wsx-hermes-spawn-at"), "1780002798.96").unwrap();
             let marker = super::read_hermes_spawn_marker(tmp.path())
                 .expect("old-format marker should parse");
-            assert!((marker.start_ts - 1780002798.96).abs() < 0.001, "start_ts mismatch: {}", marker.start_ts);
-            assert!(marker.session_id.is_none(), "old format should yield session_id=None");
+            assert!(
+                (marker.start_ts - 1780002798.96).abs() < 0.001,
+                "start_ts mismatch: {}",
+                marker.start_ts
+            );
+            assert!(
+                marker.session_id.is_none(),
+                "old format should yield session_id=None"
+            );
         }
 
         #[test]
@@ -2528,18 +2578,21 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
             // Write a marker with a specific timestamp.
-            std::fs::write(
-                tmp.path().join(".git/info/wsx-hermes-spawn-at"),
-                "1000.0\n",
-            ).unwrap();
+            std::fs::write(tmp.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
             // Cache a session id.
             super::cache_hermes_session_id_in_marker(tmp.path(), "abc");
             let marker = super::read_hermes_spawn_marker(tmp.path())
                 .expect("marker should exist after cache");
-            assert!((marker.start_ts - 1000.0).abs() < 0.001,
-                "start_ts should be preserved; got {}", marker.start_ts);
-            assert_eq!(marker.session_id.as_deref(), Some("abc"),
-                "session_id should be cached");
+            assert!(
+                (marker.start_ts - 1000.0).abs() < 0.001,
+                "start_ts should be preserved; got {}",
+                marker.start_ts
+            );
+            assert_eq!(
+                marker.session_id.as_deref(),
+                Some("abc"),
+                "session_id should be cached"
+            );
         }
 
         #[test]
@@ -2566,7 +2619,10 @@ mod tests {
 
         fn read(path: &std::path::Path) -> String {
             let mut s = String::new();
-            fs::File::open(path).unwrap().read_to_string(&mut s).unwrap();
+            fs::File::open(path)
+                .unwrap()
+                .read_to_string(&mut s)
+                .unwrap();
             s
         }
 
@@ -2629,8 +2685,11 @@ mod tests {
 
             let exclude = gitdir.join("info/exclude");
             let contents = read(&exclude);
-            assert!(contents.contains("AGENTS.md"),
-                "expected AGENTS.md in {}: {contents:?}", exclude.display());
+            assert!(
+                contents.contains("AGENTS.md"),
+                "expected AGENTS.md in {}: {contents:?}",
+                exclude.display()
+            );
         }
 
         #[test]
@@ -2639,11 +2698,7 @@ mod tests {
             // Relative gitdir resolved against the worktree path
             let rel = "external-gitdir";
             fs::create_dir_all(tmp.path().join(rel)).unwrap();
-            fs::write(
-                tmp.path().join(".git"),
-                format!("gitdir: {rel}\n"),
-            )
-            .unwrap();
+            fs::write(tmp.path().join(".git"), format!("gitdir: {rel}\n")).unwrap();
 
             super::ensure_git_exclude(tmp.path(), "AGENTS.md");
 
@@ -2669,8 +2724,14 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             super::write_agents_md_section(tmp.path(), Some("inject me"));
             let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
-            assert!(contents.contains(super::HERMES_BLOCK_BEGIN), "missing BEGIN marker: {contents:?}");
-            assert!(contents.contains(super::HERMES_BLOCK_END), "missing END marker: {contents:?}");
+            assert!(
+                contents.contains(super::HERMES_BLOCK_BEGIN),
+                "missing BEGIN marker: {contents:?}"
+            );
+            assert!(
+                contents.contains(super::HERMES_BLOCK_END),
+                "missing END marker: {contents:?}"
+            );
             assert!(contents.contains("inject me"));
         }
 
@@ -2694,7 +2755,10 @@ mod tests {
             let after_first = fs::read_to_string(&path).unwrap();
             super::write_agents_md_section(tmp.path(), Some("first"));
             let after_second = fs::read_to_string(&path).unwrap();
-            assert_eq!(after_first, after_second, "second write should be byte-identical");
+            assert_eq!(
+                after_first, after_second,
+                "second write should be byte-identical"
+            );
         }
 
         #[test]
@@ -2727,7 +2791,10 @@ mod tests {
             let path = tmp.path().join("AGENTS.md");
             // Don't create the file at all.
             super::write_agents_md_section(tmp.path(), None);
-            assert!(!path.exists(), "should not create AGENTS.md just to strip nothing");
+            assert!(
+                !path.exists(),
+                "should not create AGENTS.md just to strip nothing"
+            );
         }
 
         #[test]
@@ -2781,7 +2848,10 @@ mod tests {
             assert!(result.contains("Use ruff."));
             let rename_pos = result.find("wsx workspace rename").unwrap();
             let custom_pos = result.find("Use ruff.").unwrap();
-            assert!(custom_pos > rename_pos, "custom should come after rename block");
+            assert!(
+                custom_pos > rename_pos,
+                "custom should come after rename block"
+            );
         }
 
         #[test]
@@ -2857,7 +2927,10 @@ mod tests {
             let dpos = result.find("DOCTRINE_MARK").expect("doctrine present");
             let cpos = result.find("CUSTOM_MARK").expect("custom present");
             assert!(dpos < cpos, "doctrine must precede custom: {result}");
-            assert!(result.starts_with("DOCTRINE_MARK"), "doctrine must lead: {result}");
+            assert!(
+                result.starts_with("DOCTRINE_MARK"),
+                "doctrine must lead: {result}"
+            );
         }
 
         #[test]
@@ -2869,8 +2942,12 @@ mod tests {
                 resume: false,
                 fast_mode: false,
             };
-            let result = super::compose_injected_prompt(&mode).expect("PM still injects its prompt");
-            assert!(!result.contains("DOCTRINE_MARK"), "PM must not get doctrine: {result}");
+            let result =
+                super::compose_injected_prompt(&mode).expect("PM still injects its prompt");
+            assert!(
+                !result.contains("DOCTRINE_MARK"),
+                "PM must not get doctrine: {result}"
+            );
         }
     }
 
@@ -2934,10 +3011,14 @@ mod tests {
             };
             super::prepare_hermes_workspace(tmp.path(), &cont);
             let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap_or_default();
-            assert!(!agents.contains("<!-- BEGIN wsx-managed -->"),
-                "wsx block should be removed; got: {agents}");
-            assert!(!agents.contains("wsx workspace rename"),
-                "rename text should be gone; got: {agents}");
+            assert!(
+                !agents.contains("<!-- BEGIN wsx-managed -->"),
+                "wsx block should be removed; got: {agents}"
+            );
+            assert!(
+                !agents.contains("wsx workspace rename"),
+                "rename text should be gone; got: {agents}"
+            );
         }
 
         #[test]
@@ -2961,10 +3042,7 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             init_gitdir(tmp.path());
             // Manually write a marker with a specific (old) timestamp.
-            std::fs::write(
-                tmp.path().join(".git/info/wsx-hermes-spawn-at"),
-                "1000.0\n",
-            ).unwrap();
+            std::fs::write(tmp.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
             let fresh_mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
@@ -2975,8 +3053,11 @@ mod tests {
             super::prepare_hermes_workspace(tmp.path(), &fresh_mode);
             let marker = super::read_hermes_spawn_marker(tmp.path())
                 .expect("marker should still exist after prepare");
-            assert!((marker.start_ts - 1000.0).abs() < 0.001,
-                "start_ts must be preserved; got {}", marker.start_ts);
+            assert!(
+                (marker.start_ts - 1000.0).abs() < 0.001,
+                "start_ts must be preserved; got {}",
+                marker.start_ts
+            );
         }
     }
 
@@ -3012,8 +3093,15 @@ mod tests {
                 crate::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
-            assert_eq!(argv.first().map(|s| s.as_str()), Some("chat"), "argv: {argv:?}");
-            assert!(!argv.iter().any(|a| a == "--source"), "--source must not be emitted; argv: {argv:?}");
+            assert_eq!(
+                argv.first().map(|s| s.as_str()),
+                Some("chat"),
+                "argv: {argv:?}"
+            );
+            assert!(
+                !argv.iter().any(|a| a == "--source"),
+                "--source must not be emitted; argv: {argv:?}"
+            );
         }
 
         #[test]
@@ -3040,7 +3128,11 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: true,
             };
-            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            );
             assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
         }
 
@@ -3053,7 +3145,11 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: true,
             };
-            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            );
             assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
         }
 
@@ -3067,7 +3163,11 @@ mod tests {
                 resume: false,
                 fast_mode: false,
             };
-            let cmd = super::build_hermes_command(tmp.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let cmd = super::build_hermes_command(
+                tmp.path(),
+                &mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            );
             assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
         }
 
@@ -3089,7 +3189,8 @@ mod tests {
             conn.execute(
                 "INSERT INTO sessions (id, source, started_at) VALUES ('pm-sess', 'cli', 1234.5);",
                 [],
-            ).unwrap();
+            )
+            .unwrap();
             drop(conn);
 
             let mut env = super::EnvGuard::new();
@@ -3101,9 +3202,16 @@ mod tests {
                 resume: true,
                 fast_mode: false,
             };
-            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let cmd = super::build_hermes_command(
+                cwd.path(),
+                &mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            );
             let argv = argv_strings(&cmd);
-            let resume_idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
+            let resume_idx = argv
+                .iter()
+                .position(|a| a == "--resume")
+                .expect("expected --resume");
             assert_eq!(argv[resume_idx + 1], "pm-sess");
             assert!(argv.iter().any(|a| a == "--yolo"), "argv: {argv:?}");
         }
@@ -3113,7 +3221,12 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             for mode in &[
                 fresh_no_rename(),
-                super::SpawnMode::Continue { custom_instructions: None, doctrine: None, additional_dirs: vec![], yolo: true },
+                super::SpawnMode::Continue {
+                    custom_instructions: None,
+                    doctrine: None,
+                    additional_dirs: vec![],
+                    yolo: true,
+                },
                 super::SpawnMode::ProjectManager {
                     workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
                     custom_instructions: None,
@@ -3122,10 +3235,16 @@ mod tests {
                     fast_mode: false,
                 },
             ] {
-                let cmd = super::build_hermes_command(tmp.path(), mode, crate::remote_control::RemoteOpts::disabled());
+                let cmd = super::build_hermes_command(
+                    tmp.path(),
+                    mode,
+                    crate::remote_control::RemoteOpts::disabled(),
+                );
                 let argv = argv_strings(&cmd);
-                assert!(!argv.iter().any(|a| a == "--worktree" || a == "-w"),
-                    "should never emit --worktree; argv: {argv:?}");
+                assert!(
+                    !argv.iter().any(|a| a == "--worktree" || a == "-w"),
+                    "should never emit --worktree; argv: {argv:?}"
+                );
             }
         }
 
@@ -3140,8 +3259,10 @@ mod tests {
                 crate::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
-            assert!(!argv.iter().any(|a| a == "--source"),
-                "expected --source absent; argv: {argv:?}");
+            assert!(
+                !argv.iter().any(|a| a == "--source"),
+                "expected --source absent; argv: {argv:?}"
+            );
             assert_eq!(argv.first().map(|s| s.as_str()), Some("chat"));
         }
 
@@ -3157,7 +3278,11 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             };
-            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let cmd = super::build_hermes_command(
+                cwd.path(),
+                &mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            );
             let argv = argv_strings(&cmd);
             assert!(!argv.iter().any(|a| a == "--resume"), "argv: {argv:?}");
             assert!(!argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
@@ -3193,9 +3318,16 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             };
-            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let cmd = super::build_hermes_command(
+                cwd.path(),
+                &mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            );
             let argv = argv_strings(&cmd);
-            let idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
+            let idx = argv
+                .iter()
+                .position(|a| a == "--resume")
+                .expect("expected --resume");
             assert_eq!(argv[idx + 1], "session-abc");
         }
 
@@ -3212,7 +3344,8 @@ mod tests {
             std::fs::write(
                 cwd.path().join(".git/info/wsx-hermes-spawn-at"),
                 "1000.0\nsession-cached\n",
-            ).unwrap();
+            )
+            .unwrap();
 
             let hermes_dir = home.path().join(".hermes");
             std::fs::create_dir_all(&hermes_dir).unwrap();
@@ -3239,11 +3372,21 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             };
-            let cmd = super::build_hermes_command(cwd.path(), &mode, crate::remote_control::RemoteOpts::disabled());
+            let cmd = super::build_hermes_command(
+                cwd.path(),
+                &mode,
+                crate::remote_control::RemoteOpts::disabled(),
+            );
             let argv = argv_strings(&cmd);
-            let idx = argv.iter().position(|a| a == "--resume").expect("expected --resume");
-            assert_eq!(argv[idx + 1], "session-cached",
-                "cached id must win over time-based newer session; argv: {argv:?}");
+            let idx = argv
+                .iter()
+                .position(|a| a == "--resume")
+                .expect("expected --resume");
+            assert_eq!(
+                argv[idx + 1],
+                "session-cached",
+                "cached id must win over time-based newer session; argv: {argv:?}"
+            );
         }
 
         fn env_of(cmd: &portable_pty::CommandBuilder, key: &str) -> Option<String> {
@@ -3283,7 +3426,10 @@ mod tests {
                 crate::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
-            let idx = argv.iter().position(|a| a == "--provider").expect("expected --provider");
+            let idx = argv
+                .iter()
+                .position(|a| a == "--provider")
+                .expect("expected --provider");
             assert_eq!(argv[idx + 1], "openrouter");
         }
 
@@ -3433,8 +3579,14 @@ mod tests {
         let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
         let dpos = prompt.find("DOCTRINE_MARK").expect("doctrine present");
         let cpos = prompt.find("CUSTOM_MARK").expect("custom present");
-        assert!(dpos < cpos, "doctrine must precede custom instructions: {prompt}");
-        assert!(prompt.starts_with("DOCTRINE_MARK"), "doctrine must lead: {prompt}");
+        assert!(
+            dpos < cpos,
+            "doctrine must precede custom instructions: {prompt}"
+        );
+        assert!(
+            prompt.starts_with("DOCTRINE_MARK"),
+            "doctrine must lead: {prompt}"
+        );
     }
 
     #[test]
@@ -3455,8 +3607,14 @@ mod tests {
         let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
         let dpos = prompt.find("DOCTRINE_MARK").expect("doctrine present");
         let cpos = prompt.find("CUSTOM_MARK").expect("custom present");
-        assert!(dpos < cpos, "doctrine must precede custom instructions: {prompt}");
-        assert!(prompt.starts_with("DOCTRINE_MARK"), "doctrine must lead: {prompt}");
+        assert!(
+            dpos < cpos,
+            "doctrine must precede custom instructions: {prompt}"
+        );
+        assert!(
+            prompt.starts_with("DOCTRINE_MARK"),
+            "doctrine must lead: {prompt}"
+        );
     }
 
     #[test]
@@ -3479,8 +3637,14 @@ mod tests {
             .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
             .expect("PM with custom instructions must emit --append-system-prompt");
         let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
-        assert!(prompt.contains("PM_CUSTOM_MARK"), "PM prompt should be present: {prompt}");
-        assert!(!prompt.contains("DOCTRINE_MARK"), "PM must not get doctrine: {prompt}");
+        assert!(
+            prompt.contains("PM_CUSTOM_MARK"),
+            "PM prompt should be present: {prompt}"
+        );
+        assert!(
+            !prompt.contains("DOCTRINE_MARK"),
+            "PM must not get doctrine: {prompt}"
+        );
     }
 
     #[test]
@@ -3503,7 +3667,13 @@ mod tests {
             .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
             .expect("PM with custom instructions must emit --append-system-prompt");
         let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
-        assert!(prompt.contains("PM_CUSTOM_MARK"), "PM prompt should be present: {prompt}");
-        assert!(!prompt.contains("DOCTRINE_MARK"), "PM must not get doctrine: {prompt}");
+        assert!(
+            prompt.contains("PM_CUSTOM_MARK"),
+            "PM prompt should be present: {prompt}"
+        );
+        assert!(
+            !prompt.contains("DOCTRINE_MARK"),
+            "PM must not get doctrine: {prompt}"
+        );
     }
 }

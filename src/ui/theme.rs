@@ -277,8 +277,8 @@ impl Theme {
     /// lifecycle states that intentionally have no color (NoPr, PrDraft)
     /// so each caller can pick its own fallback — the dashboard branch
     /// column dims unknowns, the updates-panel name stays default-bold.
-    pub fn lifecycle_style(&self, lc: Option<crate::forge::BranchLifecycle>) -> Option<Style> {
-        use crate::forge::BranchLifecycle::*;
+    pub fn lifecycle_style(&self, lc: Option<crate::git::forge::BranchLifecycle>) -> Option<Style> {
+        use crate::git::forge::BranchLifecycle::*;
         match lc {
             Some(PrOpen) => Some(self.ok_style()),
             Some(PrConflicted) => Some(self.warn_style()),

@@ -1,4 +1,4 @@
-use crate::forge::BranchLifecycle;
+use crate::git::forge::BranchLifecycle;
 use crate::data::store::RepoId;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
@@ -1108,7 +1108,7 @@ mod workspace_row_tests {
     /// about PR state.
     #[test]
     fn workspace_row_paints_name_with_lifecycle_color() {
-        use crate::forge::BranchLifecycle::*;
+        use crate::git::forge::BranchLifecycle::*;
         let theme = Theme::ansi();
         let w = fixture_workspace("alpha");
         // Lifecycles without a hue (NoPr, PrDraft, None) fall back to
@@ -1164,7 +1164,7 @@ mod workspace_row_tests {
             None,
             true, // selected
             Status::Complete,
-            Some(crate::forge::BranchLifecycle::PrOpen),
+            Some(crate::git::forge::BranchLifecycle::PrOpen),
             10_000,
             &theme,
         );

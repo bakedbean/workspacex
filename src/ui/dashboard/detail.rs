@@ -7,7 +7,7 @@
 
 use crate::detail_bar_config::DetailBarConfig;
 use crate::events::WorkspaceEvents;
-use crate::forge::BranchLifecycle;
+use crate::git::forge::BranchLifecycle;
 use crate::git::DiffStats;
 use crate::proc::ProcInfo;
 use crate::data::store::{Repo, Workspace};

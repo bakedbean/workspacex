@@ -6,7 +6,7 @@
 //! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
 
 use crate::events::WorkspaceEvents;
-use crate::forge::BranchLifecycle;
+use crate::git::forge::BranchLifecycle;
 use crate::git::DiffStats;
 use crate::proc::ProcInfo;
 use crate::data::store::{Repo, Workspace};

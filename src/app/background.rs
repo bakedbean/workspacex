@@ -334,7 +334,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     g.pr_last_poll_ms.insert(id, now_ms);
                 }
                 if let Ok(Some(lifecycle)) =
-                    crate::forge::fetch_branch_lifecycle(&path, &db_branch).await
+                    crate::git::forge::fetch_branch_lifecycle(&path, &db_branch).await
                 {
                     let mut g = app.lock().await;
                     g.pr_lifecycle.insert(id, lifecycle);

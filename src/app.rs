@@ -136,7 +136,7 @@ pub struct App {
     /// Cached PR lifecycle per workspace. Absent key = never polled; present
     /// key = last successful poll's result.
     pub pr_lifecycle:
-        std::collections::HashMap<crate::data::store::WorkspaceId, crate::forge::BranchLifecycle>,
+        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::forge::BranchLifecycle>,
     /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
     pub pr_last_poll_ms: std::collections::HashMap<crate::data::store::WorkspaceId, i64>,
     /// Last epoch-ms we attempted a `git diff --shortstat` per workspace

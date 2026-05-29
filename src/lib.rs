@@ -8,7 +8,6 @@ pub mod doctrine;
 pub mod error;
 pub mod events;
 pub mod external;
-pub mod forge;
 pub mod git;
 pub mod hermes_events;
 pub mod mcp;

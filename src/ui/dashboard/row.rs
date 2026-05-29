@@ -13,7 +13,7 @@
 //!   flex └ message (or em-dash)
 //!   10ch right-aligned Ns ago
 
-use crate::forge::BranchLifecycle;
+use crate::git::forge::BranchLifecycle;
 use crate::git::DiffStats;
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;

@@ -826,18 +826,18 @@ pub(crate) fn build_spawn_info(
         .flatten();
     let yolo = ws.yolo;
     let agent = ws.agent;
-    let doctrine = crate::doctrine::resolve_effective_doctrine(&app.store, agent);
+    let doctrine = crate::agent::doctrine::resolve_effective_doctrine(&app.store, agent);
     // Resolve related repos (per-repo names → source paths), filter out
     // the spawning repo itself, build the read-only system-prompt
     // fragment, and fold it into custom_instructions before the agent sees it.
-    let resolved = crate::related::resolve(repo.related_repos.as_deref(), &app.repos);
+    let resolved = crate::agent::related::resolve(repo.related_repos.as_deref(), &app.repos);
     let resolved: Vec<(String, std::path::PathBuf)> = resolved
         .into_iter()
         .filter(|(_, p)| p != &repo.path)
         .collect();
     let additional_dirs: Vec<std::path::PathBuf> =
         resolved.iter().map(|(_, p)| p.clone()).collect();
-    let related_prompt = crate::related::build_read_only_prompt(&resolved);
+    let related_prompt = crate::agent::related::build_read_only_prompt(&resolved);
     let custom = match (custom, related_prompt) {
         (None, None) => None,
         (Some(c), None) => Some(c),
@@ -928,7 +928,7 @@ pub(crate) fn restore_attached_state(
                 }
                 if let Some((sid, sp, mode, repo_path, agent)) = build_spawn_info(app, leaf_id) {
                     maybe_mirror_mcp(app, &repo_path, &sp);
-                    let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+                    let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
                     let _ = app.sessions.spawn(sid, &sp, 80, 24, mode, remote, agent);
                 }
             }
@@ -952,7 +952,7 @@ pub(crate) fn ensure_workspace_session(
     }
     if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
         maybe_mirror_mcp(app, &repo_path, &path);
-        let remote = crate::remote_control::RemoteOpts::from_store(&app.store);
+        let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
         match app.sessions.spawn(id, &path, 80, 24, mode, remote, agent) {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
@@ -990,10 +990,10 @@ pub(crate) fn maybe_mirror_mcp(
     repo_path: &std::path::Path,
     worktree_path: &std::path::Path,
 ) {
-    if !crate::mcp::enabled(&app.store) {
+    if !crate::agent::mcp::enabled(&app.store) {
         return;
     }
-    if let Err(e) = crate::mcp::mirror_mcp_servers(repo_path, worktree_path) {
+    if let Err(e) = crate::agent::mcp::mirror_mcp_servers(repo_path, worktree_path) {
         tracing::warn!(error = %e, "failed to mirror MCP servers; continuing");
     }
 }

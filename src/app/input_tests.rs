@@ -498,7 +498,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -516,7 +516,7 @@ mod pm_state_tests {
                 80,
                 24,
                 second_mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -616,7 +616,7 @@ mod pm_state_tests {
                     80,
                     24,
                     mode,
-                    crate::remote_control::RemoteOpts::disabled(),
+                    crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
                 )
                 .unwrap();
@@ -712,7 +712,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -796,7 +796,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -866,7 +866,7 @@ mod pm_state_tests {
                     80,
                     24,
                     mode,
-                    crate::remote_control::RemoteOpts::disabled(),
+                    crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
                 )
                 .unwrap();
@@ -1147,7 +1147,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -1223,7 +1223,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -1273,7 +1273,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -1329,7 +1329,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -1369,7 +1369,7 @@ mod pm_state_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -3786,7 +3786,7 @@ mod ctrl_x_esc_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -3804,7 +3804,7 @@ mod ctrl_x_esc_tests {
                 80,
                 24,
                 second_mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -3903,7 +3903,7 @@ mod restore_layout_tests {
                     80,
                     24,
                     mode,
-                    crate::remote_control::RemoteOpts::disabled(),
+                    crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
                 )
                 .unwrap();
@@ -4260,7 +4260,7 @@ mod detail_bar_focus_tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -4478,7 +4478,7 @@ mod attached_wheel_forwarding {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
@@ -4600,7 +4600,7 @@ mod attached_wheel_forwarding {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();

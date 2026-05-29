@@ -208,7 +208,7 @@ pub async fn open_pm(
         resume,
         fast_mode: pm_fast_mode_enabled(store),
     };
-    let remote = crate::remote_control::RemoteOpts::from_store(store);
+    let remote = crate::agent::remote_control::RemoteOpts::from_store(store);
     mgr.spawn_pm(pm_dir, 80, 24, mode, remote, agent)?;
     Ok(())
 }

@@ -1,26 +1,21 @@
+pub mod agent;
 pub mod app;
 pub mod cli;
 pub mod config;
 pub mod data;
 pub mod detail_bar_config;
 pub mod detail_modules;
-pub mod doctrine;
 pub mod error;
 pub mod events;
 pub mod external;
 pub mod git;
 pub mod hermes_events;
-pub mod mcp;
 pub mod names;
 pub mod pi_events;
 pub mod pinned;
-pub mod pm;
 pub mod proc;
 pub mod pty;
-pub mod related;
-pub mod remote_control;
 pub mod remotes;
-pub mod skill;
 #[doc(hidden)]
 pub mod test_support;
 pub mod ui;

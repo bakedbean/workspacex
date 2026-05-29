@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The wsx skill content, embedded at compile time from `skills/wsx/SKILL.md`.
-pub const SKILL_CONTENT: &str = include_str!("../skills/wsx/SKILL.md");
+pub const SKILL_CONTENT: &str = include_str!("../../skills/wsx/SKILL.md");
 
 /// Default install location for the wsx skill (`~/.claude/skills/wsx/SKILL.md`).
 /// Returns `None` if the home directory can't be resolved.

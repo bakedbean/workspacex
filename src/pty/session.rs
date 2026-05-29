@@ -325,7 +325,7 @@ pub enum SpawnMode {
         custom_instructions: Option<String>,
         /// Process doctrine to inject ahead of rename/custom content.
         /// `build_spawn_info` populates this in production via
-        /// `crate::doctrine::resolve_effective_doctrine`. `None` means "inject
+        /// `crate::agent::doctrine::resolve_effective_doctrine`. `None` means "inject
         /// no doctrine" — a real production state when the operator disables it
         /// (`process_doctrine` set to `off`/`none`/`disabled`), as well as the
         /// default in tests. It is never a placeholder to be filled in later.
@@ -698,7 +698,7 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
 pub fn build_claude_command(
     cwd: &Path,
     mode: &SpawnMode,
-    remote: crate::remote_control::RemoteOpts,
+    remote: crate::agent::remote_control::RemoteOpts,
 ) -> CommandBuilder {
     let bin = std::env::var("WSX_CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
     let mut cmd = CommandBuilder::new(bin);
@@ -774,7 +774,7 @@ pub fn build_claude_command(
             fast_mode: _, // emitted below, after the match
         } => (
             None,
-            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+            Some(crate::agent::pm::pm_system_prompt(custom_instructions.as_deref())),
             None,
             false,
             *resume,
@@ -883,7 +883,7 @@ fn render_rename_system_prompt(
 pub fn build_pi_command(
     cwd: &Path,
     mode: &SpawnMode,
-    _remote: crate::remote_control::RemoteOpts,
+    _remote: crate::agent::remote_control::RemoteOpts,
 ) -> CommandBuilder {
     let bin = std::env::var("WSX_PI_BIN").unwrap_or_else(|_| "pi".to_string());
     let mut cmd = CommandBuilder::new(bin);
@@ -935,7 +935,7 @@ pub fn build_pi_command(
             fast_mode: _, // pi has no fast mode
         } => (
             None,
-            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+            Some(crate::agent::pm::pm_system_prompt(custom_instructions.as_deref())),
             None,
             *resume,
         ),
@@ -1025,7 +1025,7 @@ pub fn build_pi_command(
 pub fn build_hermes_command(
     cwd: &Path,
     mode: &SpawnMode,
-    _remote: crate::remote_control::RemoteOpts,
+    _remote: crate::agent::remote_control::RemoteOpts,
 ) -> CommandBuilder {
     let bin = std::env::var("WSX_HERMES_BIN").unwrap_or_else(|_| "hermes".to_string());
     let mut cmd = CommandBuilder::new(bin);
@@ -1158,7 +1158,7 @@ fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
             ..
         } => (
             None,
-            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+            Some(crate::agent::pm::pm_system_prompt(custom_instructions.as_deref())),
             None,
         ),
     };
@@ -1176,7 +1176,7 @@ pub fn spawn_session(
     cols: u16,
     rows: u16,
     mode: SpawnMode,
-    remote: crate::remote_control::RemoteOpts,
+    remote: crate::agent::remote_control::RemoteOpts,
     agent: AgentKind,
 ) -> Result<Session> {
     let pty_system = native_pty_system();
@@ -1308,7 +1308,7 @@ impl SessionManager {
         cols: u16,
         rows: u16,
         mode: SpawnMode,
-        remote: crate::remote_control::RemoteOpts,
+        remote: crate::agent::remote_control::RemoteOpts,
         agent: AgentKind,
     ) -> Result<Arc<Session>> {
         if let Some(s) = self.sessions.get(&id) {
@@ -1332,7 +1332,7 @@ impl SessionManager {
         cols: u16,
         rows: u16,
         mode: SpawnMode,
-        remote: crate::remote_control::RemoteOpts,
+        remote: crate::agent::remote_control::RemoteOpts,
         agent: AgentKind,
     ) -> Result<Arc<Session>> {
         if let Some(existing) = &self.pm {
@@ -1418,7 +1418,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote_control::RemoteOpts::disabled(),
+            crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
         )
         .unwrap();
@@ -1477,7 +1477,7 @@ mod tests {
                     additional_dirs: vec![],
                     yolo: false,
                 },
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 AgentKind::Claude,
             )
             .unwrap();
@@ -1516,7 +1516,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote_control::RemoteOpts::disabled(),
+            crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
         )
         .unwrap();
@@ -1551,7 +1551,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -1586,7 +1586,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
         let idx = argv
@@ -1617,7 +1617,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -1643,7 +1643,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -1663,7 +1663,7 @@ mod tests {
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             argv.iter()
@@ -1681,7 +1681,7 @@ mod tests {
             yolo: true,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(argv.iter().any(|a| a == std::ffi::OsStr::new("--continue")));
         assert!(
@@ -1701,7 +1701,7 @@ mod tests {
             yolo: false,
         };
         let cwd = std::path::PathBuf::from(".");
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -1800,7 +1800,7 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--dangerously-skip-permissions"), "{dbg}");
         assert!(!dbg.contains("--allowedTools"), "{dbg}");
@@ -1821,7 +1821,7 @@ mod tests {
             resume: true,
             fast_mode: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let dbg = format!("{cmd:?}");
         assert!(dbg.contains("--continue"), "{dbg}");
     }
@@ -1836,7 +1836,7 @@ mod tests {
             resume: false,
             fast_mode: true,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -1859,7 +1859,7 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
@@ -1877,7 +1877,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
@@ -1894,7 +1894,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
@@ -1912,7 +1912,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let opts = crate::remote_control::RemoteOpts {
+        let opts = crate::agent::remote_control::RemoteOpts {
             enabled: true,
             sandbox: false,
         };
@@ -1939,7 +1939,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let opts = crate::remote_control::RemoteOpts {
+        let opts = crate::agent::remote_control::RemoteOpts {
             enabled: true,
             sandbox: true,
         };
@@ -1962,7 +1962,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         assert!(
             !argv
@@ -1983,7 +1983,7 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let opts = crate::remote_control::RemoteOpts {
+        let opts = crate::agent::remote_control::RemoteOpts {
             enabled: true,
             sandbox: false,
         };
@@ -2009,7 +2009,7 @@ mod tests {
             ],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let args: Vec<String> = cmd
             .get_argv()
             .iter()
@@ -2041,7 +2041,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let args: Vec<String> = cmd
             .get_argv()
             .iter()
@@ -2066,7 +2066,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote_control::RemoteOpts::disabled(),
+            crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
         )
         .unwrap();
@@ -2101,7 +2101,7 @@ mod tests {
                 80,
                 24,
                 mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 AgentKind::Claude,
             )
             .unwrap();
@@ -2120,7 +2120,7 @@ mod tests {
                 80,
                 24,
                 mode2,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
                 AgentKind::Claude,
             )
             .unwrap();
@@ -2153,7 +2153,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote_control::RemoteOpts::disabled(),
+            crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
         )
         .unwrap();
@@ -2186,7 +2186,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote_control::RemoteOpts::disabled(),
+            crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
         )
         .expect("spawn_session for scrollback test")
@@ -2336,7 +2336,7 @@ mod tests {
 
         let argv_of = |env: &mut EnvGuard, mode: &SpawnMode| -> Vec<String> {
             let _ = env;
-            let cmd = build_pi_command(&cwd, mode, crate::remote_control::RemoteOpts::disabled());
+            let cmd = build_pi_command(&cwd, mode, crate::agent::remote_control::RemoteOpts::disabled());
             cmd.get_argv()
                 .iter()
                 .map(|s| s.to_string_lossy().into_owned())
@@ -3160,7 +3160,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 tmp.path(),
                 &fresh_no_rename(),
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
             assert_eq!(
@@ -3180,7 +3180,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 tmp.path(),
                 &fresh_no_rename(),
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
             assert!(!argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
@@ -3201,7 +3201,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 tmp.path(),
                 &mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
         }
@@ -3218,7 +3218,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 tmp.path(),
                 &mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
         }
@@ -3236,7 +3236,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 tmp.path(),
                 &mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
         }
@@ -3275,7 +3275,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 cwd.path(),
                 &mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
             let resume_idx = argv
@@ -3308,7 +3308,7 @@ mod tests {
                 let cmd = super::build_hermes_command(
                     tmp.path(),
                     mode,
-                    crate::remote_control::RemoteOpts::disabled(),
+                    crate::agent::remote_control::RemoteOpts::disabled(),
                 );
                 let argv = argv_strings(&cmd);
                 assert!(
@@ -3326,7 +3326,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 bogus,
                 &fresh_no_rename(),
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
             assert!(
@@ -3351,7 +3351,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 cwd.path(),
                 &mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
             assert!(!argv.iter().any(|a| a == "--resume"), "argv: {argv:?}");
@@ -3391,7 +3391,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 cwd.path(),
                 &mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
             let idx = argv
@@ -3445,7 +3445,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 cwd.path(),
                 &mode,
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
             let idx = argv
@@ -3474,7 +3474,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 tmp.path(),
                 &fresh_no_rename(),
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             assert_eq!(
                 env_of(&cmd, "HERMES_INFERENCE_MODEL"),
@@ -3493,7 +3493,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 tmp.path(),
                 &fresh_no_rename(),
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             let argv = argv_strings(&cmd);
             let idx = argv
@@ -3513,7 +3513,7 @@ mod tests {
             let cmd = super::build_hermes_command(
                 tmp.path(),
                 &fresh_no_rename(),
-                crate::remote_control::RemoteOpts::disabled(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
             );
             assert!(env_of(&cmd, "HERMES_INFERENCE_MODEL").is_none());
             let argv = argv_strings(&cmd);
@@ -3615,7 +3615,7 @@ mod tests {
                 additional_dirs: vec![],
                 yolo: false,
             },
-            crate::remote_control::RemoteOpts::disabled(),
+            crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
         );
         let err = match result {
@@ -3640,7 +3640,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -3668,7 +3668,7 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         };
-        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_pi_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -3700,7 +3700,7 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_pi_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()
@@ -3730,7 +3730,7 @@ mod tests {
             resume: false,
             fast_mode: false,
         };
-        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let cmd = build_claude_command(&cwd, &mode, crate::agent::remote_control::RemoteOpts::disabled());
         let argv = cmd.get_argv();
         let idx = argv
             .iter()

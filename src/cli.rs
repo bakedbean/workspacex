@@ -476,19 +476,19 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     // pure `wsx setup install-skill` on a fresh machine doesn't create
     // `~/.local/state/wsx/state.db` as a side effect.
     if matches!(action, CliAction::SetupInstallSkill) {
-        let target = crate::skill::default_install_path().ok_or_else(|| {
+        let target = crate::agent::skill::default_install_path().ok_or_else(|| {
             Error::UserInput("could not resolve home directory for skill install".into())
         })?;
-        let outcome = crate::skill::install_to(&target)?;
+        let outcome = crate::agent::skill::install_to(&target)?;
         let path = target.display();
         match outcome {
-            crate::skill::InstallOutcome::Created => {
+            crate::agent::skill::InstallOutcome::Created => {
                 println!("installed wsx skill to {path}");
             }
-            crate::skill::InstallOutcome::Updated => {
+            crate::agent::skill::InstallOutcome::Updated => {
                 println!("updated wsx skill at {path}");
             }
-            crate::skill::InstallOutcome::Unchanged => {
+            crate::agent::skill::InstallOutcome::Unchanged => {
                 println!("wsx skill already up to date at {path}");
             }
         }

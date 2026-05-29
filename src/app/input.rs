@@ -591,7 +591,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             // so 'r' typed inside PM (when PM is focused) goes to the PTY.
             let dirs = crate::config::Dirs::discover();
             let pm_dir = dirs.pm_dir();
-            if let Err(e) = crate::pm::refresh_pm(&mut app.sessions, &app.store, &pm_dir).await {
+            if let Err(e) = crate::agent::pm::refresh_pm(&mut app.sessions, &app.store, &pm_dir).await {
                 app.modal = Some(Modal::Error {
                     message: e.to_string(),
                 });
@@ -627,10 +627,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 let result = if app.pm_auto_summary_sent {
                     // Reopen path: refresh so PM picks up workspace
                     // changes that happened while the pane was hidden.
-                    crate::pm::open_pm_with_refresh(&mut app.sessions, &app.store, &pm_dir, custom)
+                    crate::agent::pm::open_pm_with_refresh(&mut app.sessions, &app.store, &pm_dir, custom)
                         .await
                 } else {
-                    crate::pm::open_pm_with_auto_summary(
+                    crate::agent::pm::open_pm_with_auto_summary(
                         &mut app.sessions,
                         &app.store,
                         &pm_dir,

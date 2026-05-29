@@ -272,8 +272,8 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     }
     let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
     store.delete_workspace(ws.id)?;
-    if crate::mcp::enabled(store)
-        && let Err(e) = crate::mcp::remove_worktree_entry(&ws.worktree_path)
+    if crate::agent::mcp::enabled(store)
+        && let Err(e) = crate::agent::mcp::remove_worktree_entry(&ws.worktree_path)
     {
         tracing::warn!(error = %e, "failed to remove worktree entry from ~/.claude.json");
     }
@@ -332,8 +332,8 @@ pub async fn archive_with_app(
     {
         let g = app.lock().await;
         g.store.delete_workspace(ws.id)?;
-        if crate::mcp::enabled(&g.store)
-            && let Err(e) = crate::mcp::remove_worktree_entry(&ws.worktree_path)
+        if crate::agent::mcp::enabled(&g.store)
+            && let Err(e) = crate::agent::mcp::remove_worktree_entry(&ws.worktree_path)
         {
             tracing::warn!(error = %e, "failed to remove worktree entry from ~/.claude.json");
         }

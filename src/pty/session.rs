@@ -293,6 +293,13 @@ pub enum SpawnMode {
     Fresh {
         rename_ctx: Option<RenameContext>,
         custom_instructions: Option<String>,
+        /// Process doctrine to inject ahead of rename/custom content.
+        /// `build_spawn_info` populates this in production via
+        /// `crate::doctrine::resolve_effective_doctrine`. `None` means "inject
+        /// no doctrine" — a real production state when the operator disables it
+        /// (`process_doctrine` set to `off`/`none`/`disabled`), as well as the
+        /// default in tests. It is never a placeholder to be filled in later.
+        doctrine: Option<String>,
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
     },
@@ -300,6 +307,7 @@ pub enum SpawnMode {
     /// `yolo` adds `--dangerously-skip-permissions`.
     Continue {
         custom_instructions: Option<String>,
+        doctrine: Option<String>,
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
     },
@@ -670,13 +678,15 @@ pub fn build_claude_command(
         cmd.env(k, v);
     }
 
-    let (rename_prompt, custom, allow_wsx_rename, add_continue, skip_permissions, add_dirs) =
+    let (doctrine, rename_prompt, custom, allow_wsx_rename, add_continue, skip_permissions, add_dirs) =
         match mode {
             SpawnMode::Continue {
                 custom_instructions,
+                doctrine,
                 additional_dirs,
                 yolo,
             } => (
+                doctrine.clone(),
                 None,
                 custom_instructions.clone(),
                 false,
@@ -687,6 +697,7 @@ pub fn build_claude_command(
             SpawnMode::Fresh {
                 rename_ctx,
                 custom_instructions,
+                doctrine,
                 additional_dirs,
                 yolo,
             } => {
@@ -710,6 +721,7 @@ pub fn build_claude_command(
                     (None, false)
                 };
                 (
+                    doctrine.clone(),
                     rp,
                     custom_instructions.clone(),
                     allow,
@@ -725,6 +737,7 @@ pub fn build_claude_command(
                 resume,
                 fast_mode: _, // emitted below, after the match
             } => (
+                None,
                 Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
                 None,
                 false,
@@ -765,11 +778,14 @@ pub fn build_claude_command(
         cmd.arg(r#"{"fastMode":true}"#);
     }
 
-    let combined = match (rename_prompt, custom) {
-        (None, None) => None,
-        (Some(r), None) => Some(r),
-        (None, Some(c)) => Some(c),
-        (Some(r), Some(c)) => Some(format!("{r}\n\n{c}")),
+    let parts: Vec<String> = [doctrine, rename_prompt, custom]
+        .into_iter()
+        .flatten()
+        .collect();
+    let combined = if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     };
 
     if let Some(prompt) = combined {
@@ -843,15 +859,17 @@ pub fn build_pi_command(
     cmd.env("PI_OFFLINE", "1");
     cmd.env("npm_config_loglevel", "error");
 
-    let (rename_prompt, custom, add_continue) = match mode {
+    let (doctrine, rename_prompt, custom, add_continue) = match mode {
         SpawnMode::Continue {
             custom_instructions,
+            doctrine,
             additional_dirs: _,
             yolo: _,
-        } => (None, custom_instructions.clone(), true),
+        } => (doctrine.clone(), None, custom_instructions.clone(), true),
         SpawnMode::Fresh {
             rename_ctx,
             custom_instructions,
+            doctrine,
             additional_dirs: _,
             yolo: _,
         } => {
@@ -871,7 +889,7 @@ pub fn build_pi_command(
             } else {
                 None
             };
-            (rp, custom_instructions.clone(), false)
+            (doctrine.clone(), rp, custom_instructions.clone(), false)
         }
         SpawnMode::ProjectManager {
             workspaces_json_path: _,
@@ -880,6 +898,7 @@ pub fn build_pi_command(
             resume,
             fast_mode: _, // pi has no fast mode
         } => (
+            None,
             Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
             None,
             *resume,
@@ -926,11 +945,14 @@ pub fn build_pi_command(
         }
     }
 
-    let combined = match (rename_prompt, custom) {
-        (None, None) => None,
-        (Some(r), None) => Some(r),
-        (None, Some(c)) => Some(c),
-        (Some(r), Some(c)) => Some(format!("{r}\n\n{c}")),
+    let parts: Vec<String> = [doctrine, rename_prompt, custom]
+        .into_iter()
+        .flatten()
+        .collect();
+    let combined = if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     };
 
     if let Some(prompt) = combined {
@@ -1068,38 +1090,47 @@ fn render_rename_system_prompt_hermes(
 /// Decide what text to inject into the wsx-managed block of AGENTS.md for a
 /// given Hermes spawn mode. Returns None when nothing needs injecting.
 fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
-    fn combine(rename: String, custom: Option<String>) -> String {
-        match custom {
-            None => rename,
-            Some(c) => format!("{rename}\n\n{c}"),
-        }
-    }
-
-    match mode {
+    let (doctrine, rename, custom) = match mode {
         SpawnMode::Fresh {
             rename_ctx: Some(ctx),
             custom_instructions,
+            doctrine,
             ..
-        } => Some(combine(
-            render_rename_system_prompt_hermes(
+        } => (
+            doctrine.clone(),
+            Some(render_rename_system_prompt_hermes(
                 &ctx.current_branch,
                 &ctx.branch_prefix,
                 &ctx.repo_name,
                 &ctx.current_slug,
-            ),
+            )),
             custom_instructions.clone(),
-        )),
+        ),
         SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions,
+            doctrine,
             ..
         }
         | SpawnMode::Continue {
-            custom_instructions, ..
-        } => custom_instructions.clone(),
+            custom_instructions,
+            doctrine,
+            ..
+        } => (doctrine.clone(), None, custom_instructions.clone()),
         SpawnMode::ProjectManager {
             custom_instructions, ..
-        } => Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+        } => (
+            None,
+            Some(crate::pm::pm_system_prompt(custom_instructions.as_deref())),
+            None,
+        ),
+    };
+
+    let parts: Vec<String> = [doctrine, rename, custom].into_iter().flatten().collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     }
 }
 
@@ -1346,6 +1377,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -1404,6 +1436,7 @@ mod tests {
                 SpawnMode::Fresh {
                     rename_ctx: None,
                     custom_instructions: None,
+                    doctrine: None,
                     additional_dirs: vec![],
                     yolo: false,
                 },
@@ -1442,6 +1475,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -1475,6 +1509,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(ctx),
             custom_instructions: Some("Use tabs not spaces".into()),
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1509,6 +1544,7 @@ mod tests {
     fn system_prompt_continue_passes_custom_only() {
         let mode = SpawnMode::Continue {
             custom_instructions: Some("Use ruff".into()),
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1539,6 +1575,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(ctx),
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1559,6 +1596,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1578,6 +1616,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: true,
         };
@@ -1595,6 +1634,7 @@ mod tests {
     fn yolo_continue_emits_skip_permissions() {
         let mode = SpawnMode::Continue {
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: true,
         };
@@ -1614,6 +1654,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1781,6 +1822,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1797,6 +1839,7 @@ mod tests {
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::Continue {
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1814,6 +1857,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1840,6 +1884,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1862,6 +1907,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1905,6 +1951,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![
                 PathBuf::from("/work/frontend"),
                 PathBuf::from("/work/marketing"),
@@ -1939,6 +1986,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -1963,6 +2011,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -2049,6 +2098,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -2081,6 +2131,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -2187,6 +2238,7 @@ mod tests {
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
             custom_instructions: None,
+            doctrine: None,
             additional_dirs: vec![],
             yolo: false,
         };
@@ -2257,6 +2309,7 @@ mod tests {
             env.set("WSX_PI_MODEL", "claude-opus-4-7");
             let cont_mode = SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2706,6 +2759,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: Some(rename_ctx()),
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2718,6 +2772,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: Some(rename_ctx()),
                 custom_instructions: Some("Use ruff.".into()),
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2734,6 +2789,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: Some("Use ruff.".into()),
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2746,6 +2802,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2756,6 +2813,7 @@ mod tests {
         fn continue_with_custom_returns_custom() {
             let mode = super::SpawnMode::Continue {
                 custom_instructions: Some("Be terse.".into()),
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2767,6 +2825,7 @@ mod tests {
         fn continue_without_custom_returns_none() {
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2784,6 +2843,34 @@ mod tests {
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
             assert!(!result.is_empty());
+        }
+
+        #[test]
+        fn hermes_prepends_doctrine_before_custom() {
+            let mode = super::SpawnMode::Continue {
+                custom_instructions: Some("CUSTOM_MARK".to_string()),
+                doctrine: Some("DOCTRINE_MARK".to_string()),
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("expected Some");
+            let dpos = result.find("DOCTRINE_MARK").expect("doctrine present");
+            let cpos = result.find("CUSTOM_MARK").expect("custom present");
+            assert!(dpos < cpos, "doctrine must precede custom: {result}");
+            assert!(result.starts_with("DOCTRINE_MARK"), "doctrine must lead: {result}");
+        }
+
+        #[test]
+        fn hermes_pm_mode_has_no_doctrine() {
+            let mode = super::SpawnMode::ProjectManager {
+                workspaces_json_path: std::path::PathBuf::from("/tmp/x/workspaces.json"),
+                custom_instructions: None,
+                additional_dirs: vec![],
+                resume: false,
+                fast_mode: false,
+            };
+            let result = super::compose_injected_prompt(&mode).expect("PM still injects its prompt");
+            assert!(!result.contains("DOCTRINE_MARK"), "PM must not get doctrine: {result}");
         }
     }
 
@@ -2806,6 +2893,7 @@ mod tests {
                     current_slug: "bold-fern".into(),
                 }),
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2832,6 +2920,7 @@ mod tests {
                     current_slug: "bold-fern".into(),
                 }),
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2839,6 +2928,7 @@ mod tests {
             // Now spawn Continue with nothing to inject.
             let cont = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2856,6 +2946,7 @@ mod tests {
             init_gitdir(tmp.path());
             let cont = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2877,6 +2968,7 @@ mod tests {
             let fresh_mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -2904,6 +2996,7 @@ mod tests {
             super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             }
@@ -2943,6 +3036,7 @@ mod tests {
             let mode = super::SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: true,
             };
@@ -2955,6 +3049,7 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: true,
             };
@@ -3018,7 +3113,7 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             for mode in &[
                 fresh_no_rename(),
-                super::SpawnMode::Continue { custom_instructions: None, additional_dirs: vec![], yolo: true },
+                super::SpawnMode::Continue { custom_instructions: None, doctrine: None, additional_dirs: vec![], yolo: true },
                 super::SpawnMode::ProjectManager {
                     workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
                     custom_instructions: None,
@@ -3058,6 +3153,7 @@ mod tests {
             env.set("HOME", tmp.path().to_string_lossy().as_ref());
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -3093,6 +3189,7 @@ mod tests {
             env.set("HOME", home.path().to_string_lossy().as_ref());
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -3138,6 +3235,7 @@ mod tests {
             env.set("HOME", home.path().to_string_lossy().as_ref());
             let mode = super::SpawnMode::Continue {
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             };
@@ -3297,6 +3395,7 @@ mod tests {
             SpawnMode::Fresh {
                 rename_ctx: None,
                 custom_instructions: None,
+                doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
             },
@@ -3313,5 +3412,98 @@ mod tests {
             }
             other => panic!("expected AgentBinaryMissing, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn claude_prepends_doctrine_before_custom_instructions() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: Some("CUSTOM_MARK".to_string()),
+            doctrine: Some("DOCTRINE_MARK".to_string()),
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+            .expect("expected --append-system-prompt");
+        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
+        let dpos = prompt.find("DOCTRINE_MARK").expect("doctrine present");
+        let cpos = prompt.find("CUSTOM_MARK").expect("custom present");
+        assert!(dpos < cpos, "doctrine must precede custom instructions: {prompt}");
+        assert!(prompt.starts_with("DOCTRINE_MARK"), "doctrine must lead: {prompt}");
+    }
+
+    #[test]
+    fn pi_prepends_doctrine_before_custom_instructions() {
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::Continue {
+            custom_instructions: Some("CUSTOM_MARK".to_string()),
+            doctrine: Some("DOCTRINE_MARK".to_string()),
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+            .expect("expected --append-system-prompt");
+        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
+        let dpos = prompt.find("DOCTRINE_MARK").expect("doctrine present");
+        let cpos = prompt.find("CUSTOM_MARK").expect("custom present");
+        assert!(dpos < cpos, "doctrine must precede custom instructions: {prompt}");
+        assert!(prompt.starts_with("DOCTRINE_MARK"), "doctrine must lead: {prompt}");
+    }
+
+    #[test]
+    fn pi_pm_mode_has_no_doctrine_marker() {
+        // PM variant has no doctrine field; ensure nothing leaks one in.
+        // Give PM custom instructions so it definitely emits an
+        // --append-system-prompt, making the no-doctrine assertion non-vacuous.
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
+            custom_instructions: Some("PM_CUSTOM_MARK".to_string()),
+            additional_dirs: vec![],
+            resume: false,
+            fast_mode: false,
+        };
+        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+            .expect("PM with custom instructions must emit --append-system-prompt");
+        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
+        assert!(prompt.contains("PM_CUSTOM_MARK"), "PM prompt should be present: {prompt}");
+        assert!(!prompt.contains("DOCTRINE_MARK"), "PM must not get doctrine: {prompt}");
+    }
+
+    #[test]
+    fn claude_pm_mode_has_no_doctrine_marker() {
+        // PM variant has no doctrine field; ensure nothing leaks one in.
+        let cwd = PathBuf::from(".");
+        // Give PM custom instructions so it definitely emits an
+        // --append-system-prompt, making the no-doctrine assertion non-vacuous.
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
+            custom_instructions: Some("PM_CUSTOM_MARK".to_string()),
+            additional_dirs: vec![],
+            resume: false,
+            fast_mode: false,
+        };
+        let cmd = build_claude_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+            .expect("PM with custom instructions must emit --append-system-prompt");
+        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
+        assert!(prompt.contains("PM_CUSTOM_MARK"), "PM prompt should be present: {prompt}");
+        assert!(!prompt.contains("DOCTRINE_MARK"), "PM must not get doctrine: {prompt}");
     }
 }

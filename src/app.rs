@@ -817,6 +817,7 @@ pub(crate) fn build_spawn_info(
         .flatten();
     let yolo = ws.yolo;
     let agent = ws.agent;
+    let doctrine = crate::doctrine::resolve_effective_doctrine(&app.store, agent);
     // Resolve related repos (per-repo names → source paths), filter out
     // the spawning repo itself, build the read-only system-prompt
     // fragment, and fold it into custom_instructions before the agent sees it.
@@ -837,6 +838,7 @@ pub(crate) fn build_spawn_info(
     let mode = if crate::pty::session::has_prior_session_for(&ws.worktree_path, agent) {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
+            doctrine: doctrine.clone(),
             additional_dirs,
             yolo,
         }
@@ -856,6 +858,7 @@ pub(crate) fn build_spawn_info(
         crate::pty::session::SpawnMode::Fresh {
             rename_ctx,
             custom_instructions: custom,
+            doctrine,
             additional_dirs,
             yolo,
         }

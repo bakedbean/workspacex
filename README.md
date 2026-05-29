@@ -147,6 +147,7 @@ Known keys:
 |---|---|
 | `branch_prefix` | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`. |
 | `custom_instructions` | Free-text appended to claude's system prompt on every workspace spawn. |
+| `process_doctrine` | Standing "operating doctrine" injected into every developer session (new and resumed) across all agents: think and plan before scope is set, use the superpowers skills by default (Claude/Pi only), break work into logical commits, and load the wsx skill. Not applied to the Project Manager session. Set this to replace the default text verbatim (`@file` supported); set it to `off` / `none` / `disabled` to suppress injection entirely. A blank value restores the default (it is not an off switch). |
 | `coding_agent` | Default coding agent for new workspaces: `claude` (default) / `pi` / `hermes`. Per-workspace override via `wsx workspace create <repo> --agent <agent>`. See [Coding agents](#coding-agents). |
 | `nerd_fonts` | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable. |
 | `editor_cmd` | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`. |

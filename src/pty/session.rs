@@ -3456,6 +3456,30 @@ mod tests {
     }
 
     #[test]
+    fn pi_pm_mode_has_no_doctrine_marker() {
+        // PM variant has no doctrine field; ensure nothing leaks one in.
+        // Give PM custom instructions so it definitely emits an
+        // --append-system-prompt, making the no-doctrine assertion non-vacuous.
+        let cwd = PathBuf::from(".");
+        let mode = SpawnMode::ProjectManager {
+            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
+            custom_instructions: Some("PM_CUSTOM_MARK".to_string()),
+            additional_dirs: vec![],
+            resume: false,
+            fast_mode: false,
+        };
+        let cmd = build_pi_command(&cwd, &mode, crate::remote_control::RemoteOpts::disabled());
+        let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
+            .expect("PM with custom instructions must emit --append-system-prompt");
+        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
+        assert!(prompt.contains("PM_CUSTOM_MARK"), "PM prompt should be present: {prompt}");
+        assert!(!prompt.contains("DOCTRINE_MARK"), "PM must not get doctrine: {prompt}");
+    }
+
+    #[test]
     fn claude_pm_mode_has_no_doctrine_marker() {
         // PM variant has no doctrine field; ensure nothing leaks one in.
         let cwd = PathBuf::from(".");

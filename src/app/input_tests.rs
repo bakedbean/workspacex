@@ -2375,6 +2375,40 @@ mod pm_state_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_spawn_info_doctrine_is_agent_tailored_for_hermes() {
+        // Proves the agent-tailored doctrine flows through the call site for a
+        // non-Claude agent: Hermes must get the doctrine but NOT the superpowers
+        // clause (which is Claude/Pi-only), while keeping the wsx-skill clause.
+        use crate::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/work/backend"), "backend", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "hermes-ws",
+                branch: "backend/hermes-ws",
+                worktree_path: std::path::Path::new("/wt/hermes-ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Hermes,
+            })
+            .unwrap();
+        store.set_workspace_state(ws_id, WorkspaceState::Ready).unwrap();
+
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let (_id, _path, mode, _repo_path, _agent) = build_spawn_info(&app, ws_id).unwrap();
+        match mode {
+            crate::pty::session::SpawnMode::Fresh { doctrine, .. } => {
+                let d = doctrine.expect("doctrine must be populated");
+                assert!(!d.contains("superpowers"), "hermes doctrine must omit superpowers: {d}");
+                assert!(d.contains("wsx skill"), "hermes doctrine keeps wsx skill clause: {d}");
+            }
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_spawn_info_filters_self_reference() {
         use crate::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();

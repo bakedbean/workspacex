@@ -817,7 +817,7 @@ pub(crate) fn build_spawn_info(
         .flatten();
     let yolo = ws.yolo;
     let agent = ws.agent;
-    let doctrine = Some(crate::doctrine::resolve_effective_doctrine(&app.store, agent));
+    let doctrine = crate::doctrine::resolve_effective_doctrine(&app.store, agent);
     // Resolve related repos (per-repo names → source paths), filter out
     // the spawning repo itself, build the read-only system-prompt
     // fragment, and fold it into custom_instructions before the agent sees it.

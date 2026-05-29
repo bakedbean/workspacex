@@ -1,7 +1,9 @@
 //! The standing "process doctrine" wsx injects into developer sessions.
 //!
 //! These are non-negotiable defaults; an agent may stand them down only if a
-//! task plainly does not warrant the planning.
+//! task plainly does not warrant the planning. An install may replace the text
+//! via the `process_doctrine` setting, or disable injection entirely by setting
+//! it to a disable sentinel (`off` / `none` / `disabled`).
 
 use crate::pty::session::AgentKind;
 
@@ -27,13 +29,33 @@ const CLAUSE_WSX_SKILL: &str = "- Load and follow the wsx skill. It is authorita
     for workspace and cross-repo operations in this environment; consult it before \
     running wsx commands.";
 
-/// The effective doctrine for a spawn: the `process_doctrine` setting if set
-/// (replaces the default verbatim, for every agent), else the agent-tailored
-/// default. A blank/whitespace override is treated as unset.
-pub fn resolve_effective_doctrine(store: &crate::store::Store, agent: AgentKind) -> String {
+/// Values for the `process_doctrine` setting that disable doctrine injection
+/// entirely (matched case-insensitively against the trimmed value).
+const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
+
+/// The effective doctrine for a spawn, or `None` when injection is disabled.
+///
+/// Resolution of the `process_doctrine` setting:
+/// - unset, or blank/whitespace-only → the agent-tailored default.
+/// - a disable sentinel (`off` / `none` / `disabled`, case-insensitive) →
+///   `None`, suppressing injection for that install.
+/// - any other value → that value verbatim, for every agent.
+pub fn resolve_effective_doctrine(
+    store: &crate::store::Store,
+    agent: AgentKind,
+) -> Option<String> {
     match store.get_setting("process_doctrine") {
-        Ok(Some(v)) if !v.trim().is_empty() => v,
-        _ => process_doctrine(agent),
+        Ok(Some(v)) => {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                Some(process_doctrine(agent))
+            } else if DISABLE_SENTINELS.contains(&trimmed.to_lowercase().as_str()) {
+                None
+            } else {
+                Some(v)
+            }
+        }
+        _ => Some(process_doctrine(agent)),
     }
 }
 
@@ -82,7 +104,7 @@ mod tests {
         let store = crate::store::Store::open_in_memory().unwrap();
         assert_eq!(
             resolve_effective_doctrine(&store, AgentKind::Claude),
-            process_doctrine(AgentKind::Claude)
+            Some(process_doctrine(AgentKind::Claude))
         );
     }
 
@@ -92,7 +114,7 @@ mod tests {
         store.set_setting("process_doctrine", "CUSTOM DOCTRINE").unwrap();
         assert_eq!(
             resolve_effective_doctrine(&store, AgentKind::Hermes),
-            "CUSTOM DOCTRINE"
+            Some("CUSTOM DOCTRINE".to_string())
         );
     }
 
@@ -102,7 +124,20 @@ mod tests {
         store.set_setting("process_doctrine", "   ").unwrap();
         assert_eq!(
             resolve_effective_doctrine(&store, AgentKind::Pi),
-            process_doctrine(AgentKind::Pi)
+            Some(process_doctrine(AgentKind::Pi))
         );
+    }
+
+    #[test]
+    fn resolve_disable_sentinel_suppresses_doctrine() {
+        for sentinel in ["off", "none", "disabled", "OFF", "None", " disabled "] {
+            let store = crate::store::Store::open_in_memory().unwrap();
+            store.set_setting("process_doctrine", sentinel).unwrap();
+            assert_eq!(
+                resolve_effective_doctrine(&store, AgentKind::Claude),
+                None,
+                "sentinel {sentinel:?} should disable the doctrine"
+            );
+        }
     }
 }

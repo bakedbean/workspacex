@@ -67,7 +67,7 @@ lowest level (the command builders / AGENTS.md composer), not by trusting caller
 | Hermes & superpowers | **Match the issue exactly** — superpowers clause for Claude/Pi only; Hermes gets the other three practices. |
 | Spawn-mode scope | **Fresh + Continue**, never ProjectManager. |
 | Expression of think/effort/plan | **Prose directives** + wire any genuine flags. (See §"Flag wiring" — there are essentially none.) |
-| Override semantics | The config value **replaces** the built-in default verbatim (not appended). |
+| Override semantics | The config value **replaces** the built-in default verbatim (not appended). A `off`/`none`/`disabled` sentinel disables injection entirely; blank restores the default. |
 | Pi/Hermes loading the wsx skill *content* | **Out of scope** (follow-up). The doctrine references the skill; materializing its content for non-Claude agents is deferred. |
 
 ## Design
@@ -117,6 +117,14 @@ effective_doctrine(agent) =
 
 When an override is set it applies to **all agents** verbatim (agent-tailoring is a
 property of the default only).
+
+**Disable sentinel.** Setting `process_doctrine` to one of `off` / `none` /
+`disabled` (case-insensitive, trimmed) suppresses injection entirely — the
+resolver returns `None` and no doctrine reaches the agent. A blank/whitespace
+value is still treated as unset (restores the default), so blanking is *not* an
+off switch; the sentinel is. `resolve_effective_doctrine` therefore returns
+`Option<String>` (`None` = disabled), which the spawn call site threads straight
+into the `doctrine` field.
 
 ### 3. Injection points — Fresh + Continue only, never PM
 

@@ -19,6 +19,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // branch overwrites this with live values when the detail bar renders.
     // Prevents stale rects from triggering wheel events on invisible containers.
     app.detail_container_rects = [None; 4];
+    app.attached_pane_rects.clear();
     match &app.view {
         crate::ui::View::Dashboard => {
             let selection_is_workspace =
@@ -435,7 +436,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 })
                 .collect();
 
-            let chip_rects = attached::render_panes(
+            let out = attached::render_panes(
                 f,
                 &specs,
                 &dividers,
@@ -448,7 +449,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 &pinned,
                 &app.theme,
             );
-            app.chip_rects = chip_rects;
+            app.chip_rects = out.chip_rects;
+            app.attached_pane_rects = out.pane_rects;
             app.pinned_commands_cache = pinned;
         }
         crate::ui::View::AttachedPm => {
@@ -473,7 +475,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     rect: pane_area,
                     focused: true,
                 }];
-                let _chip_rects = attached::render_panes(
+                let out = attached::render_panes(
                     f,
                     &specs,
                     &[],
@@ -486,6 +488,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     pinned,
                     &app.theme,
                 );
+                app.attached_pane_rects = out.pane_rects;
             } else {
                 // PM session went away; bounce to dashboard on next event.
                 app.leader_pending = false;

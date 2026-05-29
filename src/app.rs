@@ -210,6 +210,12 @@ pub struct App {
     /// draw and consumed by `handle_mouse` for hit-testing wheel events.
     /// Mirrors the `chip_rects` draw-populates-input-reads pattern.
     pub detail_container_rects: [Option<ratatui::layout::Rect>; 4],
+    /// Per-pane `(session, content rect)` from the last attached-view draw.
+    /// Consumed by `handle_mouse` to find the pane under the cursor and
+    /// forward wheel events to a mouse-aware agent. Storing the `Arc<Session>`
+    /// directly lets the PM pane (which lives in `app.pm`, not `app.sessions`)
+    /// be recorded the same way as workspace panes. Cleared each frame.
+    pub attached_pane_rects: Vec<(std::sync::Arc<crate::pty::session::Session>, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
@@ -286,6 +292,7 @@ impl App {
             detail_scroll_offsets: [0; 4],
             detail_scroll_last_workspace: None,
             detail_container_rects: [None; 4],
+            attached_pane_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),

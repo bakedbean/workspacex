@@ -154,7 +154,15 @@ mod tests {
         // PTY has been idle for 5s — strong signal that the pending tool
         // really is parked on a permission prompt rather than running.
         assert_eq!(
-            Status::classify(true, Some(StoppedKind::Complete), true, s(5), true, true, true),
+            Status::classify(
+                true,
+                Some(StoppedKind::Complete),
+                true,
+                s(5),
+                true,
+                true,
+                true
+            ),
             Status::Question
         );
     }
@@ -223,7 +231,15 @@ mod tests {
     #[test]
     fn stopped_complete_maps_to_complete() {
         assert_eq!(
-            Status::classify(false, Some(StoppedKind::Complete), false, s(1), true, true, true),
+            Status::classify(
+                false,
+                Some(StoppedKind::Complete),
+                false,
+                s(1),
+                true,
+                true,
+                true
+            ),
             Status::Complete
         );
     }
@@ -304,7 +320,15 @@ mod tests {
             Status::Question
         );
         assert_eq!(
-            Status::classify(false, Some(StoppedKind::Complete), false, None, true, false, false),
+            Status::classify(
+                false,
+                Some(StoppedKind::Complete),
+                false,
+                None,
+                true,
+                false,
+                false
+            ),
             Status::Complete
         );
     }

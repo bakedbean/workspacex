@@ -112,6 +112,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | Key              | Action                                                                                                      |
 | ---------------- | ----------------------------------------------------------------------------------------------------------- |
 | `Ctrl-x d`       | Close the focused pane. When only one pane is open, detaches back to the dashboard (session keeps running). |
+| `Ctrl-x Esc`     | Save the current split layout for this workspace, then detach to the dashboard. Restored on next attach.    |
 | `Ctrl-x ←/→/↑/↓` | Move focus between split panes in that direction (vim's `Ctrl-w` motions).                                  |
 | `Ctrl-x u`       | Open the floating updates panel (shows other workspaces' state; supports `v`/`s` to open in a split)        |
 | `Ctrl-x e`       | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard)                    |
@@ -447,6 +448,16 @@ The flow:
 When you split the _focused_ pane again in the same direction as its
 parent, the new pane is inserted as a sibling instead of nesting deeper —
 matches vim and keeps the tree shallow.
+
+**Saving a layout.** `Ctrl-x d` detaches without remembering how the panes
+were arranged. To keep the arrangement, press `Ctrl-x Esc` instead: wsx
+saves the split tree (and which pane was focused) against the _anchor_
+workspace — the first pane you attached to — then detaches to the
+dashboard. The next time you attach to that workspace, wsx restores the
+layout and respawns the side panes' sessions. Panes whose workspaces no
+longer exist are pruned on restore; if none survive you get a plain
+single-pane view. Workspaces with a saved multi-pane layout show a columns
+glyph next to their branch on the dashboard (nerd fonts only).
 
 ### Project manager pane
 

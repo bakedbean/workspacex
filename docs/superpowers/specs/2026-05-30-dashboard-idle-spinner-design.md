@@ -1,7 +1,7 @@
 # Dashboard idle spinner for never-prompted sessions
 
 **Date:** 2026-05-30
-**Status:** Approved design, pending implementation plan
+**Status:** Implemented in PR #130 (plan: `docs/superpowers/plans/2026-05-30-dashboard-idle-spinner.md`)
 
 ## Problem
 

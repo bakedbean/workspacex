@@ -71,8 +71,6 @@ impl Status {
         user_has_prompted: bool,
         has_prior_session: bool,
     ) -> Self {
-        // Consumed in Task 2; no behavior change yet.
-        let _ = user_has_prompted;
         // The `awaiting_tool` heuristic flags any non-question tool_use
         // pending >3s as a permission prompt — but if the PTY is still
         // streaming output the agent is clearly mid-work, so suppress the
@@ -91,6 +89,15 @@ impl Status {
             return Status::Stalled;
         }
         if session_running {
+            if !user_has_prompted {
+                // Session is live but no user prompt is recorded yet — the
+                // agent is idle at its welcome screen (or its events haven't
+                // been tailed yet), so nothing has happened. Show Idle (static
+                // `·`) rather than the spinner. The `first_user_text` signal
+                // lags the log tail (~2s), so the very first turn may read Idle
+                // briefly before flipping to the spinner.
+                return Status::Idle;
+            }
             match seconds_since_activity {
                 Some(s) if s < 30 => Status::Thinking,
                 Some(_) => Status::Waiting,
@@ -262,6 +269,52 @@ mod tests {
         assert_eq!(
             Status::classify(false, None, false, None, false, false, false),
             Status::Idle
+        );
+    }
+
+    #[test]
+    fn running_but_never_prompted_is_idle() {
+        // `s(0)` here proves the never-prompted gate beats the recency path:
+        // recent activity would otherwise classify as Thinking, but with no
+        // recorded user prompt the session must read Idle, not the spinner.
+        assert_eq!(
+            Status::classify(false, None, false, s(0), true, false, false),
+            Status::Idle
+        );
+    }
+
+    #[test]
+    fn running_but_never_prompted_is_idle_when_pty_unknown() {
+        assert_eq!(
+            Status::classify(false, None, false, None, true, false, false),
+            Status::Idle
+        );
+    }
+
+    #[test]
+    fn never_prompted_does_not_override_higher_priority_states() {
+        // The not-prompted gate sits below the early returns, so a stall,
+        // permission prompt, or completion still wins even with prompted=false.
+        assert_eq!(
+            Status::classify(false, None, true, s(0), true, false, false),
+            Status::Stalled
+        );
+        assert_eq!(
+            Status::classify(true, None, false, s(5), true, false, false),
+            Status::Question
+        );
+        assert_eq!(
+            Status::classify(false, Some(StoppedKind::Complete), false, None, true, false, false),
+            Status::Complete
+        );
+    }
+
+    #[test]
+    fn running_and_prompted_still_thinking_when_recent() {
+        // Regression: once the user has prompted, recent activity is Thinking.
+        assert_eq!(
+            Status::classify(false, None, false, s(0), true, true, false),
+            Status::Thinking
         );
     }
 }

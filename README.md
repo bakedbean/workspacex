@@ -462,8 +462,11 @@ glyph next to their branch on the dashboard (nerd fonts only).
 ### Project manager pane
 
 Press `p` on the dashboard to open a horizontal pane below the workspace list
-hosting a dedicated Claude Code "project manager" session. PM's job is to
-answer three questions about each of your active workspaces:
+hosting a dedicated "project manager" session. The PM runs whichever coding
+agent your global `coding_agent` setting selects — `claude` (the default),
+`pi`, or `hermes` (see [Coding agents](#coding-agents)) — so
+`wsx config set coding_agent pi` switches the PM to Pi on its next open. PM's
+job is to answer three questions about each of your active workspaces:
 
 - What was this workspace created for?
 - Where have things been left off?
@@ -474,7 +477,7 @@ the attached view). `Tab` or `Esc` swaps focus back to the dashboard;
 `Tab` from the dashboard swaps back into the PM pane. `r` (while PM is
 focused) refreshes `workspaces.json` and asks PM to re-summarize. `Ctrl-O`
 (while PM is focused) expands PM to a full-screen attached view so you
-can scroll through claude's history naturally; `Ctrl-x d` detaches back
+can scroll through the agent's history naturally; `Ctrl-x d` detaches back
 to the dashboard with the pane state preserved.
 
 PM only summarizes workspaces where claude has been started at least once
@@ -482,7 +485,8 @@ PM only summarizes workspaces where claude has been started at least once
 you created but never opened are skipped — nothing for PM to report on.
 
 PM lives at `$XDG_STATE_HOME/wsx/project-manager/` and persists across wsx
-restarts via Claude Code's `--continue`. On the first `p` of a wsx run with
+restarts by resuming the agent's prior session (Claude Code's `--continue`,
+or the equivalent for Pi/Hermes). On the first `p` of a wsx run with
 no prior PM session, wsx auto-sends a status-summary request (and submits
 it for you). On subsequent runs (resuming via `--continue`), wsx stays
 silent — type your own question or press `r` for a fresh summary.
@@ -515,7 +519,7 @@ Known keys:
 | `branch_prefix`          | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`.                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `custom_instructions`    | Free-text appended to claude's system prompt on every workspace spawn.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `process_doctrine`       | Standing "operating doctrine" injected into every developer session (new and resumed) across all agents: think and plan before scope is set, use the superpowers skills by default (Claude/Pi only), break work into logical commits, and load the wsx skill. Not applied to the Project Manager session. Set this to replace the default text verbatim (`@file` supported); set it to `off` / `none` / `disabled` to suppress injection entirely. A blank value restores the default (it is not an off switch). |
-| `coding_agent`           | Default coding agent for new workspaces: `claude` (default) / `pi` / `hermes`. Per-workspace override via `wsx workspace create <repo> --agent <agent>`. See [Coding agents](#coding-agents).                                                                                                                                                                                                                                                                                                                    |
+| `coding_agent`           | Default coding agent for new workspaces _and_ the Project Manager pane: `claude` (default) / `pi` / `hermes`. Per-workspace override via `wsx workspace create <repo> --agent <agent>` (does not affect the PM). See [Coding agents](#coding-agents).                                                                                                                                                                                                                                                            |
 | `nerd_fonts`             | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `editor_cmd`             | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`.                                                                                                                                                                                                                                                                         |
 | `terminal_cmd`           | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`.                                                                                                                                                                                                                                                                                                                                       |
@@ -523,7 +527,7 @@ Known keys:
 | `theme`                  | Color theme. One of `default` (palette-adaptive ANSI), `dracula` (RGB), `jellybeans` (RGB), `nord` (RGB). Unknown values fall back to `default`. Restart wsx after changing.                                                                                                                                                                                                                                                                                                                                     |
 | `pm_enabled`             | Enable the Project Manager pane (`p` keybind). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `pm_custom_instructions` | Free-text appended to the project manager's system prompt. Same `@file` / empty-clears semantics as `custom_instructions`.                                                                                                                                                                                                                                                                                                                                                                                       |
-| `pm_fast_mode`           | Launch the Project Manager session with Claude Code's fast mode enabled (`--settings '{"fastMode":true}'`). PM is a status-summary session, so fast output is usually the right tradeoff. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                                                                                                                             |
+| `pm_fast_mode`           | Launch the Project Manager session with Claude Code's fast mode enabled (`--settings '{"fastMode":true}'`). PM is a status-summary session, so fast output is usually the right tradeoff. Only applies when the PM agent is `claude` (Pi/Hermes have no fast mode); ignored otherwise. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                                 |
 | `mcp_mirror`             | Inherit MCP servers from the source repo into worktrees (see [MCP server inheritance](#mcp-server-inheritance)). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                     |
 | `remote_control`         | Pass `--remote-control` to claude on every spawn so the session is reachable via [claude.ai/code](https://claude.ai/code) and the Claude mobile app (see [Remote control](#remote-control)). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                         |
 | `remote_control_sandbox` | When `remote_control` is on, also pass `--sandbox` for an extra safety wrapper on remote-issued commands. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                                                                                                                                                                                                             |
@@ -581,6 +585,11 @@ By default, wsx spawns Claude Code (`claude`) as the coding agent in every works
 wsx config set coding_agent hermes           # new workspaces use hermes by default
 wsx workspace create backend --agent pi      # override for a single workspace
 ```
+
+The global `coding_agent` setting also selects the agent that powers the
+[Project Manager pane](#project-manager-pane); there is no separate PM-only
+setting. The per-workspace `--agent` override applies only to that
+workspace, not the PM.
 
 Supported agents:
 

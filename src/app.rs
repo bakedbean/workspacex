@@ -472,12 +472,17 @@ impl App {
             .get(&ws.id)
             .is_some_and(|e| e.is_stalled(now_ms, 60_000));
         let awaiting = self.awaiting_permission(ws.id).is_some();
+        let user_has_prompted = self
+            .workspace_events
+            .get(&ws.id)
+            .is_some_and(|e| e.first_user_text.is_some());
         crate::ui::dashboard::status::Status::classify(
             awaiting,
             stopped_kind,
             stalled,
             secs,
             running,
+            user_has_prompted,
             has_prior,
         )
     }

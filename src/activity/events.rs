@@ -653,6 +653,24 @@ fn parse_user(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
 /// interrupted" from "agent is stalled."
 const INTERRUPT_SENTINEL: &str = "[Request interrupted by user for tool use]";
 
+/// Render a subagent dispatch (Claude Code's `Agent` tool) for the activity
+/// display. The bare tool name "Agent" is uninformative — the useful signal is
+/// the subagent type (e.g. "Explore") and how many ran in parallel. A single
+/// type collapses to "using Explore agent"; N of the same type to "using 2
+/// Explore agents"; mixed or unknown types degrade to a bare count or the old
+/// "using Agent" fallback.
+fn format_agent_dispatch(subtypes: &[&str]) -> String {
+    let first = subtypes.first().copied().unwrap_or("");
+    let all_same = !first.is_empty() && subtypes.iter().all(|s| *s == first);
+    match (subtypes.len(), all_same) {
+        (1, true) => format!("using {first} agent"),
+        (n, true) => format!("using {n} {first} agents"),
+        (n, false) if n > 1 => format!("using {n} agents"),
+        // 0, or a single dispatch with no subagent_type: nothing better to say.
+        _ => "using Agent".to_string(),
+    }
+}
+
 fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     let mut out = ParsedLine::default();
     // stop_reason lives at message.stop_reason. Some lines (e.g. partial
@@ -677,6 +695,9 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
     let mut last_text: Option<&str> = None;
     let mut longest_text: Option<&str> = None;
     let mut last_tool: Option<(&str, &serde_json::Value)> = None;
+    // Subagent dispatches (the `Agent` tool) — collected across the whole
+    // message so parallel dispatches can be counted and summarized by type.
+    let mut agent_subtypes: Vec<&str> = Vec::new();
     for block in blocks {
         let Some(bt) = block.get("type").and_then(|t| t.as_str()) else {
             continue;
@@ -698,6 +719,14 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
                 let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let input = block.get("input").unwrap_or(&serde_json::Value::Null);
                 last_tool = Some((name, input));
+                if name == "Agent" {
+                    agent_subtypes.push(
+                        input
+                            .get("subagent_type")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or(""),
+                    );
+                }
                 // Track every tool_use we see — multiple in one message is rare
                 // but possible. The id is required for matching tool_results.
                 if let Some(id) = block.get("id").and_then(|i| i.as_str()) {
@@ -734,6 +763,8 @@ fn parse_assistant(v: &serde_json::Value, timestamp_ms: i64) -> ParsedLine {
                 .and_then(|c| c.as_str())
                 .unwrap_or("(no command)");
             format!("ran `{}`", collapse_ws(cmd))
+        } else if name == "Agent" {
+            format_agent_dispatch(&agent_subtypes)
         } else if name.is_empty() {
             "using a tool".to_string()
         } else {
@@ -1046,6 +1077,46 @@ mod tests {
         let ev = parse_jsonl_line(line).event.expect("should parse");
         assert_eq!(ev.kind, EventKind::AssistantToolUse);
         assert_eq!(ev.display, "using Read");
+    }
+
+    #[test]
+    fn agent_dispatch_single_shows_subagent_type() {
+        // A subagent dispatch is the `Agent` tool with the real "what" living
+        // in input.subagent_type. The bare tool name "Agent" is uninformative,
+        // so surface the subagent type instead.
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore","description":"find dashboard logic"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let ev = parse_jsonl_line(line).event.expect("should parse");
+        assert_eq!(ev.kind, EventKind::AssistantToolUse);
+        assert_eq!(ev.display, "using Explore agent");
+    }
+
+    #[test]
+    fn agent_dispatch_parallel_same_type_shows_count() {
+        // Parallel dispatch = multiple Agent tool_use blocks in one message.
+        // All the same type → "using 2 Explore agents".
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore","description":"a"}},{"type":"tool_use","id":"t2","name":"Agent","input":{"subagent_type":"Explore","description":"b"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let ev = parse_jsonl_line(line).event.expect("should parse");
+        assert_eq!(ev.kind, EventKind::AssistantToolUse);
+        assert_eq!(ev.display, "using 2 Explore agents");
+    }
+
+    #[test]
+    fn agent_dispatch_parallel_mixed_types_shows_count_only() {
+        // Mixed subagent types can't be summarized by one type name, so fall
+        // back to a bare count.
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore","description":"a"}},{"type":"tool_use","id":"t2","name":"Agent","input":{"subagent_type":"general-purpose","description":"b"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let ev = parse_jsonl_line(line).event.expect("should parse");
+        assert_eq!(ev.kind, EventKind::AssistantToolUse);
+        assert_eq!(ev.display, "using 2 agents");
+    }
+
+    #[test]
+    fn agent_dispatch_without_subagent_type_falls_back() {
+        // If subagent_type is missing we can't do better than the old behavior.
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"description":"a"}}]},"timestamp":"2026-05-14T17:32:14.000Z"}"#;
+        let ev = parse_jsonl_line(line).event.expect("should parse");
+        assert_eq!(ev.kind, EventKind::AssistantToolUse);
+        assert_eq!(ev.display, "using Agent");
     }
 
     #[test]

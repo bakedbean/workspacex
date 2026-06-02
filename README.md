@@ -9,6 +9,12 @@ Terminal UI for managing Claude Code, Pi or Hermes sessions in git worktrees.
 > agents need your attention. If you like these ideas and want to try it, feel
 > free. Feedback, ideas, and contributions are welcome.
 >
+> wsx is opinionated: it implements several "under the hood" behaviors to allow
+> for as deterministic as possible of a SDLC.  It utilizes the agent in-session
+> to rename branches as soon as it has sufficient context.  It take a hard wired
+> system prompt (or AGENTS.md for Hermes) that instructs on how to proceed with
+> using thinking, planning and available skills like superpowers.
+>
 > wsx is a work in progress.  I am often trying out different approaches to
 > how the agents keep me informed about state and updates.  It is entirely possible
 > for whole cloth features to change in fundamental ways without warning.

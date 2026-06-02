@@ -47,6 +47,7 @@ fn resolved_binary(agent: AgentKind) -> String {
         AgentKind::Claude => "WSX_CLAUDE_BIN",
         AgentKind::Pi => "WSX_PI_BIN",
         AgentKind::Hermes => "WSX_HERMES_BIN",
+        AgentKind::Codex => "WSX_CODEX_BIN",
     };
     std::env::var(env_var).unwrap_or_else(|_| agent.default_binary().to_string())
 }
@@ -57,18 +58,21 @@ pub enum AgentKind {
     Claude,
     Pi,
     Hermes,
+    Codex,
 }
 
 impl AgentKind {
     /// All agent kinds, in stable display order. Add new variants here when
     /// extending the enum — `const` arrays do not get exhaustiveness checking,
     /// so this is the one place the compiler can't catch a drift.
-    pub const ALL: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes];
+    pub const ALL: [AgentKind; 4] =
+        [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes, AgentKind::Codex];
 
     pub fn from_str_or_default(s: Option<&str>) -> Self {
         match s {
             Some("pi") => AgentKind::Pi,
             Some("hermes") => AgentKind::Hermes,
+            Some("codex") => AgentKind::Codex,
             _ => AgentKind::Claude,
         }
     }
@@ -78,6 +82,7 @@ impl AgentKind {
             AgentKind::Claude => "claude",
             AgentKind::Pi => "pi",
             AgentKind::Hermes => "hermes",
+            AgentKind::Codex => "codex",
         }
     }
 
@@ -683,6 +688,7 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
         AgentKind::Claude => has_prior_session(worktree),
         AgentKind::Pi => has_prior_pi_session(worktree),
         AgentKind::Hermes => has_prior_hermes_session(worktree),
+        AgentKind::Codex => has_prior_codex_session(worktree),
     }
 }
 
@@ -1202,6 +1208,10 @@ pub fn spawn_session(
             prepare_hermes_workspace(cwd, &mode);
             build_hermes_command(cwd, &mode, remote)
         }
+        AgentKind::Codex => {
+            prepare_codex_workspace(cwd, &mode);
+            build_codex_command(cwd, &mode, remote)
+        }
     };
     let mut child = pair.slave.spawn_command(child_cmd).map_err(|e| {
         if is_binary_not_found(&e) {
@@ -1398,6 +1408,41 @@ fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
     if read_hermes_spawn_marker(cwd).is_none() {
         write_hermes_spawn_marker(cwd);
     }
+}
+
+/// True if Codex has a recorded session whose `cwd` matches this worktree.
+/// Real implementation lands in the codex_events locate task.
+pub fn has_prior_codex_session(worktree: &Path) -> bool {
+    crate::activity::codex_events::locate_session_file(worktree).is_some()
+}
+
+/// Prepare a worktree for a Codex spawn: inject the wsx-managed instruction
+/// block into AGENTS.md (Codex reads project instructions from there, like
+/// Hermes) and hide the file from `git status`. Codex needs NO spawn-timestamp
+/// marker — session detection is cwd-in-file, not marker-based.
+fn prepare_codex_workspace(cwd: &Path, mode: &SpawnMode) {
+    let injected = compose_injected_prompt(mode);
+    let had_content = injected.is_some();
+    write_agents_md_section(cwd, injected.as_deref());
+    if had_content {
+        ensure_git_exclude(cwd, "AGENTS.md");
+    }
+}
+
+/// Build a `CommandBuilder` for `codex` inside `cwd`. STUB: bare `codex`,
+/// fleshed out (resume/yolo/model/PM) in the build_codex_command task.
+pub fn build_codex_command(
+    cwd: &Path,
+    _mode: &SpawnMode,
+    _remote: crate::agent::remote_control::RemoteOpts,
+) -> CommandBuilder {
+    let bin = std::env::var("WSX_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
+    let mut cmd = CommandBuilder::new(bin);
+    cmd.cwd(cwd);
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
+    cmd
 }
 
 #[cfg(test)]
@@ -3649,18 +3694,21 @@ mod tests {
     #[test]
     fn agent_kind_helpers_match_existing_strings() {
         use super::AgentKind;
-        assert_eq!(AgentKind::ALL.len(), 3);
+        assert_eq!(AgentKind::ALL.len(), 4);
         assert!(AgentKind::ALL.contains(&AgentKind::Claude));
         assert!(AgentKind::ALL.contains(&AgentKind::Pi));
         assert!(AgentKind::ALL.contains(&AgentKind::Hermes));
+        assert!(AgentKind::ALL.contains(&AgentKind::Codex));
 
         assert_eq!(AgentKind::Claude.display_name(), "claude");
         assert_eq!(AgentKind::Pi.display_name(), "pi");
         assert_eq!(AgentKind::Hermes.display_name(), "hermes");
+        assert_eq!(AgentKind::Codex.display_name(), "codex");
 
         assert_eq!(AgentKind::Claude.default_binary(), "claude");
         assert_eq!(AgentKind::Pi.default_binary(), "pi");
         assert_eq!(AgentKind::Hermes.default_binary(), "hermes");
+        assert_eq!(AgentKind::Codex.default_binary(), "codex");
 
         for k in AgentKind::ALL {
             assert_eq!(AgentKind::from_str_or_default(Some(k.store_value())), k);

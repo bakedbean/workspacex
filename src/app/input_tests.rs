@@ -3582,7 +3582,7 @@ mod pm_state_tests {
             .unwrap(),
         ));
 
-        for expected in [1usize, 2, 2 /* clamps at last index */] {
+        for expected in [1usize, 2, 3, 3 /* clamps at last index */] {
             handle_key_modal(
                 &mut app,
                 &shared,

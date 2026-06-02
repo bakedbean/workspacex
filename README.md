@@ -8,6 +8,12 @@ Terminal UI for managing Claude Code sessions in git worktrees.
 > those concepts: keep you in the terminal, at the keyboard, and aware of which
 > agents need your attention. If you like these ideas and want to try it, feel
 > free. Feedback, ideas, and contributions are welcome.
+>
+> wsx is a work in progress.  I am often trying out different approaches to
+> how the agents keep me informed about state and updates.  It is entirely possible
+> for whole cloth features to change in fundamental ways without warning.
+>
+> You use this at your own risk.
 
 ## Table of contents
 

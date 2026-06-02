@@ -6,6 +6,18 @@ edition = "2024"
 # is the hard floor; declaring it makes cargo fail with a clear message on
 # older toolchains instead of a cryptic edition error.
 rust-version = "1.85"
+authors = ["Eben Goodman"]
+description = "Terminal UI for managing Claude Code sessions in git worktrees."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/bakedbean/workspacex"
+homepage = "https://github.com/bakedbean/workspacex"
+keywords = ["tui", "git", "worktree", "claude", "agent"]
+categories = ["command-line-utilities", "development-tools"]
+# Not ready for crates.io yet. This makes an accidental `cargo publish` fail
+# fast instead of pushing a release. Remove (or set to a registry) when you
+# decide to publish; note the crate name `wsx` must be available there.
+publish = false
 
 [lib]
 name = "wsx"

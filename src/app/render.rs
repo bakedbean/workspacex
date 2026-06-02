@@ -14,6 +14,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // Clear chip state at the start of every frame; View::Attached and the
     // dashboard detail branch overwrite these with live values when chips render.
     app.chip_rects.clear();
+    app.attention_rects.clear();
     app.pinned_commands_cache.clear();
     // Clear detail-bar container rects each frame; the workspace-selected
     // branch overwrites this with live values when the detail bar renders.

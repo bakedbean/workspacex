@@ -4038,6 +4038,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prepare_codex_workspace_injects_rename_block_into_agents_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        let mode = SpawnMode::Fresh {
+            rename_ctx: Some(RenameContext {
+                current_branch: "prefix/my-slug".to_string(),
+                branch_prefix: "prefix".to_string(),
+                repo_name: "myrepo".to_string(),
+                current_slug: "my-slug".to_string(),
+            }),
+            custom_instructions: None,
+            doctrine: Some("DOCTRINE-MARKER".to_string()),
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        prepare_codex_workspace(cwd, &mode);
+        let agents = std::fs::read_to_string(cwd.join("AGENTS.md")).unwrap();
+        assert!(agents.contains("BEGIN wsx-managed"), "block markers: {agents}");
+        assert!(agents.contains("DOCTRINE-MARKER"), "doctrine injected: {agents}");
+        assert!(agents.contains("wsx workspace rename"), "rename hint: {agents}");
+    }
+
+    #[test]
+    fn prepare_codex_workspace_writes_no_hermes_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        std::fs::create_dir_all(cwd.join(".git/info")).unwrap();
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: Some("CUSTOM".to_string()),
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        prepare_codex_workspace(cwd, &mode);
+        // Codex uses cwd-in-file detection, not the Hermes spawn marker.
+        assert!(
+            !cwd.join(".git/info/wsx-hermes-spawn-at").exists(),
+            "codex must not write the hermes spawn marker"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn codex_spawn_and_echo() {
         let mut env = EnvGuard::new();

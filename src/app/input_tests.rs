@@ -3458,7 +3458,7 @@ mod pm_state_tests {
     }
 
     #[test]
-    fn agent_picker_modal_renders_three_agents_with_current_marker() {
+    fn agent_picker_modal_renders_four_agents_with_current_marker() {
         use crate::pty::session::AgentKind;
         use crate::ui::modal::Modal;
         let store = Store::open_in_memory().unwrap();
@@ -3488,6 +3488,10 @@ mod pm_state_tests {
         assert!(
             rendered.contains("hermes"),
             "expected hermes row: {rendered}"
+        );
+        assert!(
+            rendered.contains("codex"),
+            "expected codex row: {rendered}"
         );
         assert!(
             rendered.contains("current"),

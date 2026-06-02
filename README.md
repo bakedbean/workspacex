@@ -15,7 +15,8 @@ Terminal UI for managing Claude Code, Pi or Hermes sessions in git worktrees.
 > system prompt (or AGENTS.md for Hermes) that instructs on how to proceed with
 > using thinking, planning and available skills like superpowers.
 >
-> wsx is a work in progress.  I am often trying out different approaches to
+> wsx is a work in progress.  Like the AI development world we now live in
+> things change rapidly. I am often trying out different approaches to
 > how the agents keep me informed about state and updates.  It is entirely possible
 > for whole cloth features to change in fundamental ways without warning.
 >

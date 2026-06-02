@@ -368,8 +368,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 })
                 .unwrap_or_default();
 
-            // The status row gets the inner width minus the "⚠ " prefix
-            // (glyph + space) that `attached::render_panes` prepends.
+            // Conservative right margin for the status row; `render_panes`
+            // renders the attention line flush at `status_area.x` with no
+            // prefix, so each segment's `start_col` maps directly to a screen
+            // column (load-bearing for attention-entry click hit-testing).
             let max_width = (area.width as usize).saturating_sub(3);
             let attention = if matches!(
                 app.modal,

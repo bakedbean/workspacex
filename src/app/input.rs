@@ -1562,7 +1562,9 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
             {
                 // Clicking an attention entry attaches to that workspace,
                 // identical to `Enter` on the dashboard.
-                let _ = attach_workspace(app, ws_id);
+                if let Err(e) = attach_workspace(app, ws_id) {
+                    tracing::warn!(error = %e, "failed to attach from attention click");
+                }
             }
         }
         _ => {}

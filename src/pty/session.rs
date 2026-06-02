@@ -1411,7 +1411,8 @@ fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
 }
 
 /// True if Codex has a recorded session whose `cwd` matches this worktree.
-/// Real implementation lands in the codex_events locate task.
+/// Delegates to `codex_events::locate_session_file`, which scans
+/// `~/.codex/sessions` for the newest rollout whose embedded cwd matches.
 pub fn has_prior_codex_session(worktree: &Path) -> bool {
     crate::activity::codex_events::locate_session_file(worktree).is_some()
 }

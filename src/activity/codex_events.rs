@@ -3,7 +3,7 @@
 //! Codex rollout files are date-partitioned (`YYYY/MM/DD/`) and store the
 //! originating directory INSIDE the file (first line is `session_meta` with a
 //! `cwd` field), so locating "this worktree's session" matches by content,
-//! not by directory path. Real implementations land in later tasks.
+//! not by directory path.
 
 use crate::activity::events::{EventKind, EventSnapshot, StopReason, TailUpdate};
 use crate::error::Result;

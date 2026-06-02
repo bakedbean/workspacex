@@ -1,6 +1,6 @@
 # wsx (WorkspaceX)
 
-Terminal UI for managing Claude Code, Pi or Hermes sessions in git worktrees.
+Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git worktrees.
 
 > **A note on this project.** This is a personal project, designed around how I
 > think and work with AI. I enjoy living in the terminal and using terminal
@@ -12,7 +12,7 @@ Terminal UI for managing Claude Code, Pi or Hermes sessions in git worktrees.
 > wsx is opinionated: it implements several "under the hood" behaviors to allow
 > for as deterministic as possible of a SDLC.  It utilizes the agent in-session
 > to rename branches as soon as it has sufficient context.  It takes a hard wired
-> system prompt (or AGENTS.md for Hermes) that instructs on how to proceed with
+> system prompt (or AGENTS.md for Hermes/Codex) that instructs on how to proceed with
 > thinking, planning and available skills like superpowers.
 >
 > wsx is a work in progress.  Like the AI development world we now live in,
@@ -66,7 +66,7 @@ Terminal UI for managing Claude Code, Pi or Hermes sessions in git worktrees.
 ### Key features
 
 - **Parallel agent sessions in git worktrees**: every workspace is its own branch + worktree; switch with one key.
-- **Multiple coding agents**: run Claude, Pi, or Hermes per workspace. Set a global default with `coding_agent` or override per workspace with `--agent`. See [Coding agents](#coding-agents).
+- **Multiple coding agents**: run Claude, Pi, Hermes, or Codex per workspace. Set a global default with `coding_agent` or override per workspace with `--agent`. See [Coding agents](#coding-agents).
 - **Cross-session attention alerts**: terminal bell + `!` or `?` marker when a session is awaiting permission, has gone idle or has a question.
 - **Activity sub-line per workspace**: see the latest tool call or message from each session at a glance.
 - **Configurable Workspace Detail Bar**: Display up to four independent containers with built-in or custom modules. See [Workspace detail bar](#workspace-detail-bar).
@@ -484,7 +484,7 @@ glyph next to their branch on the dashboard (nerd fonts only).
 Press `p` on the dashboard to open a horizontal pane below the workspace list
 hosting a dedicated "project manager" session. The PM runs whichever coding
 agent your global `coding_agent` setting selects — `claude` (the default),
-`pi`, or `hermes` (see [Coding agents](#coding-agents)) — so
+`pi`, `hermes`, or `codex` (see [Coding agents](#coding-agents)) — so
 `wsx config set coding_agent pi` switches the PM to Pi on its next open. PM's
 job is to answer three questions about each of your active workspaces:
 
@@ -506,7 +506,7 @@ you created but never opened are skipped — nothing for PM to report on.
 
 PM lives at `$XDG_STATE_HOME/wsx/project-manager/` and persists across wsx
 restarts by resuming the agent's prior session (Claude Code's `--continue`,
-or the equivalent for Pi/Hermes). On the first `p` of a wsx run with
+or the equivalent for Pi/Hermes/Codex). On the first `p` of a wsx run with
 no prior PM session, wsx auto-sends a status-summary request (and submits
 it for you). On subsequent runs (resuming via `--continue`), wsx stays
 silent — type your own question or press `r` for a fresh summary.
@@ -539,7 +539,7 @@ Known keys:
 | `branch_prefix`          | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`.                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `custom_instructions`    | Free-text appended to claude's system prompt on every workspace spawn.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `process_doctrine`       | Standing "operating doctrine" injected into every developer session (new and resumed) across all agents: think and plan before scope is set, use the superpowers skills by default (Claude/Pi only), break work into logical commits, and load the wsx skill. Not applied to the Project Manager session. Set this to replace the default text verbatim (`@file` supported); set it to `off` / `none` / `disabled` to suppress injection entirely. A blank value restores the default (it is not an off switch). |
-| `coding_agent`           | Default coding agent for new workspaces _and_ the Project Manager pane: `claude` (default) / `pi` / `hermes`. Per-workspace override via `wsx workspace create <repo> --agent <agent>` (does not affect the PM). See [Coding agents](#coding-agents).                                                                                                                                                                                                                                                            |
+| `coding_agent`           | Default coding agent for new workspaces _and_ the Project Manager pane: `claude` (default) / `pi` / `hermes` / `codex`. Per-workspace override via `wsx workspace create <repo> --agent <agent>` (does not affect the PM). See [Coding agents](#coding-agents).                                                                                                                                                                                                                                                  |
 | `nerd_fonts`             | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `editor_cmd`             | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`.                                                                                                                                                                                                                                                                         |
 | `terminal_cmd`           | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`.                                                                                                                                                                                                                                                                                                                                       |
@@ -547,7 +547,7 @@ Known keys:
 | `theme`                  | Color theme. One of `default` (palette-adaptive ANSI), `dracula` (RGB), `jellybeans` (RGB), `nord` (RGB). Unknown values fall back to `default`. Restart wsx after changing.                                                                                                                                                                                                                                                                                                                                     |
 | `pm_enabled`             | Enable the Project Manager pane (`p` keybind). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `pm_custom_instructions` | Free-text appended to the project manager's system prompt. Same `@file` / empty-clears semantics as `custom_instructions`.                                                                                                                                                                                                                                                                                                                                                                                       |
-| `pm_fast_mode`           | Launch the Project Manager session with Claude Code's fast mode enabled (`--settings '{"fastMode":true}'`). PM is a status-summary session, so fast output is usually the right tradeoff. Only applies when the PM agent is `claude` (Pi/Hermes have no fast mode); ignored otherwise. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                                 |
+| `pm_fast_mode`           | Launch the Project Manager session with Claude Code's fast mode enabled (`--settings '{"fastMode":true}'`). PM is a status-summary session, so fast output is usually the right tradeoff. Only applies when the PM agent is `claude` (Pi/Hermes/Codex have no fast mode); ignored otherwise. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                           |
 | `mcp_mirror`             | Inherit MCP servers from the source repo into worktrees (see [MCP server inheritance](#mcp-server-inheritance)). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                     |
 | `remote_control`         | Pass `--remote-control` to claude on every spawn so the session is reachable via [claude.ai/code](https://claude.ai/code) and the Claude mobile app (see [Remote control](#remote-control)). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                         |
 | `remote_control_sandbox` | When `remote_control` is on, also pass `--sandbox` for an extra safety wrapper on remote-issued commands. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                                                                                                                                                                                                             |
@@ -618,6 +618,7 @@ Supported agents:
 | `claude` (default) | `--agent claude` | `claude` binary (override via `WSX_CLAUDE_BIN`)                           | Environment + `~/.claude.json` MCP        |
 | `pi`               | `--agent pi`     | `pi` binary (override via `WSX_PI_BIN`)                                   | `~/.pi/`                                  |
 | `hermes`           | `--agent hermes` | [nousresearch/hermes-agent](https://github.com/nousresearch/hermes-agent) | `~/.hermes/config.yaml` (provider, model) |
+| `codex`            | `--agent codex`  | `codex` binary (override via `WSX_CODEX_BIN`)                             | `~/.codex/config.toml`                    |
 
 #### Hermes integration
 
@@ -647,6 +648,30 @@ The block is rewritten every time Hermes spawns and automatically cleaned up whe
 ```bash
 WSX_HERMES_MODEL=llama-3-70b-instruct WSX_HERMES_PROVIDER=together wsx workspace create backend --agent hermes
 ```
+
+#### Codex integration
+
+When a workspace uses `coding_agent: codex`, wsx spawns `codex` (or the path in `WSX_CODEX_BIN`) instead of `claude`. Codex receives wsx custom instructions and auto-rename directives.
+
+**AGENTS.md management**: Because Codex has no `--append-system-prompt` flag, wsx injects the workspace doctrine, the auto-rename hint, and any custom instructions into a `wsx-managed` fenced block in the worktree's `AGENTS.md` — the same mechanism used for Hermes:
+
+```markdown
+<!-- BEGIN wsx-managed -->
+
+…injected instructions…
+
+<!-- END wsx-managed -->
+```
+
+The block is rewritten every time Codex spawns and automatically cleaned up when there's nothing to inject. The file is git-excluded via `.git/info/exclude` if untracked, or will show as modified during a spawn if already tracked. The superpowers-skills doctrine clause is omitted for Codex (those skills install under `~/.claude` and Codex can't load them).
+
+**Spawn**: fresh workspaces launch bare `codex`. Non-yolo sessions use Codex's built-in interactive approvals + workspace-write sandbox; `--yolo` workspaces add `--dangerously-bypass-approvals-and-sandbox`.
+
+**Continue**: `codex resume --last`, which Codex filters to the current directory natively — so wsx resumes the worktree's own most-recent session.
+
+**Activity**: the dashboard detail bar tails the worktree's rollout file under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. RECENT FILES is not yet populated for Codex (file edits are inferred-via-shell and not tracked).
+
+**Model**: set `WSX_CODEX_MODEL` to pass `-m <model>` to Codex (e.g. `gpt-5.4`). Unset = Codex default.
 
 ### Per-repo setup scripts
 
@@ -965,10 +990,10 @@ Per-repo list of other wsx-registered repos that workspaces in this repo should 
 ### Workspace management
 
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex]
 ```
 
-Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned Claude session. `--agent` overrides the `coding_agent` setting (see [Coding agents](#coding-agents)) for this workspace. Default: `claude`.
+Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned agent session. `--agent` overrides the `coding_agent` setting (see [Coding agents](#coding-agents)) for this workspace. Default: `claude`.
 
 ```
 wsx workspace list [<repo>]
@@ -1014,6 +1039,8 @@ A few command families live in their feature sections rather than here:
 | `WSX_HERMES_BIN`      | Path to the `hermes` binary (default: looked up via `PATH`). Only used when `coding_agent` is `hermes`.                                                                                                                                           |
 | `WSX_HERMES_MODEL`    | Model override for Hermes, passed as `HERMES_INFERENCE_MODEL` env var on the child Hermes process. When set, overrides the model in `~/.hermes/config.yaml`.                                                                                      |
 | `WSX_HERMES_PROVIDER` | Provider override for Hermes, passed as `--provider` to the Hermes CLI. Note: in classic REPL mode (the default), Hermes uses the persistent provider from `~/.hermes/config.yaml`; this flag primarily affects `-z/--oneshot` and `--tui` modes. |
+| `WSX_CODEX_BIN`       | Path to the `codex` binary (default: `codex` on `PATH`). Only used when `coding_agent` is `codex`.                                                                                                                                                |
+| `WSX_CODEX_MODEL`     | Model passed to Codex as `-m` (e.g. `gpt-5.4`). Unset = Codex default.                                                                                                                                                                           |
 | `EDITOR`              | Editor invoked by `wsx config edit` (default: `vi`)                                                                                                                                                                                               |
 | `VISUAL` / `EDITOR`   | Fallback when `editor_cmd` is unset                                                                                                                                                                                                               |
 | `TERMINAL`            | Fallback when `terminal_cmd` is unset                                                                                                                                                                                                             |

@@ -371,7 +371,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // The status row gets the inner width minus the "⚠ " prefix
             // (glyph + space) that `attached::render_panes` prepends.
             let max_width = (area.width as usize).saturating_sub(3);
-            let line = if matches!(
+            let attention = if matches!(
                 app.modal,
                 Some(crate::ui::modal::Modal::UpdatesPanel { .. })
             ) {
@@ -396,7 +396,30 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
 
             let (pane_area, chip_area, status_area, footer_area) =
-                attached::layout_chrome(area, line.is_some(), !pinned.is_empty());
+                attached::layout_chrome(area, attention.is_some(), !pinned.is_empty());
+            let attention_rects: Vec<(
+                crate::data::store::WorkspaceId,
+                ratatui::layout::Rect,
+            )> = attention
+                .as_ref()
+                .map(|a| {
+                    a.segments
+                        .iter()
+                        .map(|s| {
+                            (
+                                s.workspace_id,
+                                ratatui::layout::Rect {
+                                    x: status_area.x.saturating_add(s.start_col),
+                                    y: status_area.y,
+                                    width: s.width,
+                                    height: 1,
+                                },
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let attention_line = attention.map(|a| a.line);
             let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
             let multi_pane = panes.len() > 1;
 
@@ -447,18 +470,19 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 footer_area,
                 &focused_label,
                 multi_pane,
-                line,
+                attention_line,
                 &pinned,
                 &app.theme,
             );
             app.chip_rects = out.chip_rects;
+            app.attention_rects = attention_rects;
             app.attached_pane_rects = out.pane_rects;
             app.pinned_commands_cache = pinned;
         }
         crate::ui::View::AttachedPm => {
             if let Some(session) = app.pm.as_ref() {
                 let max_width = (area.width as usize).saturating_sub(3);
-                let line = if matches!(
+                let attention = if matches!(
                     app.modal,
                     Some(crate::ui::modal::Modal::UpdatesPanel { .. })
                 ) {
@@ -469,7 +493,30 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 // PM pane is out of scope for pinned commands per spec.
                 let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
                 let (pane_area, chip_area, status_area, footer_area) =
-                    attached::layout_chrome(area, line.is_some(), false);
+                    attached::layout_chrome(area, attention.is_some(), false);
+                let attention_rects: Vec<(
+                    crate::data::store::WorkspaceId,
+                    ratatui::layout::Rect,
+                )> = attention
+                    .as_ref()
+                    .map(|a| {
+                        a.segments
+                            .iter()
+                            .map(|s| {
+                                (
+                                    s.workspace_id,
+                                    ratatui::layout::Rect {
+                                        x: status_area.x.saturating_add(s.start_col),
+                                        y: status_area.y,
+                                        width: s.width,
+                                        height: 1,
+                                    },
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let attention_line = attention.map(|a| a.line);
                 attached::resize_pane(session, pane_area, false);
                 let specs = [crate::ui::attached::PaneSpec {
                     session,
@@ -486,11 +533,12 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     footer_area,
                     "project-manager",
                     false,
-                    line,
+                    attention_line,
                     pinned,
                     &app.theme,
                 );
                 app.attached_pane_rects = out.pane_rects;
+                app.attention_rects = attention_rects;
             } else {
                 // PM session went away; bounce to dashboard on next event.
                 app.leader_pending = false;
@@ -694,7 +742,7 @@ fn compute_attention_line(
     app: &App,
     attached_id: Option<crate::data::store::WorkspaceId>,
     max_width: usize,
-) -> Option<ratatui::text::Line<'static>> {
+) -> Option<crate::ui::updates_bar::AttentionLine> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -728,7 +776,6 @@ fn compute_attention_line(
         .collect();
     let entries = crate::ui::updates_bar::collect_attention(&candidates, attached_id, now_ms);
     crate::ui::updates_bar::format_attention_line_styled(&entries, now_ms, max_width, &app.theme)
-        .map(|al| al.line)
 }
 
 pub(crate) fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {

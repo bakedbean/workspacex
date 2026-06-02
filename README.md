@@ -1,10 +1,10 @@
-# wsx
+# wsx (WorkspaceX)
 
 Terminal UI for managing Claude Code sessions in git worktrees.
 
 > **A note on this project.** This is a personal project, designed around how I
 > think and work with AI. I enjoy living in the terminal and using terminal
-> tools like lazygit, Neovim, and friends. workspacex seeks to capitalize on
+> tools like Lazygit, Neovim, and friends. workspacex seeks to capitalize on
 > those concepts: keep you in the terminal, at the keyboard, and aware of which
 > agents need your attention. If you like these ideas and want to try it, feel
 > free. Feedback, ideas, and contributions are welcome.

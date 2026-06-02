@@ -1,6 +1,6 @@
 # wsx (WorkspaceX)
 
-Terminal UI for managing Claude Code sessions in git worktrees.
+Terminal UI for managing Claude Code, Pi or Hermes sessions in git worktrees.
 
 > **A note on this project.** This is a personal project, designed around how I
 > think and work with AI. I enjoy living in the terminal and using terminal

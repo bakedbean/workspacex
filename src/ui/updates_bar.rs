@@ -61,6 +61,26 @@ pub struct AttentionEntry {
     pub activity: ActivityState,
 }
 
+/// The rendered attention line plus the clickable geometry of each entry.
+/// Returned by [`format_attention_line_styled`] so the render pass can map
+/// entries to screen rects for mouse hit-testing.
+#[derive(Debug, Clone)]
+pub struct AttentionLine {
+    pub line: Line<'static>,
+    /// One segment per *rendered* entry (the `included` ones, not the
+    /// `… +N more` overflow). Columns are 0-based from the line's left edge.
+    pub segments: Vec<AttentionSegment>,
+}
+
+/// The clickable extent of one attention entry: which workspace it points to
+/// and where it sits within the line (column offset + width, in cells).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttentionSegment {
+    pub workspace_id: WorkspaceId,
+    pub start_col: u16,
+    pub width: u16,
+}
+
 /// One-char glyph for the inline status row. Mirrors the dashboard's
 /// attn-marker vocabulary so users see the same icons in both surfaces.
 pub fn glyph_for_activity(a: ActivityState) -> char {
@@ -98,7 +118,7 @@ pub fn format_attention_line_styled(
     now_ms: i64,
     max_width: usize,
     theme: &Theme,
-) -> Option<Line<'static>> {
+) -> Option<AttentionLine> {
     if entries.is_empty() {
         return None;
     }
@@ -128,15 +148,19 @@ pub fn format_attention_line_styled(
         included += 1;
     }
     let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut segments: Vec<AttentionSegment> = Vec::new();
     // Always render at least one entry; if the first doesn't fit we emit
     // it as-is and rely on ratatui's clipping.
     if included == 0 {
         included = 1;
     }
+    let mut col: usize = 0;
     for (i, e) in entries.iter().take(included).enumerate() {
         if i > 0 {
             spans.push(Span::styled(" │ ".to_string(), theme.dim_style()));
+            col += sep_w;
         }
+        let entry_start = col;
         let status = status_for_activity(e.activity);
         let glyph = status.glyph().to_string();
         spans.push(Span::styled(glyph, theme.status_style(status)));
@@ -147,6 +171,12 @@ pub fn format_attention_line_styled(
         ));
         let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
         spans.push(Span::styled(format!(" ({age})"), theme.dim_style()));
+        col += widths[i];
+        segments.push(AttentionSegment {
+            workspace_id: e.workspace_id,
+            start_col: entry_start as u16,
+            width: widths[i] as u16,
+        });
     }
     let remaining = entries.len().saturating_sub(included);
     if remaining > 0 {
@@ -155,7 +185,10 @@ pub fn format_attention_line_styled(
             theme.dim_style(),
         ));
     }
-    Some(Line::from(spans))
+    Some(AttentionLine {
+        line: Line::from(spans),
+        segments,
+    })
 }
 
 /// Collect every workspace whose `needs_attention` flag is set, excluding
@@ -515,7 +548,9 @@ mod tests {
                 activity: ActivityState::Stalled,
             },
         ];
-        let line = format_attention_line_styled(&entries, 10_000, 200, &theme).expect("line");
+        let line = format_attention_line_styled(&entries, 10_000, 200, &theme)
+            .expect("line")
+            .line;
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("? a/q"), "first entry glyph + name: {text:?}");
         assert!(
@@ -540,5 +575,65 @@ mod tests {
     fn styled_line_returns_none_when_empty() {
         let theme = Theme::wsx();
         assert!(format_attention_line_styled(&[], 0, 80, &theme).is_none());
+    }
+
+    #[test]
+    fn styled_line_emits_clickable_segment_per_entry() {
+        let theme = Theme::wsx();
+        let entries = vec![
+            AttentionEntry {
+                workspace_id: WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "q".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::AwaitingAnswer,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(2),
+                repo_name: "bb".into(),
+                name: "ss".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::Stalled,
+            },
+        ];
+        // now_ms - age_anchor_ms = 1_000 -> age "1s" (2 chars) for both.
+        let out = format_attention_line_styled(&entries, 10_000, 200, &theme).expect("line");
+        assert_eq!(out.segments.len(), 2, "one segment per rendered entry");
+
+        // Entry 0: "? a/q (1s)" -> 1+1 + 1 +1+ 1 + 2 + 2 + 1 = 10 cols, at col 0.
+        assert_eq!(out.segments[0].workspace_id, WorkspaceId(1));
+        assert_eq!(out.segments[0].start_col, 0);
+        assert_eq!(out.segments[0].width, 10);
+
+        // Entry 1 width: "! bb/ss (1s)" -> 1+1 + 2 +1+ 2 + 2 + 2 + 1 = 12 cols.
+        // start_col = entry0 width (10) + separator (3) = 13.
+        assert_eq!(out.segments[1].workspace_id, WorkspaceId(2));
+        assert_eq!(out.segments[1].start_col, 13);
+        assert_eq!(out.segments[1].width, 12);
+    }
+
+    #[test]
+    fn styled_line_segments_exclude_overflow_more_tail() {
+        let theme = Theme::wsx();
+        let entries = vec![
+            AttentionEntry {
+                workspace_id: WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "q".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::AwaitingAnswer,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(2),
+                repo_name: "bb".into(),
+                name: "ss".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::Stalled,
+            },
+        ];
+        // max_width 10 fits only entry 0 ("? a/q (1s)" is exactly 10).
+        let out = format_attention_line_styled(&entries, 10_000, 10, &theme).expect("line");
+        assert_eq!(out.segments.len(), 1, "only the included entry is clickable");
+        assert_eq!(out.segments[0].workspace_id, WorkspaceId(1));
     }
 }

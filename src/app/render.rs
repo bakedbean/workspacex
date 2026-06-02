@@ -727,6 +727,7 @@ fn compute_attention_line(
         .collect();
     let entries = crate::ui::updates_bar::collect_attention(&candidates, attached_id, now_ms);
     crate::ui::updates_bar::format_attention_line_styled(&entries, now_ms, max_width, &app.theme)
+        .map(|al| al.line)
 }
 
 pub(crate) fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::ActivityState {

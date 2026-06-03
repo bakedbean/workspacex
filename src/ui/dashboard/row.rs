@@ -378,7 +378,7 @@ mod tests {
         let theme = Theme::wsx();
         let line = render(&base(), ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
-        assert!(text.starts_with("▎"), "gutter first: {text:?}");
+        assert!(text.starts_with("▎"), "agent bar first: {text:?}");
         assert!(text.contains("? "), "static glyph for non-live status");
         assert!(text.contains("repo-overview"), "name present");
         assert!(

@@ -420,8 +420,30 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let pinned =
                 crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
 
-            let (pane_area, chip_area, status_area, footer_area) =
-                attached::layout_chrome(area, attention.is_some(), !pinned.is_empty());
+            // Build agents list for the footer agents row. Only shown when
+            // the focused workspace has more than its primary agent.
+            let focused_agents_list: Vec<(crate::pty::session::AgentKind, String, char)> = {
+                let instances = app.store.workspace_agents(focused_id).unwrap_or_default();
+                if instances.len() > 1 {
+                    let keys = attached::agent_switch_keys(instances.len());
+                    instances
+                        .into_iter()
+                        .zip(keys)
+                        .map(|(inst, key)| (inst.agent, inst.label(), key))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            let agents_present = !focused_agents_list.is_empty();
+
+            let (pane_area, chip_area, status_area, footer_area, agents_area) =
+                attached::layout_chrome(
+                    area,
+                    attention.is_some(),
+                    !pinned.is_empty(),
+                    agents_present,
+                );
             let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
                 attention
                     .as_ref()
@@ -497,11 +519,13 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 chip_area,
                 status_area,
                 footer_area,
+                agents_area,
                 &focused_label,
                 focused_agent,
                 multi_pane,
                 attention_line,
                 &pinned,
+                &focused_agents_list,
                 &app.theme,
             );
             app.chip_rects = out.chip_rects;
@@ -522,8 +546,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 };
                 // PM pane is out of scope for pinned commands per spec.
                 let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
-                let (pane_area, chip_area, status_area, footer_area) =
-                    attached::layout_chrome(area, attention.is_some(), false);
+                let (pane_area, chip_area, status_area, footer_area, agents_area) =
+                    attached::layout_chrome(area, attention.is_some(), false, false);
                 let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
                     attention
                         .as_ref()
@@ -560,11 +584,13 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     chip_area,
                     status_area,
                     footer_area,
+                    agents_area,
                     "project-manager",
                     None,
                     false,
                     attention_line,
                     pinned,
+                    &[],
                     &app.theme,
                 );
                 app.attached_pane_rects = out.pane_rects;

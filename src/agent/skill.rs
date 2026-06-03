@@ -58,7 +58,8 @@ pub fn default_install_path() -> Option<PathBuf> {
 /// bundled Claude Code skill. Codex is included only when it appears to be
 /// installed, either via `WSX_CODEX_BIN`, a `codex` executable on PATH, or an
 /// existing `~/.codex` directory from a prior Codex run. Hermes is included
-/// when the `hermes` binary is on PATH or `~/.hermes` exists.
+/// when `WSX_HERMES_BIN` is set, the `hermes` binary is on PATH, or
+/// `~/.hermes` exists.
 pub fn default_install_targets() -> Option<Vec<InstallTarget>> {
     let mut targets = vec![InstallTarget {
         agent: "Claude",
@@ -88,7 +89,8 @@ fn codex_is_installed() -> bool {
 }
 
 fn hermes_is_installed() -> bool {
-    binary_on_path("hermes")
+    std::env::var_os("WSX_HERMES_BIN").is_some()
+        || binary_on_path("hermes")
         || dirs::home_dir()
             .map(|h| h.join(".hermes").is_dir())
             .unwrap_or(false)
@@ -325,6 +327,7 @@ mod tests {
         env.set("HOME", home.path());
         env.set("PATH", bin.path());
         env.remove("WSX_CODEX_BIN");
+        env.remove("WSX_HERMES_BIN");
 
         let targets = default_install_targets().unwrap();
 
@@ -348,6 +351,7 @@ mod tests {
         env.set("HOME", home.path());
         env.set("PATH", "");
         env.remove("WSX_CODEX_BIN");
+        env.remove("WSX_HERMES_BIN");
 
         let targets = default_install_targets().unwrap();
 
@@ -362,9 +366,24 @@ mod tests {
         env.set("HOME", home.path());
         env.set("PATH", "");
         env.remove("WSX_CODEX_BIN");
+        env.remove("WSX_HERMES_BIN");
 
         let targets = default_install_targets().unwrap();
 
         assert!(!targets.iter().any(|t| t.agent == "Hermes"));
+    }
+
+    #[test]
+    fn default_targets_include_hermes_when_hermes_bin_env_is_set() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.remove("WSX_CODEX_BIN");
+        env.set("WSX_HERMES_BIN", "/custom/hermes");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(targets.iter().any(|t| t.agent == "Hermes"));
     }
 }

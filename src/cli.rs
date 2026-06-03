@@ -489,9 +489,17 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                 let kind = it
                     .next()
                     .ok_or_else(|| Error::UserInput("agent add <kind>".into()))?;
-                if kind != "claude" && kind != "pi" && kind != "hermes" && kind != "codex" {
+                // Validate against the canonical agent set so this can't drift
+                // from `AgentKind` as kinds are added/renamed.
+                use crate::pty::session::AgentKind;
+                if !AgentKind::ALL.iter().any(|k| k.display_name() == kind) {
+                    let valid = AgentKind::ALL
+                        .iter()
+                        .map(|k| k.display_name())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     return Err(Error::UserInput(format!(
-                        "agent add: kind must be 'claude', 'pi', 'hermes', or 'codex', got '{kind}'"
+                        "agent add: kind must be one of [{valid}], got '{kind}'"
                     )));
                 }
                 Ok(CliAction::AgentAdd { kind })

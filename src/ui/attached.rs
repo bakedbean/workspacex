@@ -481,8 +481,12 @@ pub fn agents_row_spans(
 /// mirroring [`layout_chip_row`]. Returns one rect per agent, in order, by
 /// walking pill widths from the leading `agents:` label. Each pill spans its
 /// color bar + `label ` + optional ` key ` pill; the inter-pill gap is not
-/// included in any rect. Rects are clamped to the row area but never dropped,
-/// so every agent (including keyless overflow) stays clickable.
+/// included in any rect. One rect is returned per agent (so indices stay
+/// aligned with the agents slice), but each is clamped to the row width: a
+/// pill that begins at or past the row's right edge collapses to width 0 and
+/// is therefore not hit-testable. So agents whose pills overflow the visible
+/// row width are rendered up to the edge but are not clickable — switch to
+/// them by key instead, or widen the terminal.
 pub fn layout_agents_row(
     area: Rect,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],

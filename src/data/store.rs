@@ -816,10 +816,18 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
     UNIQUE(workspace_id, agent, ordinal)
 );
 CREATE INDEX IF NOT EXISTS idx_workspace_agents_ws ON workspace_agents(workspace_id);
+-- Exactly one primary per workspace. The runtime assumes this (primary_instance_id
+-- uses query_row); enforce it at the DB layer so a stray second primary can't be
+-- inserted and cause nondeterministic resolution.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_one_primary
+    ON workspace_agents(workspace_id) WHERE is_primary = 1;
 
 CREATE TABLE IF NOT EXISTS agent_messages (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    -- workspace_id intentionally has no FK: messages outlive a removed workspace until drained.
+    -- workspace_id is a denormalized filter column with NO foreign key. Message
+    -- rows are cleaned up explicitly (delete_workspace / remove_repo /
+    -- remove_workspace_agent) rather than by cascade: target_agent_id's FK to
+    -- workspace_agents would otherwise block deleting those parent rows.
     workspace_id    INTEGER NOT NULL,
     target_agent_id INTEGER NOT NULL REFERENCES workspace_agents(id),
     from_agent_id   INTEGER,

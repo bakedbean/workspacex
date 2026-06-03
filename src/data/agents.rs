@@ -117,6 +117,18 @@ impl Store {
     }
 
     pub fn remove_workspace_agent(&self, id: AgentInstanceId) -> Result<()> {
+        // Clear any inbox rows targeting this instance first: agent_messages
+        // has an FK (target_agent_id -> workspace_agents.id) with no cascade,
+        // and delivered messages are retained, so the row delete below would
+        // FK-violate once any message had ever been sent to this agent. The
+        // `IN (... WHERE is_primary = 0)` guard mirrors the row delete's
+        // own guard so a primary's inbox is never wiped (and each statement is
+        // independently safe, so there's no separate-SELECT TOCTOU).
+        self.conn().execute(
+            "DELETE FROM agent_messages WHERE target_agent_id = ?1
+             AND ?1 IN (SELECT id FROM workspace_agents WHERE is_primary = 0)",
+            [id.0],
+        )?;
         // Atomic: only deletes non-primary rows, so there is no TOCTOU between a
         // separate SELECT and DELETE.
         let deleted = self.conn().execute(
@@ -233,6 +245,29 @@ mod store_tests {
         let added = store.add_workspace_agent(ws, AgentKind::Pi).unwrap();
         store.remove_workspace_agent(added.id).unwrap();
         assert_eq!(store.workspace_agents(ws).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn remove_agent_with_messages_does_not_fk_violate() {
+        // agent_messages.target_agent_id FKs to workspace_agents.id (no cascade)
+        // and delivered messages are retained, so removing an agent that has
+        // ever received a message must clear those rows first.
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let added = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        store.enqueue_message(ws, added.id, None, "ping").unwrap();
+        // Would FK-violate without the inbox cleanup in remove_workspace_agent.
+        store.remove_workspace_agent(added.id).unwrap();
+        assert_eq!(store.workspace_agents(ws).unwrap().len(), 1);
+        assert!(store.undelivered_messages().unwrap().is_empty());
+    }
+
+    #[test]
+    fn duplicate_primary_is_rejected_by_unique_index() {
+        // The partial unique index enforces exactly one primary per workspace.
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store); // already has one primary
+        assert!(store.add_primary_agent(ws, AgentKind::Codex, 1).is_err());
     }
 
     #[test]

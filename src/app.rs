@@ -207,6 +207,11 @@ pub struct App {
     /// Rects of the rendered chip row buttons from the last draw tick.
     /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
     pub chip_rects: Vec<ratatui::layout::Rect>,
+    /// Rects of the rendered attention-row entries from the last draw tick,
+    /// each paired with the workspace it points to. Consumed by `handle_mouse`
+    /// to attach on click. Mirrors the `chip_rects` draw-populates /
+    /// input-reads pattern; cleared each frame.
+    pub attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
     /// Per-slot scroll offset for detail-bar containers. Bumped by mouse
     /// wheel via `handle_mouse`, clamped on every draw to
     /// `content_height - visible_height` for the matching container.
@@ -301,6 +306,7 @@ impl App {
             next_archive_gen: 0,
             pending_archive_gen: None,
             chip_rects: Vec::new(),
+            attention_rects: Vec::new(),
             detail_scroll_offsets: [0; 4],
             detail_scroll_last_workspace: None,
             detail_container_rects: [None; 4],

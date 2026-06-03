@@ -137,11 +137,14 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x Esc`     | Save the current split layout for this workspace, then detach to the dashboard. Restored on next attach.    |
 | `Ctrl-x ←/→/↑/↓` | Move focus between split panes in that direction (vim's `Ctrl-w` motions).                                  |
 | `Ctrl-x u`       | Open the floating updates panel (shows other workspaces' state; supports `v`/`s` to open in a split)        |
+| `Ctrl-x a`       | Open the agents panel to add/remove agents in this workspace (see [Multi-agent workspaces](#multi-agent-workspaces)) |
 | `Ctrl-x e`       | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard)                    |
 | `Ctrl-x t`       | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`)                                    |
 | `Ctrl-x v`       | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`)                  |
 | `Ctrl-x k`       | Show processes running under the attached workspace's worktree                                              |
 | `Ctrl-x x`       | Send a literal `Ctrl-x` to claude                                                                           |
+
+When a workspace has more than one agent, the footer also binds bare keys `q w r y i o p s h j` (no leader) to switch the focused pane between agents — see [Multi-agent workspaces](#multi-agent-workspaces).
 
 ### Pinned commands
 
@@ -1111,6 +1114,7 @@ Equivalent to the dashboard's archive action: runs the per-repo archive script, 
 
 A few command families live in their feature sections rather than here:
 
+- `wsx agent list | send | add` — see [Multi-agent workspaces](#multi-agent-workspaces)
 - `wsx config get | set | list | edit <key>` — see [Global settings](#global-settings)
 - `wsx remote [<name>]` — see [Named remote shortcuts](#named-remote-shortcuts)
 - `wsx repo set-setup | set-archive | edit-setup | edit-archive <repo>` — see [Per-repo setup scripts](#per-repo-setup-scripts)
@@ -1129,6 +1133,8 @@ A few command families live in their feature sections rather than here:
 | `WSX_HERMES_PROVIDER` | Provider override for Hermes, passed as `--provider` to the Hermes CLI. Note: in classic REPL mode (the default), Hermes uses the persistent provider from `~/.hermes/config.yaml`; this flag primarily affects `-z/--oneshot` and `--tui` modes. |
 | `WSX_CODEX_BIN`       | Path to the `codex` binary (default: `codex` on `PATH`). Only used when `coding_agent` is `codex`.                                                                                                                                                |
 | `WSX_CODEX_MODEL`     | Model passed to Codex as `-m` (e.g. `gpt-5.4`). Unset = Codex default.                                                                                                                                                                           |
+| `WSX_WORKSPACE_ID`    | Injected into each agent session: the workspace it belongs to. `wsx agent` commands read it to resolve the current workspace. See [Multi-agent workspaces](#multi-agent-workspaces).                                                              |
+| `WSX_AGENT_INSTANCE_ID` | Injected into each agent session: that specific agent instance. `wsx agent send` reads it to stamp the message sender. See [Multi-agent workspaces](#multi-agent-workspaces).                                                                   |
 | `EDITOR`              | Editor invoked by `wsx config edit` (default: `vi`)                                                                                                                                                                                               |
 | `VISUAL` / `EDITOR`   | Fallback when `editor_cmd` is unset                                                                                                                                                                                                               |
 | `TERMINAL`            | Fallback when `terminal_cmd` is unset                                                                                                                                                                                                             |

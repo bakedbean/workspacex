@@ -633,7 +633,11 @@ mod tests {
         ];
         // max_width 10 fits only entry 0 ("? a/q (1s)" is exactly 10).
         let out = format_attention_line_styled(&entries, 10_000, 10, &theme).expect("line");
-        assert_eq!(out.segments.len(), 1, "only the included entry is clickable");
+        assert_eq!(
+            out.segments.len(),
+            1,
+            "only the included entry is clickable"
+        );
         assert_eq!(out.segments[0].workspace_id, WorkspaceId(1));
     }
 }

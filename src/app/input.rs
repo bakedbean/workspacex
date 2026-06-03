@@ -1552,14 +1552,12 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                     && m.row < r.y.saturating_add(r.height)
             }) {
                 fire_chip(app, idx).await;
-            } else if let Some((ws_id, _)) =
-                app.attention_rects.iter().copied().find(|(_, r)| {
-                    m.column >= r.x
-                        && m.column < r.x.saturating_add(r.width)
-                        && m.row >= r.y
-                        && m.row < r.y.saturating_add(r.height)
-                })
-            {
+            } else if let Some((ws_id, _)) = app.attention_rects.iter().copied().find(|(_, r)| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
                 // Clicking an attention entry attaches to that workspace,
                 // identical to `Enter` on the dashboard.
                 if let Err(e) = attach_workspace(app, ws_id) {

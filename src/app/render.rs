@@ -399,28 +399,26 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
             let (pane_area, chip_area, status_area, footer_area) =
                 attached::layout_chrome(area, attention.is_some(), !pinned.is_empty());
-            let attention_rects: Vec<(
-                crate::data::store::WorkspaceId,
-                ratatui::layout::Rect,
-            )> = attention
-                .as_ref()
-                .map(|a| {
-                    a.segments
-                        .iter()
-                        .map(|s| {
-                            (
-                                s.workspace_id,
-                                ratatui::layout::Rect {
-                                    x: status_area.x.saturating_add(s.start_col),
-                                    y: status_area.y,
-                                    width: s.width,
-                                    height: 1,
-                                },
-                            )
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
+                attention
+                    .as_ref()
+                    .map(|a| {
+                        a.segments
+                            .iter()
+                            .map(|s| {
+                                (
+                                    s.workspace_id,
+                                    ratatui::layout::Rect {
+                                        x: status_area.x.saturating_add(s.start_col),
+                                        y: status_area.y,
+                                        width: s.width,
+                                        height: 1,
+                                    },
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
             let attention_line = attention.map(|a| a.line);
             let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
             let multi_pane = panes.len() > 1;
@@ -496,28 +494,26 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
                 let (pane_area, chip_area, status_area, footer_area) =
                     attached::layout_chrome(area, attention.is_some(), false);
-                let attention_rects: Vec<(
-                    crate::data::store::WorkspaceId,
-                    ratatui::layout::Rect,
-                )> = attention
-                    .as_ref()
-                    .map(|a| {
-                        a.segments
-                            .iter()
-                            .map(|s| {
-                                (
-                                    s.workspace_id,
-                                    ratatui::layout::Rect {
-                                        x: status_area.x.saturating_add(s.start_col),
-                                        y: status_area.y,
-                                        width: s.width,
-                                        height: 1,
-                                    },
-                                )
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
+                    attention
+                        .as_ref()
+                        .map(|a| {
+                            a.segments
+                                .iter()
+                                .map(|s| {
+                                    (
+                                        s.workspace_id,
+                                        ratatui::layout::Rect {
+                                            x: status_area.x.saturating_add(s.start_col),
+                                            y: status_area.y,
+                                            width: s.width,
+                                            height: 1,
+                                        },
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                 let attention_line = attention.map(|a| a.line);
                 attached::resize_pane(session, pane_area, false);
                 let specs = [crate::ui::attached::PaneSpec {

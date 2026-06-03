@@ -15,6 +15,10 @@ Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git workt
 > system prompt (or AGENTS.md for Hermes/Codex) that instructs on how to proceed with
 > thinking, planning and available skills like superpowers.
 
+
+## Multi Agent Workflow Example
+https://github.com/user-attachments/assets/811f1d33-caa4-4aa8-abb3-f222c26d3b48
+
 ## Table of contents
 
 - [Overview](#overview)

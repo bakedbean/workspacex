@@ -35,7 +35,10 @@ mod tests {
 
     #[test]
     fn usage_displays_only_msg() {
-        let e = Error::Usage { group: Some("agent"), msg: "missing arguments".into() };
+        let e = Error::Usage {
+            group: Some("agent"),
+            msg: "missing arguments".into(),
+        };
         assert_eq!(e.to_string(), "missing arguments");
     }
 }

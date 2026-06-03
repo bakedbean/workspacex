@@ -35,7 +35,13 @@ async fn main() -> Result<()> {
     dirs.ensure()?;
 
     // CLI path: parse args; if non-TUI, dispatch and return.
-    let action = cli::parse_args(std::env::args().collect())?;
+    let action = match cli::parse_args(std::env::args().collect()) {
+        Ok(a) => a,
+        Err(e) => {
+            eprint!("{}", cli::report_cli_error(&e));
+            std::process::exit(2);
+        }
+    };
     if !matches!(action, cli::CliAction::Tui) {
         cli::run_cli(action, &dirs).await?;
         return Ok(());

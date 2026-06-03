@@ -222,6 +222,15 @@ pub fn render_usage_error(group: Option<&str>, msg: &str) -> String {
     format!("error: {msg}\n\n{block}")
 }
 
+/// Formats a CLI error for stderr. Usage errors render the matching help
+/// block; everything else falls back to a one-line message.
+pub fn report_cli_error(e: &Error) -> String {
+    match e {
+        Error::Usage { group, msg } => render_usage_error(*group, msg),
+        other => format!("error: {other}\n"),
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum HelpTopic {
     Root,
@@ -2040,5 +2049,23 @@ mod tests {
         let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&normalized).expect("re-parse normalized");
         assert_eq!(parsed.containers.len(), 4);
+    }
+
+    #[test]
+    fn report_cli_error_formats_usage_block() {
+        let e = Error::Usage {
+            group: Some("agent"),
+            msg: "agent send needs <label> <message...>".into(),
+        };
+        let s = report_cli_error(&e);
+        assert!(s.starts_with("error: agent send needs"));
+        assert!(s.contains("send <label> <message...>"));
+    }
+
+    #[test]
+    fn report_cli_error_falls_back_for_other_errors() {
+        let e = Error::UserInput("unknown setting key: nope".into());
+        let s = report_cli_error(&e);
+        assert!(s.contains("unknown setting key: nope"));
     }
 }

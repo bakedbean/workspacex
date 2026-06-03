@@ -4,8 +4,10 @@
 //! original (creation-time) agent is its primary instance; additional agents
 //! — including duplicates of the same kind — are non-primary instances.
 
-use crate::data::store::{AgentInstanceId, WorkspaceId};
+use crate::data::store::{AgentInstanceId, Store, WorkspaceId, now_ms};
+use crate::error::Result;
 use crate::pty::session::AgentKind;
+use rusqlite::OptionalExtension;
 
 #[derive(Debug, Clone)]
 pub struct AgentInstance {
@@ -35,6 +37,242 @@ pub fn instance_label(agent: AgentKind, ordinal: i64) -> String {
 impl AgentInstance {
     pub fn label(&self) -> String {
         instance_label(self.agent, self.ordinal)
+    }
+}
+
+fn row_to_instance(r: &rusqlite::Row) -> rusqlite::Result<AgentInstance> {
+    Ok(AgentInstance {
+        id: AgentInstanceId(r.get(0)?),
+        workspace_id: WorkspaceId(r.get(1)?),
+        agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(2)?)),
+        ordinal: r.get(3)?,
+        is_primary: r.get::<_, i64>(4)? != 0,
+        session_ref: r.get(5)?,
+        created_at: r.get(6)?,
+    })
+}
+
+impl Store {
+    /// All instances for a workspace, primary first then by creation time.
+    pub fn workspace_agents(&self, ws: WorkspaceId) -> Result<Vec<AgentInstance>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at
+             FROM workspace_agents WHERE workspace_id = ?1
+             ORDER BY is_primary DESC, created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([ws.0], row_to_instance)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Add a non-primary instance, computing the next ordinal for its kind.
+    pub fn add_workspace_agent(&self, ws: WorkspaceId, agent: AgentKind) -> Result<AgentInstance> {
+        // The MAX(ordinal)+1 SELECT and the INSERT are two statements. The TUI
+        // is single-threaded and the CLI is the only other writer, so a race is
+        // unlikely; the UNIQUE(workspace_id, agent, ordinal) constraint is the
+        // backstop and would surface a clean error (not a panic) on collision.
+        let next: i64 = self.conn().query_row(
+            "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM workspace_agents
+             WHERE workspace_id = ?1 AND agent = ?2",
+            rusqlite::params![ws.0, agent.store_value()],
+            |r| r.get(0),
+        )?;
+        let now = now_ms();
+        self.conn().execute(
+            "INSERT INTO workspace_agents (workspace_id, agent, ordinal, is_primary, created_at)
+             VALUES (?1, ?2, ?3, 0, ?4)",
+            rusqlite::params![ws.0, agent.store_value(), next, now],
+        )?;
+        Ok(AgentInstance {
+            id: AgentInstanceId(self.conn().last_insert_rowid()),
+            workspace_id: ws,
+            agent,
+            ordinal: next,
+            is_primary: false,
+            session_ref: None,
+            created_at: now,
+        })
+    }
+
+    /// Seed the primary instance for a freshly created workspace.
+    pub fn add_primary_agent(
+        &self,
+        ws: WorkspaceId,
+        agent: AgentKind,
+        created_at: i64,
+    ) -> Result<AgentInstance> {
+        self.conn().execute(
+            "INSERT INTO workspace_agents (workspace_id, agent, ordinal, is_primary, created_at)
+             VALUES (?1, ?2, 1, 1, ?3)",
+            rusqlite::params![ws.0, agent.store_value(), created_at],
+        )?;
+        Ok(AgentInstance {
+            id: AgentInstanceId(self.conn().last_insert_rowid()),
+            workspace_id: ws,
+            agent,
+            ordinal: 1,
+            is_primary: true,
+            session_ref: None,
+            created_at,
+        })
+    }
+
+    pub fn remove_workspace_agent(&self, id: AgentInstanceId) -> Result<()> {
+        // Atomic: only deletes non-primary rows, so there is no TOCTOU between a
+        // separate SELECT and DELETE.
+        let deleted = self.conn().execute(
+            "DELETE FROM workspace_agents WHERE id = ?1 AND is_primary = 0",
+            [id.0],
+        )?;
+        if deleted == 0 {
+            let exists: i64 = self.conn().query_row(
+                "SELECT count(*) FROM workspace_agents WHERE id = ?1",
+                [id.0],
+                |r| r.get(0),
+            )?;
+            return Err(crate::error::Error::UserInput(if exists == 0 {
+                "agent not found".into()
+            } else {
+                "cannot remove the primary agent".into()
+            }));
+        }
+        Ok(())
+    }
+
+    pub fn set_instance_session_ref(&self, id: AgentInstanceId, session_ref: &str) -> Result<()> {
+        let n = self.conn().execute(
+            "UPDATE workspace_agents SET session_ref = ?1 WHERE id = ?2",
+            rusqlite::params![session_ref, id.0],
+        )?;
+        if n == 0 {
+            return Err(crate::error::Error::UserInput("agent not found".into()));
+        }
+        Ok(())
+    }
+
+    /// Resolve a label like "claude" or "claude#2" to an instance id.
+    pub fn resolve_instance_label(
+        &self,
+        ws: WorkspaceId,
+        label: &str,
+    ) -> Result<Option<AgentInstanceId>> {
+        Ok(self
+            .workspace_agents(ws)?
+            .into_iter()
+            .find(|i| i.label() == label)
+            .map(|i| i.id))
+    }
+
+    /// The primary instance id for a workspace.
+    pub fn primary_instance_id(&self, ws: WorkspaceId) -> Result<Option<AgentInstanceId>> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT id FROM workspace_agents WHERE workspace_id = ?1 AND is_primary = 1",
+                [ws.0],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(AgentInstanceId))
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, Store, WorkspaceId};
+
+    fn seed_ws_with_primary(store: &Store) -> WorkspaceId {
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w1",
+                branch: "wsx/w1",
+                worktree_path: std::path::Path::new("/tmp/r/w1"),
+                yolo: false,
+                agent: AgentKind::Claude,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
+        ws
+    }
+
+    #[test]
+    fn add_then_list_computes_ordinals_and_labels() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let second = store.add_workspace_agent(ws, AgentKind::Claude).unwrap();
+        let codex = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        assert_eq!(second.ordinal, 2);
+        assert_eq!(second.label(), "claude#2");
+        assert_eq!(codex.ordinal, 1);
+        assert_eq!(codex.label(), "codex");
+
+        let all = store.workspace_agents(ws).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all[0].is_primary); // primary first
+    }
+
+    #[test]
+    fn remove_refuses_primary_but_removes_others() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let primary = store.workspace_agents(ws).unwrap()[0].id;
+        assert!(store.remove_workspace_agent(primary).is_err());
+
+        let added = store.add_workspace_agent(ws, AgentKind::Pi).unwrap();
+        store.remove_workspace_agent(added.id).unwrap();
+        assert_eq!(store.workspace_agents(ws).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn resolve_label_and_primary_id() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let second = store.add_workspace_agent(ws, AgentKind::Claude).unwrap();
+        assert_eq!(
+            store.resolve_instance_label(ws, "claude#2").unwrap(),
+            Some(second.id)
+        );
+        assert_eq!(store.resolve_instance_label(ws, "nope").unwrap(), None);
+        assert!(store.primary_instance_id(ws).unwrap().is_some());
+    }
+
+    #[test]
+    fn remove_nonexistent_agent_errors() {
+        let store = Store::open_in_memory().unwrap();
+        let _ = seed_ws_with_primary(&store);
+        assert!(store.remove_workspace_agent(AgentInstanceId(9999)).is_err());
+    }
+
+    #[test]
+    fn set_session_ref_on_unknown_id_errors() {
+        let store = Store::open_in_memory().unwrap();
+        let _ = seed_ws_with_primary(&store);
+        assert!(
+            store
+                .set_instance_session_ref(AgentInstanceId(9999), "x")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn set_session_ref_persists() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let added = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        store
+            .set_instance_session_ref(added.id, "sess-123")
+            .unwrap();
+        let reloaded = store
+            .workspace_agents(ws)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.id == added.id)
+            .unwrap();
+        assert_eq!(reloaded.session_ref.as_deref(), Some("sess-123"));
     }
 }
 

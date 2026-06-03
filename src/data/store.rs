@@ -681,8 +681,7 @@ impl Store {
         Ok(out)
     }
 
-    #[cfg(test)]
-    pub(crate) fn conn_for_test(&self) -> &rusqlite::Connection {
+    pub(crate) fn conn(&self) -> &rusqlite::Connection {
         &self.conn
     }
 
@@ -769,7 +768,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_undelivered
     ON agent_messages(workspace_id) WHERE delivered_at IS NULL;
 "#;
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -1577,28 +1576,28 @@ mod tests {
             .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
             .unwrap();
         store
-            .conn_for_test()
+            .conn()
             .execute(
                 "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)
                  VALUES (?1, 'w1', 'wsx/w1', '/tmp/r/w1', 'Ready', 'Ok', 7, 0, 'codex')",
                 [repo.0],
             )
             .unwrap();
-        let ws = WorkspaceId(store.conn_for_test().last_insert_rowid());
+        let ws = WorkspaceId(store.conn().last_insert_rowid());
 
         // Simulate a pre-V12 database, then re-run the migration to exercise backfill.
         store
-            .conn_for_test()
+            .conn()
             .execute("DELETE FROM workspace_agents", [])
             .unwrap();
         store
-            .conn_for_test()
+            .conn()
             .execute("PRAGMA user_version = 11", [])
             .unwrap();
         store.migrate_for_test().unwrap();
 
         let count: i64 = store
-            .conn_for_test()
+            .conn()
             .query_row(
                 "SELECT count(*) FROM workspace_agents WHERE workspace_id = ?1 AND is_primary = 1",
                 [ws.0],
@@ -1608,7 +1607,7 @@ mod tests {
         assert_eq!(count, 1);
 
         let agent: String = store
-            .conn_for_test()
+            .conn()
             .query_row(
                 "SELECT agent FROM workspace_agents WHERE workspace_id = ?1",
                 [ws.0],
@@ -1621,12 +1620,12 @@ mod tests {
         // `v < 12` block with the backfilled rows already present. `INSERT OR
         // IGNORE` must keep this idempotent (count stays 1, not 2).
         store
-            .conn_for_test()
+            .conn()
             .execute("PRAGMA user_version = 11", [])
             .unwrap();
         store.migrate_for_test().unwrap();
         let count_after_reentry: i64 = store
-            .conn_for_test()
+            .conn()
             .query_row(
                 "SELECT count(*) FROM workspace_agents WHERE workspace_id = ?1",
                 [ws.0],
@@ -1636,7 +1635,7 @@ mod tests {
         assert_eq!(count_after_reentry, 1);
 
         let v: i64 = store
-            .conn_for_test()
+            .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, 12);

@@ -3489,10 +3489,7 @@ mod pm_state_tests {
             rendered.contains("hermes"),
             "expected hermes row: {rendered}"
         );
-        assert!(
-            rendered.contains("codex"),
-            "expected codex row: {rendered}"
-        );
+        assert!(rendered.contains("codex"), "expected codex row: {rendered}");
         assert!(
             rendered.contains("current"),
             "expected current marker: {rendered}"

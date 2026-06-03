@@ -953,12 +953,8 @@ async fn handle_key_modal(
                 agent = match agent {
                     crate::pty::session::AgentKind::Claude => crate::pty::session::AgentKind::Pi,
                     crate::pty::session::AgentKind::Pi => crate::pty::session::AgentKind::Hermes,
-                    crate::pty::session::AgentKind::Hermes => {
-                        crate::pty::session::AgentKind::Codex
-                    }
-                    crate::pty::session::AgentKind::Codex => {
-                        crate::pty::session::AgentKind::Claude
-                    }
+                    crate::pty::session::AgentKind::Hermes => crate::pty::session::AgentKind::Codex,
+                    crate::pty::session::AgentKind::Codex => crate::pty::session::AgentKind::Claude,
                 };
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id,

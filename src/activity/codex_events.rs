@@ -322,6 +322,7 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::EnvGuard;
 
     fn write_rollout(dir: &Path, name: &str, cwd: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
@@ -343,13 +344,11 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         let mine = write_rollout(&day, "rollout-B.jsonl", &abs.to_string_lossy());
 
-        let original = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", home.path()); }
+        // EnvGuard serializes against sibling tests that mutate HOME (e.g.
+        // hermes_events) via the process-wide ENV_LOCK; raw set_var would race.
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
         let result = locate_session_file(work.path());
-        match original {
-            Some(h) => unsafe { std::env::set_var("HOME", h); },
-            None => unsafe { std::env::remove_var("HOME"); },
-        }
         assert_eq!(result, Some(mine));
     }
 
@@ -360,13 +359,9 @@ mod tests {
         let day = home.path().join(".codex/sessions/2026/06/02");
         write_rollout(&day, "rollout-A.jsonl", "/nowhere/relevant");
 
-        let original = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", home.path()); }
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
         let result = locate_session_file(work.path());
-        match original {
-            Some(h) => unsafe { std::env::set_var("HOME", h); },
-            None => unsafe { std::env::remove_var("HOME"); },
-        }
         assert!(result.is_none());
     }
 
@@ -374,13 +369,9 @@ mod tests {
     fn locate_returns_none_when_sessions_dir_missing() {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
-        let original = std::env::var_os("HOME");
-        unsafe { std::env::set_var("HOME", home.path()); }
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
         let result = locate_session_file(work.path());
-        match original {
-            Some(h) => unsafe { std::env::set_var("HOME", h); },
-            None => unsafe { std::env::remove_var("HOME"); },
-        }
         assert!(result.is_none());
     }
 
@@ -401,7 +392,10 @@ mod tests {
         let ev = p.event.expect("event");
         assert_eq!(ev.kind, EventKind::AssistantText);
         assert!(ev.display.contains("trace the billing path"));
-        assert_eq!(p.last_assistant_text.as_deref(), Some("I'll trace the billing path first."));
+        assert_eq!(
+            p.last_assistant_text.as_deref(),
+            Some("I'll trace the billing path first.")
+        );
     }
 
     #[test]
@@ -410,7 +404,10 @@ mod tests {
         let p = parse_jsonl_line(line);
         assert_eq!(p.stop_reason, Some(StopReason::EndTurn));
         assert!(p.event.is_none(), "no duplicate event for task_complete");
-        assert_eq!(p.last_assistant_text.as_deref(), Some("Done. No edits made."));
+        assert_eq!(
+            p.last_assistant_text.as_deref(),
+            Some("Done. No edits made.")
+        );
     }
 
     #[test]
@@ -419,7 +416,11 @@ mod tests {
         let p = parse_jsonl_line(line);
         let ev = p.event.expect("event");
         assert_eq!(ev.kind, EventKind::AssistantToolUse);
-        assert!(ev.display.contains("ran `rg -n invoice .`"), "display: {}", ev.display);
+        assert!(
+            ev.display.contains("ran `rg -n invoice .`"),
+            "display: {}",
+            ev.display
+        );
         assert_eq!(p.tool_use_starts.len(), 1);
         assert_eq!(p.tool_use_starts[0].0, "call_abc");
         assert_eq!(p.tool_use_starts[0].1, "exec_command");
@@ -477,7 +478,10 @@ mod tests {
         assert_eq!(u2.new_offset, u.new_offset);
 
         let l3 = r#"{"timestamp":"2026-06-02T18:56:09.820Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"ok"}}"#;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         use std::io::Write;
         writeln!(f, "{l3}").unwrap();
         let u3 = tail_session(&path, u2.new_offset).unwrap();
@@ -504,6 +508,10 @@ mod tests {
         std::fs::write(&path, format!("{l1}\n{partial}")).unwrap();
         let u = tail_session(&path, 0).unwrap();
         assert_eq!(u.events.len(), 1, "partial trailing line must be ignored");
-        assert_eq!(u.new_offset as usize, l1.len() + 1, "offset stops after the terminated line");
+        assert_eq!(
+            u.new_offset as usize,
+            l1.len() + 1,
+            "offset stops after the terminated line"
+        );
     }
 }

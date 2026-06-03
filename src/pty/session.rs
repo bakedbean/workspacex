@@ -65,8 +65,12 @@ impl AgentKind {
     /// All agent kinds, in stable display order. Add new variants here when
     /// extending the enum — `const` arrays do not get exhaustiveness checking,
     /// so this is the one place the compiler can't catch a drift.
-    pub const ALL: [AgentKind; 4] =
-        [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes, AgentKind::Codex];
+    pub const ALL: [AgentKind; 4] = [
+        AgentKind::Claude,
+        AgentKind::Pi,
+        AgentKind::Hermes,
+        AgentKind::Codex,
+    ];
 
     pub fn from_str_or_default(s: Option<&str>) -> Self {
         match s {
@@ -3956,7 +3960,10 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         });
-        assert!(!argv.iter().any(|a| a == "resume"), "fresh must not resume: {argv:?}");
+        assert!(
+            !argv.iter().any(|a| a == "resume"),
+            "fresh must not resume: {argv:?}"
+        );
         assert!(
             !argv.iter().any(|a| a.starts_with("--dangerously-bypass")),
             "non-yolo must not bypass: {argv:?}"
@@ -3965,7 +3972,10 @@ mod tests {
             !argv.iter().any(|a| a == "--ask-for-approval"),
             "dev session uses codex defaults: {argv:?}"
         );
-        assert!(!argv.iter().any(|a| a == "-m"), "no model env set: {argv:?}");
+        assert!(
+            !argv.iter().any(|a| a == "-m"),
+            "no model env set: {argv:?}"
+        );
     }
 
     #[test]
@@ -3980,7 +3990,8 @@ mod tests {
             yolo: true,
         });
         assert!(
-            argv.iter().any(|a| a == "--dangerously-bypass-approvals-and-sandbox"),
+            argv.iter()
+                .any(|a| a == "--dangerously-bypass-approvals-and-sandbox"),
             "yolo must bypass: {argv:?}"
         );
     }
@@ -3995,8 +4006,14 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         });
-        assert!(argv.iter().any(|a| a == "resume"), "continue must resume: {argv:?}");
-        assert!(argv.iter().any(|a| a == "--last"), "continue must use --last: {argv:?}");
+        assert!(
+            argv.iter().any(|a| a == "resume"),
+            "continue must resume: {argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a == "--last"),
+            "continue must use --last: {argv:?}"
+        );
     }
 
     #[test]
@@ -4011,14 +4028,19 @@ mod tests {
             fast_mode: false,
         });
         assert!(
-            argv.windows(2).any(|w| w[0] == "--ask-for-approval" && w[1] == "never"),
+            argv.windows(2)
+                .any(|w| w[0] == "--ask-for-approval" && w[1] == "never"),
             "pm must never ask: {argv:?}"
         );
         assert!(
-            argv.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "read-only"),
+            argv.windows(2)
+                .any(|w| w[0] == "--sandbox" && w[1] == "read-only"),
             "pm must be read-only: {argv:?}"
         );
-        assert!(!argv.iter().any(|a| a == "resume"), "pm fresh must not resume: {argv:?}");
+        assert!(
+            !argv.iter().any(|a| a == "resume"),
+            "pm fresh must not resume: {argv:?}"
+        );
     }
 
     #[test]
@@ -4057,9 +4079,18 @@ mod tests {
         };
         prepare_codex_workspace(cwd, &mode);
         let agents = std::fs::read_to_string(cwd.join("AGENTS.md")).unwrap();
-        assert!(agents.contains("BEGIN wsx-managed"), "block markers: {agents}");
-        assert!(agents.contains("DOCTRINE-MARKER"), "doctrine injected: {agents}");
-        assert!(agents.contains("wsx workspace rename"), "rename hint: {agents}");
+        assert!(
+            agents.contains("BEGIN wsx-managed"),
+            "block markers: {agents}"
+        );
+        assert!(
+            agents.contains("DOCTRINE-MARKER"),
+            "doctrine injected: {agents}"
+        );
+        assert!(
+            agents.contains("wsx workspace rename"),
+            "rename hint: {agents}"
+        );
     }
 
     #[test]

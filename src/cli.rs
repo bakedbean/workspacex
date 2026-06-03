@@ -637,7 +637,10 @@ fn parse_repo(it: &mut Args) -> Result<CliAction> {
         }
         other => Err(Error::Usage {
             group: None,
-            msg: format!("unknown repo action: {other:?}"),
+            msg: match other {
+                Some(cmd) => format!("unknown repo command: {cmd}"),
+                None => "missing repo command".into(),
+            },
         }),
     }
 }
@@ -684,7 +687,10 @@ fn parse_config(it: &mut Args) -> Result<CliAction> {
         }
         other => Err(Error::Usage {
             group: None,
-            msg: format!("unknown config action: {other:?}"),
+            msg: match other {
+                Some(cmd) => format!("unknown config command: {cmd}"),
+                None => "missing config command".into(),
+            },
         }),
     }
 }
@@ -817,7 +823,10 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
         }
         other => Err(Error::Usage {
             group: None,
-            msg: format!("unknown workspace action: {other:?}"),
+            msg: match other {
+                Some(cmd) => format!("unknown workspace command: {cmd}"),
+                None => "missing workspace command".into(),
+            },
         }),
     }
 }
@@ -873,7 +882,10 @@ fn parse_setup(it: &mut Args) -> Result<CliAction> {
         Some("install-skill") => Ok(CliAction::SetupInstallSkill),
         other => Err(Error::Usage {
             group: None,
-            msg: format!("unknown setup action: {other:?}"),
+            msg: match other {
+                Some(cmd) => format!("unknown setup command: {cmd}"),
+                None => "missing setup command".into(),
+            },
         }),
     }
 }
@@ -2067,6 +2079,23 @@ mod tests {
         let e = Error::UserInput("unknown setting key: nope".into());
         let s = report_cli_error(&e);
         assert!(s.contains("unknown setting key: nope"));
+    }
+
+    #[test]
+    fn unknown_subcommand_messages_are_clean() {
+        // No Debug-formatted Option (`None` / `Some("..")`) leaking into user text.
+        let missing = match parse(&["workspace"]) {
+            Err(e) => e.to_string(),
+            _ => panic!("expected error"),
+        };
+        assert_eq!(missing, "missing workspace command");
+        let unknown = match parse(&["workspace", "bogus"]) {
+            Err(e) => e.to_string(),
+            _ => panic!("expected error"),
+        };
+        assert_eq!(unknown, "unknown workspace command: bogus");
+        assert!(!missing.contains("None"));
+        assert!(!unknown.contains("Some("));
     }
 
     #[test]

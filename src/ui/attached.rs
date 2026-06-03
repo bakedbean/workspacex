@@ -1,6 +1,6 @@
 use crate::commands::pinned::{PinnedCommand, truncate_label};
 use crate::pty::render::render_screen;
-use crate::pty::session::Session;
+use crate::pty::session::{AgentKind, Session};
 use crate::ui::split::{Divider, SplitDirection};
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -18,6 +18,9 @@ pub struct PaneSpec<'a> {
     pub label: &'a str,
     pub rect: Rect,
     pub focused: bool,
+    /// The pane's coding agent, or `None` for the project-manager pane
+    /// (which is not one of the four coding agents).
+    pub agent: Option<AgentKind>,
 }
 
 /// What `render_panes` reports back to the caller for input hit-testing.
@@ -53,6 +56,7 @@ pub fn render_panes(
     status_area: Rect,
     footer_area: Rect,
     footer_label: &str,
+    footer_agent: Option<AgentKind>,
     multi_pane_footer: bool,
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
@@ -77,7 +81,7 @@ pub fn render_panes(
     // throughout the chrome stack.
     let footer_text = ratatui::text::Text::from(vec![
         Line::from(Vec::<Span<'static>>::new()),
-        footer_line(footer_label, multi_pane_footer, theme),
+        footer_line(footer_label, footer_agent, multi_pane_footer, theme),
     ]);
     f.render_widget(Paragraph::new(footer_text), footer_area);
 
@@ -120,10 +124,13 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
         } else {
             Style::default()
         };
-        let spans = vec![
-            Span::styled("▎".to_string(), gutter_style),
-            Span::styled(format!(" {} ", pane.label), name_style),
-        ];
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(3);
+        if let Some(agent) = pane.agent {
+            // Agent identity bar, left of the focus gutter → two-tone edge.
+            spans.push(Span::styled("▎".to_string(), theme.agent_style(agent)));
+        }
+        spans.push(Span::styled("▎".to_string(), gutter_style));
+        spans.push(Span::styled(format!(" {} ", pane.label), name_style));
         f.render_widget(Paragraph::new(Line::from(spans)).style(row_bg), area);
     }
 
@@ -222,7 +229,12 @@ pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
 /// leader, then per-keybind chips (`<key>` in dim+bold, ` <label>` in
 /// `path` color), separated by 2 spaces. Matches the dashboard footer's
 /// chip pattern.
-fn footer_line(label: &str, multi_pane: bool, theme: &Theme) -> Line<'static> {
+fn footer_line(
+    label: &str,
+    agent: Option<AgentKind>,
+    multi_pane: bool,
+    theme: &Theme,
+) -> Line<'static> {
     let keys: &[(&str, &str)] = if multi_pane {
         &[
             ("d", "close-pane"),
@@ -255,6 +267,10 @@ fn footer_line(label: &str, multi_pane: bool, theme: &Theme) -> Line<'static> {
     let pad_style = theme.chip_bg_style();
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 5 + 4);
+    if let Some(a) = agent {
+        spans.push(Span::styled("▎".to_string(), theme.agent_style(a)));
+        spans.push(Span::raw(" ".to_string()));
+    }
     spans.push(Span::styled(label.to_string(), theme.header_style()));
     spans.push(Span::raw("   ".to_string()));
     // ^x leader rendered as a standalone pill (no label tail).
@@ -405,7 +421,7 @@ mod tests {
         // regression that re-extended bg_soft over the label would
         // visually merge key and label into one block.
         let theme = crate::ui::theme::Theme::wsx();
-        let line = footer_line("ws", false, &theme);
+        let line = footer_line("ws", None, false, &theme);
         let leader = line
             .spans
             .iter()
@@ -426,6 +442,33 @@ mod tests {
         assert_eq!(
             chord_label.style.bg, None,
             "label should not carry the chip bg"
+        );
+    }
+
+    #[test]
+    fn footer_line_prepends_agent_bar_when_present() {
+        let theme = Theme::wsx();
+        let line = footer_line("wsx/foo", Some(AgentKind::Codex), false, &theme);
+        assert_eq!(line.spans[0].content.as_ref(), "▎");
+        assert_eq!(
+            line.spans[0].style.fg,
+            theme.agent_style(AgentKind::Codex).fg
+        );
+        assert_eq!(
+            line.spans[2].content.as_ref(),
+            "wsx/foo",
+            "label follows the bar and its trailing space"
+        );
+    }
+
+    #[test]
+    fn footer_line_omits_agent_bar_when_none() {
+        let theme = Theme::wsx();
+        let line = footer_line("project-manager", None, false, &theme);
+        assert_eq!(
+            line.spans[0].content.as_ref(),
+            "project-manager",
+            "no leading bar for the PM pane"
         );
     }
 

@@ -368,6 +368,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     }
                 })
                 .unwrap_or_default();
+            let focused_agent = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == focused_id)
+                .map(|(_, w)| w.agent);
 
             // Conservative right margin for the status row; `render_panes`
             // renders the attention line flush at `status_area.x` with no
@@ -438,27 +443,29 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 String,
                 ratatui::layout::Rect,
                 bool,
+                Option<crate::pty::session::AgentKind>,
             )> = panes
                 .into_iter()
                 .filter_map(|(ws_id, path, rect)| {
                     let session = app.sessions.get(ws_id)?;
-                    let label = app
+                    let (label, agent) = app
                         .workspaces
                         .iter()
                         .find(|(_, w)| w.id == ws_id)
-                        .map(|(_, w)| w.name.clone())
+                        .map(|(_, w)| (w.name.clone(), Some(w.agent)))
                         .unwrap_or_default();
                     let focused = path == state.focus;
-                    Some((session, label, rect, focused))
+                    Some((session, label, rect, focused, agent))
                 })
                 .collect();
             let specs: Vec<crate::ui::attached::PaneSpec<'_>> = pane_data
                 .iter()
-                .map(|(s, l, r, f)| crate::ui::attached::PaneSpec {
+                .map(|(s, l, r, f, a)| crate::ui::attached::PaneSpec {
                     session: s,
                     label: l.as_str(),
                     rect: *r,
                     focused: *f,
+                    agent: *a,
                 })
                 .collect();
 
@@ -470,6 +477,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 status_area,
                 footer_area,
                 &focused_label,
+                focused_agent,
                 multi_pane,
                 attention_line,
                 &pinned,
@@ -522,6 +530,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     label: "project-manager",
                     rect: pane_area,
                     focused: true,
+                    agent: None,
                 }];
                 let out = attached::render_panes(
                     f,
@@ -531,6 +540,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     status_area,
                     footer_area,
                     "project-manager",
+                    None,
                     false,
                     attention_line,
                     pinned,

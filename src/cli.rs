@@ -424,6 +424,9 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
     let group = first.as_deref().expect("None handled above");
 
     // Per-group help: `wsx agent --help`, `wsx agent -h`, `wsx agent help`.
+    // Intentional tradeoff: a literal `--help`/`-h`/`help` anywhere in a group's
+    // args triggers help, even in a value position; no wsx argument legitimately
+    // takes those literals (use `@file` for arbitrary values).
     if rest.iter().any(|a| is_help(a)) {
         if let Some(g) = group_name(group) {
             return Ok(CliAction::Help(HelpTopic::Group(g)));
@@ -653,7 +656,10 @@ fn parse_config(it: &mut Args) -> Result<CliAction> {
                 msg: "config get <key>".into(),
             })?;
             if !known_setting_key(&key) {
-                return Err(Error::UserInput(format!("unknown setting key: {key}")));
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("unknown setting key: {key}"),
+                });
             }
             Ok(CliAction::ConfigGet { key })
         }
@@ -663,7 +669,10 @@ fn parse_config(it: &mut Args) -> Result<CliAction> {
                 msg: "config set <key> <value-or-@file>".into(),
             })?;
             if !known_setting_key(&key) {
-                return Err(Error::UserInput(format!("unknown setting key: {key}")));
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("unknown setting key: {key}"),
+                });
             }
             let value = it.next().ok_or_else(|| Error::Usage {
                 group: None,
@@ -681,7 +690,10 @@ fn parse_config(it: &mut Args) -> Result<CliAction> {
                 msg: "config edit <key>".into(),
             })?;
             if !known_setting_key(&key) {
-                return Err(Error::UserInput(format!("unknown setting key: {key}")));
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("unknown setting key: {key}"),
+                });
             }
             Ok(CliAction::ConfigEdit { key })
         }
@@ -1577,6 +1589,34 @@ mod tests {
     fn rejects_unknown_setting_key() {
         assert!(parse(&["config", "set", "nope", "val"]).is_err());
         assert!(parse(&["config", "get", "nope"]).is_err());
+    }
+
+    #[test]
+    fn unknown_setting_key_is_tagged_config_usage() {
+        match parse(&["config", "set", "nope", "x"]) {
+            Err(Error::Usage {
+                group: Some("config"),
+                msg,
+            }) => {
+                assert_eq!(msg, "unknown setting key: nope");
+            }
+            other => panic!("expected config-tagged Usage, got {other:?}"),
+        }
+        // get and edit forms too
+        assert!(matches!(
+            parse(&["config", "get", "nope"]),
+            Err(Error::Usage {
+                group: Some("config"),
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(&["config", "edit", "nope"]),
+            Err(Error::Usage {
+                group: Some("config"),
+                ..
+            })
+        ));
     }
 
     #[test]

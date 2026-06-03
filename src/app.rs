@@ -1171,7 +1171,10 @@ pub(crate) fn ensure_workspace_session(
         // Resolve the primary agent instance for this workspace, defensively
         // seeding one for any row that somehow lacks a primary instance.
         let inst = resolve_primary_instance(app, id)?;
-        match app.sessions.spawn(inst, &path, 80, 24, mode, remote, agent) {
+        match app
+            .sessions
+            .spawn(inst, id, &path, 80, 24, mode, remote, agent)
+        {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
                 app.modal = Some(crate::ui::modal::Modal::AgentMissing {
@@ -1214,7 +1217,7 @@ pub(crate) fn ensure_instance_session(
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
         match app
             .sessions
-            .spawn(inst, &path, 80, 24, mode, remote, instance.agent)
+            .spawn(inst, ws_id, &path, 80, 24, mode, remote, instance.agent)
         {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {

@@ -1186,6 +1186,16 @@ fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
     }
 }
 
+/// Identity of the workspace+instance a spawned agent belongs to, surfaced to
+/// the child process as `WSX_WORKSPACE_ID` / `WSX_AGENT_INSTANCE_ID` so the
+/// agent's `wsx agent send` can address peers and identify itself. `None` for
+/// the project-manager session (which is not a workspace agent).
+#[derive(Debug, Clone, Copy)]
+pub struct SpawnIdentity {
+    pub workspace_id: i64,
+    pub instance_id: i64,
+}
+
 pub fn spawn_session(
     cwd: &Path,
     cols: u16,
@@ -1193,6 +1203,7 @@ pub fn spawn_session(
     mode: SpawnMode,
     remote: crate::agent::remote_control::RemoteOpts,
     agent: AgentKind,
+    identity: Option<SpawnIdentity>,
 ) -> Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -1204,7 +1215,7 @@ pub fn spawn_session(
         })
         .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
 
-    let child_cmd = match agent {
+    let mut child_cmd = match agent {
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
         AgentKind::Pi => build_pi_command(cwd, &mode, remote),
         AgentKind::Hermes => {
@@ -1216,6 +1227,10 @@ pub fn spawn_session(
             build_codex_command(cwd, &mode, remote)
         }
     };
+    if let Some(id) = identity {
+        child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
+        child_cmd.env("WSX_AGENT_INSTANCE_ID", id.instance_id.to_string());
+    }
     let mut child = pair.slave.spawn_command(child_cmd).map_err(|e| {
         if is_binary_not_found(&e) {
             Error::AgentBinaryMissing(resolved_binary(agent))
@@ -1323,6 +1338,7 @@ impl SessionManager {
     pub fn spawn(
         &mut self,
         id: crate::data::store::AgentInstanceId,
+        workspace_id: crate::data::store::WorkspaceId,
         cwd: &Path,
         cols: u16,
         rows: u16,
@@ -1336,7 +1352,13 @@ impl SessionManager {
             }
             // Otherwise fall through and respawn.
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote, agent)?);
+        let identity = Some(SpawnIdentity {
+            workspace_id: workspace_id.0,
+            instance_id: id.0,
+        });
+        let session = Arc::new(spawn_session(
+            cwd, cols, rows, mode, remote, agent, identity,
+        )?);
         self.sessions.insert(id, session.clone());
         Ok(session)
     }
@@ -1368,7 +1390,7 @@ impl SessionManager {
                 return Ok(existing.clone());
             }
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote, agent)?);
+        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote, agent, None)?);
         self.pm = Some(session.clone());
         Ok(session)
     }
@@ -1526,6 +1548,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
+            None,
         )
         .unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
@@ -1570,9 +1593,11 @@ mod tests {
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
         let id = crate::data::store::AgentInstanceId(1);
+        let ws_id = crate::data::store::WorkspaceId(1);
         let session = mgr
             .spawn(
                 id,
+                ws_id,
                 &cwd,
                 80,
                 24,
@@ -1624,6 +1649,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
+            None,
         )
         .unwrap();
 
@@ -2238,6 +2264,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
+            None,
         )
         .unwrap();
         // Prime cat with some output so activity_ms is populated, then let it settle.
@@ -2325,6 +2352,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
+            None,
         )
         .unwrap();
         // Do NOT send any input — cat stays silent, activity_ms never gets set.
@@ -2358,6 +2386,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
+            None,
         )
         .expect("spawn_session for scrollback test")
     }
@@ -3794,6 +3823,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
+            None,
         );
         let err = match result {
             Err(e) => e,
@@ -3805,6 +3835,46 @@ mod tests {
             }
             other => panic!("expected AgentBinaryMissing, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn spawn_identity_env_vars_set_on_command_when_present() {
+        let mut cmd = CommandBuilder::new("dummy");
+        let identity = Some(SpawnIdentity {
+            workspace_id: 42,
+            instance_id: 7,
+        });
+        if let Some(id) = identity {
+            cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
+            cmd.env("WSX_AGENT_INSTANCE_ID", id.instance_id.to_string());
+        }
+        assert_eq!(
+            cmd.get_env("WSX_WORKSPACE_ID").and_then(|v| v.to_str()),
+            Some("42"),
+        );
+        assert_eq!(
+            cmd.get_env("WSX_AGENT_INSTANCE_ID")
+                .and_then(|v| v.to_str()),
+            Some("7"),
+        );
+    }
+
+    #[test]
+    fn spawn_identity_env_vars_absent_when_none() {
+        let mut cmd = CommandBuilder::new("dummy");
+        let identity: Option<SpawnIdentity> = None;
+        if let Some(id) = identity {
+            cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
+            cmd.env("WSX_AGENT_INSTANCE_ID", id.instance_id.to_string());
+        }
+        assert!(
+            cmd.get_env("WSX_WORKSPACE_ID").is_none(),
+            "WSX_WORKSPACE_ID must not be set for PM session"
+        );
+        assert!(
+            cmd.get_env("WSX_AGENT_INSTANCE_ID").is_none(),
+            "WSX_AGENT_INSTANCE_ID must not be set for PM session"
+        );
     }
 
     #[test]
@@ -4136,6 +4206,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
+            None,
         )
         .unwrap();
         s.writer.send(b"hello-codex\n".to_vec()).await.unwrap();

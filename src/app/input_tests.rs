@@ -495,6 +495,7 @@ mod pm_state_tests {
         app.sessions
             .spawn(
                 __inst_0,
+                first_id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -514,6 +515,7 @@ mod pm_state_tests {
         app.sessions
             .spawn(
                 __inst_1,
+                second_id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -620,6 +622,7 @@ mod pm_state_tests {
             app.sessions
                 .spawn(
                     __inst_2,
+                    id,
                     std::path::Path::new("."),
                     80,
                     24,
@@ -719,6 +722,7 @@ mod pm_state_tests {
         app.sessions
             .spawn(
                 __inst_3,
+                id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -805,6 +809,7 @@ mod pm_state_tests {
         app.sessions
             .spawn(
                 __inst_4,
+                id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -877,6 +882,7 @@ mod pm_state_tests {
             app.sessions
                 .spawn(
                     __inst_5,
+                    *id,
                     std::path::Path::new("."),
                     80,
                     24,
@@ -1161,6 +1167,7 @@ mod pm_state_tests {
         app.sessions
             .spawn(
                 __inst_6,
+                attached_id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -1238,6 +1245,7 @@ mod pm_state_tests {
         app.sessions
             .spawn(
                 __inst_7,
+                attached_id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -1385,6 +1393,7 @@ mod pm_state_tests {
         app.sessions
             .spawn(
                 __inst_8,
+                ws_id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -4025,6 +4034,7 @@ mod ctrl_x_esc_tests {
         app.sessions
             .spawn(
                 __inst_9,
+                first_id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -4044,6 +4054,7 @@ mod ctrl_x_esc_tests {
         app.sessions
             .spawn(
                 __inst_10,
+                second_id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -4151,6 +4162,7 @@ mod restore_layout_tests {
             app.sessions
                 .spawn(
                     __inst_11,
+                    id,
                     std::path::Path::new("."),
                     80,
                     24,
@@ -4516,6 +4528,7 @@ mod detail_bar_focus_tests {
         app.sessions
             .spawn(
                 __inst_12,
+                ws_id,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -4739,6 +4752,7 @@ mod attached_wheel_forwarding {
         app.sessions
             .spawn(
                 __inst_13,
+                ws_id,
                 std::path::Path::new("."),
                 80,
                 24,

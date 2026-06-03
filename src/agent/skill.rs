@@ -1,10 +1,10 @@
-//! Embedded Claude Code skill and installer.
+//! Embedded agent skill and installer.
 //!
-//! The skill teaches Claude Code to drive the `wsx` CLI (workspace
+//! The skill teaches coding agents to drive the `wsx` CLI (workspace
 //! operations, slug-vs-branch naming, cross-repo orchestration). It's
 //! bundled into the binary at compile time so `wsx setup install-skill`
-//! can write it to `~/.claude/skills/wsx/SKILL.md` on any machine where
-//! wsx is installed.
+//! can write it to each supported agent's skill directory on any machine
+//! where wsx is installed.
 
 use crate::error::{Error, Result};
 use std::io::Write;
@@ -13,15 +13,84 @@ use std::path::{Path, PathBuf};
 /// The wsx skill content, embedded at compile time from `skills/wsx/SKILL.md`.
 pub const SKILL_CONTENT: &str = include_str!("../../skills/wsx/SKILL.md");
 
-/// Default install location for the wsx skill (`~/.claude/skills/wsx/SKILL.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallTarget {
+    pub agent: &'static str,
+    pub path: PathBuf,
+}
+
+/// Default Claude install location (`~/.claude/skills/wsx/SKILL.md`).
 /// Returns `None` if the home directory can't be resolved.
-pub fn default_install_path() -> Option<PathBuf> {
+pub fn default_claude_install_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| {
         h.join(".claude")
             .join("skills")
             .join("wsx")
             .join("SKILL.md")
     })
+}
+
+/// Default Codex install location (`~/.codex/skills/wsx/SKILL.md`).
+/// Returns `None` if the home directory can't be resolved.
+pub fn default_codex_install_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".codex").join("skills").join("wsx").join("SKILL.md"))
+}
+
+/// Default install location kept for older call sites.
+pub fn default_install_path() -> Option<PathBuf> {
+    default_claude_install_path()
+}
+
+/// Install targets for `wsx setup install-skill`.
+///
+/// Claude is always included because this command historically installs the
+/// bundled Claude Code skill. Codex is included only when it appears to be
+/// installed, either via `WSX_CODEX_BIN`, a `codex` executable on PATH, or an
+/// existing `~/.codex` directory from a prior Codex run.
+pub fn default_install_targets() -> Option<Vec<InstallTarget>> {
+    let mut targets = vec![InstallTarget {
+        agent: "Claude",
+        path: default_claude_install_path()?,
+    }];
+    if codex_is_installed() {
+        targets.push(InstallTarget {
+            agent: "Codex",
+            path: default_codex_install_path()?,
+        });
+    }
+    Some(targets)
+}
+
+fn codex_is_installed() -> bool {
+    std::env::var_os("WSX_CODEX_BIN").is_some()
+        || binary_on_path("codex")
+        || dirs::home_dir()
+            .map(|h| h.join(".codex").is_dir())
+            .unwrap_or(false)
+}
+
+fn binary_on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        let candidate = dir.join(name);
+        candidate.is_file() && is_executable(&candidate)
+    })
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +146,7 @@ fn write_atomic(path: &Path, content: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::EnvGuard;
     use tempfile::TempDir;
 
     #[test]
@@ -116,5 +186,101 @@ mod tests {
         std::fs::write(&target, "stale content").unwrap();
         assert_eq!(install_to(&target).unwrap(), InstallOutcome::Updated);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), SKILL_CONTENT);
+    }
+
+    #[test]
+    fn default_targets_include_claude_only_when_codex_is_absent() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.remove("WSX_CODEX_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert_eq!(
+            targets,
+            vec![InstallTarget {
+                agent: "Claude",
+                path: home
+                    .path()
+                    .join(".claude")
+                    .join("skills")
+                    .join("wsx")
+                    .join("SKILL.md"),
+            }]
+        );
+    }
+
+    #[test]
+    fn default_targets_include_codex_when_binary_is_on_path() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        let bin = TempDir::new().unwrap();
+        let codex = bin.path().join("codex");
+        std::fs::write(&codex, "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        env.set("HOME", home.path());
+        env.set("PATH", bin.path());
+        env.remove("WSX_CODEX_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(targets.iter().any(|t| {
+            t.agent == "Codex"
+                && t.path
+                    == home
+                        .path()
+                        .join(".codex")
+                        .join("skills")
+                        .join("wsx")
+                        .join("SKILL.md")
+        }));
+    }
+
+    #[test]
+    fn default_targets_include_codex_when_codex_home_exists() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        std::fs::create_dir(home.path().join(".codex")).unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.remove("WSX_CODEX_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(targets.iter().any(|t| t.agent == "Codex"));
+    }
+
+    #[test]
+    fn default_targets_ignore_codex_home_regular_file() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        std::fs::write(home.path().join(".codex"), "").unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.remove("WSX_CODEX_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(!targets.iter().any(|t| t.agent == "Codex"));
+    }
+
+    #[test]
+    fn default_targets_include_codex_when_codex_bin_env_is_set() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.set("WSX_CODEX_BIN", "/custom/codex");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(targets.iter().any(|t| t.agent == "Codex"));
     }
 }

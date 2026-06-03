@@ -162,6 +162,16 @@ impl Store {
             .map(|i| i.id))
     }
 
+    /// A single instance by its id.
+    pub fn workspace_agents_by_id(&self, id: AgentInstanceId) -> Result<Option<AgentInstance>> {
+        let mut stmt = self.conn().prepare_cached(
+            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at
+             FROM workspace_agents WHERE id = ?1",
+        )?;
+        let r = stmt.query_row([id.0], row_to_instance).optional()?;
+        Ok(r)
+    }
+
     /// The primary instance id for a workspace.
     pub fn primary_instance_id(&self, ws: WorkspaceId) -> Result<Option<AgentInstanceId>> {
         let mut stmt = self.conn().prepare_cached(
@@ -271,6 +281,23 @@ mod store_tests {
             .find(|i| i.id == added.id)
             .unwrap();
         assert_eq!(reloaded.session_ref.as_deref(), Some("sess-123"));
+    }
+
+    #[test]
+    fn workspace_agents_by_id_returns_instance_or_none() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let added = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let got = store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        assert_eq!(got.id, added.id);
+        assert_eq!(got.agent, AgentKind::Codex);
+        assert!(!got.is_primary);
+        assert!(
+            store
+                .workspace_agents_by_id(AgentInstanceId(9999))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

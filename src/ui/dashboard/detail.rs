@@ -535,23 +535,33 @@ pub(crate) fn build_recent_files(
     } else {
         for f in files.iter().take(5) {
             let diff = lookup_file_diff(f, worktree_path, diff_per_file);
-            let suffix_width = match diff {
+            // The right-aligned `+added −removed` cluster, when present.
+            let counts = match diff {
                 Some(d) if d.added > 0 || d.removed > 0 => {
-                    4 + d.added.to_string().chars().count() + d.removed.to_string().chars().count()
+                    Some((format!("+{}", d.added), format!("−{}", d.removed)))
                 }
-                _ => 0,
+                _ => None,
             };
+            // Visible width of that cluster ("+A" + space + "−R").
+            let cluster_width = counts
+                .as_ref()
+                .map(|(added, removed)| added.chars().count() + 1 + removed.chars().count())
+                .unwrap_or(0);
+            // Reserve the cluster plus a minimum 2-space gutter so the
+            // path can never butt up against the counts.
+            let path_width = column_width.saturating_sub(cluster_width + 2);
             let display = display_relative_path(f, worktree_path);
-            let path_width = column_width.saturating_sub(suffix_width);
             let truncated = truncate_to_chars_left(&display, path_width);
-            let mut spans: Vec<Span<'static>> = vec![Span::styled(truncated, theme.dim_style())];
-            if let Some(d) = diff
-                && (d.added > 0 || d.removed > 0)
-            {
-                spans.push(Span::raw("  ".to_string()));
-                spans.push(Span::styled(format!("+{}", d.added), theme.ok_style()));
+            let mut spans: Vec<Span<'static>> =
+                vec![Span::styled(truncated.clone(), theme.dim_style())];
+            if let Some((added, removed)) = counts {
+                // Pad so the cluster's last glyph lands exactly at
+                // `column_width`, keeping counts flush-right across rows.
+                let pad = column_width.saturating_sub(cluster_width + truncated.chars().count());
+                spans.push(Span::raw(" ".repeat(pad)));
+                spans.push(Span::styled(added, theme.ok_style()));
                 spans.push(Span::raw(" ".to_string()));
-                spans.push(Span::styled(format!("−{}", d.removed), theme.err_style()));
+                spans.push(Span::styled(removed, theme.err_style()));
             }
             out.push(Line::from(spans));
         }
@@ -1320,6 +1330,50 @@ mod tests {
         assert_eq!(lines.len(), 1);
         let placeholder = line_to_string(&lines[0]);
         assert_eq!(placeholder, "—");
+    }
+
+    #[test]
+    fn build_recent_files_right_justifies_diff_counts() {
+        // Counts must sit flush against the right edge regardless of how
+        // long the path is or how many digits the counts have, so each
+        // rendered row fills exactly `column_width` and ends with its
+        // own `+added −removed` cluster.
+        let theme = Theme::default();
+        let worktree = std::path::PathBuf::from("/wt");
+        let mut evt = crate::activity::events::WorkspaceEvents::default();
+        evt.recent_edited_files
+            .push_back("/wt/short.rs".to_string());
+        evt.recent_edited_files
+            .push_back("/wt/a/longer/nested/path/name.rs".to_string());
+        let mut diff = std::collections::HashMap::new();
+        diff.insert(
+            "short.rs".to_string(),
+            DiffStats {
+                added: 5,
+                removed: 3,
+            },
+        );
+        diff.insert(
+            "a/longer/nested/path/name.rs".to_string(),
+            DiffStats {
+                added: 120,
+                removed: 40,
+            },
+        );
+
+        let column_width = 40;
+        let lines = build_recent_files(Some(&evt), Some(&diff), &worktree, &theme, column_width);
+        assert_eq!(lines.len(), 2);
+        for line in &lines {
+            let s = line_to_string(line);
+            assert_eq!(
+                s.chars().count(),
+                column_width,
+                "row not right-justified to column_width: {s:?}"
+            );
+        }
+        assert!(line_to_string(&lines[0]).ends_with("+5 −3"));
+        assert!(line_to_string(&lines[1]).ends_with("+120 −40"));
     }
 
     #[test]

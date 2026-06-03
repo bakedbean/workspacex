@@ -65,7 +65,7 @@ fn codex_is_installed() -> bool {
     std::env::var_os("WSX_CODEX_BIN").is_some()
         || binary_on_path("codex")
         || dirs::home_dir()
-            .map(|h| h.join(".codex").exists())
+            .map(|h| h.join(".codex").is_dir())
             .unwrap_or(false)
 }
 
@@ -75,8 +75,22 @@ fn binary_on_path(name: &str) -> bool {
     };
     std::env::split_paths(&path).any(|dir| {
         let candidate = dir.join(name);
-        candidate.is_file()
+        candidate.is_file() && is_executable(&candidate)
     })
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,7 +217,14 @@ mod tests {
         let mut env = EnvGuard::new();
         let home = TempDir::new().unwrap();
         let bin = TempDir::new().unwrap();
-        std::fs::write(bin.path().join("codex"), "").unwrap();
+        let codex = bin.path().join("codex");
+        std::fs::write(&codex, "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         env.set("HOME", home.path());
         env.set("PATH", bin.path());
         env.remove("WSX_CODEX_BIN");
@@ -230,6 +251,33 @@ mod tests {
         env.set("HOME", home.path());
         env.set("PATH", "");
         env.remove("WSX_CODEX_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(targets.iter().any(|t| t.agent == "Codex"));
+    }
+
+    #[test]
+    fn default_targets_ignore_codex_home_regular_file() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        std::fs::write(home.path().join(".codex"), "").unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.remove("WSX_CODEX_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(!targets.iter().any(|t| t.agent == "Codex"));
+    }
+
+    #[test]
+    fn default_targets_include_codex_when_codex_bin_env_is_set() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.set("WSX_CODEX_BIN", "/custom/codex");
 
         let targets = default_install_targets().unwrap();
 

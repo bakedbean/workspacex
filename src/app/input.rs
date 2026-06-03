@@ -7,8 +7,9 @@
 
 use crate::app::{
     App, AttachReady, PendingEdit, RepoSettingField, SelectionTarget, SharedApp,
-    apply_repo_setting, attach_workspace, ensure_workspace_session, reconcile_create_result,
-    rescan_processes, restore_attached_state, save_layout_for, schedule_detach_refresh,
+    apply_repo_setting, attach_workspace, ensure_instance_session, ensure_workspace_session,
+    reconcile_create_result, rescan_processes, restore_attached_state, save_layout_for,
+    schedule_detach_refresh,
 };
 use crate::error::Result;
 use crate::ui::View;
@@ -1361,6 +1362,63 @@ async fn handle_key_modal(
                     }
                     app.modal = None;
                     attach_workspace(app, ws_id)?;
+                }
+                _ => {}
+            }
+        }
+        Modal::AgentsPanel {
+            workspace_id,
+            selected,
+        } => {
+            use crate::pty::session::AgentKind;
+            match k.code {
+                KeyCode::Esc => {
+                    app.modal = None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.modal = Some(Modal::AgentsPanel {
+                        workspace_id,
+                        selected: selected.saturating_sub(1),
+                    });
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    app.modal = Some(Modal::AgentsPanel {
+                        workspace_id,
+                        selected: (selected + 1).min(AgentKind::ALL.len() - 1),
+                    });
+                }
+                KeyCode::Enter => {
+                    // Defensively bound the index: navigation clamps `selected`,
+                    // but guard against a stale/large value so this can never panic.
+                    let idx = selected.min(AgentKind::ALL.len().saturating_sub(1));
+                    let kind = AgentKind::ALL[idx];
+                    let inst = app.store.add_workspace_agent(workspace_id, kind)?;
+                    // Spawn it now. ensure_instance_session sets Modal::AgentMissing
+                    // (and returns AgentMissing) if the binary is absent — in that
+                    // case leave that modal up; otherwise close the panel.
+                    match ensure_instance_session(app, inst.id)? {
+                        AttachReady::AgentMissing => {} // ensure_instance_session set the modal
+                        _ => app.modal = None,
+                    }
+                }
+                KeyCode::Char('a') => {
+                    for kind in AgentKind::ALL {
+                        let inst = app.store.add_workspace_agent(workspace_id, kind)?;
+                        let _ = ensure_instance_session(app, inst.id)?;
+                    }
+                    app.modal = None;
+                }
+                KeyCode::Char('x') => {
+                    // Remove the most-recently-added non-primary instance.
+                    if let Some(last) = app
+                        .store
+                        .workspace_agents(workspace_id)?
+                        .into_iter()
+                        .rfind(|i| !i.is_primary)
+                    {
+                        app.sessions.remove(last.id);
+                        app.store.remove_workspace_agent(last.id)?;
+                    }
                 }
                 _ => {}
             }

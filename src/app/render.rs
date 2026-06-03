@@ -656,6 +656,16 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     );
                 }
             }
+            crate::ui::modal::Modal::AgentsPanel {
+                workspace_id,
+                selected,
+            } => {
+                let agents = app
+                    .store
+                    .workspace_agents(*workspace_id)
+                    .unwrap_or_default();
+                crate::ui::modal::render_agents_panel(f, area, &agents, *selected, &app.theme);
+            }
             other => modal::render(f, area, other, app.tick, &app.theme),
         }
     }

@@ -548,8 +548,13 @@ pub(crate) fn build_recent_files(
                 .map(|(added, removed)| added.chars().count() + 1 + removed.chars().count())
                 .unwrap_or(0);
             // Reserve the cluster plus a minimum 2-space gutter so the
-            // path can never butt up against the counts.
-            let path_width = column_width.saturating_sub(cluster_width + 2);
+            // path can never butt up against the counts. With no counts
+            // the path takes the full width — no gutter to reserve.
+            let path_width = if counts.is_some() {
+                column_width.saturating_sub(cluster_width + 2)
+            } else {
+                column_width
+            };
             let display = display_relative_path(f, worktree_path);
             let truncated = truncate_to_chars_left(&display, path_width);
             let mut spans: Vec<Span<'static>> =
@@ -1374,6 +1379,28 @@ mod tests {
         }
         assert!(line_to_string(&lines[0]).ends_with("+5 −3"));
         assert!(line_to_string(&lines[1]).ends_with("+120 −40"));
+    }
+
+    #[test]
+    fn build_recent_files_no_diff_uses_full_path_width() {
+        // With no per-file diff there is no count cluster, so no gutter
+        // should be reserved — a path longer than column_width gets
+        // truncated to the full width, not width − 2.
+        let theme = Theme::default();
+        let worktree = std::path::PathBuf::from("/wt");
+        let mut evt = crate::activity::events::WorkspaceEvents::default();
+        evt.recent_edited_files
+            .push_back("/wt/a/deeply/nested/directory/structure/file.rs".to_string());
+
+        let column_width = 20;
+        // No diff map at all → counts == None for every row.
+        let lines = build_recent_files(Some(&evt), None, &worktree, &theme, column_width);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            line_to_string(&lines[0]).chars().count(),
+            column_width,
+            "path should fill the full column when no counts follow it"
+        );
     }
 
     #[test]

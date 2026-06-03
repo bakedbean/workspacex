@@ -118,6 +118,18 @@ mod tests {
     }
 
     #[test]
+    fn codex_omits_superpowers_but_keeps_the_rest() {
+        let d = process_doctrine(AgentKind::Codex).to_lowercase();
+        assert!(
+            !d.contains("superpowers"),
+            "codex must NOT get superpowers clause (skills live under ~/.claude): {d}"
+        );
+        assert!(d.contains("plan"), "codex keeps planning clause: {d}");
+        assert!(d.contains("commit"), "codex keeps commits clause: {d}");
+        assert!(d.contains("wsx skill"), "codex keeps wsx skill clause: {d}");
+    }
+
+    #[test]
     fn resolve_returns_default_when_unset() {
         let store = crate::data::store::Store::open_in_memory().unwrap();
         assert_eq!(

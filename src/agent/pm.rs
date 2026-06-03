@@ -110,6 +110,12 @@ fn compute_session_log_dir(worktree: &Path, agent: crate::pty::session::AgentKin
             // Hermes stores sessions in ~/.hermes/state.db (sqlite), not a per-cwd log directory. PM dossier session-tail is not supported for Hermes workspaces.
             home.join(".hermes/UNSUPPORTED-no-session-log-dir-for-hermes")
         }
+        crate::pty::session::AgentKind::Codex => {
+            // Codex stores sessions in ~/.codex/sessions/YYYY/MM/DD/ with cwd
+            // embedded per-file, not a per-cwd log directory. PM dossier
+            // session-tail is not supported for Codex workspaces.
+            home.join(".codex/UNSUPPORTED-no-session-log-dir-for-codex")
+        }
     }
 }
 

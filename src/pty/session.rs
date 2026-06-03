@@ -47,6 +47,7 @@ fn resolved_binary(agent: AgentKind) -> String {
         AgentKind::Claude => "WSX_CLAUDE_BIN",
         AgentKind::Pi => "WSX_PI_BIN",
         AgentKind::Hermes => "WSX_HERMES_BIN",
+        AgentKind::Codex => "WSX_CODEX_BIN",
     };
     std::env::var(env_var).unwrap_or_else(|_| agent.default_binary().to_string())
 }
@@ -57,18 +58,25 @@ pub enum AgentKind {
     Claude,
     Pi,
     Hermes,
+    Codex,
 }
 
 impl AgentKind {
     /// All agent kinds, in stable display order. Add new variants here when
     /// extending the enum — `const` arrays do not get exhaustiveness checking,
     /// so this is the one place the compiler can't catch a drift.
-    pub const ALL: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes];
+    pub const ALL: [AgentKind; 4] = [
+        AgentKind::Claude,
+        AgentKind::Pi,
+        AgentKind::Hermes,
+        AgentKind::Codex,
+    ];
 
     pub fn from_str_or_default(s: Option<&str>) -> Self {
         match s {
             Some("pi") => AgentKind::Pi,
             Some("hermes") => AgentKind::Hermes,
+            Some("codex") => AgentKind::Codex,
             _ => AgentKind::Claude,
         }
     }
@@ -78,6 +86,7 @@ impl AgentKind {
             AgentKind::Claude => "claude",
             AgentKind::Pi => "pi",
             AgentKind::Hermes => "hermes",
+            AgentKind::Codex => "codex",
         }
     }
 
@@ -683,6 +692,7 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
         AgentKind::Claude => has_prior_session(worktree),
         AgentKind::Pi => has_prior_pi_session(worktree),
         AgentKind::Hermes => has_prior_hermes_session(worktree),
+        AgentKind::Codex => has_prior_codex_session(worktree),
     }
 }
 
@@ -1202,6 +1212,10 @@ pub fn spawn_session(
             prepare_hermes_workspace(cwd, &mode);
             build_hermes_command(cwd, &mode, remote)
         }
+        AgentKind::Codex => {
+            prepare_codex_workspace(cwd, &mode);
+            build_codex_command(cwd, &mode, remote)
+        }
     };
     let mut child = pair.slave.spawn_command(child_cmd).map_err(|e| {
         if is_binary_not_found(&e) {
@@ -1398,6 +1412,87 @@ fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
     if read_hermes_spawn_marker(cwd).is_none() {
         write_hermes_spawn_marker(cwd);
     }
+}
+
+/// True if Codex has a recorded session whose `cwd` matches this worktree.
+/// Delegates to `codex_events::locate_session_file`, which scans
+/// `~/.codex/sessions` for the newest rollout whose embedded cwd matches.
+pub fn has_prior_codex_session(worktree: &Path) -> bool {
+    crate::activity::codex_events::locate_session_file(worktree).is_some()
+}
+
+/// Prepare a worktree for a Codex spawn: inject the wsx-managed instruction
+/// block into AGENTS.md (Codex reads project instructions from there, like
+/// Hermes) and hide the file from `git status`. Codex needs NO spawn-timestamp
+/// marker — session detection is cwd-in-file, not marker-based.
+fn prepare_codex_workspace(cwd: &Path, mode: &SpawnMode) {
+    let injected = compose_injected_prompt(mode);
+    let had_content = injected.is_some();
+    write_agents_md_section(cwd, injected.as_deref());
+    if had_content {
+        ensure_git_exclude(cwd, "AGENTS.md");
+    }
+}
+
+/// Build a `CommandBuilder` for `codex` (or whatever `WSX_CODEX_BIN` points to)
+/// inside `cwd`. Inherits the current process env.
+///
+/// Spawn-mode mapping:
+/// - `Fresh`            → `codex`
+/// - `Continue`         → `codex resume --last` (cwd-filtered by Codex itself)
+/// - `ProjectManager`   → `codex [resume --last]` + `--ask-for-approval never
+///                         --sandbox read-only` (PM reads only, never prompts)
+///
+/// `yolo` adds `--dangerously-bypass-approvals-and-sandbox`. Non-yolo dev
+/// sessions pass no approval flags, inheriting Codex's interactive defaults.
+/// `WSX_CODEX_MODEL` (trimmed, non-empty) adds `-m <model>`.
+///
+/// Codex has no `--append-system-prompt`; instruction injection (doctrine /
+/// rename / custom / PM prompt) is handled by `prepare_codex_workspace` via
+/// AGENTS.md. The `remote` arg is unused — wsx's RemoteOpts targets Claude's
+/// `--remote-control`, which is unrelated to Codex's `--remote`.
+pub fn build_codex_command(
+    cwd: &Path,
+    mode: &SpawnMode,
+    _remote: crate::agent::remote_control::RemoteOpts,
+) -> CommandBuilder {
+    let bin = std::env::var("WSX_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
+    let mut cmd = CommandBuilder::new(bin);
+    cmd.cwd(cwd);
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
+
+    let (resume, yolo, pm) = match mode {
+        SpawnMode::Fresh { yolo, .. } => (false, *yolo, false),
+        SpawnMode::Continue { yolo, .. } => (true, *yolo, false),
+        SpawnMode::ProjectManager { resume, .. } => (*resume, false, true),
+    };
+
+    if resume {
+        cmd.arg("resume");
+        cmd.arg("--last");
+    }
+
+    if yolo {
+        cmd.arg("--dangerously-bypass-approvals-and-sandbox");
+    } else if pm {
+        cmd.arg("--ask-for-approval");
+        cmd.arg("never");
+        cmd.arg("--sandbox");
+        cmd.arg("read-only");
+    }
+
+    let model = std::env::var("WSX_CODEX_MODEL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(m) = model {
+        cmd.arg("-m");
+        cmd.arg(&m);
+    }
+
+    cmd
 }
 
 #[cfg(test)]
@@ -3649,18 +3744,21 @@ mod tests {
     #[test]
     fn agent_kind_helpers_match_existing_strings() {
         use super::AgentKind;
-        assert_eq!(AgentKind::ALL.len(), 3);
+        assert_eq!(AgentKind::ALL.len(), 4);
         assert!(AgentKind::ALL.contains(&AgentKind::Claude));
         assert!(AgentKind::ALL.contains(&AgentKind::Pi));
         assert!(AgentKind::ALL.contains(&AgentKind::Hermes));
+        assert!(AgentKind::ALL.contains(&AgentKind::Codex));
 
         assert_eq!(AgentKind::Claude.display_name(), "claude");
         assert_eq!(AgentKind::Pi.display_name(), "pi");
         assert_eq!(AgentKind::Hermes.display_name(), "hermes");
+        assert_eq!(AgentKind::Codex.display_name(), "codex");
 
         assert_eq!(AgentKind::Claude.default_binary(), "claude");
         assert_eq!(AgentKind::Pi.default_binary(), "pi");
         assert_eq!(AgentKind::Hermes.default_binary(), "hermes");
+        assert_eq!(AgentKind::Codex.default_binary(), "codex");
 
         for k in AgentKind::ALL {
             assert_eq!(AgentKind::from_str_or_default(Some(k.store_value())), k);
@@ -3835,5 +3933,209 @@ mod tests {
             !prompt.contains("DOCTRINE_MARK"),
             "PM must not get doctrine: {prompt}"
         );
+    }
+
+    /// Build a Codex command for `mode` and return its argv as lossy Strings.
+    fn codex_argv(mode: &SpawnMode) -> Vec<String> {
+        let cmd = build_codex_command(
+            Path::new("/tmp/wt"),
+            mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
+        cmd.get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn codex_fresh_is_bare_codex_with_no_approval_flags() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        env.remove("WSX_CODEX_MODEL");
+        let argv = codex_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        assert!(
+            !argv.iter().any(|a| a == "resume"),
+            "fresh must not resume: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a.starts_with("--dangerously-bypass")),
+            "non-yolo must not bypass: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "--ask-for-approval"),
+            "dev session uses codex defaults: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "-m"),
+            "no model env set: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn codex_fresh_yolo_bypasses_approvals() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        let argv = codex_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: true,
+        });
+        assert!(
+            argv.iter()
+                .any(|a| a == "--dangerously-bypass-approvals-and-sandbox"),
+            "yolo must bypass: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn codex_continue_uses_resume_last() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        let argv = codex_argv(&SpawnMode::Continue {
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        assert!(
+            argv.iter().any(|a| a == "resume"),
+            "continue must resume: {argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a == "--last"),
+            "continue must use --last: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn codex_pm_is_read_only_and_never_asks() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        let argv = codex_argv(&SpawnMode::ProjectManager {
+            workspaces_json_path: std::path::PathBuf::from("/tmp/pm/workspaces.json"),
+            custom_instructions: None,
+            additional_dirs: vec![],
+            resume: false,
+            fast_mode: false,
+        });
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--ask-for-approval" && w[1] == "never"),
+            "pm must never ask: {argv:?}"
+        );
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--sandbox" && w[1] == "read-only"),
+            "pm must be read-only: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "resume"),
+            "pm fresh must not resume: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn codex_model_env_adds_dash_m() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        env.set("WSX_CODEX_MODEL", "gpt-5.4");
+        let argv = codex_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        assert!(
+            argv.windows(2).any(|w| w[0] == "-m" && w[1] == "gpt-5.4"),
+            "model must be passed via -m: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn prepare_codex_workspace_injects_rename_block_into_agents_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        let mode = SpawnMode::Fresh {
+            rename_ctx: Some(RenameContext {
+                current_branch: "prefix/my-slug".to_string(),
+                branch_prefix: "prefix".to_string(),
+                repo_name: "myrepo".to_string(),
+                current_slug: "my-slug".to_string(),
+            }),
+            custom_instructions: None,
+            doctrine: Some("DOCTRINE-MARKER".to_string()),
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        prepare_codex_workspace(cwd, &mode);
+        let agents = std::fs::read_to_string(cwd.join("AGENTS.md")).unwrap();
+        assert!(
+            agents.contains("BEGIN wsx-managed"),
+            "block markers: {agents}"
+        );
+        assert!(
+            agents.contains("DOCTRINE-MARKER"),
+            "doctrine injected: {agents}"
+        );
+        assert!(
+            agents.contains("wsx workspace rename"),
+            "rename hint: {agents}"
+        );
+    }
+
+    #[test]
+    fn prepare_codex_workspace_writes_no_hermes_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        std::fs::create_dir_all(cwd.join(".git/info")).unwrap();
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: Some("CUSTOM".to_string()),
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        prepare_codex_workspace(cwd, &mode);
+        // Codex uses cwd-in-file detection, not the Hermes spawn marker.
+        assert!(
+            !cwd.join(".git/info/wsx-hermes-spawn-at").exists(),
+            "codex must not write the hermes spawn marker"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn codex_spawn_and_echo() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", cat_path());
+        let cwd = PathBuf::from(".");
+        let s = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            },
+            crate::agent::remote_control::RemoteOpts::disabled(),
+            AgentKind::Codex,
+        )
+        .unwrap();
+        s.writer.send(b"hello-codex\n".to_vec()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let screen = s.parser.lock().unwrap().screen().contents();
+        assert!(screen.contains("hello-codex"), "screen: {screen:?}");
     }
 }

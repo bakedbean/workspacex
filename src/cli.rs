@@ -355,7 +355,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
             Some("create") => {
                 let repo = it.next().ok_or_else(|| {
                     Error::UserInput(
-                        "workspace create <repo> [--name <slug>] [--yolo] [--agent pi|claude]"
+                        "workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex]"
                             .into(),
                     )
                 })?;
@@ -374,7 +374,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                         "--agent" => {
                             agent = Some(it.next().ok_or_else(|| {
                                 Error::UserInput(
-                                    "--agent needs value (pi, claude, or hermes)".into(),
+                                    "--agent needs value (claude, pi, hermes, or codex)".into(),
                                 )
                             })?);
                         }
@@ -387,9 +387,10 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
                     && a != "pi"
                     && a != "claude"
                     && a != "hermes"
+                    && a != "codex"
                 {
                     return Err(Error::UserInput(format!(
-                        "--agent must be 'pi', 'claude', or 'hermes', got '{a}'"
+                        "--agent must be 'claude', 'pi', 'hermes', or 'codex', got '{a}'"
                     )));
                 }
                 Ok(CliAction::WorkspaceCreate {

@@ -164,13 +164,11 @@ impl Store {
 
     /// The primary instance id for a workspace.
     pub fn primary_instance_id(&self, ws: WorkspaceId) -> Result<Option<AgentInstanceId>> {
-        Ok(self
-            .conn()
-            .query_row(
-                "SELECT id FROM workspace_agents WHERE workspace_id = ?1 AND is_primary = 1",
-                [ws.0],
-                |r| r.get::<_, i64>(0),
-            )
+        let mut stmt = self.conn().prepare_cached(
+            "SELECT id FROM workspace_agents WHERE workspace_id = ?1 AND is_primary = 1",
+        )?;
+        Ok(stmt
+            .query_row([ws.0], |r| r.get::<_, i64>(0))
             .optional()?
             .map(AgentInstanceId))
     }

@@ -403,6 +403,28 @@ impl App {
         self.selectable.get(self.dashboard.selected).copied()
     }
 
+    /// The primary agent instance for a workspace (the creation-time agent).
+    ///
+    /// Deliberately collapses a DB error to `None` (same as "no primary
+    /// instance") — callers are read/render paths where degrading to
+    /// "session-less for this frame" is acceptable and self-heals next frame.
+    /// Spawn paths that must not silently skip seeding use
+    /// `resolve_primary_instance` (which returns `Result`) instead.
+    pub(crate) fn primary_instance(
+        &self,
+        ws: crate::data::store::WorkspaceId,
+    ) -> Option<crate::data::store::AgentInstanceId> {
+        self.store.primary_instance_id(ws).ok().flatten()
+    }
+
+    /// The live session for a given agent instance, if any.
+    pub(crate) fn session_for(
+        &self,
+        inst: crate::data::store::AgentInstanceId,
+    ) -> Option<std::sync::Arc<crate::pty::session::Session>> {
+        self.sessions.get(inst)
+    }
+
     /// If the workspace has any pending tool_use that is a real permission
     /// prompt (NOT AskUserQuestion / ExitPlanMode, which are question tools
     /// surfaced separately as AwaitingAnswer, and NOT Agent subagent
@@ -434,7 +456,9 @@ impl App {
         &self,
         ws: &crate::data::store::Workspace,
     ) -> crate::ui::dashboard::status::Status {
-        let session = self.sessions.get(ws.id);
+        let session = self
+            .primary_instance(ws.id)
+            .and_then(|i| self.sessions.get(i));
         let running = session.as_ref().is_some_and(|s| {
             matches!(
                 *s.status.read().unwrap(),
@@ -836,6 +860,29 @@ pub(crate) fn apply_repo_setting(
     }
 }
 
+/// Resolve the primary agent instance id for a workspace, defensively seeding
+/// a primary instance row for any (pre-migration / freshly created) workspace
+/// that somehow lacks one. Used by the spawn paths to key sessions.
+pub(crate) fn resolve_primary_instance(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Result<crate::data::store::AgentInstanceId> {
+    match app.store.primary_instance_id(ws_id)? {
+        Some(i) => Ok(i),
+        None => {
+            let (_, ws) = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == ws_id)
+                .ok_or_else(|| crate::error::Error::Store(rusqlite::Error::QueryReturnedNoRows))?;
+            Ok(app
+                .store
+                .add_primary_agent(ws_id, ws.agent, ws.created_at)?
+                .id)
+        }
+    }
+}
+
 pub(crate) fn build_spawn_info(
     app: &App,
     ws_id: crate::data::store::WorkspaceId,
@@ -950,13 +997,20 @@ pub(crate) fn restore_attached_state(
             // already spawned by the caller. Skip on failure and continue
             // with remaining panes — partial restore is better than no restore.
             for leaf_id in tree.leaves() {
-                if leaf_id == anchor || app.sessions.get(leaf_id).is_some() {
+                if leaf_id == anchor
+                    || app
+                        .primary_instance(leaf_id)
+                        .and_then(|i| app.sessions.get(i))
+                        .is_some()
+                {
                     continue;
                 }
                 if let Some((sid, sp, mode, repo_path, agent)) = build_spawn_info(app, leaf_id) {
                     maybe_mirror_mcp(app, &repo_path, &sp);
                     let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
-                    let _ = app.sessions.spawn(sid, &sp, 80, 24, mode, remote, agent);
+                    if let Ok(inst) = resolve_primary_instance(app, sid) {
+                        let _ = app.sessions.spawn(inst, &sp, 80, 24, mode, remote, agent);
+                    }
                 }
             }
             crate::ui::AttachedState { tree, focus }
@@ -974,13 +1028,20 @@ pub(crate) fn ensure_workspace_session(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<AttachReady> {
-    if app.sessions.get(ws_id).is_some() {
+    if app
+        .primary_instance(ws_id)
+        .and_then(|i| app.sessions.get(i))
+        .is_some()
+    {
         return Ok(AttachReady::Ok);
     }
     if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
-        match app.sessions.spawn(id, &path, 80, 24, mode, remote, agent) {
+        // Resolve the primary agent instance for this workspace, defensively
+        // seeding one for any row that somehow lacks a primary instance.
+        let inst = resolve_primary_instance(app, id)?;
+        match app.sessions.spawn(inst, &path, 80, 24, mode, remote, agent) {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
                 app.modal = Some(crate::ui::modal::Modal::AgentMissing {
@@ -1007,7 +1068,11 @@ pub(crate) fn attach_workspace(
         AttachReady::Ok => {}
         AttachReady::AgentMissing => return Ok(()),
     }
-    if app.sessions.get(ws_id).is_some() {
+    if app
+        .primary_instance(ws_id)
+        .and_then(|i| app.sessions.get(i))
+        .is_some()
+    {
         let restored = restore_attached_state(app, ws_id);
         app.view = View::Attached(restored);
     }

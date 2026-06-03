@@ -1,6 +1,5 @@
 #![allow(clippy::collapsible_if, clippy::arc_with_non_send_sync)]
 
-use crate::data::store::WorkspaceId;
 use crate::error::{Error, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
@@ -1300,7 +1299,7 @@ fn now_ms() -> u64 {
 }
 
 pub struct SessionManager {
-    sessions: HashMap<WorkspaceId, Arc<Session>>,
+    sessions: HashMap<crate::data::store::AgentInstanceId, Arc<Session>>,
     pm: Option<Arc<Session>>,
 }
 
@@ -1323,7 +1322,7 @@ impl SessionManager {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         &mut self,
-        id: WorkspaceId,
+        id: crate::data::store::AgentInstanceId,
         cwd: &Path,
         cols: u16,
         rows: u16,
@@ -1342,8 +1341,14 @@ impl SessionManager {
         Ok(session)
     }
 
-    pub fn get(&self, id: WorkspaceId) -> Option<Arc<Session>> {
+    pub fn get(&self, id: crate::data::store::AgentInstanceId) -> Option<Arc<Session>> {
         self.sessions.get(&id).cloned()
+    }
+
+    pub fn remove(&mut self, id: crate::data::store::AgentInstanceId) {
+        if let Some(s) = self.sessions.remove(&id) {
+            s.kill();
+        }
     }
 
     pub fn spawn_pm(
@@ -1564,7 +1569,7 @@ mod tests {
         env.set("WSX_CLAUDE_BIN", "/bin/sh");
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
-        let id = crate::data::store::WorkspaceId(1);
+        let id = crate::data::store::AgentInstanceId(1);
         let session = mgr
             .spawn(
                 id,

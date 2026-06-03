@@ -124,7 +124,10 @@ fn scroll_active(app: &App, rows: usize, up: bool) {
 /// view + focus, or None when there is no targetable session.
 fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Session>> {
     match &app.view {
-        View::Attached(state) => state.focused_id().and_then(|id| app.sessions.get(id)),
+        View::Attached(state) => state
+            .focused_id()
+            .and_then(|id| app.primary_instance(id))
+            .and_then(|i| app.sessions.get(i)),
         View::AttachedPm => app.pm.clone(),
         View::Dashboard
             if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
@@ -139,9 +142,14 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
 /// is the currently selected workspace.
 fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Session>> {
     match &app.view {
-        View::Attached(state) => state.focused_id().and_then(|id| app.sessions.get(id)),
+        View::Attached(state) => state
+            .focused_id()
+            .and_then(|id| app.primary_instance(id))
+            .and_then(|i| app.sessions.get(i)),
         View::Dashboard => match app.selected_target() {
-            Some(SelectionTarget::Workspace(id)) => app.sessions.get(id),
+            Some(SelectionTarget::Workspace(id)) => {
+                app.primary_instance(id).and_then(|i| app.sessions.get(i))
+            }
             _ => None,
         },
         _ => None,
@@ -673,7 +681,7 @@ async fn handle_key_attached(
     id: WorkspaceId,
     k: crossterm::event::KeyEvent,
 ) -> Result<()> {
-    let session = match app.sessions.get(id) {
+    let session = match app.primary_instance(id).and_then(|i| app.sessions.get(i)) {
         Some(s) => s,
         None => {
             app.leader_pending = false;
@@ -1120,7 +1128,11 @@ async fn handle_key_modal(
                         app.workspace_needs_attention.remove(&ws_id);
                         match ensure_workspace_session(app, ws_id)? {
                             AttachReady::Ok => {
-                                if app.sessions.get(ws_id).is_some() {
+                                if app
+                                    .primary_instance(ws_id)
+                                    .and_then(|i| app.sessions.get(i))
+                                    .is_some()
+                                {
                                     let restored = restore_attached_state(app, ws_id);
                                     app.leader_pending = false;
                                     app.view = View::Attached(restored);
@@ -1151,7 +1163,11 @@ async fn handle_key_modal(
                         app.workspace_needs_attention.remove(&ws_id);
                         match ensure_workspace_session(app, ws_id)? {
                             AttachReady::Ok => {
-                                if app.sessions.get(ws_id).is_some() {
+                                if app
+                                    .primary_instance(ws_id)
+                                    .and_then(|i| app.sessions.get(i))
+                                    .is_some()
+                                {
                                     match &mut app.view {
                                         View::Attached(state) => {
                                             // Same pane already focused: switch focus
@@ -1379,7 +1395,10 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
                 // yet — otherwise an inline reply on an unattached
                 // workspace silently drops.
                 let _ = ensure_workspace_session(app, ws_id);
-                if let Some(session) = app.sessions.get(ws_id) {
+                if let Some(session) = app
+                    .primary_instance(ws_id)
+                    .and_then(|i| app.sessions.get(i))
+                {
                     let mut bytes = draft.into_bytes();
                     bytes.push(b'\r');
                     session.scroll_to_live();
@@ -1602,6 +1621,28 @@ pub(crate) async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent
         _ => {}
     }
     Ok(())
+}
+
+/// Test helper: resolve (seeding if necessary) the primary agent instance id
+/// for a workspace, so tests can spawn/look up sessions keyed by instance the
+/// same way production paths do.
+///
+/// Unlike production's `resolve_primary_instance`, this reads directly from the
+/// store rather than the `app.workspaces` in-memory mirror, because many tests
+/// insert workspace rows straight into the store without refreshing the mirror.
+/// The seeded agent kind is irrelevant — sessions are keyed only by the id.
+#[cfg(test)]
+pub(crate) fn test_primary_instance(
+    app: &App,
+    ws: crate::data::store::WorkspaceId,
+) -> crate::data::store::AgentInstanceId {
+    if let Some(i) = app.store.primary_instance_id(ws).unwrap() {
+        return i;
+    }
+    app.store
+        .add_primary_agent(ws, crate::pty::session::AgentKind::Claude, 0)
+        .unwrap()
+        .id
 }
 
 #[cfg(test)]

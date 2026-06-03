@@ -491,9 +491,10 @@ mod pm_state_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_0 = test_primary_instance(&app, first_id);
         app.sessions
             .spawn(
-                first_id,
+                __inst_0,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -509,9 +510,10 @@ mod pm_state_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_1 = test_primary_instance(&app, second_id);
         app.sessions
             .spawn(
-                second_id,
+                __inst_1,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -609,9 +611,10 @@ mod pm_state_tests {
                 additional_dirs: vec![],
                 yolo: false,
             };
+            let __inst_2 = test_primary_instance(&app, id);
             app.sessions
                 .spawn(
-                    id,
+                    __inst_2,
                     std::path::Path::new("."),
                     80,
                     24,
@@ -705,9 +708,10 @@ mod pm_state_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_3 = test_primary_instance(&app, id);
         app.sessions
             .spawn(
-                id,
+                __inst_3,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -789,9 +793,10 @@ mod pm_state_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_4 = test_primary_instance(&app, id);
         app.sessions
             .spawn(
-                id,
+                __inst_4,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -859,9 +864,10 @@ mod pm_state_tests {
                 additional_dirs: vec![],
                 yolo: false,
             };
+            let __inst_5 = test_primary_instance(&app, *id);
             app.sessions
                 .spawn(
-                    *id,
+                    __inst_5,
                     std::path::Path::new("."),
                     80,
                     24,
@@ -1140,9 +1146,10 @@ mod pm_state_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_6 = test_primary_instance(&app, attached_id);
         app.sessions
             .spawn(
-                attached_id,
+                __inst_6,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -1216,9 +1223,10 @@ mod pm_state_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_7 = test_primary_instance(&app, attached_id);
         app.sessions
             .spawn(
-                attached_id,
+                __inst_7,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -1362,9 +1370,10 @@ mod pm_state_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_8 = test_primary_instance(app, ws_id);
         app.sessions
             .spawn(
-                ws_id,
+                __inst_8,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -1385,7 +1394,7 @@ mod pm_state_tests {
         handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
         assert_eq!(
             app.sessions
-                .get(ws_id)
+                .get(test_primary_instance(&app, ws_id))
                 .unwrap()
                 .scrollback_offset
                 .load(std::sync::atomic::Ordering::Relaxed),
@@ -1399,11 +1408,14 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
-        app.sessions.get(ws_id).unwrap().scroll_up(5);
+        app.sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap()
+            .scroll_up(5);
         handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollDown)).await;
         assert_eq!(
             app.sessions
-                .get(ws_id)
+                .get(test_primary_instance(&app, ws_id))
                 .unwrap()
                 .scrollback_offset
                 .load(std::sync::atomic::Ordering::Relaxed),
@@ -1462,8 +1474,16 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
-        app.sessions.get(ws_id).unwrap().scroll_up(20);
-        assert!(app.sessions.get(ws_id).unwrap().is_scrolled());
+        app.sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap()
+            .scroll_up(20);
+        assert!(
+            app.sessions
+                .get(test_primary_instance(&app, ws_id))
+                .unwrap()
+                .is_scrolled()
+        );
         handle_key_attached(
             &mut app,
             ws_id,
@@ -1472,7 +1492,10 @@ mod pm_state_tests {
         .await
         .unwrap();
         assert!(
-            !app.sessions.get(ws_id).unwrap().is_scrolled(),
+            !app.sessions
+                .get(test_primary_instance(&app, ws_id))
+                .unwrap()
+                .is_scrolled(),
             "any keystroke flowing to PTY must snap to live"
         );
     }
@@ -1483,7 +1506,10 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
-        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        app.sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap()
+            .scroll_up(20);
         // Ctrl-x is the leader. It's consumed by wsx and never reaches the PTY.
         handle_key_attached(
             &mut app,
@@ -1494,7 +1520,10 @@ mod pm_state_tests {
         .unwrap();
         assert!(app.leader_pending);
         assert!(
-            app.sessions.get(ws_id).unwrap().is_scrolled(),
+            app.sessions
+                .get(test_primary_instance(&app, ws_id))
+                .unwrap()
+                .is_scrolled(),
             "leader key consumed by wsx; offset should be preserved"
         );
     }
@@ -1505,7 +1534,10 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
-        app.sessions.get(ws_id).unwrap().scroll_up(20);
+        app.sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap()
+            .scroll_up(20);
         // Up arrow flows to the PTY (Claude Code prompt history) — must
         // also snap scrollback back to live.
         handle_key_attached(
@@ -1515,7 +1547,12 @@ mod pm_state_tests {
         )
         .await
         .unwrap();
-        assert!(!app.sessions.get(ws_id).unwrap().is_scrolled());
+        assert!(
+            !app.sessions
+                .get(test_primary_instance(&app, ws_id))
+                .unwrap()
+                .is_scrolled()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1555,7 +1592,10 @@ mod pm_state_tests {
         // cat echoes input back. Verify the screen eventually contains
         // the command text.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -1598,7 +1638,10 @@ mod pm_state_tests {
 
         // No bytes should have been written; cat hasn't echoed anything.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -1718,7 +1761,10 @@ mod pm_state_tests {
 
         // Wait for PTY cat echo.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -1774,7 +1820,10 @@ mod pm_state_tests {
 
         // cat echoes input back; verify the command reached the PTY.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -1829,7 +1878,10 @@ mod pm_state_tests {
 
         // No chip command should have been dispatched.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -1897,7 +1949,10 @@ mod pm_state_tests {
         assert!(!app.leader_pending);
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -2053,7 +2108,9 @@ mod pm_state_tests {
 
         // Critical precondition: NO session spawned for this workspace.
         assert!(
-            app.sessions.get(ws_id).is_none(),
+            app.sessions
+                .get(test_primary_instance(&app, ws_id))
+                .is_none(),
             "precondition: workspace must not have a session yet"
         );
 
@@ -2082,13 +2139,18 @@ mod pm_state_tests {
 
         // The session must have been auto-spawned by fire_chip.
         assert!(
-            app.sessions.get(ws_id).is_some(),
+            app.sessions
+                .get(test_primary_instance(&app, ws_id))
+                .is_some(),
             "fire_chip must auto-spawn a session for the selected workspace"
         );
 
         // And the command must have reached the new session's PTY.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -2171,7 +2233,10 @@ mod pm_state_tests {
 
         // Command still dispatched.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -3671,7 +3736,10 @@ mod pm_state_tests {
             .clone();
         assert_eq!(mem.agent, AgentKind::Claude);
         // A session exists.
-        assert!(app.sessions.get(id).is_some(), "session should be alive");
+        assert!(
+            app.sessions.get(test_primary_instance(&app, id)).is_some(),
+            "session should be alive"
+        );
         // Modal closed.
         assert!(app.modal.is_none(), "modal should be cleared on success");
     }
@@ -3840,9 +3908,10 @@ mod ctrl_x_esc_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_9 = test_primary_instance(&app, first_id);
         app.sessions
             .spawn(
-                first_id,
+                __inst_9,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -3858,9 +3927,10 @@ mod ctrl_x_esc_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_10 = test_primary_instance(&app, second_id);
         app.sessions
             .spawn(
-                second_id,
+                __inst_10,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -3961,9 +4031,10 @@ mod restore_layout_tests {
                 additional_dirs: vec![],
                 yolo: false,
             };
+            let __inst_11 = test_primary_instance(&app, id);
             app.sessions
                 .spawn(
-                    id,
+                    __inst_11,
                     std::path::Path::new("."),
                     80,
                     24,
@@ -4318,9 +4389,10 @@ mod detail_bar_focus_tests {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_12 = test_primary_instance(&app, ws_id);
         app.sessions
             .spawn(
-                ws_id,
+                __inst_12,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -4395,7 +4467,10 @@ mod detail_bar_focus_tests {
         // Wait for the cat PTY to echo the command back.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         let parser = session.parser.lock().unwrap();
         let screen_text = parser.screen().contents();
         assert!(
@@ -4536,9 +4611,10 @@ mod attached_wheel_forwarding {
             additional_dirs: vec![],
             yolo: false,
         };
+        let __inst_13 = test_primary_instance(app, ws_id);
         app.sessions
             .spawn(
-                ws_id,
+                __inst_13,
                 std::path::Path::new("."),
                 80,
                 24,
@@ -4554,7 +4630,7 @@ mod attached_wheel_forwarding {
     // Enable SGR mouse reporting on the session's parser and register a
     // full-screen pane rect so the cursor at (10,10) is "over" the pane.
     fn arm_mouse_mode_and_pane(app: &mut App, ws_id: crate::data::store::WorkspaceId) {
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app.sessions.get(test_primary_instance(app, ws_id)).unwrap();
         {
             let mut p = session.parser.lock().unwrap();
             p.process(b"\x1b[?1000h\x1b[?1006h");
@@ -4584,7 +4660,7 @@ mod attached_wheel_forwarding {
         // Forwarded to the agent -> wsx scrollback must NOT move.
         assert_eq!(
             app.sessions
-                .get(ws_id)
+                .get(test_primary_instance(&app, ws_id))
                 .unwrap()
                 .scrollback_offset
                 .load(Ordering::Relaxed),
@@ -4607,7 +4683,7 @@ mod attached_wheel_forwarding {
         // Shift bypasses the agent -> wsx scrollback moves.
         assert_eq!(
             app.sessions
-                .get(ws_id)
+                .get(test_primary_instance(&app, ws_id))
                 .unwrap()
                 .scrollback_offset
                 .load(Ordering::Relaxed),
@@ -4622,7 +4698,10 @@ mod attached_wheel_forwarding {
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
         // Register the pane rect but do NOT enable mouse mode.
-        let session = app.sessions.get(ws_id).unwrap();
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
         app.attached_pane_rects = vec![(
             session,
             Rect {
@@ -4639,7 +4718,7 @@ mod attached_wheel_forwarding {
         .await;
         assert_eq!(
             app.sessions
-                .get(ws_id)
+                .get(test_primary_instance(&app, ws_id))
                 .unwrap()
                 .scrollback_offset
                 .load(Ordering::Relaxed),
@@ -4680,7 +4759,10 @@ mod attached_wheel_forwarding {
         arm_mouse_mode_and_pane(&mut app, ws_id);
         // Pre-scroll so a fall-through ScrollDown would drop 5 -> 2; forwarding
         // leaves it at 5.
-        app.sessions.get(ws_id).unwrap().scroll_up(5);
+        app.sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap()
+            .scroll_up(5);
         handle_mouse(
             &mut app,
             mouse_at_mod(MouseEventKind::ScrollDown, 10, 10, KeyModifiers::NONE),
@@ -4688,7 +4770,7 @@ mod attached_wheel_forwarding {
         .await;
         assert_eq!(
             app.sessions
-                .get(ws_id)
+                .get(test_primary_instance(&app, ws_id))
                 .unwrap()
                 .scrollback_offset
                 .load(Ordering::Relaxed),
@@ -4712,7 +4794,7 @@ mod attached_wheel_forwarding {
         .await;
         assert_eq!(
             app.sessions
-                .get(ws_id)
+                .get(test_primary_instance(&app, ws_id))
                 .unwrap()
                 .scrollback_offset
                 .load(Ordering::Relaxed),

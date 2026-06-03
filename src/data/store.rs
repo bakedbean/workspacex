@@ -247,6 +247,14 @@ impl Store {
     }
 
     pub fn remove_repo(&self, id: RepoId) -> Result<()> {
+        // Clear agent-instance rows before deleting workspaces.
+        // `workspace_agents.workspace_id` has no ON DELETE CASCADE, so the
+        // FK constraint would block the workspace delete without this.
+        self.conn.execute(
+            "DELETE FROM workspace_agents WHERE workspace_id IN \
+                 (SELECT id FROM workspaces WHERE repo_id = ?1)",
+            [id.0],
+        )?;
         self.conn
             .execute("DELETE FROM workspaces WHERE repo_id = ?1", [id.0])?;
         self.conn
@@ -493,6 +501,14 @@ impl Store {
     }
 
     pub fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
+        // `workspace_agents.workspace_id` references `workspaces(id)` WITHOUT
+        // `ON DELETE CASCADE`, so clear any agent-instance rows first or the
+        // foreign-key constraint would block the delete. (Now that sessions are
+        // keyed by primary instance, attached workspaces always have a row.)
+        self.conn.execute(
+            "DELETE FROM workspace_agents WHERE workspace_id = ?1",
+            [id.0],
+        )?;
         self.conn
             .execute("DELETE FROM workspaces WHERE id = ?1", [id.0])?;
         Ok(())

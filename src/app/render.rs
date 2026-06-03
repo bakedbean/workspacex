@@ -74,7 +74,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         continue;
                     }
                     let status = app.classify_status(ws);
-                    let session = app.sessions.get(ws.id);
+                    let session = app
+                        .primary_instance(ws.id)
+                        .and_then(|i| app.sessions.get(i));
                     let secs = session.as_ref().map(|s| {
                         let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
                         if last == 0 {
@@ -148,7 +150,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // `Active`/`Off`/`Awaiting` distinctions `alert_decision`
             // depends on.
             for (_rid, ws) in &app.workspaces {
-                let session = app.sessions.get(ws.id);
+                let session = app
+                    .primary_instance(ws.id)
+                    .and_then(|i| app.sessions.get(i));
                 let running = session.as_ref().is_some_and(|s| {
                     matches!(
                         *s.status.read().unwrap(),
@@ -250,7 +254,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             {
                 if let Some((rid, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
                     if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
-                        let session = app.sessions.get(ws.id);
+                        let session = app
+                            .primary_instance(ws.id)
+                            .and_then(|i| app.sessions.get(i));
                         // Activity timestamp: prefer whichever signal is more
                         // recent. `session.activity_ms` only exists for
                         // workspaces wsx is currently attached to. The JSONL
@@ -343,11 +349,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // If any leaf's session has gone away (e.g. workspace was
             // archived from elsewhere), bounce back to dashboard. Matches
             // the previous single-pane fallback at handle_key_attached.
-            if state
-                .leaves()
-                .iter()
-                .any(|id| app.sessions.get(*id).is_none())
-            {
+            if state.leaves().iter().any(|id| {
+                app.primary_instance(*id)
+                    .and_then(|i| app.sessions.get(i))
+                    .is_none()
+            }) {
                 app.leader_pending = false;
                 app.view = crate::ui::View::Dashboard;
                 return;
@@ -441,7 +447,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
             // Resize each session's PTY to its pane area (minus title row when multi-pane).
             for (ws_id, _path, rect) in &panes {
-                if let Some(session) = app.sessions.get(*ws_id) {
+                if let Some(session) = app
+                    .primary_instance(*ws_id)
+                    .and_then(|i| app.sessions.get(i))
+                {
                     attached::resize_pane(&session, *rect, multi_pane);
                 }
             }
@@ -451,7 +460,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let pane_data: Vec<PaneData> = panes
                 .into_iter()
                 .filter_map(|(ws_id, path, rect)| {
-                    let session = app.sessions.get(ws_id)?;
+                    let session = app.session_for(app.primary_instance(ws_id)?)?;
                     let (label, agent) = app
                         .workspaces
                         .iter()

@@ -14,13 +14,6 @@ Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git workt
 > to rename branches as soon as it has sufficient context.  It takes a hard wired
 > system prompt (or AGENTS.md for Hermes/Codex) that instructs on how to proceed with
 > thinking, planning and available skills like superpowers.
->
-> wsx is a work in progress.  Like the AI development world we now live in,
-> things change rapidly. I am often trying out different approaches to
-> how the agents keep me informed about state and updates.  It is entirely possible
-> for whole cloth features to change in fundamental ways without warning.
->
-> You use this at your own risk.
 
 ## Table of contents
 

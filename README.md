@@ -10,7 +10,7 @@ Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git workt
 > free. Feedback, ideas, and contributions are welcome.
 >
 > wsx is opinionated: it implements several "under the hood" behaviors to allow
-> for as deterministic as possible of a SDLC.  It utilizes the agent in-session
+> for a deterministic-ish SDLC.  It utilizes the agent in-session
 > to rename branches as soon as it has sufficient context.  It takes a hard wired
 > system prompt (or AGENTS.md for Hermes/Codex) that instructs on how to proceed with
 > thinking, planning and available skills like superpowers.

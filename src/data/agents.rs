@@ -272,6 +272,29 @@ mod store_tests {
             .unwrap();
         assert_eq!(reloaded.session_ref.as_deref(), Some("sess-123"));
     }
+
+    #[test]
+    fn add_primary_agent_seeds_single_primary() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "wsx/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: AgentKind::Hermes,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Hermes, 1).unwrap();
+        let all = store.workspace_agents(ws).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].is_primary);
+        assert_eq!(all[0].agent, AgentKind::Hermes);
+    }
 }
 
 #[cfg(test)]

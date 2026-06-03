@@ -67,6 +67,9 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         agent,
     })?;
 
+    // Seed the primary agent instance so the roster is authoritative from birth.
+    store.add_primary_agent(id, agent, crate::data::store::now_ms())?;
+
     if cancel.is_cancelled() {
         store.set_workspace_state(id, WorkspaceState::Failed)?;
         return Err(Error::Cancelled);
@@ -171,14 +174,18 @@ pub async fn create_with_app(
     // --- Phase 3 (short, locked): insert workspace row. ---
     let id = {
         let g = app.lock().await;
-        g.store.insert_workspace(&NewWorkspace {
+        let ws_id = g.store.insert_workspace(&NewWorkspace {
             repo_id: repo.id,
             name: &final_name,
             branch: &branch,
             worktree_path: &worktree_path,
             yolo,
             agent,
-        })?
+        })?;
+        // Seed the primary agent instance so the roster is authoritative from birth.
+        g.store
+            .add_primary_agent(ws_id, agent, crate::data::store::now_ms())?;
+        ws_id
     };
 
     if cancel.is_cancelled() {

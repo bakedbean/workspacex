@@ -2068,4 +2068,24 @@ mod tests {
         let s = report_cli_error(&e);
         assert!(s.contains("unknown setting key: nope"));
     }
+
+    #[test]
+    fn registry_matches_dispatched_groups() {
+        // Every group the dispatcher accepts must have a help entry, and every
+        // help entry must be a real group. Update BOTH when adding a command group.
+        let dispatched = ["workspace", "agent", "repo", "config", "remote", "setup"];
+        let registry: Vec<&str> = GROUPS.iter().map(|g| g.name).collect();
+        for d in dispatched {
+            assert!(
+                registry.contains(&d),
+                "group `{d}` dispatched but missing from GROUPS"
+            );
+        }
+        for r in &registry {
+            assert!(
+                dispatched.contains(r),
+                "group `{r}` in GROUPS but not dispatched"
+            );
+        }
+    }
 }

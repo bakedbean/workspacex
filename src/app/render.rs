@@ -31,6 +31,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // Prevents stale rects from triggering wheel events on invisible containers.
     app.detail_container_rects = [None; 4];
     app.attached_pane_rects.clear();
+    app.agent_chip_rects.clear();
     match &app.view {
         crate::ui::View::Dashboard => {
             let selection_is_workspace =
@@ -422,14 +423,22 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
             // Build agents list for the footer agents row. Only shown when
             // the focused workspace has more than its primary agent.
-            let focused_agents_list: Vec<(crate::pty::session::AgentKind, String, char)> = {
+            let focused_agents_list: Vec<(
+                crate::data::store::AgentInstanceId,
+                crate::pty::session::AgentKind,
+                String,
+                Option<char>,
+            )> = {
                 let instances = app.store.workspace_agents(focused_id).unwrap_or_default();
                 if instances.len() > 1 {
+                    // Keys cap at 10 (see `agent_switch_keys`); agents past the
+                    // pool get `None` so they still render and stay clickable
+                    // rather than being silently dropped by a `zip`.
                     let keys = attached::agent_switch_keys(instances.len());
                     instances
                         .into_iter()
-                        .zip(keys)
-                        .map(|(inst, key)| (inst.agent, inst.label(), key))
+                        .enumerate()
+                        .map(|(i, inst)| (inst.id, inst.agent, inst.label(), keys.get(i).copied()))
                         .collect()
                 } else {
                     Vec::new()
@@ -531,6 +540,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             app.chip_rects = out.chip_rects;
             app.attention_rects = attention_rects;
             app.attached_pane_rects = out.pane_rects;
+            app.agent_chip_rects = out.agent_chip_rects;
             app.pinned_commands_cache = pinned;
         }
         crate::ui::View::AttachedPm => {

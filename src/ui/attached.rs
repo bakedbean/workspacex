@@ -1,4 +1,5 @@
 use crate::commands::pinned::{PinnedCommand, truncate_label};
+use crate::data::store::AgentInstanceId;
 use crate::pty::render::render_screen;
 use crate::pty::session::{AgentKind, Session};
 use crate::ui::split::{Divider, SplitDirection};
@@ -29,6 +30,10 @@ pub struct PanesDrawOutput {
     pub chip_rects: Vec<Rect>,
     /// `(session, terminal content rect)` for each rendered pane.
     pub pane_rects: Vec<(Arc<Session>, Rect)>,
+    /// `(instance id, clickable rect)` for each agent pill in the footer
+    /// agents row. Empty when the row isn't shown. Consumed by the input
+    /// handler to retarget the focused pane on click.
+    pub agent_chip_rects: Vec<(AgentInstanceId, Rect)>,
 }
 
 /// Render one or more attached panes plus the shared chrome (optional
@@ -61,7 +66,7 @@ pub fn render_panes(
     multi_pane_footer: bool,
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
-    agents: &[(AgentKind, String, char)],
+    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     theme: &Theme,
 ) -> PanesDrawOutput {
     let show_titles = panes.len() > 1;
@@ -91,15 +96,22 @@ pub fn render_panes(
     // when there are no pinned commands.
     let chip_rects = render_chip_row(f, chip_area, pinned, theme);
 
-    // Agents row: only rendered when the workspace has more than its primary agent.
-    if !agents.is_empty() {
+    // Agents row: only rendered when the workspace has more than its primary
+    // agent. Each pill's clickable rect is computed alongside the spans so the
+    // input handler can retarget the focused pane on click.
+    let agent_chip_rects: Vec<(AgentInstanceId, Rect)> = if agents.is_empty() {
+        Vec::new()
+    } else {
         let spans = agents_row_spans(agents, theme);
         f.render_widget(Paragraph::new(Line::from(spans)), agents_area);
-    }
+        let rects = layout_agents_row(agents_area, agents);
+        agents.iter().map(|(id, _, _, _)| *id).zip(rects).collect()
+    };
 
     PanesDrawOutput {
         chip_rects,
         pane_rects,
+        agent_chip_rects,
     }
 }
 
@@ -427,10 +439,21 @@ pub fn agent_switch_keys(count: usize) -> Vec<char> {
     POOL.iter().copied().take(count).collect()
 }
 
+/// Leading label of the agents row; its width is shared by the renderer and
+/// `layout_agents_row` so the computed pill rects align with what's drawn.
+const AGENTS_ROW_PREFIX: &str = "agents:  ";
+/// Inter-pill separator width (in columns) in the agents row.
+const AGENTS_ROW_GAP: u16 = 3;
+
 /// Spans for the footer agents row: `agents:  ▎claude q   ▎codex w`.
 /// Each agent entry renders as a colored identity bar (`▎`), the agent
-/// label, and a switch key in the footer's key-pill style.
-pub fn agents_row_spans(agents: &[(AgentKind, String, char)], theme: &Theme) -> Vec<Span<'static>> {
+/// label, and (when present) a switch key in the footer's key-pill style.
+/// Agents past the switch-key pool carry `None` and render keyless — they
+/// still show the color bar + label and remain clickable.
+pub fn agents_row_spans(
+    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+    theme: &Theme,
+) -> Vec<Span<'static>> {
     let key_style = Style::default()
         .fg(theme.dim)
         .add_modifier(Modifier::BOLD)
@@ -438,18 +461,56 @@ pub fn agents_row_spans(agents: &[(AgentKind, String, char)], theme: &Theme) -> 
     let pad_style = theme.chip_bg_style();
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(1 + agents.len() * 6);
-    spans.push(Span::raw("agents:  ".to_string()));
-    for (i, (kind, label, key)) in agents.iter().enumerate() {
+    spans.push(Span::raw(AGENTS_ROW_PREFIX.to_string()));
+    for (i, (_id, kind, label, key)) in agents.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw("   ".to_string()));
+            spans.push(Span::raw(" ".repeat(AGENTS_ROW_GAP as usize)));
         }
         spans.push(Span::styled("▎".to_string(), theme.agent_style(*kind)));
         spans.push(Span::raw(format!("{label} ")));
-        spans.push(Span::styled(" ".to_string(), pad_style));
-        spans.push(Span::styled(key.to_string(), key_style));
-        spans.push(Span::styled(" ".to_string(), pad_style));
+        if let Some(key) = key {
+            spans.push(Span::styled(" ".to_string(), pad_style));
+            spans.push(Span::styled(key.to_string(), key_style));
+            spans.push(Span::styled(" ".to_string(), pad_style));
+        }
     }
     spans
+}
+
+/// Compute the clickable Rect for each agent pill in the footer agents row,
+/// mirroring [`layout_chip_row`]. Returns one rect per agent, in order, by
+/// walking pill widths from the leading `agents:` label. Each pill spans its
+/// color bar + `label ` + optional ` key ` pill; the inter-pill gap is not
+/// included in any rect. Rects are clamped to the row area but never dropped,
+/// so every agent (including keyless overflow) stays clickable.
+pub fn layout_agents_row(
+    area: Rect,
+    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+) -> Vec<Rect> {
+    let mut rects = Vec::with_capacity(agents.len());
+    let max_x = area.x.saturating_add(area.width);
+    let mut x = area
+        .x
+        .saturating_add(AGENTS_ROW_PREFIX.chars().count() as u16);
+    for (i, (_id, _kind, label, key)) in agents.iter().enumerate() {
+        if i > 0 {
+            x = x.saturating_add(AGENTS_ROW_GAP);
+        }
+        // "▎" (1) + "{label} " (label + 1) + optional " key " pill (3).
+        let mut width = 1 + label.chars().count() as u16 + 1;
+        if key.is_some() {
+            width = width.saturating_add(3);
+        }
+        let clamped_width = width.min(max_x.saturating_sub(x));
+        rects.push(Rect {
+            x,
+            y: area.y,
+            width: clamped_width,
+            height: 1,
+        });
+        x = x.saturating_add(width);
+    }
+    rects
 }
 
 #[cfg(test)]
@@ -640,8 +701,18 @@ mod tests {
     fn agents_row_spans_include_label_and_color_bar() {
         let theme = Theme::by_name("default");
         let agents = vec![
-            (AgentKind::Claude, "claude".to_string(), 'q'),
-            (AgentKind::Codex, "codex".to_string(), 'w'),
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".to_string(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Codex,
+                "codex".to_string(),
+                Some('w'),
+            ),
         ];
         let spans = agents_row_spans(&agents, &theme);
         let text: String = spans.iter().map(|s| s.content.to_string()).collect();

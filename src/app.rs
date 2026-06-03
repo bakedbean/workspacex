@@ -233,6 +233,11 @@ pub struct App {
         std::sync::Arc<crate::pty::session::Session>,
         ratatui::layout::Rect,
     )>,
+    /// `(instance id, rect)` for each agent pill in the footer agents row,
+    /// populated each attached-view draw and consumed by `handle_mouse` to
+    /// retarget the focused pane on click. Mirrors the `chip_rects`
+    /// draw-populates / input-reads pattern; cleared each frame.
+    pub agent_chip_rects: Vec<(crate::data::store::AgentInstanceId, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
@@ -311,6 +316,7 @@ impl App {
             detail_scroll_last_workspace: None,
             detail_container_rects: [None; 4],
             attached_pane_rects: Vec::new(),
+            agent_chip_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),
@@ -423,6 +429,37 @@ impl App {
         inst: crate::data::store::AgentInstanceId,
     ) -> Option<std::sync::Arc<crate::pty::session::Session>> {
         self.sessions.get(inst)
+    }
+
+    /// Retarget the focused attached pane to `inst` (switching the visible agent
+    /// in place), spawning its session if needed. No-op if not in attached view
+    /// or the instance is unknown.
+    pub(crate) fn switch_focused_pane_to(
+        &mut self,
+        inst: crate::data::store::AgentInstanceId,
+    ) -> Result<()> {
+        // Only retarget once the session is actually ready. On a missing
+        // binary, ensure_instance_session sets the AgentMissing modal and
+        // returns AgentMissing WITHOUT spawning — retargeting anyway would
+        // point the focused leaf at a sessionless instance, and the next
+        // draw's "leaf session missing -> bounce to Dashboard" guard would
+        // then collapse the whole split. Mirror attach_workspace and bail.
+        match ensure_instance_session(self, inst)? {
+            AttachReady::Ok => {}
+            AttachReady::AgentMissing => return Ok(()),
+        }
+        let Some(instance) = self.store.workspace_agents_by_id(inst)? else {
+            return Ok(());
+        };
+        if let crate::ui::View::Attached(state) = &mut self.view {
+            let target = crate::ui::split::AttachTarget {
+                workspace_id: instance.workspace_id,
+                instance: inst,
+            };
+            let path = state.focus.clone();
+            state.set_leaf_target(&path, target);
+        }
+        Ok(())
     }
 
     /// If the workspace has any pending tool_use that is a real permission

@@ -876,6 +876,21 @@ async fn handle_key_attached(
                 }
                 return Ok(());
             }
+            // Fallback: any other leftover letter may be an agent switch key
+            // from the footer agents row. Matched against the same
+            // `agent_switch_keys` pool the renderer used, so the displayed key
+            // equals the bound key. Placed last so it never shadows the
+            // specific arms above (the pool excludes all of them).
+            KeyCode::Char(c) => {
+                let agents = app.store.workspace_agents(id).unwrap_or_default();
+                if agents.len() > 1 {
+                    let keys = crate::ui::attached::agent_switch_keys(agents.len());
+                    if let Some(idx) = keys.iter().position(|k| *k == c) {
+                        app.switch_focused_pane_to(agents[idx].id)?;
+                    }
+                }
+                return Ok(());
+            }
             _ => return Ok(()),
         }
     }
@@ -1674,6 +1689,17 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 // identical to `Enter` on the dashboard.
                 if let Err(e) = attach_workspace(app, ws_id) {
                     tracing::warn!(error = %e, "failed to attach from attention click");
+                }
+            } else if let Some((inst, _)) = app.agent_chip_rects.iter().copied().find(|(_, r)| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                // Clicking an agent pill retargets the focused pane to that
+                // instance, spawning its session if needed.
+                if let Err(e) = app.switch_focused_pane_to(inst) {
+                    tracing::warn!(error = %e, "failed to switch pane from agent-pill click");
                 }
             }
         }

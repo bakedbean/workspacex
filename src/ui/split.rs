@@ -104,6 +104,16 @@ impl AttachedState {
         self.tree.leaf_at(&self.focus)
     }
 
+    /// Replace the target of the leaf at `path`. No-op if the path doesn't
+    /// resolve to a leaf.
+    pub fn set_leaf_target(&mut self, path: &FocusPath, target: AttachTarget) {
+        if let Some(node) = at_mut(&mut self.tree, path)
+            && let SplitTree::Leaf(t) = node
+        {
+            *t = target;
+        }
+    }
+
     /// All attach targets present in the tree (any order).
     pub fn leaves(&self) -> Vec<AttachTarget> {
         self.tree.leaves()
@@ -798,6 +808,56 @@ mod tests {
         let outcome = tree.prune(&|_| true);
         assert!(matches!(outcome, PruneOutcome::Kept));
         assert_eq!(tree.leaves(), vec![wid(1)]);
+    }
+
+    #[test]
+    fn set_leaf_target_replaces_focused_leaf() {
+        let t0 = AttachTarget {
+            workspace_id: WorkspaceId(1),
+            instance: AgentInstanceId(10),
+        };
+        let t1 = AttachTarget {
+            workspace_id: WorkspaceId(1),
+            instance: AgentInstanceId(11),
+        };
+        let mut state = AttachedState {
+            tree: SplitTree::Leaf(t0),
+            focus: vec![],
+        };
+        state.set_leaf_target(&state.focus.clone(), t1);
+        assert_eq!(state.focused_target(), Some(t1));
+    }
+
+    #[test]
+    fn set_leaf_target_replaces_nested_leaf_only() {
+        // A 2-pane split; retarget the second leaf and confirm the first is
+        // untouched.
+        let mut state = AttachedState {
+            tree: SplitTree::Split {
+                direction: SplitDirection::Vertical,
+                children: vec![SplitTree::Leaf(wid(1)), SplitTree::Leaf(wid(2))],
+            },
+            focus: vec![1],
+        };
+        let new = AttachTarget {
+            workspace_id: WorkspaceId(2),
+            instance: AgentInstanceId(99),
+        };
+        state.set_leaf_target(&vec![1], new);
+        assert_eq!(state.tree.leaf_at(&[1]), Some(new));
+        assert_eq!(state.tree.leaf_at(&[0]), Some(wid(1))); // sibling unchanged
+    }
+
+    #[test]
+    fn set_leaf_target_is_noop_for_unresolvable_path() {
+        let t0 = wid(1);
+        let mut state = AttachedState {
+            tree: SplitTree::Leaf(t0),
+            focus: vec![],
+        };
+        // Descending into a leaf / out-of-bounds index resolves to no leaf.
+        state.set_leaf_target(&vec![3], wid(2));
+        assert_eq!(state.tree.leaf_at(&[]), Some(t0)); // unchanged
     }
 
     #[test]

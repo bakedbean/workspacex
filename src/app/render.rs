@@ -82,6 +82,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .and_then(|e| e.latest.clone());
                     let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
                     let row = crate::ui::dashboard::row::RowInputs {
+                        agent: ws.agent,
                         status,
                         name: ws.name.clone(),
                         branch: ws.branch.clone(),

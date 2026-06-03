@@ -15,6 +15,7 @@
 
 use crate::git::DiffStats;
 use crate::git::forge::BranchLifecycle;
+use crate::pty::session::AgentKind;
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
@@ -33,6 +34,7 @@ const AGE_WIDTH: usize = 10;
 const GUTTER_WIDTH: usize = 1;
 const ELBOW_WIDTH: usize = 3;
 const GLYPH_WIDTH: usize = 2;
+const AGENT_WIDTH: usize = 1;
 
 /// User-resizable column widths. Values are clamped to safe ranges by
 /// `ColumnWidths::clamped` (called from the config read path) so the
@@ -65,6 +67,7 @@ impl Default for ColumnWidths {
 /// from `app.rs` state.
 #[derive(Debug, Clone)]
 pub struct RowInputs {
+    pub agent: AgentKind,
     pub status: Status,
     pub name: String,
     pub branch: String,
@@ -91,6 +94,15 @@ pub fn render(
     let name_width = widths.name;
     let branch_width = widths.branch;
     let mut spans: Vec<Span<'static>> = Vec::new();
+
+    // 0: agent identity bar — a fixed per-agent color, independent of
+    // status. Sits left of the status gutter so the row shows a two-tone
+    // left edge: outer = agent, inner = status. Plain Unicode, no
+    // nerd-font gating (same glyph as the gutter).
+    spans.push(Span::styled(
+        "▎".to_string(),
+        theme.agent_style(inputs.agent),
+    ));
 
     // 1: gutter — thicker bar on the selected row gives a high-contrast
     // leading edge that doesn't rely on the row-bg tint being visible.
@@ -212,7 +224,8 @@ pub fn render(
     }
 
     // 8: message (flex)
-    let left_consumed = GUTTER_WIDTH
+    let left_consumed = AGENT_WIDTH
+        + GUTTER_WIDTH
         + ELBOW_WIDTH
         + GLYPH_WIDTH
         + name_width
@@ -309,6 +322,7 @@ mod tests {
 
     fn base() -> RowInputs {
         RowInputs {
+            agent: AgentKind::Claude,
             status: Status::Question,
             name: "repo-overview".into(),
             branch: "bakedbean/repo-overview".into(),
@@ -337,7 +351,7 @@ mod tests {
     fn unselected_row_uses_thin_gutter_glyph() {
         let theme = Theme::wsx();
         let line = render(&base(), ColumnWidths::default(), 0, &theme, 120);
-        let gutter = line.spans.first().expect("gutter span present");
+        let gutter = line.spans.get(1).expect("status gutter span present");
         assert_eq!(gutter.content.as_ref(), "▎");
     }
 
@@ -350,7 +364,7 @@ mod tests {
         let mut inputs = base();
         inputs.selected = true;
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
-        let gutter = line.spans.first().expect("gutter span present");
+        let gutter = line.spans.get(1).expect("status gutter span present");
         assert_eq!(gutter.content.as_ref(), "▍");
         assert_eq!(
             gutter.style.fg,
@@ -708,6 +722,67 @@ mod tests {
         assert!(
             !narrow_text.contains("very-long-branch-name-that-take"),
             "narrow branch truncates: {narrow_text:?}"
+        );
+    }
+
+    #[test]
+    fn agent_bar_is_leftmost_span_with_agent_color() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.agent = AgentKind::Pi;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let first = line.spans.first().expect("agent bar present");
+        assert_eq!(first.content.as_ref(), "▎");
+        assert_eq!(first.style.fg, theme.agent_style(AgentKind::Pi).fg);
+    }
+
+    #[test]
+    fn agent_bar_precedes_status_gutter_as_two_tone_edge() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.agent = AgentKind::Codex; // blue
+        inputs.status = Status::Complete; // green gutter — distinct from blue
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        assert_eq!(line.spans[0].content.as_ref(), "▎", "agent bar first");
+        assert_eq!(line.spans[1].content.as_ref(), "▎", "status gutter second");
+        assert_eq!(
+            line.spans[0].style.fg,
+            theme.agent_style(AgentKind::Codex).fg
+        );
+        assert_eq!(
+            line.spans[1].style.fg,
+            theme.status_style(Status::Complete).fg
+        );
+        assert_ne!(line.spans[0].style.fg, line.spans[1].style.fg);
+    }
+
+    #[test]
+    fn agent_bar_keeps_color_when_selected() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.agent = AgentKind::Hermes;
+        inputs.selected = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        assert_eq!(line.spans[0].content.as_ref(), "▎");
+        assert_eq!(
+            line.spans[0].style.fg,
+            theme.agent_style(AgentKind::Hermes).fg
+        );
+        assert_eq!(
+            line.spans[1].content.as_ref(),
+            "▍",
+            "status gutter still thickens on selection"
+        );
+    }
+
+    #[test]
+    fn ago_stays_right_aligned_after_agent_column() {
+        let theme = Theme::wsx();
+        let line = render(&base(), ColumnWidths::default(), 0, &theme, 120);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.trim_end().ends_with("29s ago"),
+            "age column stays right-aligned: {text:?}"
         );
     }
 }

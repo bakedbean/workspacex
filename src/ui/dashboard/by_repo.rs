@@ -131,6 +131,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, w)| RowInputs {
+                agent: crate::pty::session::AgentKind::Claude,
                 status: w.status,
                 name: w.name.clone(),
                 branch: w.branch.clone(),

@@ -38,6 +38,8 @@ wsx agent add <kind>                        # attach another agent: kind = claud
 wsx agent send <label> <message…>           # async message to a peer (label e.g. claude, claude#2)
 ```
 
+Run `wsx --help` or `wsx <command> --help` to list commands and arguments directly from the CLI.
+
 `--agent` on `create` picks the workspace's first (primary) agent; `wsx agent add` attaches more on top. See [Multi-agent workspaces](#multi-agent-workspaces) below for how peers, labels, and messaging work.
 
 The full reference is the project README's "CLI reference", "Multi-agent workspaces", and "Related repos" sections — consult it for `wsx config` / `wsx remote` / setup scripts.

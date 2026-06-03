@@ -349,23 +349,24 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // If any leaf's session has gone away (e.g. workspace was
             // archived from elsewhere), bounce back to dashboard. Matches
             // the previous single-pane fallback at handle_key_attached.
-            if state.leaves().iter().any(|id| {
-                app.primary_instance(*id)
-                    .and_then(|i| app.sessions.get(i))
-                    .is_none()
-            }) {
+            if state
+                .leaves()
+                .iter()
+                .any(|t| app.sessions.get(t.instance).is_none())
+            {
                 app.leader_pending = false;
                 app.view = crate::ui::View::Dashboard;
                 return;
             }
-            let focused_id = match state.focused_id() {
-                Some(id) => id,
+            let focused_target = match state.focused_target() {
+                Some(t) => t,
                 None => {
                     app.leader_pending = false;
                     app.view = crate::ui::View::Dashboard;
                     return;
                 }
             };
+            let focused_id = focused_target.workspace_id;
             let focused_label = app
                 .workspaces
                 .iter()
@@ -446,27 +447,34 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let multi_pane = panes.len() > 1;
 
             // Resize each session's PTY to its pane area (minus title row when multi-pane).
-            for (ws_id, _path, rect) in &panes {
-                if let Some(session) = app
-                    .primary_instance(*ws_id)
-                    .and_then(|i| app.sessions.get(i))
-                {
+            for (target, _path, rect) in &panes {
+                if let Some(session) = app.sessions.get(target.instance) {
                     attached::resize_pane(&session, *rect, multi_pane);
                 }
             }
 
             // Build PaneSpec list. Use owned sessions + labels to keep
-            // them alive while rendering.
+            // them alive while rendering. The leaf carries the agent instance
+            // directly; resolve the session from it and the label/agent kind
+            // from the instance (falling back to the workspace name + agent).
             let pane_data: Vec<PaneData> = panes
                 .into_iter()
-                .filter_map(|(ws_id, path, rect)| {
-                    let session = app.session_for(app.primary_instance(ws_id)?)?;
-                    let (label, agent) = app
-                        .workspaces
-                        .iter()
-                        .find(|(_, w)| w.id == ws_id)
-                        .map(|(_, w)| (w.name.clone(), Some(w.agent)))
-                        .unwrap_or_default();
+                .filter_map(|(target, path, rect)| {
+                    let session = app.session_for(target.instance)?;
+                    let instance = app
+                        .store
+                        .workspace_agents_by_id(target.instance)
+                        .ok()
+                        .flatten();
+                    let (label, agent) = match instance {
+                        Some(inst) => (inst.label(), Some(inst.agent)),
+                        None => app
+                            .workspaces
+                            .iter()
+                            .find(|(_, w)| w.id == target.workspace_id)
+                            .map(|(_, w)| (w.name.clone(), Some(w.agent)))
+                            .unwrap_or_default(),
+                    };
                     let focused = path == state.focus;
                     Some((session, label, rect, focused, agent))
                 })
@@ -837,8 +845,12 @@ mod layout_indicator_cache_tests {
                 agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
-        let mut pair = SplitTree::Leaf(a);
-        pair.split(&[], SplitDirection::Vertical, a);
+        let ta = crate::ui::split::AttachTarget {
+            workspace_id: a,
+            instance: crate::data::store::AgentInstanceId(a.0),
+        };
+        let mut pair = SplitTree::Leaf(ta);
+        pair.split(&[], SplitDirection::Vertical, ta);
         store.set_workspace_layout(a, &pair, &[1]).unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         assert!(
@@ -847,7 +859,7 @@ mod layout_indicator_cache_tests {
         );
         // Replace with a single-pane layout — should drop from the cache after refresh.
         app.store
-            .set_workspace_layout(a, &SplitTree::Leaf(a), &[])
+            .set_workspace_layout(a, &SplitTree::Leaf(ta), &[])
             .unwrap();
         app.refresh().unwrap();
         assert!(

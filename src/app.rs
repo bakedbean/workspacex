@@ -1036,7 +1036,7 @@ fn build_added_spawn_info(
 }
 
 pub(crate) fn save_layout_for(app: &mut App, state: crate::ui::AttachedState) {
-    let Some(anchor) = state.leaves().first().copied() else {
+    let Some(anchor) = state.leaves().first().map(|t| t.workspace_id) else {
         return;
     };
     if let Err(e) = app
@@ -1052,48 +1052,61 @@ pub(crate) fn save_layout_for(app: &mut App, state: crate::ui::AttachedState) {
 
 /// Restore a saved layout for `anchor`, pruning any workspaces that no longer
 /// exist. Spawns missing sessions for surviving side panes. Falls back to a
-/// single-pane view if no layout is saved or all panes were pruned.
+/// single-pane view if no layout is saved or all panes were pruned. Returns
+/// `None` only if the anchor has no resolvable primary instance (unreachable
+/// in normal use — all callers guard on `primary_instance(...).is_some()`).
 pub(crate) fn restore_attached_state(
     app: &mut App,
     anchor: crate::data::store::WorkspaceId,
-) -> crate::ui::AttachedState {
-    let Some((mut tree, mut focus)) = app.store.get_workspace_layout(anchor).ok().flatten() else {
-        return crate::ui::AttachedState::single(anchor);
+) -> Option<crate::ui::AttachedState> {
+    // Fallback single-pane target: the anchor workspace's primary instance.
+    // Matches pre-multi-agent behavior — a single-agent workspace's leaf is
+    // its primary instance.
+    let single = |app: &App| {
+        app.primary_instance(anchor).map(|instance| {
+            crate::ui::AttachedState::single(crate::ui::split::AttachTarget {
+                workspace_id: anchor,
+                instance,
+            })
+        })
     };
-    let valid: std::collections::HashSet<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
+    let Some((mut tree, mut focus)) = app.store.get_workspace_layout(anchor).ok().flatten() else {
+        return single(app);
+    };
+    let valid_ws: std::collections::HashSet<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
     use crate::ui::split::PruneOutcome;
-    let outcome = tree.prune(&|id| valid.contains(&id));
+    // A leaf is stale if its workspace no longer exists OR its agent instance
+    // no longer exists in the store.
+    let outcome = tree.prune(&|t| {
+        valid_ws.contains(&t.workspace_id)
+            && app
+                .store
+                .workspace_agents_by_id(t.instance)
+                .ok()
+                .flatten()
+                .is_some()
+    });
     match outcome {
         PruneOutcome::Empty => {
             let _ = app.store.delete_workspace_layout(anchor);
             let _ = app.refresh();
-            crate::ui::AttachedState::single(anchor)
+            single(app)
         }
         PruneOutcome::Kept => {
             if tree.leaf_at(&focus).is_none() {
                 focus = tree.first_leaf_path();
             }
-            // Spawn any missing sessions for the side panes. Anchor was
-            // already spawned by the caller. Skip on failure and continue
-            // with remaining panes — partial restore is better than no restore.
-            for leaf_id in tree.leaves() {
-                if leaf_id == anchor
-                    || app
-                        .primary_instance(leaf_id)
-                        .and_then(|i| app.sessions.get(i))
-                        .is_some()
-                {
+            // Spawn any missing sessions for the side panes. The focused
+            // anchor instance was already spawned by the caller. Skip on
+            // failure and continue with remaining panes — partial restore is
+            // better than no restore.
+            for leaf in tree.leaves() {
+                if app.sessions.get(leaf.instance).is_some() {
                     continue;
                 }
-                if let Some((sid, sp, mode, repo_path, agent)) = build_spawn_info(app, leaf_id) {
-                    maybe_mirror_mcp(app, &repo_path, &sp);
-                    let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
-                    if let Ok(inst) = resolve_primary_instance(app, sid) {
-                        let _ = app.sessions.spawn(inst, &sp, 80, 24, mode, remote, agent);
-                    }
-                }
+                let _ = ensure_instance_session(app, leaf.instance);
             }
-            crate::ui::AttachedState { tree, focus }
+            Some(crate::ui::AttachedState { tree, focus })
         }
     }
 }
@@ -1143,9 +1156,6 @@ pub(crate) fn ensure_workspace_session(
 /// spawn `Fresh` with an injected handoff note (see `build_added_spawn_info`).
 /// Mirrors `ensure_workspace_session`'s return/error conventions, including the
 /// `AgentMissing` modal for a missing agent binary.
-// Spawn capability for added instances (Task 8). The dashboard/attached UI
-// wiring that invokes this lands in a follow-up task; allow until then.
-#[allow(dead_code)]
 pub(crate) fn ensure_instance_session(
     app: &mut App,
     inst: crate::data::store::AgentInstanceId,
@@ -1200,8 +1210,9 @@ pub(crate) fn attach_workspace(
         .and_then(|i| app.sessions.get(i))
         .is_some()
     {
-        let restored = restore_attached_state(app, ws_id);
-        app.view = View::Attached(restored);
+        if let Some(restored) = restore_attached_state(app, ws_id) {
+            app.view = View::Attached(restored);
+        }
     }
     Ok(())
 }

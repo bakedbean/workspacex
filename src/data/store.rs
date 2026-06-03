@@ -11,7 +11,8 @@ pub struct RepoId(pub i64);
 #[serde(transparent)]
 pub struct WorkspaceId(pub i64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct AgentInstanceId(pub i64);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -638,6 +639,12 @@ impl Store {
         let Some((tree_json, focus_json)) = row else {
             return Ok(None);
         };
+        // Backward-compat: layouts written before split-tree leaves carried an
+        // agent instance serialized a leaf as a bare int (`{"Leaf": 5}`), which
+        // no longer deserializes into the `Leaf(AttachTarget)` shape. A parse
+        // failure is treated as "no saved layout" (the row is dropped and we
+        // return `Ok(None)`), so any pre-existing multi-pane layout resets to
+        // single-pane once after this change — acceptable for convenience state.
         match (
             serde_json::from_str::<crate::ui::split::SplitTree>(&tree_json),
             serde_json::from_str::<Vec<usize>>(&focus_json),
@@ -829,6 +836,15 @@ fn parse_setup(s: &str) -> SetupStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Layout-test leaf: a workspace paired with a same-numbered instance id.
+    /// Layout persistence doesn't validate instance ids, so any id round-trips.
+    fn lt(id: WorkspaceId) -> crate::ui::split::AttachTarget {
+        crate::ui::split::AttachTarget {
+            workspace_id: id,
+            instance: AgentInstanceId(id.0),
+        }
+    }
 
     #[test]
     fn open_in_memory_runs_migrations_idempotently() {
@@ -1372,8 +1388,8 @@ mod tests {
                 agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
-        let mut tree = SplitTree::Leaf(id);
-        tree.split(&[], SplitDirection::Vertical, id);
+        let mut tree = SplitTree::Leaf(lt(id));
+        tree.split(&[], SplitDirection::Vertical, lt(id));
         let focus = vec![1];
         store.set_workspace_layout(id, &tree, &focus).unwrap();
         let got = store
@@ -1413,7 +1429,7 @@ mod tests {
             })
             .unwrap();
         store
-            .set_workspace_layout(id, &SplitTree::Leaf(id), &[])
+            .set_workspace_layout(id, &SplitTree::Leaf(lt(id)), &[])
             .unwrap();
         store.delete_workspace(id).unwrap();
         assert!(store.get_workspace_layout(id).unwrap().is_none());
@@ -1436,9 +1452,9 @@ mod tests {
                 agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
-        let single = SplitTree::Leaf(id);
-        let mut pair = SplitTree::Leaf(id);
-        pair.split(&[], SplitDirection::Vertical, id);
+        let single = SplitTree::Leaf(lt(id));
+        let mut pair = SplitTree::Leaf(lt(id));
+        pair.split(&[], SplitDirection::Vertical, lt(id));
         store.set_workspace_layout(id, &single, &[]).unwrap();
         store.set_workspace_layout(id, &pair, &[1]).unwrap();
         let got = store.get_workspace_layout(id).unwrap().unwrap();
@@ -1510,11 +1526,11 @@ mod tests {
             .unwrap();
         // a: single-leaf layout (should NOT appear).
         store
-            .set_workspace_layout(a, &SplitTree::Leaf(a), &[])
+            .set_workspace_layout(a, &SplitTree::Leaf(lt(a)), &[])
             .unwrap();
         // b: two-leaf layout (should appear).
-        let mut pair = SplitTree::Leaf(b);
-        pair.split(&[], SplitDirection::Vertical, a);
+        let mut pair = SplitTree::Leaf(lt(b));
+        pair.split(&[], SplitDirection::Vertical, lt(a));
         store.set_workspace_layout(b, &pair, &[1]).unwrap();
         let got = store.list_multi_pane_layout_anchors().unwrap();
         assert_eq!(got, vec![b], "only multi-pane anchors returned");

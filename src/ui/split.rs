@@ -3,8 +3,18 @@
 //! vertically (`:vsplit`, children side-by-side) or horizontally
 //! (`:split`, children stacked) into a parent node.
 
-use crate::data::store::WorkspaceId;
+use crate::data::store::{AgentInstanceId, WorkspaceId};
 use ratatui::layout::{Constraint, Direction as LayoutDirection, Layout, Rect};
+
+/// What a single leaf pane points at: a specific agent instance within a
+/// workspace. For a single-agent workspace the `instance` is the
+/// workspace's primary instance, so behavior is unchanged from when the
+/// leaf carried a bare `WorkspaceId`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct AttachTarget {
+    pub workspace_id: WorkspaceId,
+    pub instance: AgentInstanceId,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SplitDirection {
@@ -33,7 +43,7 @@ pub struct Divider {
 /// node.
 #[derive(Debug, Clone)]
 pub struct LayoutResult {
-    pub panes: Vec<(WorkspaceId, FocusPath, Rect)>,
+    pub panes: Vec<(AttachTarget, FocusPath, Rect)>,
     pub dividers: Vec<Divider>,
 }
 
@@ -47,7 +57,7 @@ pub enum Arrow {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SplitTree {
-    Leaf(WorkspaceId),
+    Leaf(AttachTarget),
     Split {
         direction: SplitDirection,
         children: Vec<SplitTree>,
@@ -82,20 +92,20 @@ pub struct AttachedState {
 }
 
 impl AttachedState {
-    pub fn single(id: WorkspaceId) -> Self {
+    pub fn single(target: AttachTarget) -> Self {
         Self {
-            tree: SplitTree::Leaf(id),
+            tree: SplitTree::Leaf(target),
             focus: Vec::new(),
         }
     }
 
-    /// Workspace id of the focused leaf, if the focus path resolves.
-    pub fn focused_id(&self) -> Option<WorkspaceId> {
+    /// Attach target of the focused leaf, if the focus path resolves.
+    pub fn focused_target(&self) -> Option<AttachTarget> {
         self.tree.leaf_at(&self.focus)
     }
 
-    /// All workspace ids present in the tree (any order).
-    pub fn leaves(&self) -> Vec<WorkspaceId> {
+    /// All attach targets present in the tree (any order).
+    pub fn leaves(&self) -> Vec<AttachTarget> {
         self.tree.leaves()
     }
 
@@ -107,8 +117,8 @@ impl AttachedState {
     /// Split the focused leaf in `dir`, inserting `new_id` as a new pane.
     /// New leaf becomes focused. Returns `false` if the focus path was
     /// invalid (which shouldn't happen in normal use).
-    pub fn split(&mut self, dir: SplitDirection, new_id: WorkspaceId) -> bool {
-        match self.tree.split(&self.focus, dir, new_id) {
+    pub fn split(&mut self, dir: SplitDirection, new_target: AttachTarget) -> bool {
+        match self.tree.split(&self.focus, dir, new_target) {
             Some(new_focus) => {
                 self.focus = new_focus;
                 true
@@ -169,7 +179,7 @@ impl AttachedState {
 }
 
 impl SplitTree {
-    pub fn leaves(&self) -> Vec<WorkspaceId> {
+    pub fn leaves(&self) -> Vec<AttachTarget> {
         let mut out = Vec::new();
         self.collect_leaves(&mut out);
         out
@@ -194,9 +204,9 @@ impl SplitTree {
         }
     }
 
-    fn collect_leaves(&self, out: &mut Vec<WorkspaceId>) {
+    fn collect_leaves(&self, out: &mut Vec<AttachTarget>) {
         match self {
-            SplitTree::Leaf(id) => out.push(*id),
+            SplitTree::Leaf(target) => out.push(*target),
             SplitTree::Split { children, .. } => {
                 for c in children {
                     c.collect_leaves(out);
@@ -224,10 +234,10 @@ impl SplitTree {
         }
     }
 
-    pub fn leaf_at(&self, path: &[usize]) -> Option<WorkspaceId> {
+    pub fn leaf_at(&self, path: &[usize]) -> Option<AttachTarget> {
         let node = at(self, path)?;
         match node {
-            SplitTree::Leaf(id) => Some(*id),
+            SplitTree::Leaf(target) => Some(*target),
             SplitTree::Split { .. } => None,
         }
     }
@@ -240,7 +250,7 @@ impl SplitTree {
         &mut self,
         path: &[usize],
         dir: SplitDirection,
-        new_id: WorkspaceId,
+        new_target: AttachTarget,
     ) -> Option<FocusPath> {
         // Sibling-insert path: parent is a Split with matching direction.
         if let Some((&last_idx, parent_path)) = path.split_last() {
@@ -253,7 +263,7 @@ impl SplitTree {
                 if let SplitTree::Split { children, .. } = parent
                     && last_idx <= children.len()
                 {
-                    children.insert(last_idx + 1, SplitTree::Leaf(new_id));
+                    children.insert(last_idx + 1, SplitTree::Leaf(new_target));
                     let mut new_focus = parent_path.to_vec();
                     new_focus.push(last_idx + 1);
                     return Some(new_focus);
@@ -262,13 +272,13 @@ impl SplitTree {
         }
         // Nesting path: replace leaf with a new 2-child Split.
         let target = at_mut(self, path)?;
-        let orig_id = match *target {
-            SplitTree::Leaf(id) => id,
+        let orig_target = match *target {
+            SplitTree::Leaf(t) => t,
             SplitTree::Split { .. } => return None,
         };
         *target = SplitTree::Split {
             direction: dir,
-            children: vec![SplitTree::Leaf(orig_id), SplitTree::Leaf(new_id)],
+            children: vec![SplitTree::Leaf(orig_target), SplitTree::Leaf(new_target)],
         };
         let mut new_focus = path.to_vec();
         new_focus.push(1);
@@ -318,10 +328,10 @@ impl SplitTree {
     /// Drop every leaf whose `keep(id)` returns false. After pruning,
     /// any `Split` that ends up with a single child is collapsed into
     /// that child (matches the invariant maintained by `close`).
-    pub fn prune<F: Fn(WorkspaceId) -> bool>(&mut self, keep: &F) -> PruneOutcome {
+    pub fn prune<F: Fn(AttachTarget) -> bool>(&mut self, keep: &F) -> PruneOutcome {
         match self {
-            SplitTree::Leaf(id) => {
-                if keep(*id) {
+            SplitTree::Leaf(target) => {
+                if keep(*target) {
                     PruneOutcome::Kept
                 } else {
                     PruneOutcome::Empty
@@ -361,11 +371,11 @@ impl SplitTree {
         &self,
         area: Rect,
         path: &mut Vec<usize>,
-        out: &mut Vec<(WorkspaceId, FocusPath, Rect)>,
+        out: &mut Vec<(AttachTarget, FocusPath, Rect)>,
         dividers: &mut Vec<Divider>,
     ) {
         match self {
-            SplitTree::Leaf(id) => out.push((*id, path.clone(), area)),
+            SplitTree::Leaf(target) => out.push((*target, path.clone(), area)),
             SplitTree::Split {
                 direction,
                 children,
@@ -503,10 +513,16 @@ fn first_leaf_path(root: &SplitTree, base: &[usize]) -> FocusPath {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::store::WorkspaceId;
+    use crate::data::store::{AgentInstanceId, WorkspaceId};
 
-    fn wid(n: i64) -> WorkspaceId {
-        WorkspaceId(n)
+    /// Test leaf payload: a workspace and its (same-numbered) primary
+    /// instance. Tree-structure assertions only ever compare these, so
+    /// using `n` for both keeps the tests readable.
+    fn wid(n: i64) -> AttachTarget {
+        AttachTarget {
+            workspace_id: WorkspaceId(n),
+            instance: AgentInstanceId(n),
+        }
     }
 
     #[test]
@@ -543,7 +559,7 @@ mod tests {
         assert_eq!(result.dividers[0].direction, SplitDirection::Vertical);
         assert_eq!(result.dividers[0].rect, Rect::new(40, 0, 1, 24));
         // Focus moved to the new (second) pane.
-        assert_eq!(s.focused_id(), Some(wid(2)));
+        assert_eq!(s.focused_target(), Some(wid(2)));
     }
 
     #[test]
@@ -580,7 +596,7 @@ mod tests {
         // Two dividers between three siblings.
         assert_eq!(result.dividers.len(), 2);
         // Focus is on the newly inserted wid(3).
-        assert_eq!(s.focused_id(), Some(wid(3)));
+        assert_eq!(s.focused_target(), Some(wid(3)));
     }
 
     #[test]
@@ -612,7 +628,7 @@ mod tests {
             CloseOutcome::Empty => panic!("should not be empty"),
         }
         assert_eq!(s.leaves(), vec![wid(1)]);
-        assert_eq!(s.focused_id(), Some(wid(1)));
+        assert_eq!(s.focused_target(), Some(wid(1)));
         // Tree should be a single Leaf again, not a 1-child Split.
         assert!(matches!(s.tree, SplitTree::Leaf(_)));
     }
@@ -628,7 +644,7 @@ mod tests {
         }
         assert_eq!(s.leaves(), vec![wid(1), wid(2)]);
         // Focus shifts to the new last index in the same parent.
-        assert_eq!(s.focused_id(), Some(wid(2)));
+        assert_eq!(s.focused_target(), Some(wid(2)));
     }
 
     #[test]
@@ -643,13 +659,13 @@ mod tests {
         s.split(SplitDirection::Vertical, wid(2)); // focus on wid(2)
         // Move left → wid(1).
         assert!(s.focus_direction(Arrow::Left));
-        assert_eq!(s.focused_id(), Some(wid(1)));
+        assert_eq!(s.focused_target(), Some(wid(1)));
         // Move right → wid(2).
         assert!(s.focus_direction(Arrow::Right));
-        assert_eq!(s.focused_id(), Some(wid(2)));
+        assert_eq!(s.focused_target(), Some(wid(2)));
         // Right again — no further sibling.
         assert!(!s.focus_direction(Arrow::Right));
-        assert_eq!(s.focused_id(), Some(wid(2)));
+        assert_eq!(s.focused_target(), Some(wid(2)));
     }
 
     #[test]
@@ -659,7 +675,7 @@ mod tests {
         // Up/Down don't match a Vertical split — no movement.
         assert!(!s.focus_direction(Arrow::Up));
         assert!(!s.focus_direction(Arrow::Down));
-        assert_eq!(s.focused_id(), Some(wid(2)));
+        assert_eq!(s.focused_target(), Some(wid(2)));
     }
 
     #[test]
@@ -671,11 +687,11 @@ mod tests {
         s.split(SplitDirection::Horizontal, wid(3)); // focus wid(3), nested under wid(2)
         // From wid(3), Up should move to wid(2) within the nested split.
         assert!(s.focus_direction(Arrow::Up));
-        assert_eq!(s.focused_id(), Some(wid(2)));
+        assert_eq!(s.focused_target(), Some(wid(2)));
         // From wid(2), Left walks up past the Horizontal split (no match),
         // hits the Vertical split, moves to wid(1).
         assert!(s.focus_direction(Arrow::Left));
-        assert_eq!(s.focused_id(), Some(wid(1)));
+        assert_eq!(s.focused_target(), Some(wid(1)));
     }
 
     #[test]
@@ -684,9 +700,9 @@ mod tests {
         s.split(SplitDirection::Vertical, wid(2));
         s.split(SplitDirection::Vertical, wid(3)); // focus wid(3)
         assert!(s.focus_next());
-        assert_eq!(s.focused_id(), Some(wid(1)));
+        assert_eq!(s.focused_target(), Some(wid(1)));
         assert!(s.focus_next());
-        assert_eq!(s.focused_id(), Some(wid(2)));
+        assert_eq!(s.focused_target(), Some(wid(2)));
     }
 
     #[test]
@@ -707,6 +723,25 @@ mod tests {
             assert_eq!(x.1, y.1, "focus path");
             assert_eq!(x.2, y.2, "rect");
         }
+    }
+
+    #[test]
+    fn serde_round_trip_two_agents_same_workspace() {
+        // Two leaves with the SAME workspace_id but DIFFERENT instance ids
+        // (the two-agents-one-workspace case) must round-trip exactly.
+        let a = AttachTarget {
+            workspace_id: WorkspaceId(7),
+            instance: AgentInstanceId(100),
+        };
+        let b = AttachTarget {
+            workspace_id: WorkspaceId(7),
+            instance: AgentInstanceId(200),
+        };
+        let mut tree = SplitTree::Leaf(a);
+        assert!(tree.split(&[], SplitDirection::Vertical, b).is_some());
+        let json = serde_json::to_string(&tree).expect("serialize");
+        let back: SplitTree = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.leaves(), vec![a, b]);
     }
 
     #[test]

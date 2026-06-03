@@ -434,7 +434,7 @@ mod pm_state_tests {
         .unwrap();
         assert!(app.modal.is_none(), "Enter should close the modal");
         assert!(
-            matches!(&app.view, crate::ui::View::Attached(s) if s.focused_id() == Some(ws_id)),
+            matches!(&app.view, crate::ui::View::Attached(s) if s.focused_target().map(|t| t.workspace_id) == Some(ws_id)),
             "Enter should switch view to the selected workspace; got {:?}",
             app.view
         );
@@ -522,7 +522,8 @@ mod pm_state_tests {
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(AttachedState::single(first_id));
+        let first_target = test_target(&app, first_id);
+        app.view = crate::ui::View::Attached(AttachedState::single(first_target));
 
         // Open Updates panel, point at the second workspace, press 'v'.
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
@@ -558,10 +559,14 @@ mod pm_state_tests {
         match &app.view {
             crate::ui::View::Attached(state) => {
                 assert_eq!(state.leaf_count(), 2, "v should produce a 2-pane split");
-                assert!(state.leaves().contains(&first_id));
-                assert!(state.leaves().contains(&second_id));
+                let ws_ids: Vec<_> = state.leaves().iter().map(|t| t.workspace_id).collect();
+                assert!(ws_ids.contains(&first_id));
+                assert!(ws_ids.contains(&second_id));
                 // Focus should be on the newly added pane.
-                assert_eq!(state.focused_id(), Some(second_id));
+                assert_eq!(
+                    state.focused_target().map(|t| t.workspace_id),
+                    Some(second_id)
+                );
             }
             other => panic!("expected Attached view; got {other:?}"),
         }
@@ -625,14 +630,16 @@ mod pm_state_tests {
                 .unwrap();
         }
         // Start in a 2-pane split with `second` focused.
-        let mut state = AttachedState::single(first_id);
-        state.split(SplitDirection::Vertical, second_id);
+        let first_target = test_target(&app, first_id);
+        let second_target = test_target(&app, second_id);
+        let mut state = AttachedState::single(first_target);
+        state.split(SplitDirection::Vertical, second_target);
         app.view = crate::ui::View::Attached(state);
 
         // Ctrl-x d closes JUST the focused pane; should leave `first` alone.
         handle_key_attached(
             &mut app,
-            second_id,
+            second_target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
@@ -640,7 +647,7 @@ mod pm_state_tests {
         assert!(app.leader_pending);
         handle_key_attached(
             &mut app,
-            second_id,
+            second_target,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
         )
         .await
@@ -648,7 +655,7 @@ mod pm_state_tests {
         match &app.view {
             crate::ui::View::Attached(state) => {
                 assert_eq!(state.leaf_count(), 1, "should drop down to 1 pane");
-                assert_eq!(state.focused_id(), Some(first_id));
+                assert_eq!(state.focused_target(), Some(first_target));
             }
             other => panic!("expected Attached view; got {other:?}"),
         }
@@ -656,14 +663,14 @@ mod pm_state_tests {
         // Ctrl-x d on the last pane detaches fully.
         handle_key_attached(
             &mut app,
-            first_id,
+            first_target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
         .unwrap();
         handle_key_attached(
             &mut app,
-            first_id,
+            first_target,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
         )
         .await
@@ -720,7 +727,8 @@ mod pm_state_tests {
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(AttachedState::single(id));
+        let target = test_target(&app, id);
+        app.view = crate::ui::View::Attached(AttachedState::single(target));
         // Seed throttle stamps so we can prove the detach handler
         // clears them (forcing the next poll tick to re-fetch).
         app.diff_last_poll_ms.insert(id, 12_345);
@@ -730,14 +738,14 @@ mod pm_state_tests {
         // Ctrl-x d on the last pane fully detaches.
         handle_key_attached(
             &mut app,
-            id,
+            target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
         .unwrap();
         handle_key_attached(
             &mut app,
-            id,
+            target,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
         )
         .await
@@ -805,18 +813,19 @@ mod pm_state_tests {
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(AttachedState::single(id));
+        let target = test_target(&app, id);
+        app.view = crate::ui::View::Attached(AttachedState::single(target));
 
         handle_key_attached(
             &mut app,
-            id,
+            target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
         .unwrap();
         handle_key_attached(
             &mut app,
-            id,
+            target,
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         )
         .await
@@ -877,28 +886,30 @@ mod pm_state_tests {
                 )
                 .unwrap();
         }
-        let mut state = AttachedState::single(ids[0]);
-        state.split(SplitDirection::Vertical, ids[1]);
+        let target0 = test_target(&app, ids[0]);
+        let target1 = test_target(&app, ids[1]);
+        let mut state = AttachedState::single(target0);
+        state.split(SplitDirection::Vertical, target1);
         // Focus is on ids[1] post-split.
         app.view = crate::ui::View::Attached(state);
 
         handle_key_attached(
             &mut app,
-            ids[1],
+            target1,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
         .unwrap();
         handle_key_attached(
             &mut app,
-            ids[1],
+            target1,
             KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
         )
         .await
         .unwrap();
         match &app.view {
             crate::ui::View::Attached(state) => {
-                assert_eq!(state.focused_id(), Some(ids[0]));
+                assert_eq!(state.focused_target(), Some(target0));
             }
             other => panic!("expected Attached view; got {other:?}"),
         }
@@ -1158,7 +1169,7 @@ mod pm_state_tests {
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
+        app.view = crate::ui::View::Attached(AttachedState::single(test_target(&app, attached_id)));
         // The new status row exclusively surfaces workspaces with
         // `needs_attention` set — recent activity alone no longer qualifies.
         // In production both flags are set together when `alert_decision`
@@ -1235,7 +1246,7 @@ mod pm_state_tests {
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(AttachedState::single(attached_id));
+        app.view = crate::ui::View::Attached(AttachedState::single(test_target(&app, attached_id)));
 
         let backend = TestBackend::new(80, 24);
         let mut term = Terminal::new(backend).unwrap();
@@ -1382,7 +1393,7 @@ mod pm_state_tests {
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(AttachedState::single(ws_id));
+        app.view = crate::ui::View::Attached(AttachedState::single(test_target(app, ws_id)));
         ws_id
     }
 
@@ -1474,6 +1485,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
+        let target = test_target(&app, ws_id);
         app.sessions
             .get(test_primary_instance(&app, ws_id))
             .unwrap()
@@ -1486,7 +1498,7 @@ mod pm_state_tests {
         );
         handle_key_attached(
             &mut app,
-            ws_id,
+            target,
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
         )
         .await
@@ -1506,6 +1518,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
+        let target = test_target(&app, ws_id);
         app.sessions
             .get(test_primary_instance(&app, ws_id))
             .unwrap()
@@ -1513,7 +1526,7 @@ mod pm_state_tests {
         // Ctrl-x is the leader. It's consumed by wsx and never reaches the PTY.
         handle_key_attached(
             &mut app,
-            ws_id,
+            target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
@@ -1534,6 +1547,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
+        let target = test_target(&app, ws_id);
         app.sessions
             .get(test_primary_instance(&app, ws_id))
             .unwrap()
@@ -1542,7 +1556,7 @@ mod pm_state_tests {
         // also snap scrollback back to live.
         handle_key_attached(
             &mut app,
-            ws_id,
+            target,
             KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
         )
         .await
@@ -1561,6 +1575,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
+        let target = test_target(&app, ws_id);
 
         // Populate the cache directly (Task 7's resolution path is tested
         // separately via the resolve() unit tests).
@@ -1572,7 +1587,7 @@ mod pm_state_tests {
         // Ctrl-x leader.
         handle_key_attached(
             &mut app,
-            ws_id,
+            target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
@@ -1582,7 +1597,7 @@ mod pm_state_tests {
         // '1' — fires chip 1, clears leader.
         handle_key_attached(
             &mut app,
-            ws_id,
+            target,
             KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
         )
         .await
@@ -1610,6 +1625,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let ws_id = spawn_attached_workspace(&mut app);
+        let target = test_target(&app, ws_id);
 
         // Only one chip in the cache.
         app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
@@ -1620,7 +1636,7 @@ mod pm_state_tests {
         // Ctrl-x leader.
         handle_key_attached(
             &mut app,
-            ws_id,
+            target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
@@ -1629,7 +1645,7 @@ mod pm_state_tests {
         // '5' — index 4, out of range for a 1-element cache.
         handle_key_attached(
             &mut app,
-            ws_id,
+            target,
             KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
         )
         .await
@@ -3818,7 +3834,10 @@ mod detail_scroll {
         // session is needed — `scroll_active` no-ops when the focused id has
         // no session, which is the behavior we want to verify (detail
         // offsets stay untouched regardless).
-        app.view = View::Attached(AttachedState::single(crate::data::store::WorkspaceId(1)));
+        app.view = View::Attached(AttachedState::single(crate::ui::split::AttachTarget {
+            workspace_id: crate::data::store::WorkspaceId(1),
+            instance: crate::data::store::AgentInstanceId(1),
+        }));
         app.detail_container_rects = [
             Some(Rect {
                 x: 0,
@@ -3940,21 +3959,23 @@ mod ctrl_x_esc_tests {
             )
             .unwrap();
 
-        let mut state = AttachedState::single(first_id);
-        state.split(SplitDirection::Vertical, second_id);
+        let first_target = test_target(&app, first_id);
+        let second_target = test_target(&app, second_id);
+        let mut state = AttachedState::single(first_target);
+        state.split(SplitDirection::Vertical, second_target);
         app.view = crate::ui::View::Attached(state);
 
         // Send Ctrl-x then Esc.
         handle_key_attached(
             &mut app,
-            first_id,
+            first_target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
         .unwrap();
         handle_key_attached(
             &mut app,
-            first_id,
+            first_target,
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         )
         .await
@@ -3967,7 +3988,8 @@ mod ctrl_x_esc_tests {
         let saved = app.store.get_workspace_layout(first_id).unwrap();
         assert!(saved.is_some(), "layout should be saved under first leaf");
         let (tree, _focus) = saved.unwrap();
-        assert_eq!(tree.leaves(), vec![first_id, second_id]);
+        let leaf_ws: Vec<_> = tree.leaves().iter().map(|t| t.workspace_id).collect();
+        assert_eq!(leaf_ws, vec![first_id, second_id]);
         assert!(
             app.workspaces_with_multi_pane_layouts.contains(&first_id),
             "cache should refresh to include the new layout's anchor"
@@ -4060,8 +4082,8 @@ mod restore_layout_tests {
     async fn dashboard_enter_restores_saved_layout() {
         use crate::ui::split::{SplitDirection, SplitTree};
         let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("restore");
-        let mut tree = SplitTree::Leaf(first_id);
-        tree.split(&[], SplitDirection::Vertical, second_id);
+        let mut tree = SplitTree::Leaf(test_target(&app, first_id));
+        tree.split(&[], SplitDirection::Vertical, test_target(&app, second_id));
         app.store
             .set_workspace_layout(first_id, &tree, &[1])
             .unwrap();
@@ -4072,7 +4094,8 @@ mod restore_layout_tests {
             .unwrap();
         match &app.view {
             crate::ui::View::Attached(s) => {
-                assert_eq!(s.leaves(), vec![first_id, second_id]);
+                let leaf_ws: Vec<_> = s.leaves().iter().map(|t| t.workspace_id).collect();
+                assert_eq!(leaf_ws, vec![first_id, second_id]);
                 assert_eq!(s.focus, vec![1]);
             }
             _ => panic!("expected attached view with restored layout"),
@@ -4088,7 +4111,8 @@ mod restore_layout_tests {
             .unwrap();
         match &app.view {
             crate::ui::View::Attached(s) => {
-                assert_eq!(s.leaves(), vec![first_id]);
+                let leaf_ws: Vec<_> = s.leaves().iter().map(|t| t.workspace_id).collect();
+                assert_eq!(leaf_ws, vec![first_id]);
             }
             _ => panic!("expected single-pane attached view"),
         }
@@ -4106,7 +4130,8 @@ mod restore_layout_tests {
         .unwrap();
         match &app.view {
             crate::ui::View::Attached(s) => {
-                assert_eq!(s.leaves(), vec![first_id]);
+                let leaf_ws: Vec<_> = s.leaves().iter().map(|t| t.workspace_id).collect();
+                assert_eq!(leaf_ws, vec![first_id]);
             }
             _ => panic!("expected single-pane attached view after 'l' on workspace"),
         }
@@ -4116,8 +4141,8 @@ mod restore_layout_tests {
     async fn restore_prunes_archived_side_panes() {
         use crate::ui::split::{SplitDirection, SplitTree};
         let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("prune");
-        let mut tree = SplitTree::Leaf(first_id);
-        tree.split(&[], SplitDirection::Vertical, second_id);
+        let mut tree = SplitTree::Leaf(test_target(&app, first_id));
+        tree.split(&[], SplitDirection::Vertical, test_target(&app, second_id));
         app.store
             .set_workspace_layout(first_id, &tree, &[1])
             .unwrap();
@@ -4130,7 +4155,8 @@ mod restore_layout_tests {
             .unwrap();
         match &app.view {
             crate::ui::View::Attached(s) => {
-                assert_eq!(s.leaves(), vec![first_id], "side pane pruned");
+                let leaf_ws: Vec<_> = s.leaves().iter().map(|t| t.workspace_id).collect();
+                assert_eq!(leaf_ws, vec![first_id], "side pane pruned");
             }
             _ => panic!("expected attached view with pruned layout"),
         }
@@ -4140,25 +4166,27 @@ mod restore_layout_tests {
     async fn ctrl_x_d_does_not_modify_saved_layout() {
         use crate::ui::split::{AttachedState, SplitDirection, SplitTree};
         let (mut app, first_id, second_id) = setup_two_workspaces_with_sessions("ctrlxd");
-        let mut tree = SplitTree::Leaf(first_id);
-        tree.split(&[], SplitDirection::Vertical, second_id);
+        let first_target = test_target(&app, first_id);
+        let second_target = test_target(&app, second_id);
+        let mut tree = SplitTree::Leaf(first_target);
+        tree.split(&[], SplitDirection::Vertical, second_target);
         app.store
             .set_workspace_layout(first_id, &tree, &[1])
             .unwrap();
-        let mut state = AttachedState::single(first_id);
-        state.split(SplitDirection::Vertical, second_id);
+        let mut state = AttachedState::single(first_target);
+        state.split(SplitDirection::Vertical, second_target);
         app.view = crate::ui::View::Attached(state);
         // Close second pane with Ctrl-x d (focus is on second_id from the split).
         handle_key_attached(
             &mut app,
-            second_id,
+            second_target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
         .unwrap();
         handle_key_attached(
             &mut app,
-            second_id,
+            second_target,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
         )
         .await
@@ -4166,14 +4194,14 @@ mod restore_layout_tests {
         // Close last pane → dashboard.
         handle_key_attached(
             &mut app,
-            first_id,
+            first_target,
             KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
         )
         .await
         .unwrap();
         handle_key_attached(
             &mut app,
-            first_id,
+            first_target,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
         )
         .await
@@ -4181,7 +4209,8 @@ mod restore_layout_tests {
         assert!(matches!(app.view, crate::ui::View::Dashboard));
         // The stored layout is unchanged.
         let (saved, _) = app.store.get_workspace_layout(first_id).unwrap().unwrap();
-        assert_eq!(saved.leaves(), vec![first_id, second_id]);
+        let leaf_ws: Vec<_> = saved.leaves().iter().map(|t| t.workspace_id).collect();
+        assert_eq!(leaf_ws, vec![first_id, second_id]);
     }
 }
 
@@ -4511,7 +4540,8 @@ mod leader_view_transition_tests {
 
         // Place the app in Attached view — but do NOT spawn a session, so
         // handle_key_attached will immediately bounce back to Dashboard.
-        app.view = crate::ui::View::Attached(crate::ui::split::AttachedState::single(ws_id));
+        let target = test_target(&app, ws_id);
+        app.view = crate::ui::View::Attached(crate::ui::split::AttachedState::single(target));
         // Arm the leader as if the user had pressed Ctrl-X while attached.
         app.leader_pending = true;
 
@@ -4519,7 +4549,7 @@ mod leader_view_transition_tests {
         // it will assign app.view = View::Dashboard and return.
         handle_key_attached(
             &mut app,
-            ws_id,
+            target,
             KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
         )
         .await
@@ -4623,7 +4653,7 @@ mod attached_wheel_forwarding {
                 crate::pty::session::AgentKind::Claude,
             )
             .unwrap();
-        app.view = crate::ui::View::Attached(AttachedState::single(ws_id));
+        app.view = crate::ui::View::Attached(AttachedState::single(test_target(app, ws_id)));
         ws_id
     }
 

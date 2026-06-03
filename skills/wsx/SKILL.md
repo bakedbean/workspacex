@@ -73,6 +73,35 @@ If the work is large enough that you want separate Claude sessions per repo, the
 - **Committing on a placeholder branch.** If `git branch --show-current` shows the auto-generated slug (e.g. `bakedbean/merry-birch`) and you've decided what you're doing, rename via `wsx workspace rename` BEFORE committing.
 - **Assuming a sibling session "knows" what you decided.** Different sessions don't share state — the PR body and commit messages are your handoff channel.
 
+## Multi-agent workspaces
+
+A workspace can have more than one agent attached — including more than one of
+the same kind. You may be one of several agents sharing the same git worktree
+and branch.
+
+- **See your peers:** run `wsx agent list`. Agents are addressed by label — the
+  first of a kind is its bare name (`claude`), additional ones get a numeric
+  suffix (`claude#2`). The primary (workspace-creation) agent is marked
+  `(primary)`.
+- **Your identity:** `$WSX_AGENT_INSTANCE_ID` holds your instance id and
+  `$WSX_WORKSPACE_ID` holds the workspace id.
+- **Message a peer:** `wsx agent send <label> <message>`. Delivery is
+  asynchronous — the message is injected into the peer's session shortly after,
+  tagged `[message from <you>]` so they know it came from you.
+- **Add a peer:** `wsx agent send` only reaches agents already attached. To
+  attach one, use `wsx agent add <kind>` (kind = claude | pi | hermes | codex),
+  or the `^x a` panel in the TUI.
+
+**Example — a reviewer agent pinging the primary about a finding:**
+
+```
+wsx agent send claude "I reviewed the diff on this branch. The retry loop in
+fetch.rs (line 88) has no upper bound — can you cap it?"
+```
+
+Because all agents in a workspace share the worktree, coordinate before making
+overlapping edits to the same files — prefer messaging to hand off work.
+
 ## When NOT to use
 
 - TUI customization (keybindings, themes, dashboard layout) — those live in `wsx config` keys; see README.

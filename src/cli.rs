@@ -168,8 +168,11 @@ pub fn group_name(s: &str) -> Option<&'static str> {
     GROUPS.iter().map(|g| g.name).find(|&n| n == s)
 }
 
-fn is_help(tok: &str) -> bool {
-    matches!(tok, "--help" | "-h" | "help")
+/// The dashed help flags. Bare `help` is handled separately — only in a
+/// subcommand position — because it is a legitimate argument value/name
+/// elsewhere (e.g. a repo named `help`).
+fn is_help_flag(tok: &str) -> bool {
+    matches!(tok, "--help" | "-h")
 }
 
 fn is_version(tok: &str) -> bool {
@@ -416,18 +419,20 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
             };
             return Ok(CliAction::Help(topic));
         }
-        Some(t) if is_help(t) => return Ok(CliAction::Help(HelpTopic::Root)),
+        Some(t) if is_help_flag(t) => return Ok(CliAction::Help(HelpTopic::Root)),
         Some(t) if is_version(t) => return Ok(CliAction::Version),
         _ => {}
     }
 
     let group = first.as_deref().expect("None handled above");
 
-    // Per-group help: `wsx agent --help`, `wsx agent -h`, `wsx agent help`.
-    // Intentional tradeoff: a literal `--help`/`-h`/`help` anywhere in a group's
-    // args triggers help, even in a value position; no wsx argument legitimately
-    // takes those literals (use `@file` for arbitrary values).
-    if rest.iter().any(|a| is_help(a)) {
+    // Per-group help. `--help`/`-h` are flag-style and may appear anywhere
+    // (`wsx agent send --help`); bare `help` is only a help request in the
+    // subcommand slot (`wsx agent help`), since it is a valid value/name
+    // elsewhere (e.g. `wsx repo remove help` removes a repo named `help`).
+    let wants_group_help =
+        rest.iter().any(|a| is_help_flag(a)) || rest.first().map(|a| a.as_str()) == Some("help");
+    if wants_group_help {
         if let Some(g) = group_name(group) {
             return Ok(CliAction::Help(HelpTopic::Group(g)));
         }
@@ -1514,6 +1519,45 @@ mod tests {
         assert!(want(parse(&["agent", "--help"]).unwrap()));
         assert!(want(parse(&["agent", "-h"]).unwrap()));
         assert!(want(parse(&["help", "agent"]).unwrap()));
+    }
+
+    #[test]
+    fn dashed_help_flag_triggers_group_help_anywhere() {
+        let want = |a: CliAction| matches!(a, CliAction::Help(HelpTopic::Group("agent")));
+        // After a valid subcommand, a dashed flag still surfaces group help.
+        assert!(want(parse(&["agent", "send", "--help"]).unwrap()));
+        assert!(want(parse(&["agent", "send", "-h"]).unwrap()));
+    }
+
+    #[test]
+    fn bare_help_is_a_subcommand_not_a_value() {
+        // `help` in the subcommand slot → group help.
+        assert!(matches!(
+            parse(&["repo", "help"]).unwrap(),
+            CliAction::Help(HelpTopic::Group("repo"))
+        ));
+        // `help` as an argument VALUE must NOT trigger help.
+        match parse(&["repo", "remove", "help"]).unwrap() {
+            CliAction::RepoRemove { name } => assert_eq!(name, "help"),
+            other => panic!("expected RepoRemove {{ name: \"help\" }}, got {other:?}"),
+        }
+        match parse(&["config", "set", "editor_cmd", "help"]).unwrap() {
+            CliAction::ConfigSet {
+                key,
+                source: ValueSource::Literal(v),
+            } => {
+                assert_eq!(key, "editor_cmd");
+                assert_eq!(v, "help");
+            }
+            other => panic!("expected ConfigSet value \"help\", got {other:?}"),
+        }
+        match parse(&["agent", "send", "claude", "help"]).unwrap() {
+            CliAction::AgentSend { target, prompt } => {
+                assert_eq!(target, "claude");
+                assert_eq!(prompt, "help");
+            }
+            other => panic!("expected AgentSend prompt \"help\", got {other:?}"),
+        }
     }
 
     #[test]

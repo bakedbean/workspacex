@@ -222,6 +222,18 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 11", [])?;
         }
+        if v < 12 {
+            self.conn.execute_batch(SCHEMA_V12_MULTI_AGENT)?;
+            // Backfill one primary instance row per existing workspace from the
+            // denormalized workspaces.agent column.
+            self.conn.execute(
+                "INSERT OR IGNORE INTO workspace_agents \
+                     (workspace_id, agent, ordinal, is_primary, created_at)
+                 SELECT id, agent, 1, 1, created_at FROM workspaces",
+                [],
+            )?;
+            self.conn.execute("PRAGMA user_version = 12", [])?;
+        }
         Ok(())
     }
 
@@ -668,6 +680,16 @@ impl Store {
         }
         Ok(out)
     }
+
+    #[cfg(test)]
+    pub(crate) fn conn_for_test(&self) -> &rusqlite::Connection {
+        &self.conn
+    }
+
+    #[cfg(test)]
+    pub(crate) fn migrate_for_test(&self) -> Result<()> {
+        self.migrate()
+    }
 }
 
 const SCHEMA_V1: &str = r#"
@@ -718,6 +740,34 @@ CREATE TABLE IF NOT EXISTS workspace_layouts (
     updated_at INTEGER NOT NULL
 );
 ";
+
+const SCHEMA_V12_MULTI_AGENT: &str = r#"
+CREATE TABLE IF NOT EXISTS workspace_agents (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id  INTEGER NOT NULL REFERENCES workspaces(id),
+    agent         TEXT    NOT NULL,
+    -- ordinal is per (workspace, agent): claude ordinal 1 and codex ordinal 1 coexist.
+    ordinal       INTEGER NOT NULL,
+    is_primary    INTEGER NOT NULL DEFAULT 0,
+    session_ref   TEXT,
+    created_at    INTEGER NOT NULL,
+    UNIQUE(workspace_id, agent, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_ws ON workspace_agents(workspace_id);
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- workspace_id intentionally has no FK: messages outlive a removed workspace until drained.
+    workspace_id    INTEGER NOT NULL,
+    target_agent_id INTEGER NOT NULL REFERENCES workspace_agents(id),
+    from_agent_id   INTEGER,
+    body            TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    delivered_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_undelivered
+    ON agent_messages(workspace_id) WHERE delivered_at IS NULL;
+"#;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -1518,5 +1568,77 @@ mod tests {
             .find(|w| w.id == id)
             .expect("workspace present");
         assert_eq!(ws.agent, AgentKind::Hermes);
+    }
+
+    #[test]
+    fn migration_v12_backfills_one_primary_instance_per_workspace() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        store
+            .conn_for_test()
+            .execute(
+                "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)
+                 VALUES (?1, 'w1', 'wsx/w1', '/tmp/r/w1', 'Ready', 'Ok', 7, 0, 'codex')",
+                [repo.0],
+            )
+            .unwrap();
+        let ws = WorkspaceId(store.conn_for_test().last_insert_rowid());
+
+        // Simulate a pre-V12 database, then re-run the migration to exercise backfill.
+        store
+            .conn_for_test()
+            .execute("DELETE FROM workspace_agents", [])
+            .unwrap();
+        store
+            .conn_for_test()
+            .execute("PRAGMA user_version = 11", [])
+            .unwrap();
+        store.migrate_for_test().unwrap();
+
+        let count: i64 = store
+            .conn_for_test()
+            .query_row(
+                "SELECT count(*) FROM workspace_agents WHERE workspace_id = ?1 AND is_primary = 1",
+                [ws.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let agent: String = store
+            .conn_for_test()
+            .query_row(
+                "SELECT agent FROM workspace_agents WHERE workspace_id = ?1",
+                [ws.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(agent, "codex");
+
+        // Simulate a crash between the DDL and the version bump: re-enter the
+        // `v < 12` block with the backfilled rows already present. `INSERT OR
+        // IGNORE` must keep this idempotent (count stays 1, not 2).
+        store
+            .conn_for_test()
+            .execute("PRAGMA user_version = 11", [])
+            .unwrap();
+        store.migrate_for_test().unwrap();
+        let count_after_reentry: i64 = store
+            .conn_for_test()
+            .query_row(
+                "SELECT count(*) FROM workspace_agents WHERE workspace_id = ?1",
+                [ws.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_after_reentry, 1);
+
+        let v: i64 = store
+            .conn_for_test()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 12);
     }
 }

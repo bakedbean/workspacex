@@ -401,9 +401,20 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     // Ctrl-X cancels the chord instead of getting stuck armed.
     if app.leader_pending {
         app.leader_pending = false;
-        if let KeyCode::Char(c @ '1'..='9') = k.code {
-            let idx = (c as u8 - b'1') as usize;
-            fire_chip(app, idx).await;
+        match k.code {
+            KeyCode::Char('a') => {
+                if let Some(crate::app::SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                    app.modal = Some(crate::ui::modal::Modal::AgentsPanel {
+                        workspace_id: ws_id,
+                        selected: 0,
+                    });
+                }
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as u8 - b'1') as usize;
+                fire_chip(app, idx).await;
+            }
+            _ => {}
         }
         return Ok(());
     }
@@ -767,6 +778,13 @@ async fn handle_key_attached(
             }
             KeyCode::Char('u') => {
                 app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+                return Ok(());
+            }
+            KeyCode::Char('a') => {
+                app.modal = Some(crate::ui::modal::Modal::AgentsPanel {
+                    workspace_id: id,
+                    selected: 0,
+                });
                 return Ok(());
             }
             KeyCode::Char('e') => {

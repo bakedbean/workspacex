@@ -1880,10 +1880,11 @@ mod pm_state_tests {
         .unwrap();
         assert!(app.leader_pending);
 
-        // 'a' — non-digit, clears leader without firing.
+        // 'z' — a key with no leader binding; clears the leader without
+        // firing. (Not 'a', which now opens the agents panel.)
         handle_key_dashboard(
             &mut app,
-            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
         )
         .await
         .unwrap();
@@ -2209,6 +2210,99 @@ mod pm_state_tests {
             !app.leader_pending,
             "second Ctrl-X must cancel the chord, not re-arm"
         );
+    }
+
+    /// Ctrl-X then 'a' opens the AgentsPanel modal for the selected workspace
+    /// on the dashboard.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dashboard_ctrl_x_then_a_opens_agents_panel() {
+        use crate::ui::modal::Modal;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.view = crate::ui::View::Dashboard;
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.dashboard.selected = 0;
+        app.modal = None;
+
+        // Ctrl-X — arms the leader.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "Ctrl-X must arm leader_pending");
+
+        // 'a' — must open AgentsPanel for the selected workspace.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending, "leader must clear after 'a'");
+        match &app.modal {
+            Some(Modal::AgentsPanel {
+                workspace_id,
+                selected,
+            }) => {
+                assert_eq!(
+                    *workspace_id, ws_id,
+                    "AgentsPanel must reference the selected workspace"
+                );
+                assert_eq!(*selected, 0);
+            }
+            other => panic!("expected AgentsPanel modal; got {other:?}"),
+        }
+    }
+
+    /// Ctrl-X then 'a' opens the AgentsPanel modal for the focused pane's
+    /// workspace in the attached view.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attached_ctrl_x_then_a_opens_agents_panel() {
+        use crate::ui::modal::Modal;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        let target = test_target(&app, ws_id);
+        app.modal = None;
+
+        // Ctrl-X — arms the leader.
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "Ctrl-X must arm leader_pending");
+
+        // 'a' — must open AgentsPanel for the focused workspace.
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending, "leader must clear after 'a'");
+        match &app.modal {
+            Some(Modal::AgentsPanel {
+                workspace_id,
+                selected,
+            }) => {
+                assert_eq!(
+                    *workspace_id, ws_id,
+                    "AgentsPanel must reference the focused workspace"
+                );
+                assert_eq!(*selected, 0);
+            }
+            other => panic!("expected AgentsPanel modal; got {other:?}"),
+        }
     }
 
     /// A chip click in the attached view dispatches the command but must

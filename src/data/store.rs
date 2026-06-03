@@ -11,6 +11,10 @@ pub struct RepoId(pub i64);
 #[serde(transparent)]
 pub struct WorkspaceId(pub i64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct AgentInstanceId(pub i64);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceState {
     Pending,
@@ -219,6 +223,18 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 11", [])?;
         }
+        if v < 12 {
+            self.conn.execute_batch(SCHEMA_V12_MULTI_AGENT)?;
+            // Backfill one primary instance row per existing workspace from the
+            // denormalized workspaces.agent column.
+            self.conn.execute(
+                "INSERT OR IGNORE INTO workspace_agents \
+                     (workspace_id, agent, ordinal, is_primary, created_at)
+                 SELECT id, agent, 1, 1, created_at FROM workspaces",
+                [],
+            )?;
+            self.conn.execute("PRAGMA user_version = 12", [])?;
+        }
         Ok(())
     }
 
@@ -232,6 +248,21 @@ impl Store {
     }
 
     pub fn remove_repo(&self, id: RepoId) -> Result<()> {
+        // Clear agent-instance rows before deleting workspaces.
+        // `workspace_agents.workspace_id` has no ON DELETE CASCADE, so the
+        // FK constraint would block the workspace delete without this.
+        //
+        // Manual cascade: agent_messages.target_agent_id → workspace_agents → workspaces
+        self.conn.execute(
+            "DELETE FROM agent_messages WHERE workspace_id IN \
+                 (SELECT id FROM workspaces WHERE repo_id = ?1)",
+            [id.0],
+        )?;
+        self.conn.execute(
+            "DELETE FROM workspace_agents WHERE workspace_id IN \
+                 (SELECT id FROM workspaces WHERE repo_id = ?1)",
+            [id.0],
+        )?;
         self.conn
             .execute("DELETE FROM workspaces WHERE repo_id = ?1", [id.0])?;
         self.conn
@@ -478,6 +509,18 @@ impl Store {
     }
 
     pub fn delete_workspace(&self, id: WorkspaceId) -> Result<()> {
+        // `workspace_agents.workspace_id` references `workspaces(id)` WITHOUT
+        // `ON DELETE CASCADE`, so clear any agent-instance rows first or the
+        // foreign-key constraint would block the delete. (Now that sessions are
+        // keyed by primary instance, attached workspaces always have a row.)
+        //
+        // Manual cascade: agent_messages.target_agent_id → workspace_agents → workspaces
+        self.conn
+            .execute("DELETE FROM agent_messages WHERE workspace_id = ?1", [id.0])?;
+        self.conn.execute(
+            "DELETE FROM workspace_agents WHERE workspace_id = ?1",
+            [id.0],
+        )?;
         self.conn
             .execute("DELETE FROM workspaces WHERE id = ?1", [id.0])?;
         Ok(())
@@ -508,6 +551,24 @@ impl Store {
             "UPDATE workspaces SET agent = ?1 WHERE id = ?2",
             rusqlite::params![agent.store_value(), id.0],
         )?;
+        // Keep the primary workspace_agents row in sync (the spec's single-writer
+        // invariant: workspaces.agent is a denormalized mirror of the primary
+        // instance's kind). Compute a collision-free ordinal for the new kind:
+        // the next free ordinal among existing rows of that kind (the primary
+        // currently holds its OLD kind, so it isn't counted) — which is 1 for the
+        // common single-agent replace, or MAX+1 if added instances of the new
+        // kind already exist.
+        let next_ordinal: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM workspace_agents
+             WHERE workspace_id = ?1 AND agent = ?2",
+            rusqlite::params![id.0, agent.store_value()],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            "UPDATE workspace_agents SET agent = ?1, ordinal = ?2
+             WHERE workspace_id = ?3 AND is_primary = 1",
+            rusqlite::params![agent.store_value(), next_ordinal, id.0],
+        )?;
         Ok(())
     }
 
@@ -532,20 +593,7 @@ impl Store {
             "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
              FROM workspaces WHERE repo_id = ?1 ORDER BY id",
         )?;
-        let rows = stmt.query_map([repo_id.0], |r| {
-            Ok(Workspace {
-                id: WorkspaceId(r.get(0)?),
-                repo_id: RepoId(r.get(1)?),
-                name: r.get(2)?,
-                branch: r.get(3)?,
-                worktree_path: PathBuf::from(r.get::<_, String>(4)?),
-                state: parse_state(&r.get::<_, String>(5)?),
-                setup_status: parse_setup(&r.get::<_, String>(6)?),
-                created_at: r.get(7)?,
-                yolo: r.get::<_, i64>(8)? != 0,
-                agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
-            })
-        })?;
+        let rows = stmt.query_map([repo_id.0], row_to_workspace)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
@@ -607,6 +655,12 @@ impl Store {
         let Some((tree_json, focus_json)) = row else {
             return Ok(None);
         };
+        // Backward-compat: layouts written before split-tree leaves carried an
+        // agent instance serialized a leaf as a bare int (`{"Leaf": 5}`), which
+        // no longer deserializes into the `Leaf(AttachTarget)` shape. A parse
+        // failure is treated as "no saved layout" (the row is dropped and we
+        // return `Ok(None)`), so any pre-existing multi-pane layout resets to
+        // single-pane once after this change — acceptable for convenience state.
         match (
             serde_json::from_str::<crate::ui::split::SplitTree>(&tree_json),
             serde_json::from_str::<Vec<usize>>(&focus_json),
@@ -665,6 +719,39 @@ impl Store {
         }
         Ok(out)
     }
+
+    /// Fetch a single workspace by its id.
+    pub fn workspace_by_id(&self, id: WorkspaceId) -> Result<Option<Workspace>> {
+        let r = self
+            .conn
+            .query_row(
+                "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
+                 FROM workspaces WHERE id = ?1",
+                [id.0],
+                row_to_workspace,
+            )
+            .optional()?;
+        Ok(r)
+    }
+
+    /// All workspaces across every repo (used by `resolve_current_workspace`).
+    pub fn all_workspaces(&self) -> Result<Vec<Workspace>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
+             FROM workspaces ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], row_to_workspace)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub(crate) fn conn(&self) -> &rusqlite::Connection {
+        &self.conn
+    }
+
+    #[cfg(test)]
+    pub(crate) fn migrate_for_test(&self) -> Result<()> {
+        self.migrate()
+    }
 }
 
 const SCHEMA_V1: &str = r#"
@@ -716,11 +803,62 @@ CREATE TABLE IF NOT EXISTS workspace_layouts (
 );
 ";
 
-fn now_ms() -> i64 {
+const SCHEMA_V12_MULTI_AGENT: &str = r#"
+CREATE TABLE IF NOT EXISTS workspace_agents (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id  INTEGER NOT NULL REFERENCES workspaces(id),
+    agent         TEXT    NOT NULL,
+    -- ordinal is per (workspace, agent): claude ordinal 1 and codex ordinal 1 coexist.
+    ordinal       INTEGER NOT NULL,
+    is_primary    INTEGER NOT NULL DEFAULT 0,
+    session_ref   TEXT,
+    created_at    INTEGER NOT NULL,
+    UNIQUE(workspace_id, agent, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_ws ON workspace_agents(workspace_id);
+-- Exactly one primary per workspace. The runtime assumes this (primary_instance_id
+-- uses query_row); enforce it at the DB layer so a stray second primary can't be
+-- inserted and cause nondeterministic resolution.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_agents_one_primary
+    ON workspace_agents(workspace_id) WHERE is_primary = 1;
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- workspace_id is a denormalized filter column with NO foreign key. Message
+    -- rows are cleaned up explicitly (delete_workspace / remove_repo /
+    -- remove_workspace_agent) rather than by cascade: target_agent_id's FK to
+    -- workspace_agents would otherwise block deleting those parent rows.
+    workspace_id    INTEGER NOT NULL,
+    target_agent_id INTEGER NOT NULL REFERENCES workspace_agents(id),
+    from_agent_id   INTEGER,
+    body            TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    delivered_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_undelivered
+    ON agent_messages(workspace_id) WHERE delivered_at IS NULL;
+"#;
+
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {
+    Ok(Workspace {
+        id: WorkspaceId(r.get(0)?),
+        repo_id: RepoId(r.get(1)?),
+        name: r.get(2)?,
+        branch: r.get(3)?,
+        worktree_path: PathBuf::from(r.get::<_, String>(4)?),
+        state: parse_state(&r.get::<_, String>(5)?),
+        setup_status: parse_setup(&r.get::<_, String>(6)?),
+        created_at: r.get(7)?,
+        yolo: r.get::<_, i64>(8)? != 0,
+        agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
+    })
 }
 
 fn state_label(s: &WorkspaceState) -> &'static str {
@@ -761,6 +899,15 @@ fn parse_setup(s: &str) -> SetupStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Layout-test leaf: a workspace paired with a same-numbered instance id.
+    /// Layout persistence doesn't validate instance ids, so any id round-trips.
+    fn lt(id: WorkspaceId) -> crate::ui::split::AttachTarget {
+        crate::ui::split::AttachTarget {
+            workspace_id: id,
+            instance: AgentInstanceId(id.0),
+        }
+    }
 
     #[test]
     fn open_in_memory_runs_migrations_idempotently() {
@@ -1304,8 +1451,8 @@ mod tests {
                 agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
-        let mut tree = SplitTree::Leaf(id);
-        tree.split(&[], SplitDirection::Vertical, id);
+        let mut tree = SplitTree::Leaf(lt(id));
+        tree.split(&[], SplitDirection::Vertical, lt(id));
         let focus = vec![1];
         store.set_workspace_layout(id, &tree, &focus).unwrap();
         let got = store
@@ -1345,7 +1492,7 @@ mod tests {
             })
             .unwrap();
         store
-            .set_workspace_layout(id, &SplitTree::Leaf(id), &[])
+            .set_workspace_layout(id, &SplitTree::Leaf(lt(id)), &[])
             .unwrap();
         store.delete_workspace(id).unwrap();
         assert!(store.get_workspace_layout(id).unwrap().is_none());
@@ -1368,9 +1515,9 @@ mod tests {
                 agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
-        let single = SplitTree::Leaf(id);
-        let mut pair = SplitTree::Leaf(id);
-        pair.split(&[], SplitDirection::Vertical, id);
+        let single = SplitTree::Leaf(lt(id));
+        let mut pair = SplitTree::Leaf(lt(id));
+        pair.split(&[], SplitDirection::Vertical, lt(id));
         store.set_workspace_layout(id, &single, &[]).unwrap();
         store.set_workspace_layout(id, &pair, &[1]).unwrap();
         let got = store.get_workspace_layout(id).unwrap().unwrap();
@@ -1442,11 +1589,11 @@ mod tests {
             .unwrap();
         // a: single-leaf layout (should NOT appear).
         store
-            .set_workspace_layout(a, &SplitTree::Leaf(a), &[])
+            .set_workspace_layout(a, &SplitTree::Leaf(lt(a)), &[])
             .unwrap();
         // b: two-leaf layout (should appear).
-        let mut pair = SplitTree::Leaf(b);
-        pair.split(&[], SplitDirection::Vertical, a);
+        let mut pair = SplitTree::Leaf(lt(b));
+        pair.split(&[], SplitDirection::Vertical, lt(a));
         store.set_workspace_layout(b, &pair, &[1]).unwrap();
         let got = store.list_multi_pane_layout_anchors().unwrap();
         assert_eq!(got, vec![b], "only multi-pane anchors returned");
@@ -1515,5 +1662,154 @@ mod tests {
             .find(|w| w.id == id)
             .expect("workspace present");
         assert_eq!(ws.agent, AgentKind::Hermes);
+    }
+
+    #[test]
+    fn set_workspace_agent_syncs_primary_instance_row() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "wsx/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .add_primary_agent(ws, crate::pty::session::AgentKind::Claude, 1)
+            .unwrap();
+
+        store
+            .set_workspace_agent(ws, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+
+        let primary = store
+            .workspace_agents(ws)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.is_primary)
+            .unwrap();
+        assert_eq!(primary.agent, crate::pty::session::AgentKind::Codex);
+        assert_eq!(primary.ordinal, 1); // no added codex existed → ordinal 1
+        assert_eq!(primary.label(), "codex");
+    }
+
+    #[test]
+    fn set_workspace_agent_avoids_ordinal_collision_with_added_instance() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "wsx/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .add_primary_agent(ws, crate::pty::session::AgentKind::Claude, 1)
+            .unwrap();
+        // An added codex already occupies (ws, codex, ordinal 1).
+        store
+            .add_workspace_agent(ws, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+
+        // Replacing the primary's kind to codex must NOT collide on UNIQUE(ws,agent,ordinal).
+        store
+            .set_workspace_agent(ws, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+
+        let all = store.workspace_agents(ws).unwrap();
+        let primary = all.iter().find(|i| i.is_primary).unwrap();
+        assert_eq!(primary.agent, crate::pty::session::AgentKind::Codex);
+        assert_eq!(primary.ordinal, 2); // codex#1 was taken by the added one
+        // Both codex instances coexist, distinct ordinals.
+        assert_eq!(
+            all.iter()
+                .filter(|i| i.agent == crate::pty::session::AgentKind::Codex)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn migration_v12_backfills_one_primary_instance_per_workspace() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)
+                 VALUES (?1, 'w1', 'wsx/w1', '/tmp/r/w1', 'Ready', 'Ok', 7, 0, 'codex')",
+                [repo.0],
+            )
+            .unwrap();
+        let ws = WorkspaceId(store.conn().last_insert_rowid());
+
+        // Simulate a pre-V12 database, then re-run the migration to exercise backfill.
+        store
+            .conn()
+            .execute("DELETE FROM workspace_agents", [])
+            .unwrap();
+        store
+            .conn()
+            .execute("PRAGMA user_version = 11", [])
+            .unwrap();
+        store.migrate_for_test().unwrap();
+
+        let count: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM workspace_agents WHERE workspace_id = ?1 AND is_primary = 1",
+                [ws.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let agent: String = store
+            .conn()
+            .query_row(
+                "SELECT agent FROM workspace_agents WHERE workspace_id = ?1",
+                [ws.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(agent, "codex");
+
+        // Simulate a crash between the DDL and the version bump: re-enter the
+        // `v < 12` block with the backfilled rows already present. `INSERT OR
+        // IGNORE` must keep this idempotent (count stays 1, not 2).
+        store
+            .conn()
+            .execute("PRAGMA user_version = 11", [])
+            .unwrap();
+        store.migrate_for_test().unwrap();
+        let count_after_reentry: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM workspace_agents WHERE workspace_id = ?1",
+                [ws.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_after_reentry, 1);
+
+        let v: i64 = store
+            .conn()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 12);
     }
 }

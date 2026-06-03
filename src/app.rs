@@ -14,6 +14,7 @@ pub mod activity;
 pub mod background;
 pub mod bell;
 pub mod input;
+pub mod messaging;
 pub mod render;
 pub use crate::app::activity::{ActivityState, classify_activity, classify_activity_with_events};
 pub use crate::app::background::{branch_drift_poll, tail_workspace_events};
@@ -233,6 +234,11 @@ pub struct App {
         std::sync::Arc<crate::pty::session::Session>,
         ratatui::layout::Rect,
     )>,
+    /// `(instance id, rect)` for each agent pill in the footer agents row,
+    /// populated each attached-view draw and consumed by `handle_mouse` to
+    /// retarget the focused pane on click. Mirrors the `chip_rects`
+    /// draw-populates / input-reads pattern; cleared each frame.
+    pub agent_chip_rects: Vec<(crate::data::store::AgentInstanceId, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
@@ -311,6 +317,7 @@ impl App {
             detail_scroll_last_workspace: None,
             detail_container_rects: [None; 4],
             attached_pane_rects: Vec::new(),
+            agent_chip_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),
@@ -403,6 +410,59 @@ impl App {
         self.selectable.get(self.dashboard.selected).copied()
     }
 
+    /// The primary agent instance for a workspace (the creation-time agent).
+    ///
+    /// Deliberately collapses a DB error to `None` (same as "no primary
+    /// instance") — callers are read/render paths where degrading to
+    /// "session-less for this frame" is acceptable and self-heals next frame.
+    /// Spawn paths that must not silently skip seeding use
+    /// `resolve_primary_instance` (which returns `Result`) instead.
+    pub(crate) fn primary_instance(
+        &self,
+        ws: crate::data::store::WorkspaceId,
+    ) -> Option<crate::data::store::AgentInstanceId> {
+        self.store.primary_instance_id(ws).ok().flatten()
+    }
+
+    /// The live session for a given agent instance, if any.
+    pub(crate) fn session_for(
+        &self,
+        inst: crate::data::store::AgentInstanceId,
+    ) -> Option<std::sync::Arc<crate::pty::session::Session>> {
+        self.sessions.get(inst)
+    }
+
+    /// Retarget the focused attached pane to `inst` (switching the visible agent
+    /// in place), spawning its session if needed. No-op if not in attached view
+    /// or the instance is unknown.
+    pub(crate) fn switch_focused_pane_to(
+        &mut self,
+        inst: crate::data::store::AgentInstanceId,
+    ) -> Result<()> {
+        // Only retarget once the session is actually ready. On a missing
+        // binary, ensure_instance_session sets the AgentMissing modal and
+        // returns AgentMissing WITHOUT spawning — retargeting anyway would
+        // point the focused leaf at a sessionless instance, and the next
+        // draw's "leaf session missing -> bounce to Dashboard" guard would
+        // then collapse the whole split. Mirror attach_workspace and bail.
+        match ensure_instance_session(self, inst, true)? {
+            AttachReady::Ok => {}
+            AttachReady::AgentMissing => return Ok(()),
+        }
+        let Some(instance) = self.store.workspace_agents_by_id(inst)? else {
+            return Ok(());
+        };
+        if let crate::ui::View::Attached(state) = &mut self.view {
+            let target = crate::ui::split::AttachTarget {
+                workspace_id: instance.workspace_id,
+                instance: inst,
+            };
+            let path = state.focus.clone();
+            state.set_leaf_target(&path, target);
+        }
+        Ok(())
+    }
+
     /// If the workspace has any pending tool_use that is a real permission
     /// prompt (NOT AskUserQuestion / ExitPlanMode, which are question tools
     /// surfaced separately as AwaitingAnswer, and NOT Agent subagent
@@ -434,7 +494,9 @@ impl App {
         &self,
         ws: &crate::data::store::Workspace,
     ) -> crate::ui::dashboard::status::Status {
-        let session = self.sessions.get(ws.id);
+        let session = self
+            .primary_instance(ws.id)
+            .and_then(|i| self.sessions.get(i));
         let running = session.as_ref().is_some_and(|s| {
             matches!(
                 *s.status.read().unwrap(),
@@ -677,7 +739,11 @@ pub async fn run<B: Backend + std::io::Write>(
                 // processes (e.g. `wsx workspace create` invoked by Claude
                 // during a related-repos flow). Cheap: PRAGMA data_version
                 // is in-process and only triggers refresh on external commits.
-                g.poll_external_changes();
+                // Only scan the inbox when a sibling commit was detected
+                // (e.g. a `wsx agent send`), avoiding a per-frame DB query.
+                if g.poll_external_changes() {
+                    g.drain_agent_messages();
+                }
                 let now_secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -836,24 +902,52 @@ pub(crate) fn apply_repo_setting(
     }
 }
 
-pub(crate) fn build_spawn_info(
+/// Resolve the primary agent instance id for a workspace, defensively seeding
+/// a primary instance row for any (pre-migration / freshly created) workspace
+/// that somehow lacks one. Used by the spawn paths to key sessions.
+pub(crate) fn resolve_primary_instance(
     app: &App,
     ws_id: crate::data::store::WorkspaceId,
-) -> Option<(
-    crate::data::store::WorkspaceId,
-    std::path::PathBuf,
-    crate::pty::session::SpawnMode,
-    std::path::PathBuf,
-    crate::pty::session::AgentKind,
-)> {
+) -> Result<crate::data::store::AgentInstanceId> {
+    match app.store.primary_instance_id(ws_id)? {
+        Some(i) => Ok(i),
+        None => {
+            let (_, ws) = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == ws_id)
+                .ok_or_else(|| crate::error::Error::Store(rusqlite::Error::QueryReturnedNoRows))?;
+            Ok(app
+                .store
+                .add_primary_agent(ws_id, ws.agent, ws.created_at)?
+                .id)
+        }
+    }
+}
+
+/// Shared spawn context for a workspace: the bits common to spawning the
+/// primary agent or any added instance. Keeping this in one place avoids
+/// duplicating the custom-instructions / related-repo / doctrine /
+/// additional-dirs computation between `build_spawn_info` and
+/// `build_added_spawn_info`.
+struct SpawnContext {
+    repo_path: std::path::PathBuf,
+    worktree: std::path::PathBuf,
+    /// Repo custom instructions merged with the related-repo read-only prompt.
+    custom: Option<String>,
+    additional_dirs: Vec<std::path::PathBuf>,
+    yolo: bool,
+}
+
+fn resolve_spawn_context(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Option<SpawnContext> {
     let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
     let repo = app.repos.iter().find(|r| r.id == *rid)?;
     let custom = crate::data::repo::resolve_custom_instructions(repo, &app.store)
         .ok()
         .flatten();
-    let yolo = ws.yolo;
-    let agent = ws.agent;
-    let doctrine = crate::agent::doctrine::resolve_effective_doctrine(&app.store, agent);
     // Resolve related repos (per-repo names → source paths), filter out
     // the spawning repo itself, build the read-only system-prompt
     // fragment, and fold it into custom_instructions before the agent sees it.
@@ -871,7 +965,39 @@ pub(crate) fn build_spawn_info(
         (None, Some(r)) => Some(r),
         (Some(c), Some(r)) => Some(format!("{c}\n\n{r}")),
     };
-    let mode = if crate::pty::session::has_prior_session_for(&ws.worktree_path, agent) {
+    Some(SpawnContext {
+        repo_path: repo.path.clone(),
+        worktree: ws.worktree_path.clone(),
+        custom,
+        additional_dirs,
+        yolo: ws.yolo,
+    })
+}
+
+pub(crate) fn build_spawn_info(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Option<(
+    crate::data::store::WorkspaceId,
+    std::path::PathBuf,
+    crate::pty::session::SpawnMode,
+    std::path::PathBuf,
+    crate::pty::session::AgentKind,
+)> {
+    let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
+    let repo = app.repos.iter().find(|r| r.id == *rid)?;
+    let agent = ws.agent;
+    let doctrine = crate::agent::doctrine::resolve_effective_doctrine(&app.store, agent);
+    let ctx = resolve_spawn_context(app, ws_id)?;
+    let SpawnContext {
+        custom,
+        additional_dirs,
+        yolo,
+        worktree,
+        repo_path,
+        ..
+    } = ctx;
+    let mode = if crate::pty::session::has_prior_session_for(&worktree, agent) {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
             doctrine: doctrine.clone(),
@@ -899,17 +1025,60 @@ pub(crate) fn build_spawn_info(
             yolo,
         }
     };
-    Some((
-        ws_id,
-        ws.worktree_path.clone(),
-        mode,
-        repo.path.clone(),
-        agent,
-    ))
+    Some((ws_id, worktree, mode, repo_path, agent))
+}
+
+/// Build spawn parameters for an *added* (non-primary) instance. Added agents
+/// always spawn `Fresh` with an injected handoff note so they re-orient from
+/// the shared worktree + git diff (no session resume — see Task 8 scope).
+/// Returns `(worktree, SpawnMode, repo_path)`.
+fn build_added_spawn_info(
+    app: &App,
+    instance: &crate::data::agents::AgentInstance,
+) -> Option<(
+    std::path::PathBuf,
+    crate::pty::session::SpawnMode,
+    std::path::PathBuf,
+)> {
+    let ws_id = instance.workspace_id;
+    let (_, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
+    let repo = app.repos.iter().find(|r| r.id == ws.repo_id)?;
+    let base_ref = repo.base_branch.as_deref().unwrap_or("main");
+    // The primary instance's label, for the handoff note's "alongside `X`" line.
+    let primary_label = app
+        .store
+        .workspace_agents(ws_id)
+        .ok()
+        .and_then(|agents| agents.into_iter().find(|a| a.is_primary).map(|a| a.label()))
+        .unwrap_or_else(|| "the primary agent".to_string());
+    let note = crate::agent::handoff::context_note(
+        instance.agent,
+        &crate::agent::handoff::HandoffContext {
+            primary_label: &primary_label,
+            branch: &ws.branch,
+            base_ref,
+            workspace_name: &ws.name,
+        },
+    );
+    let ctx = resolve_spawn_context(app, ws_id)?;
+    // Put the handoff note LAST so repo/related context precedes it.
+    let custom_instructions = match ctx.custom {
+        Some(c) => format!("{c}\n\n{note}"),
+        None => note,
+    };
+    let doctrine = crate::agent::doctrine::resolve_effective_doctrine(&app.store, instance.agent);
+    let mode = crate::pty::session::SpawnMode::Fresh {
+        rename_ctx: None,
+        custom_instructions: Some(custom_instructions),
+        doctrine,
+        additional_dirs: ctx.additional_dirs,
+        yolo: ctx.yolo,
+    };
+    Some((ctx.worktree, mode, ctx.repo_path))
 }
 
 pub(crate) fn save_layout_for(app: &mut App, state: crate::ui::AttachedState) {
-    let Some(anchor) = state.leaves().first().copied() else {
+    let Some(anchor) = state.leaves().first().map(|t| t.workspace_id) else {
         return;
     };
     if let Err(e) = app
@@ -925,41 +1094,61 @@ pub(crate) fn save_layout_for(app: &mut App, state: crate::ui::AttachedState) {
 
 /// Restore a saved layout for `anchor`, pruning any workspaces that no longer
 /// exist. Spawns missing sessions for surviving side panes. Falls back to a
-/// single-pane view if no layout is saved or all panes were pruned.
+/// single-pane view if no layout is saved or all panes were pruned. Returns
+/// `None` only if the anchor has no resolvable primary instance (unreachable
+/// in normal use — all callers guard on `primary_instance(...).is_some()`).
 pub(crate) fn restore_attached_state(
     app: &mut App,
     anchor: crate::data::store::WorkspaceId,
-) -> crate::ui::AttachedState {
-    let Some((mut tree, mut focus)) = app.store.get_workspace_layout(anchor).ok().flatten() else {
-        return crate::ui::AttachedState::single(anchor);
+) -> Option<crate::ui::AttachedState> {
+    // Fallback single-pane target: the anchor workspace's primary instance.
+    // Matches pre-multi-agent behavior — a single-agent workspace's leaf is
+    // its primary instance.
+    let single = |app: &App| {
+        app.primary_instance(anchor).map(|instance| {
+            crate::ui::AttachedState::single(crate::ui::split::AttachTarget {
+                workspace_id: anchor,
+                instance,
+            })
+        })
     };
-    let valid: std::collections::HashSet<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
+    let Some((mut tree, mut focus)) = app.store.get_workspace_layout(anchor).ok().flatten() else {
+        return single(app);
+    };
+    let valid_ws: std::collections::HashSet<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
     use crate::ui::split::PruneOutcome;
-    let outcome = tree.prune(&|id| valid.contains(&id));
+    // A leaf is stale if its workspace no longer exists OR its agent instance
+    // no longer exists in the store.
+    let outcome = tree.prune(&|t| {
+        valid_ws.contains(&t.workspace_id)
+            && app
+                .store
+                .workspace_agents_by_id(t.instance)
+                .ok()
+                .flatten()
+                .is_some()
+    });
     match outcome {
         PruneOutcome::Empty => {
             let _ = app.store.delete_workspace_layout(anchor);
             let _ = app.refresh();
-            crate::ui::AttachedState::single(anchor)
+            single(app)
         }
         PruneOutcome::Kept => {
             if tree.leaf_at(&focus).is_none() {
                 focus = tree.first_leaf_path();
             }
-            // Spawn any missing sessions for the side panes. Anchor was
-            // already spawned by the caller. Skip on failure and continue
-            // with remaining panes — partial restore is better than no restore.
-            for leaf_id in tree.leaves() {
-                if leaf_id == anchor || app.sessions.get(leaf_id).is_some() {
+            // Spawn any missing sessions for the side panes. The focused
+            // anchor instance was already spawned by the caller. Skip on
+            // failure and continue with remaining panes — partial restore is
+            // better than no restore.
+            for leaf in tree.leaves() {
+                if app.sessions.get(leaf.instance).is_some() {
                     continue;
                 }
-                if let Some((sid, sp, mode, repo_path, agent)) = build_spawn_info(app, leaf_id) {
-                    maybe_mirror_mcp(app, &repo_path, &sp);
-                    let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
-                    let _ = app.sessions.spawn(sid, &sp, 80, 24, mode, remote, agent);
-                }
+                let _ = ensure_instance_session(app, leaf.instance, true);
             }
-            crate::ui::AttachedState { tree, focus }
+            Some(crate::ui::AttachedState { tree, focus })
         }
     }
 }
@@ -974,13 +1163,23 @@ pub(crate) fn ensure_workspace_session(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<AttachReady> {
-    if app.sessions.get(ws_id).is_some() {
+    if app
+        .primary_instance(ws_id)
+        .and_then(|i| app.sessions.get(i))
+        .is_some()
+    {
         return Ok(AttachReady::Ok);
     }
     if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
-        match app.sessions.spawn(id, &path, 80, 24, mode, remote, agent) {
+        // Resolve the primary agent instance for this workspace, defensively
+        // seeding one for any row that somehow lacks a primary instance.
+        let inst = resolve_primary_instance(app, id)?;
+        match app
+            .sessions
+            .spawn(inst, id, &path, 80, 24, mode, remote, agent)
+        {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
                 app.modal = Some(crate::ui::modal::Modal::AgentMissing {
@@ -988,6 +1187,59 @@ pub(crate) fn ensure_workspace_session(
                     agent,
                     binary,
                 });
+                return Ok(AttachReady::AgentMissing);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(AttachReady::Ok)
+}
+
+/// Ensure a specific agent *instance* has a live PTY session, spawning one in
+/// place if missing. Primary instances delegate to `ensure_workspace_session`
+/// so the primary path is never duplicated. Added (non-primary) instances
+/// spawn `Fresh` with an injected handoff note (see `build_added_spawn_info`).
+/// Mirrors `ensure_workspace_session`'s return/error conventions, including the
+/// `AgentMissing` modal for a missing agent binary.
+///
+/// `surface_missing` controls whether a missing-binary error raises
+/// `Modal::AgentMissing`. Pass `true` for interactive callers (keyboard
+/// handlers, `switch_focused_pane_to`, `restore_attached_state`) so the user
+/// sees the modal. Pass `false` for background callers (e.g. the message drain)
+/// so a missing binary doesn't pop a modal over the user's unrelated view.
+pub(crate) fn ensure_instance_session(
+    app: &mut App,
+    inst: crate::data::store::AgentInstanceId,
+    surface_missing: bool,
+) -> Result<AttachReady> {
+    if app.sessions.get(inst).is_some() {
+        return Ok(AttachReady::Ok);
+    }
+    // Unknown instance id: treat as a no-op (matches `build_spawn_info`
+    // returning `None` for a workspace whose setup hasn't completed).
+    let Some(instance) = app.store.workspace_agents_by_id(inst)? else {
+        return Ok(AttachReady::Ok);
+    };
+    if instance.is_primary {
+        return ensure_workspace_session(app, instance.workspace_id);
+    }
+    let ws_id = instance.workspace_id;
+    if let Some((path, mode, repo_path)) = build_added_spawn_info(app, &instance) {
+        maybe_mirror_mcp(app, &repo_path, &path);
+        let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
+        match app
+            .sessions
+            .spawn(inst, ws_id, &path, 80, 24, mode, remote, instance.agent)
+        {
+            Ok(_) => {}
+            Err(crate::error::Error::AgentBinaryMissing(binary)) => {
+                if surface_missing {
+                    app.modal = Some(crate::ui::modal::Modal::AgentMissing {
+                        ws_id,
+                        agent: instance.agent,
+                        binary,
+                    });
+                }
                 return Ok(AttachReady::AgentMissing);
             }
             Err(e) => return Err(e),
@@ -1007,9 +1259,14 @@ pub(crate) fn attach_workspace(
         AttachReady::Ok => {}
         AttachReady::AgentMissing => return Ok(()),
     }
-    if app.sessions.get(ws_id).is_some() {
-        let restored = restore_attached_state(app, ws_id);
-        app.view = View::Attached(restored);
+    if app
+        .primary_instance(ws_id)
+        .and_then(|i| app.sessions.get(i))
+        .is_some()
+    {
+        if let Some(restored) = restore_attached_state(app, ws_id) {
+            app.view = View::Attached(restored);
+        }
     }
     Ok(())
 }
@@ -1236,6 +1493,60 @@ mod reconcile_archive_tests {
             Some(99),
             "stale reconcile must not clear pending_archive_gen"
         );
+    }
+}
+
+#[cfg(test)]
+mod added_spawn_tests {
+    use super::*;
+    use crate::data::store::NewWorkspace;
+    use crate::pty::session::{AgentKind, SpawnMode};
+    use tempfile::TempDir;
+
+    #[test]
+    fn build_added_spawn_info_is_fresh_with_handoff_note() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "feat",
+                branch: "wsx/feat",
+                worktree_path: std::path::Path::new("/tmp/r/feat"),
+                yolo: false,
+                agent: AgentKind::Claude,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
+        let added = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+
+        let tmp = TempDir::new().unwrap();
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        app.refresh().unwrap();
+
+        let (_worktree, mode, _repo_path) =
+            build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh {
+                rename_ctx,
+                custom_instructions,
+                ..
+            } => {
+                assert!(rename_ctx.is_none(), "added agents never rename");
+                let note = custom_instructions.expect("handoff note present");
+                // References the primary's label, the branch, and the
+                // base-ref-driven git diff hint (default "main").
+                assert!(note.contains("claude"), "note mentions primary: {note}");
+                assert!(note.contains("wsx/feat"), "note mentions branch: {note}");
+                assert!(
+                    note.contains("git diff main...HEAD"),
+                    "note mentions base ref: {note}"
+                );
+            }
+            other => panic!("expected Fresh, got {other:?}"),
+        }
     }
 }
 

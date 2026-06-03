@@ -31,6 +31,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // Prevents stale rects from triggering wheel events on invisible containers.
     app.detail_container_rects = [None; 4];
     app.attached_pane_rects.clear();
+    app.agent_chip_rects.clear();
     match &app.view {
         crate::ui::View::Dashboard => {
             let selection_is_workspace =
@@ -74,7 +75,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         continue;
                     }
                     let status = app.classify_status(ws);
-                    let session = app.sessions.get(ws.id);
+                    let session = app
+                        .primary_instance(ws.id)
+                        .and_then(|i| app.sessions.get(i));
                     let secs = session.as_ref().map(|s| {
                         let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
                         if last == 0 {
@@ -148,7 +151,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // `Active`/`Off`/`Awaiting` distinctions `alert_decision`
             // depends on.
             for (_rid, ws) in &app.workspaces {
-                let session = app.sessions.get(ws.id);
+                let session = app
+                    .primary_instance(ws.id)
+                    .and_then(|i| app.sessions.get(i));
                 let running = session.as_ref().is_some_and(|s| {
                     matches!(
                         *s.status.read().unwrap(),
@@ -250,7 +255,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             {
                 if let Some((rid, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
                     if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
-                        let session = app.sessions.get(ws.id);
+                        let session = app
+                            .primary_instance(ws.id)
+                            .and_then(|i| app.sessions.get(i));
                         // Activity timestamp: prefer whichever signal is more
                         // recent. `session.activity_ms` only exists for
                         // workspaces wsx is currently attached to. The JSONL
@@ -346,20 +353,21 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             if state
                 .leaves()
                 .iter()
-                .any(|id| app.sessions.get(*id).is_none())
+                .any(|t| app.sessions.get(t.instance).is_none())
             {
                 app.leader_pending = false;
                 app.view = crate::ui::View::Dashboard;
                 return;
             }
-            let focused_id = match state.focused_id() {
-                Some(id) => id,
+            let focused_target = match state.focused_target() {
+                Some(t) => t,
                 None => {
                     app.leader_pending = false;
                     app.view = crate::ui::View::Dashboard;
                     return;
                 }
             };
+            let focused_id = focused_target.workspace_id;
             let focused_label = app
                 .workspaces
                 .iter()
@@ -413,8 +421,38 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let pinned =
                 crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
 
-            let (pane_area, chip_area, status_area, footer_area) =
-                attached::layout_chrome(area, attention.is_some(), !pinned.is_empty());
+            // Build agents list for the footer agents row. Only shown when
+            // the focused workspace has more than its primary agent.
+            let focused_agents_list: Vec<(
+                crate::data::store::AgentInstanceId,
+                crate::pty::session::AgentKind,
+                String,
+                Option<char>,
+            )> = {
+                let instances = app.store.workspace_agents(focused_id).unwrap_or_default();
+                if instances.len() > 1 {
+                    // Keys cap at 10 (see `agent_switch_keys`); agents past the
+                    // pool get `None` so they still render and stay clickable
+                    // rather than being silently dropped by a `zip`.
+                    let keys = attached::agent_switch_keys(instances.len());
+                    instances
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, inst)| (inst.id, inst.agent, inst.label(), keys.get(i).copied()))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            };
+            let agents_present = !focused_agents_list.is_empty();
+
+            let (pane_area, chip_area, status_area, footer_area, agents_area) =
+                attached::layout_chrome(
+                    area,
+                    attention.is_some(),
+                    !pinned.is_empty(),
+                    agents_present,
+                );
             let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
                 attention
                     .as_ref()
@@ -440,24 +478,34 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let multi_pane = panes.len() > 1;
 
             // Resize each session's PTY to its pane area (minus title row when multi-pane).
-            for (ws_id, _path, rect) in &panes {
-                if let Some(session) = app.sessions.get(*ws_id) {
+            for (target, _path, rect) in &panes {
+                if let Some(session) = app.sessions.get(target.instance) {
                     attached::resize_pane(&session, *rect, multi_pane);
                 }
             }
 
             // Build PaneSpec list. Use owned sessions + labels to keep
-            // them alive while rendering.
+            // them alive while rendering. The leaf carries the agent instance
+            // directly; resolve the session from it and the label/agent kind
+            // from the instance (falling back to the workspace name + agent).
             let pane_data: Vec<PaneData> = panes
                 .into_iter()
-                .filter_map(|(ws_id, path, rect)| {
-                    let session = app.sessions.get(ws_id)?;
-                    let (label, agent) = app
-                        .workspaces
-                        .iter()
-                        .find(|(_, w)| w.id == ws_id)
-                        .map(|(_, w)| (w.name.clone(), Some(w.agent)))
-                        .unwrap_or_default();
+                .filter_map(|(target, path, rect)| {
+                    let session = app.session_for(target.instance)?;
+                    let instance = app
+                        .store
+                        .workspace_agents_by_id(target.instance)
+                        .ok()
+                        .flatten();
+                    let (label, agent) = match instance {
+                        Some(inst) => (inst.label(), Some(inst.agent)),
+                        None => app
+                            .workspaces
+                            .iter()
+                            .find(|(_, w)| w.id == target.workspace_id)
+                            .map(|(_, w)| (w.name.clone(), Some(w.agent)))
+                            .unwrap_or_default(),
+                    };
                     let focused = path == state.focus;
                     Some((session, label, rect, focused, agent))
                 })
@@ -480,16 +528,19 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 chip_area,
                 status_area,
                 footer_area,
+                agents_area,
                 &focused_label,
                 focused_agent,
                 multi_pane,
                 attention_line,
                 &pinned,
+                &focused_agents_list,
                 &app.theme,
             );
             app.chip_rects = out.chip_rects;
             app.attention_rects = attention_rects;
             app.attached_pane_rects = out.pane_rects;
+            app.agent_chip_rects = out.agent_chip_rects;
             app.pinned_commands_cache = pinned;
         }
         crate::ui::View::AttachedPm => {
@@ -505,8 +556,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 };
                 // PM pane is out of scope for pinned commands per spec.
                 let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
-                let (pane_area, chip_area, status_area, footer_area) =
-                    attached::layout_chrome(area, attention.is_some(), false);
+                let (pane_area, chip_area, status_area, footer_area, agents_area) =
+                    attached::layout_chrome(area, attention.is_some(), false, false);
                 let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
                     attention
                         .as_ref()
@@ -543,11 +594,13 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     chip_area,
                     status_area,
                     footer_area,
+                    agents_area,
                     "project-manager",
                     None,
                     false,
                     attention_line,
                     pinned,
+                    &[],
                     &app.theme,
                 );
                 app.attached_pane_rects = out.pane_rects;
@@ -638,6 +691,16 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         f, area, &repo_name, repo, *selected, &app.theme,
                     );
                 }
+            }
+            crate::ui::modal::Modal::AgentsPanel {
+                workspace_id,
+                selected,
+            } => {
+                let agents = app
+                    .store
+                    .workspace_agents(*workspace_id)
+                    .unwrap_or_default();
+                crate::ui::modal::render_agents_panel(f, area, &agents, *selected, &app.theme);
             }
             other => modal::render(f, area, other, app.tick, &app.theme),
         }
@@ -828,8 +891,12 @@ mod layout_indicator_cache_tests {
                 agent: crate::pty::session::AgentKind::Claude,
             })
             .unwrap();
-        let mut pair = SplitTree::Leaf(a);
-        pair.split(&[], SplitDirection::Vertical, a);
+        let ta = crate::ui::split::AttachTarget {
+            workspace_id: a,
+            instance: crate::data::store::AgentInstanceId(a.0),
+        };
+        let mut pair = SplitTree::Leaf(ta);
+        pair.split(&[], SplitDirection::Vertical, ta);
         store.set_workspace_layout(a, &pair, &[1]).unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         assert!(
@@ -838,7 +905,7 @@ mod layout_indicator_cache_tests {
         );
         // Replace with a single-pane layout — should drop from the cache after refresh.
         app.store
-            .set_workspace_layout(a, &SplitTree::Leaf(a), &[])
+            .set_workspace_layout(a, &SplitTree::Leaf(ta), &[])
             .unwrap();
         app.refresh().unwrap();
         assert!(

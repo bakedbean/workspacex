@@ -1,4 +1,5 @@
 use crate::commands::pinned::{PinnedCommand, truncate_label};
+use crate::data::store::AgentInstanceId;
 use crate::pty::render::render_screen;
 use crate::pty::session::{AgentKind, Session};
 use crate::ui::split::{Divider, SplitDirection};
@@ -29,6 +30,10 @@ pub struct PanesDrawOutput {
     pub chip_rects: Vec<Rect>,
     /// `(session, terminal content rect)` for each rendered pane.
     pub pane_rects: Vec<(Arc<Session>, Rect)>,
+    /// `(instance id, clickable rect)` for each agent pill in the footer
+    /// agents row. Empty when the row isn't shown. Consumed by the input
+    /// handler to retarget the focused pane on click.
+    pub agent_chip_rects: Vec<(AgentInstanceId, Rect)>,
 }
 
 /// Render one or more attached panes plus the shared chrome (optional
@@ -55,11 +60,13 @@ pub fn render_panes(
     chip_area: Rect,
     status_area: Rect,
     footer_area: Rect,
+    agents_area: Rect,
     footer_label: &str,
     footer_agent: Option<AgentKind>,
     multi_pane_footer: bool,
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
+    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     theme: &Theme,
 ) -> PanesDrawOutput {
     let show_titles = panes.len() > 1;
@@ -88,9 +95,23 @@ pub fn render_panes(
     // Chips + inline rule filler. Always renders so the rule shows even
     // when there are no pinned commands.
     let chip_rects = render_chip_row(f, chip_area, pinned, theme);
+
+    // Agents row: only rendered when the workspace has more than its primary
+    // agent. Each pill's clickable rect is computed alongside the spans so the
+    // input handler can retarget the focused pane on click.
+    let agent_chip_rects: Vec<(AgentInstanceId, Rect)> = if agents.is_empty() {
+        Vec::new()
+    } else {
+        let spans = agents_row_spans(agents, theme);
+        f.render_widget(Paragraph::new(Line::from(spans)), agents_area);
+        let rects = layout_agents_row(agents_area, agents);
+        agents.iter().map(|(id, _, _, _)| *id).zip(rects).collect()
+    };
+
     PanesDrawOutput {
         chip_rects,
         pane_rects,
+        agent_chip_rects,
     }
 }
 
@@ -176,11 +197,13 @@ fn render_dividers(f: &mut Frame, dividers: &[Divider], theme: &Theme) {
 }
 
 /// Carve the attached view's full `area` into pane / chip / status /
-/// footer sub-areas. Chip and attention rows are 1 cell tall (flush with
-/// each other — the chip row's inline `─` rule already provides visual
-/// separation from above). The footer rect is 2 cells tall so its
-/// leading blank line lifts the keys one cell away from the rows above,
-/// regardless of whether the attention line is present.
+/// footer / agents sub-areas. Chip and attention rows are 1 cell tall
+/// (flush with each other — the chip row's inline `─` rule already
+/// provides visual separation from above). The footer rect is 2 cells
+/// tall so its leading blank line lifts the keys one cell away from the
+/// rows above, regardless of whether the attention line is present.
+/// When `agents_present` is true an additional 1-row agents strip is
+/// appended below the footer.
 ///
 /// The chip row carries either pinned-command chips followed by a `─`
 /// rule filler, or just the rule when no chips are configured.
@@ -188,8 +211,10 @@ pub fn layout_chrome(
     area: Rect,
     attention_present: bool,
     _pinned_present: bool,
-) -> (Rect, Rect, Rect, Rect) {
+    agents_present: bool,
+) -> (Rect, Rect, Rect, Rect, Rect) {
     let status_h = if attention_present { 1 } else { 0 };
+    let agents_h = if agents_present { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -197,9 +222,10 @@ pub fn layout_chrome(
             Constraint::Length(1),        // chip row
             Constraint::Length(status_h), // attention row (0 when absent)
             Constraint::Length(2),        // footer keys with 1-cell spacer above
+            Constraint::Length(agents_h), // agents row (0 when absent)
         ])
         .split(area);
-    (chunks[0], chunks[1], chunks[2], chunks[3])
+    (chunks[0], chunks[1], chunks[2], chunks[3], chunks[4])
 }
 
 /// Resize a session's PTY to fill its pane area (minus a per-pane title
@@ -383,6 +409,114 @@ pub(crate) fn render_chip_row(
     rects
 }
 
+/// Switch keys for the footer agents row, drawn from a reserved-safe pool so
+/// they never collide with the `^x` leader follow-ups already bound in the
+/// attached view:
+///   - `a` → agents panel
+///   - `u` → updates panel
+///   - `d` → detach / close-pane
+///   - `x` → send literal Ctrl-x
+///   - `e` → open editor
+///   - `t` → open terminal
+///   - `v` → open diff
+///   - `g` → open lazygit
+///   - `k` → process list
+///   - `1-9` (digits) → pinned commands
+///
+/// This is the single source of truth: both the renderer and (in a later
+/// task) the input dispatcher call this with the same count so the
+/// displayed key always equals the bound key.
+///
+/// Returns AT MOST `POOL.len()` (10) keys: a workspace with more than 10
+/// agents (only reachable via many same-kind duplicates) exhausts the pool.
+/// Callers must NOT `zip` agents against the result in a way that silently
+/// drops the overflow — agents past the pool should still render (just
+/// without a keyboard switch key; they remain clickable).
+pub fn agent_switch_keys(count: usize) -> Vec<char> {
+    // Pool excludes every letter the attached `^x` leader already binds
+    // (d, x, u, a, e, t, v, g, k) plus all digits (pinned chips 1-9).
+    const POOL: &[char] = &['q', 'w', 'r', 'y', 'i', 'o', 'p', 's', 'h', 'j'];
+    POOL.iter().copied().take(count).collect()
+}
+
+/// Leading label of the agents row; its width is shared by the renderer and
+/// `layout_agents_row` so the computed pill rects align with what's drawn.
+const AGENTS_ROW_PREFIX: &str = "agents:  ";
+/// Inter-pill separator width (in columns) in the agents row.
+const AGENTS_ROW_GAP: u16 = 3;
+
+/// Spans for the footer agents row: `agents:  ▎claude q   ▎codex w`.
+/// Each agent entry renders as a colored identity bar (`▎`), the agent
+/// label, and (when present) a switch key in the footer's key-pill style.
+/// Agents past the switch-key pool carry `None` and render keyless — they
+/// still show the color bar + label and remain clickable.
+pub fn agents_row_spans(
+    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let key_style = Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft);
+    let pad_style = theme.chip_bg_style();
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(1 + agents.len() * 6);
+    spans.push(Span::raw(AGENTS_ROW_PREFIX.to_string()));
+    for (i, (_id, kind, label, key)) in agents.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" ".repeat(AGENTS_ROW_GAP as usize)));
+        }
+        spans.push(Span::styled("▎".to_string(), theme.agent_style(*kind)));
+        spans.push(Span::raw(format!("{label} ")));
+        if let Some(key) = key {
+            spans.push(Span::styled(" ".to_string(), pad_style));
+            spans.push(Span::styled(key.to_string(), key_style));
+            spans.push(Span::styled(" ".to_string(), pad_style));
+        }
+    }
+    spans
+}
+
+/// Compute the clickable Rect for each agent pill in the footer agents row,
+/// mirroring [`layout_chip_row`]. Returns one rect per agent, in order, by
+/// walking pill widths from the leading `agents:` label. Each pill spans its
+/// color bar + `label ` + optional ` key ` pill; the inter-pill gap is not
+/// included in any rect. One rect is returned per agent (so indices stay
+/// aligned with the agents slice), but each is clamped to the row width: a
+/// pill that begins at or past the row's right edge collapses to width 0 and
+/// is therefore not hit-testable. So agents whose pills overflow the visible
+/// row width are rendered up to the edge but are not clickable — switch to
+/// them by key instead, or widen the terminal.
+pub fn layout_agents_row(
+    area: Rect,
+    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+) -> Vec<Rect> {
+    let mut rects = Vec::with_capacity(agents.len());
+    let max_x = area.x.saturating_add(area.width);
+    let mut x = area
+        .x
+        .saturating_add(AGENTS_ROW_PREFIX.chars().count() as u16);
+    for (i, (_id, _kind, label, key)) in agents.iter().enumerate() {
+        if i > 0 {
+            x = x.saturating_add(AGENTS_ROW_GAP);
+        }
+        // "▎" (1) + "{label} " (label + 1) + optional " key " pill (3).
+        let mut width = 1 + label.chars().count() as u16 + 1;
+        if key.is_some() {
+            width = width.saturating_add(3);
+        }
+        let clamped_width = width.min(max_x.saturating_sub(x));
+        rects.push(Rect {
+            x,
+            y: area.y,
+            width: clamped_width,
+            height: 1,
+        });
+        x = x.saturating_add(width);
+    }
+    rects
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,7 +652,7 @@ mod tests {
         // a single cell of breathing room just above the keys —
         // independent of whether the attention row is present.
         let area = ratatui::layout::Rect::new(0, 0, 80, 30);
-        let (pane, chip, status, footer) = layout_chrome(area, true, true);
+        let (pane, chip, status, footer, agents) = layout_chrome(area, true, true, false);
         assert_eq!(chip.height, 1, "chip row is 1 tall (no spacer below)");
         assert_eq!(
             status.height, 1,
@@ -528,13 +662,14 @@ mod tests {
             footer.height, 2,
             "footer rect is 2 tall (spacer + keys row)"
         );
+        assert_eq!(agents.height, 0, "agents row absent when not requested");
         assert_eq!(
-            pane.height + chip.height + status.height + footer.height,
+            pane.height + chip.height + status.height + footer.height + agents.height,
             area.height,
             "chrome chunks should tile the full area without overlap"
         );
 
-        let (_, chip2, status2, footer2) = layout_chrome(area, false, true);
+        let (_, chip2, status2, footer2, agents2) = layout_chrome(area, false, true, false);
         assert_eq!(chip2.height, 1);
         assert_eq!(
             status2.height, 0,
@@ -544,6 +679,51 @@ mod tests {
             footer2.height, 2,
             "footer rect still has its leading spacer when attention absent"
         );
+        assert_eq!(agents2.height, 0);
+
+        let (_, _, _, _, agents3) = layout_chrome(area, false, true, true);
+        assert_eq!(agents3.height, 1, "agents row is 1 tall when present");
+    }
+
+    #[test]
+    fn switch_keys_skip_reserved_and_are_unique() {
+        // Request the whole pool so the exclusion check covers every key.
+        let keys = agent_switch_keys(64);
+        // No reserved `^x`-leader letter may appear anywhere in the pool.
+        for reserved in ['d', 'x', 'u', 'a', 'e', 't', 'v', 'g', 'k'] {
+            assert!(
+                !keys.contains(&reserved),
+                "pool must not contain reserved '{reserved}'"
+            );
+        }
+        assert!(keys.iter().all(|c| !c.is_ascii_digit())); // digits are pinned chips
+        let unique: std::collections::HashSet<_> = keys.iter().collect();
+        assert_eq!(unique.len(), keys.len());
+    }
+
+    #[test]
+    fn agents_row_spans_include_label_and_color_bar() {
+        let theme = Theme::by_name("default");
+        let agents = vec![
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".to_string(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Codex,
+                "codex".to_string(),
+                Some('w'),
+            ),
+        ];
+        let spans = agents_row_spans(&agents, &theme);
+        let text: String = spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("claude"));
+        assert!(text.contains("codex"));
+        assert!(text.contains('q'));
+        assert!(text.contains('w'));
     }
 
     #[test]

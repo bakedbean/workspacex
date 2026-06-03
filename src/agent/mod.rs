@@ -5,6 +5,7 @@
 //! orchestration (`pm`), and skill installation (`skill`).
 
 pub mod doctrine;
+pub mod handoff;
 pub mod mcp;
 pub mod pm;
 pub mod related;

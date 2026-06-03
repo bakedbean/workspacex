@@ -7,10 +7,10 @@
 
 use crate::app::{
     App, AttachReady, PendingEdit, RepoSettingField, SelectionTarget, SharedApp,
-    apply_repo_setting, attach_workspace, ensure_workspace_session, reconcile_create_result,
-    rescan_processes, restore_attached_state, save_layout_for, schedule_detach_refresh,
+    apply_repo_setting, attach_workspace, ensure_instance_session, ensure_workspace_session,
+    reconcile_create_result, rescan_processes, restore_attached_state, save_layout_for,
+    schedule_detach_refresh,
 };
-use crate::data::store::WorkspaceId;
 use crate::error::Result;
 use crate::ui::View;
 use crate::ui::modal::Modal;
@@ -124,7 +124,9 @@ fn scroll_active(app: &App, rows: usize, up: bool) {
 /// view + focus, or None when there is no targetable session.
 fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Session>> {
     match &app.view {
-        View::Attached(state) => state.focused_id().and_then(|id| app.sessions.get(id)),
+        View::Attached(state) => state
+            .focused_target()
+            .and_then(|target| app.sessions.get(target.instance)),
         View::AttachedPm => app.pm.clone(),
         View::Dashboard
             if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
@@ -139,9 +141,13 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
 /// is the currently selected workspace.
 fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Session>> {
     match &app.view {
-        View::Attached(state) => state.focused_id().and_then(|id| app.sessions.get(id)),
+        View::Attached(state) => state
+            .focused_target()
+            .and_then(|target| app.sessions.get(target.instance)),
         View::Dashboard => match app.selected_target() {
-            Some(SelectionTarget::Workspace(id)) => app.sessions.get(id),
+            Some(SelectionTarget::Workspace(id)) => {
+                app.primary_instance(id).and_then(|i| app.sessions.get(i))
+            }
             _ => None,
         },
         _ => None,
@@ -395,9 +401,20 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     // Ctrl-X cancels the chord instead of getting stuck armed.
     if app.leader_pending {
         app.leader_pending = false;
-        if let KeyCode::Char(c @ '1'..='9') = k.code {
-            let idx = (c as u8 - b'1') as usize;
-            fire_chip(app, idx).await;
+        match k.code {
+            KeyCode::Char('a') => {
+                if let Some(crate::app::SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                    app.modal = Some(crate::ui::modal::Modal::AgentsPanel {
+                        workspace_id: ws_id,
+                        selected: 0,
+                    });
+                }
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as u8 - b'1') as usize;
+                fire_chip(app, idx).await;
+            }
+            _ => {}
         }
         return Ok(());
     }
@@ -670,10 +687,13 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
 }
 async fn handle_key_attached(
     app: &mut App,
-    id: WorkspaceId,
+    target: crate::ui::split::AttachTarget,
     k: crossterm::event::KeyEvent,
 ) -> Result<()> {
-    let session = match app.sessions.get(id) {
+    // The focused leaf carries the agent instance directly; the workspace id
+    // drives workspace-level actions (open editor/diff/process list, etc.).
+    let id = target.workspace_id;
+    let session = match app.sessions.get(target.instance) {
         Some(s) => s,
         None => {
             app.leader_pending = false;
@@ -691,17 +711,21 @@ async fn handle_key_attached(
                 // only when the last pane closes.
                 if let View::Attached(state) = &mut app.view {
                     if state.leaf_count() > 1 {
-                        let closed = state.focused_id();
+                        let closed = state.focused_target();
                         match state.close_focused() {
                             CloseOutcome::Focus(_) => {
+                                // Refresh the closed pane's workspace. If another pane
+                                // shares the same workspace this may redundantly refresh
+                                // a still-attached workspace — harmless (at most one
+                                // extra poll).
                                 if let Some(cid) = closed {
-                                    schedule_detach_refresh(app, [cid]);
+                                    schedule_detach_refresh(app, [cid.workspace_id]);
                                 }
                                 return Ok(());
                             }
                             CloseOutcome::Empty => {
                                 if let Some(cid) = closed {
-                                    schedule_detach_refresh(app, [cid]);
+                                    schedule_detach_refresh(app, [cid.workspace_id]);
                                 }
                                 app.view = View::Dashboard;
                                 return Ok(());
@@ -709,8 +733,10 @@ async fn handle_key_attached(
                         }
                     }
                 }
-                let leaves = match &app.view {
-                    View::Attached(state) => state.leaves(),
+                let leaves: Vec<_> = match &app.view {
+                    View::Attached(state) => {
+                        state.leaves().iter().map(|t| t.workspace_id).collect()
+                    }
                     _ => Vec::new(),
                 };
                 schedule_detach_refresh(app, leaves);
@@ -721,8 +747,10 @@ async fn handle_key_attached(
                 if let View::Attached(state) = &app.view {
                     save_layout_for(app, state.clone());
                 }
-                let leaves = match &app.view {
-                    View::Attached(state) => state.leaves(),
+                let leaves: Vec<_> = match &app.view {
+                    View::Attached(state) => {
+                        state.leaves().iter().map(|t| t.workspace_id).collect()
+                    }
                     _ => Vec::new(),
                 };
                 schedule_detach_refresh(app, leaves);
@@ -750,6 +778,13 @@ async fn handle_key_attached(
             }
             KeyCode::Char('u') => {
                 app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+                return Ok(());
+            }
+            KeyCode::Char('a') => {
+                app.modal = Some(crate::ui::modal::Modal::AgentsPanel {
+                    workspace_id: id,
+                    selected: 0,
+                });
                 return Ok(());
             }
             KeyCode::Char('e') => {
@@ -838,6 +873,21 @@ async fn handle_key_attached(
                     bytes.push(b'\r');
                     session.scroll_to_live();
                     let _ = session.writer.send(bytes).await;
+                }
+                return Ok(());
+            }
+            // Fallback: any other leftover letter may be an agent switch key
+            // from the footer agents row. Matched against the same
+            // `agent_switch_keys` pool the renderer used, so the displayed key
+            // equals the bound key. Placed last so it never shadows the
+            // specific arms above (the pool excludes all of them).
+            KeyCode::Char(c) => {
+                let agents = app.store.workspace_agents(id).unwrap_or_default();
+                if agents.len() > 1 {
+                    let keys = crate::ui::attached::agent_switch_keys(agents.len());
+                    if let Some(idx) = keys.iter().position(|k| *k == c) {
+                        app.switch_focused_pane_to(agents[idx].id)?;
+                    }
                 }
                 return Ok(());
             }
@@ -1120,10 +1170,15 @@ async fn handle_key_modal(
                         app.workspace_needs_attention.remove(&ws_id);
                         match ensure_workspace_session(app, ws_id)? {
                             AttachReady::Ok => {
-                                if app.sessions.get(ws_id).is_some() {
-                                    let restored = restore_attached_state(app, ws_id);
-                                    app.leader_pending = false;
-                                    app.view = View::Attached(restored);
+                                if app
+                                    .primary_instance(ws_id)
+                                    .and_then(|i| app.sessions.get(i))
+                                    .is_some()
+                                {
+                                    if let Some(restored) = restore_attached_state(app, ws_id) {
+                                        app.leader_pending = false;
+                                        app.view = View::Attached(restored);
+                                    }
                                 }
                             }
                             AttachReady::AgentMissing => {
@@ -1151,32 +1206,45 @@ async fn handle_key_modal(
                         app.workspace_needs_attention.remove(&ws_id);
                         match ensure_workspace_session(app, ws_id)? {
                             AttachReady::Ok => {
-                                if app.sessions.get(ws_id).is_some() {
+                                if let Some(instance) = app.primary_instance(ws_id)
+                                    && app.sessions.get(instance).is_some()
+                                {
+                                    // Splitting from the dashboard targets the
+                                    // workspace's primary instance — preserves
+                                    // pre-multi-agent behavior (the leaf for a
+                                    // single-agent workspace is its primary).
+                                    let target = crate::ui::split::AttachTarget {
+                                        workspace_id: ws_id,
+                                        instance,
+                                    };
                                     match &mut app.view {
                                         View::Attached(state) => {
                                             // Same pane already focused: switch focus
                                             // instead of splitting onto itself.
-                                            if state.focused_id() == Some(ws_id) {
+                                            if state.focused_target() == Some(target) {
                                                 // no-op
-                                            } else if state.leaves().contains(&ws_id) {
+                                            } else if state.leaves().contains(&target) {
                                                 // Already open in another pane —
                                                 // just refocus there.
                                                 if let Some(p) =
                                                     state.tree.leaf_paths().into_iter().find(|p| {
-                                                        state.tree.leaf_at(p) == Some(ws_id)
+                                                        state.tree.leaf_at(p) == Some(target)
                                                     })
                                                 {
                                                     state.focus = p;
                                                 }
                                             } else {
-                                                state.split(dir, ws_id);
+                                                state.split(dir, target);
                                             }
                                         }
                                         _ => {
                                             // No attached pane yet — restore saved layout or attach plainly.
-                                            let restored = restore_attached_state(app, ws_id);
-                                            app.leader_pending = false;
-                                            app.view = View::Attached(restored);
+                                            if let Some(restored) =
+                                                restore_attached_state(app, ws_id)
+                                            {
+                                                app.leader_pending = false;
+                                                app.view = View::Attached(restored);
+                                            }
                                         }
                                     }
                                 }
@@ -1331,6 +1399,63 @@ async fn handle_key_modal(
                 _ => {}
             }
         }
+        Modal::AgentsPanel {
+            workspace_id,
+            selected,
+        } => {
+            use crate::pty::session::AgentKind;
+            match k.code {
+                KeyCode::Esc => {
+                    app.modal = None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.modal = Some(Modal::AgentsPanel {
+                        workspace_id,
+                        selected: selected.saturating_sub(1),
+                    });
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    app.modal = Some(Modal::AgentsPanel {
+                        workspace_id,
+                        selected: (selected + 1).min(AgentKind::ALL.len() - 1),
+                    });
+                }
+                KeyCode::Enter => {
+                    // Defensively bound the index: navigation clamps `selected`,
+                    // but guard against a stale/large value so this can never panic.
+                    let idx = selected.min(AgentKind::ALL.len().saturating_sub(1));
+                    let kind = AgentKind::ALL[idx];
+                    let inst = app.store.add_workspace_agent(workspace_id, kind)?;
+                    // Spawn it now. ensure_instance_session sets Modal::AgentMissing
+                    // (and returns AgentMissing) if the binary is absent — in that
+                    // case leave that modal up; otherwise close the panel.
+                    match ensure_instance_session(app, inst.id, true)? {
+                        AttachReady::AgentMissing => {} // ensure_instance_session set the modal
+                        _ => app.modal = None,
+                    }
+                }
+                KeyCode::Char('a') => {
+                    for kind in AgentKind::ALL {
+                        let inst = app.store.add_workspace_agent(workspace_id, kind)?;
+                        let _ = ensure_instance_session(app, inst.id, true)?;
+                    }
+                    app.modal = None;
+                }
+                KeyCode::Char('x') => {
+                    // Remove the most-recently-added non-primary instance.
+                    if let Some(last) = app
+                        .store
+                        .workspace_agents(workspace_id)?
+                        .into_iter()
+                        .rfind(|i| !i.is_primary)
+                    {
+                        app.sessions.remove(last.id);
+                        app.store.remove_workspace_agent(last.id)?;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     Ok(())
 }
@@ -1379,7 +1504,10 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
                 // yet — otherwise an inline reply on an unattached
                 // workspace silently drops.
                 let _ = ensure_workspace_session(app, ws_id);
-                if let Some(session) = app.sessions.get(ws_id) {
+                if let Some(session) = app
+                    .primary_instance(ws_id)
+                    .and_then(|i| app.sessions.get(i))
+                {
                     let mut bytes = draft.into_bytes();
                     bytes.push(b'\r');
                     session.scroll_to_live();
@@ -1562,6 +1690,17 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 if let Err(e) = attach_workspace(app, ws_id) {
                     tracing::warn!(error = %e, "failed to attach from attention click");
                 }
+            } else if let Some((inst, _)) = app.agent_chip_rects.iter().copied().find(|(_, r)| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                // Clicking an agent pill retargets the focused pane to that
+                // instance, spawning its session if needed.
+                if let Err(e) = app.switch_focused_pane_to(inst) {
+                    tracing::warn!(error = %e, "failed to switch pane from agent-pill click");
+                }
             }
         }
         _ => {}
@@ -1578,7 +1717,7 @@ async fn dispatch_key(
         match &app.view {
             View::Dashboard => handle_key_dashboard(app, k).await?,
             View::Attached(state) => {
-                let id = match state.focused_id() {
+                let id = match state.focused_target() {
                     Some(id) => id,
                     None => {
                         app.leader_pending = false;
@@ -1602,6 +1741,42 @@ pub(crate) async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent
         _ => {}
     }
     Ok(())
+}
+
+/// Test helper: resolve (seeding if necessary) the primary agent instance id
+/// for a workspace, so tests can spawn/look up sessions keyed by instance the
+/// same way production paths do.
+///
+/// Unlike production's `resolve_primary_instance`, this reads directly from the
+/// store rather than the `app.workspaces` in-memory mirror, because many tests
+/// insert workspace rows straight into the store without refreshing the mirror.
+/// The seeded agent kind is irrelevant — sessions are keyed only by the id.
+#[cfg(test)]
+pub(crate) fn test_primary_instance(
+    app: &App,
+    ws: crate::data::store::WorkspaceId,
+) -> crate::data::store::AgentInstanceId {
+    if let Some(i) = app.store.primary_instance_id(ws).unwrap() {
+        return i;
+    }
+    app.store
+        .add_primary_agent(ws, crate::pty::session::AgentKind::Claude, 0)
+        .unwrap()
+        .id
+}
+
+/// Test helper: the attach target for a workspace's primary agent instance.
+/// Mirrors production single-pane behavior, where a single-agent workspace's
+/// leaf carries `(workspace_id, primary_instance_id)`.
+#[cfg(test)]
+pub(crate) fn test_target(
+    app: &App,
+    ws: crate::data::store::WorkspaceId,
+) -> crate::ui::split::AttachTarget {
+    crate::ui::split::AttachTarget {
+        workspace_id: ws,
+        instance: test_primary_instance(app, ws),
+    }
 }
 
 #[cfg(test)]

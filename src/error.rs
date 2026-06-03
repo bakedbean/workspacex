@@ -20,6 +20,25 @@ pub enum Error {
     Serde(#[from] serde_json::Error),
     #[error("invalid input: {0}")]
     UserInput(String),
+    #[error("{msg}")]
+    Usage {
+        group: Option<&'static str>,
+        msg: String,
+    },
     #[error("cancelled")]
     Cancelled,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_displays_only_msg() {
+        let e = Error::Usage {
+            group: Some("agent"),
+            msg: "missing arguments".into(),
+        };
+        assert_eq!(e.to_string(), "missing arguments");
+    }
 }

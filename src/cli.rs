@@ -2,9 +2,249 @@ use crate::config::Dirs;
 use crate::error::{Error, Result};
 use std::path::PathBuf;
 
+pub struct CmdInfo {
+    pub usage: &'static str,
+    pub blurb: &'static str,
+}
+
+pub struct GroupInfo {
+    pub name: &'static str,
+    pub blurb: &'static str,
+    pub commands: &'static [CmdInfo],
+}
+
+pub static GROUPS: &[GroupInfo] = &[
+    GroupInfo {
+        name: "workspace",
+        blurb: "Create, list, rename, and archive workspaces",
+        commands: &[
+            CmdInfo {
+                usage: "create <repo> [--name <slug>] [--yolo] [--agent <kind>]",
+                blurb: "Create a workspace (branch + worktree)",
+            },
+            CmdInfo {
+                usage: "list [<repo>]",
+                blurb: "List workspaces as TSV rows",
+            },
+            CmdInfo {
+                usage: "path <repo> <slug>",
+                blurb: "Print a workspace's worktree path",
+            },
+            CmdInfo {
+                usage: "rename <repo> <old> <new>",
+                blurb: "Rename a workspace slug and its branch",
+            },
+            CmdInfo {
+                usage: "archive <repo> <slug> [--keep-worktree] [--force-delete-branch]",
+                blurb: "Archive a workspace",
+            },
+        ],
+    },
+    GroupInfo {
+        name: "agent",
+        blurb: "List, add, and message agents in a workspace",
+        commands: &[
+            CmdInfo {
+                usage: "list",
+                blurb: "Show agents in the current workspace",
+            },
+            CmdInfo {
+                usage: "add <kind>",
+                blurb: "Attach an agent (claude|pi|hermes|codex)",
+            },
+            CmdInfo {
+                usage: "send <label> <message...>",
+                blurb: "Queue an async message to a peer agent",
+            },
+        ],
+    },
+    GroupInfo {
+        name: "repo",
+        blurb: "Register and configure repositories",
+        commands: &[
+            CmdInfo {
+                usage: "add <path> [--name <name>] [--prefix <prefix>]",
+                blurb: "Register a repository",
+            },
+            CmdInfo {
+                usage: "list",
+                blurb: "List registered repositories",
+            },
+            CmdInfo {
+                usage: "remove <name>",
+                blurb: "Unregister a repository",
+            },
+            CmdInfo {
+                usage: "set-prefix <name> <prefix>",
+                blurb: "Set the branch prefix",
+            },
+            CmdInfo {
+                usage: "set-base-branch <name> <ref-or-empty>",
+                blurb: "Set the base branch",
+            },
+            CmdInfo {
+                usage: "set-instructions <name> <value-or-@file>",
+                blurb: "Set custom instructions",
+            },
+            CmdInfo {
+                usage: "set-setup <name> <value-or-@file>",
+                blurb: "Set the setup script",
+            },
+            CmdInfo {
+                usage: "set-archive <name> <value-or-@file>",
+                blurb: "Set the archive script",
+            },
+            CmdInfo {
+                usage: "edit-setup <name>",
+                blurb: "Edit the setup script in $EDITOR",
+            },
+            CmdInfo {
+                usage: "edit-archive <name>",
+                blurb: "Edit the archive script in $EDITOR",
+            },
+            CmdInfo {
+                usage: "set-pinned-commands <name> <value-or-@file>",
+                blurb: "Set pinned commands",
+            },
+            CmdInfo {
+                usage: "edit-pinned-commands <name>",
+                blurb: "Edit pinned commands in $EDITOR",
+            },
+            CmdInfo {
+                usage: "set-name <name> <new-name>",
+                blurb: "Rename a repository",
+            },
+            CmdInfo {
+                usage: "set-related-repos <name> <value-or-@file>",
+                blurb: "Set related repos",
+            },
+            CmdInfo {
+                usage: "edit-related-repos <name>",
+                blurb: "Edit related repos in $EDITOR",
+            },
+        ],
+    },
+    GroupInfo {
+        name: "config",
+        blurb: "Get and set global settings",
+        commands: &[
+            CmdInfo {
+                usage: "get <key>",
+                blurb: "Print a setting value",
+            },
+            CmdInfo {
+                usage: "set <key> <value-or-@file>",
+                blurb: "Set a setting",
+            },
+            CmdInfo {
+                usage: "list",
+                blurb: "List all settings",
+            },
+            CmdInfo {
+                usage: "edit <key>",
+                blurb: "Edit a setting in $EDITOR",
+            },
+        ],
+    },
+    GroupInfo {
+        name: "remote",
+        blurb: "Run saved remote shortcuts",
+        commands: &[CmdInfo {
+            usage: "[<name>]",
+            blurb: "List remotes, or run the named remote shortcut",
+        }],
+    },
+    GroupInfo {
+        name: "setup",
+        blurb: "One-off setup helpers",
+        commands: &[CmdInfo {
+            usage: "install-skill",
+            blurb: "Install the wsx Claude Code skill",
+        }],
+    },
+];
+
+pub fn group_name(s: &str) -> Option<&'static str> {
+    GROUPS.iter().map(|g| g.name).find(|&n| n == s)
+}
+
+/// The dashed help flags. Bare `help` is handled separately — only in a
+/// subcommand position — because it is a legitimate argument value/name
+/// elsewhere (e.g. a repo named `help`).
+fn is_help_flag(tok: &str) -> bool {
+    matches!(tok, "--help" | "-h")
+}
+
+fn is_version(tok: &str) -> bool {
+    matches!(tok, "--version" | "-V")
+}
+
+pub fn render_root_help() -> String {
+    let mut out = String::from("wsx — git-worktree workspace manager\n\n");
+    out.push_str("USAGE:\n  wsx [COMMAND]            (no command launches the TUI)\n\n");
+    out.push_str("COMMANDS:\n");
+    let width = GROUPS.iter().map(|g| g.name.len()).max().unwrap_or(0);
+    for g in GROUPS {
+        out.push_str(&format!(
+            "  {:<width$}   {}\n",
+            g.name,
+            g.blurb,
+            width = width
+        ));
+    }
+    out.push_str("\nRun `wsx <command> --help` for command details.\n");
+    out
+}
+
+pub fn render_group_help(name: &str) -> String {
+    let Some(g) = GROUPS.iter().find(|g| g.name == name) else {
+        return render_root_help();
+    };
+    let mut out = format!("wsx {} — {}\n\n", g.name, g.blurb);
+    out.push_str(&format!("USAGE:\n  wsx {} <command> [args]\n\n", g.name));
+    out.push_str("COMMANDS:\n");
+    let width = g.commands.iter().map(|c| c.usage.len()).max().unwrap_or(0);
+    for c in g.commands {
+        out.push_str(&format!(
+            "  {:<width$}   {}\n",
+            c.usage,
+            c.blurb,
+            width = width
+        ));
+    }
+    out
+}
+
+type Args = dyn Iterator<Item = String>;
+
+pub fn render_usage_error(group: Option<&str>, msg: &str) -> String {
+    let block = match group {
+        Some(g) => render_group_help(g),
+        None => render_root_help(),
+    };
+    format!("error: {msg}\n\n{block}")
+}
+
+/// Formats a CLI error for stderr. Usage errors render the matching help
+/// block; everything else falls back to a one-line message.
+pub fn report_cli_error(e: &Error) -> String {
+    match e {
+        Error::Usage { group, msg } => render_usage_error(*group, msg),
+        other => format!("error: {other}\n"),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum HelpTopic {
+    Root,
+    Group(&'static str),
+}
+
 #[derive(Debug)]
 pub enum CliAction {
     Tui,
+    Help(HelpTopic),
+    Version,
     RepoAdd {
         path: PathBuf,
         name: String,
@@ -161,356 +401,509 @@ fn known_setting_key(k: &str) -> bool {
 }
 
 pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
-    let mut it = args.into_iter().skip(1);
+    let mut rest: Vec<String> = args.into_iter().skip(1).collect();
+    let first = if rest.is_empty() {
+        None
+    } else {
+        Some(rest.remove(0))
+    };
+
+    match first.as_deref() {
+        None => return Ok(CliAction::Tui),
+        // Match the literal `help` subcommand before the is_help() flag guard,
+        // so `wsx help <group>` resolves the group instead of collapsing to Root.
+        Some("help") => {
+            let topic = match rest.first().and_then(|s| group_name(s)) {
+                Some(g) => HelpTopic::Group(g),
+                None => HelpTopic::Root,
+            };
+            return Ok(CliAction::Help(topic));
+        }
+        Some(t) if is_help_flag(t) => return Ok(CliAction::Help(HelpTopic::Root)),
+        Some(t) if is_version(t) => return Ok(CliAction::Version),
+        _ => {}
+    }
+
+    let group = first.as_deref().expect("None handled above");
+
+    // Per-group help. `--help`/`-h` are flag-style and may appear anywhere
+    // (`wsx agent send --help`); bare `help` is only a help request in the
+    // subcommand slot (`wsx agent help`), since it is a valid value/name
+    // elsewhere (e.g. `wsx repo remove help` removes a repo named `help`).
+    let wants_group_help =
+        rest.iter().any(|a| is_help_flag(a)) || rest.first().map(|a| a.as_str()) == Some("help");
+    if wants_group_help {
+        if let Some(g) = group_name(group) {
+            return Ok(CliAction::Help(HelpTopic::Group(g)));
+        }
+    }
+
+    let mut it = rest.into_iter();
+    match group {
+        "repo" => parse_repo(&mut it).map_err(|e| tag_group(e, group)),
+        "config" => parse_config(&mut it).map_err(|e| tag_group(e, group)),
+        "remote" => parse_remote(&mut it).map_err(|e| tag_group(e, group)),
+        "workspace" => parse_workspace(&mut it).map_err(|e| tag_group(e, group)),
+        "agent" => parse_agent(&mut it).map_err(|e| tag_group(e, group)),
+        "setup" => parse_setup(&mut it).map_err(|e| tag_group(e, group)),
+        other => Err(Error::Usage {
+            group: None,
+            msg: format!("unknown command: {other}"),
+        }),
+    }
+}
+
+fn tag_group(e: Error, group: &str) -> Error {
+    match e {
+        Error::Usage { group: None, msg } => Error::Usage {
+            group: group_name(group),
+            msg,
+        },
+        other => other,
+    }
+}
+
+fn parse_repo(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
-        None => Ok(CliAction::Tui),
-        Some("repo") => match it.next().as_deref() {
-            Some("add") => {
-                let path = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo add <path>".into()))?;
-                let path = PathBuf::from(path);
-                let mut name = path
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let mut branch_prefix = String::new();
-                while let Some(arg) = it.next() {
-                    match arg.as_str() {
-                        "--name" => {
-                            name = it
-                                .next()
-                                .ok_or_else(|| Error::UserInput("--name needs value".into()))?
-                        }
-                        "--prefix" => {
-                            branch_prefix = it
-                                .next()
-                                .ok_or_else(|| Error::UserInput("--prefix needs value".into()))?
-                        }
-                        other => return Err(Error::UserInput(format!("unknown arg: {other}"))),
+        Some("add") => {
+            let path = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo add <path>".into(),
+            })?;
+            let path = PathBuf::from(path);
+            let mut name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let mut branch_prefix = String::new();
+            while let Some(arg) = it.next() {
+                match arg.as_str() {
+                    "--name" => {
+                        name = it.next().ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--name needs value".into(),
+                        })?
+                    }
+                    "--prefix" => {
+                        branch_prefix = it.next().ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--prefix needs value".into(),
+                        })?
+                    }
+                    other => {
+                        return Err(Error::Usage {
+                            group: None,
+                            msg: format!("unknown arg: {other}"),
+                        });
                     }
                 }
-                Ok(CliAction::RepoAdd {
-                    path,
-                    name,
-                    branch_prefix,
-                })
             }
-            Some("list") => Ok(CliAction::RepoList),
-            Some("remove") => {
-                let name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo remove <name>".into()))?;
-                Ok(CliAction::RepoRemove { name })
+            Ok(CliAction::RepoAdd {
+                path,
+                name,
+                branch_prefix,
+            })
+        }
+        Some("list") => Ok(CliAction::RepoList),
+        Some("remove") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo remove <name>".into(),
+            })?;
+            Ok(CliAction::RepoRemove { name })
+        }
+        Some("set-prefix") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-prefix <name> <prefix>".into(),
+            })?;
+            let prefix = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-prefix <name> <prefix>".into(),
+            })?;
+            Ok(CliAction::RepoSetPrefix { name, prefix })
+        }
+        Some("set-base-branch") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-base-branch <name> <ref-or-empty>".into(),
+            })?;
+            let value = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-base-branch <name> <ref-or-empty>".into(),
+            })?;
+            Ok(CliAction::RepoSetBaseBranch { name, value })
+        }
+        Some("set-instructions") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-instructions <name> <value-or-@file>".into(),
+            })?;
+            let value = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-instructions <name> <value-or-@file>".into(),
+            })?;
+            Ok(CliAction::RepoSetInstructions {
+                name,
+                source: ValueSource::from_arg(value),
+            })
+        }
+        Some("set-setup") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-setup <name> <value-or-@file>".into(),
+            })?;
+            let value = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-setup <name> <value-or-@file>".into(),
+            })?;
+            Ok(CliAction::RepoSetSetup {
+                name,
+                source: ValueSource::from_arg(value),
+            })
+        }
+        Some("set-archive") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-archive <name> <value-or-@file>".into(),
+            })?;
+            let value = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-archive <name> <value-or-@file>".into(),
+            })?;
+            Ok(CliAction::RepoSetArchive {
+                name,
+                source: ValueSource::from_arg(value),
+            })
+        }
+        Some("edit-setup") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo edit-setup <name>".into(),
+            })?;
+            Ok(CliAction::RepoEditSetup { name })
+        }
+        Some("edit-archive") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo edit-archive <name>".into(),
+            })?;
+            Ok(CliAction::RepoEditArchive { name })
+        }
+        Some("set-pinned-commands") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-pinned-commands <name> <value-or-@file>".into(),
+            })?;
+            let value = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-pinned-commands <name> <value-or-@file>".into(),
+            })?;
+            Ok(CliAction::RepoSetPinnedCommands {
+                name,
+                source: ValueSource::from_arg(value),
+            })
+        }
+        Some("edit-pinned-commands") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo edit-pinned-commands <name>".into(),
+            })?;
+            Ok(CliAction::RepoEditPinnedCommands { name })
+        }
+        Some("set-name") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-name <name> <new-name>".into(),
+            })?;
+            let new_name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-name <name> <new-name>".into(),
+            })?;
+            Ok(CliAction::RepoSetName { name, new_name })
+        }
+        Some("set-related-repos") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-related-repos <name> <value-or-@file>".into(),
+            })?;
+            let value = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-related-repos <name> <value-or-@file>".into(),
+            })?;
+            Ok(CliAction::RepoSetRelatedRepos {
+                name,
+                source: ValueSource::from_arg(value),
+            })
+        }
+        Some("edit-related-repos") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo edit-related-repos <name>".into(),
+            })?;
+            Ok(CliAction::RepoEditRelatedRepos { name })
+        }
+        other => Err(Error::Usage {
+            group: None,
+            msg: match other {
+                Some(cmd) => format!("unknown repo command: {cmd}"),
+                None => "missing repo command".into(),
+            },
+        }),
+    }
+}
+
+fn parse_config(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("get") => {
+            let key = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "config get <key>".into(),
+            })?;
+            if !known_setting_key(&key) {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("unknown setting key: {key}"),
+                });
             }
-            Some("set-prefix") => {
-                let name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo set-prefix <name> <prefix>".into()))?;
-                let prefix = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo set-prefix <name> <prefix>".into()))?;
-                Ok(CliAction::RepoSetPrefix { name, prefix })
+            Ok(CliAction::ConfigGet { key })
+        }
+        Some("set") => {
+            let key = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "config set <key> <value-or-@file>".into(),
+            })?;
+            if !known_setting_key(&key) {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("unknown setting key: {key}"),
+                });
             }
-            Some("set-base-branch") => {
-                let name = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-base-branch <name> <ref-or-empty>".into())
-                })?;
-                let value = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-base-branch <name> <ref-or-empty>".into())
-                })?;
-                Ok(CliAction::RepoSetBaseBranch { name, value })
+            let value = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "config set <key> <value-or-@file>".into(),
+            })?;
+            Ok(CliAction::ConfigSet {
+                key,
+                source: ValueSource::from_arg(value),
+            })
+        }
+        Some("list") => Ok(CliAction::ConfigList),
+        Some("edit") => {
+            let key = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "config edit <key>".into(),
+            })?;
+            if !known_setting_key(&key) {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("unknown setting key: {key}"),
+                });
             }
-            Some("set-instructions") => {
-                let name = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-instructions <name> <value-or-@file>".into())
-                })?;
-                let value = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-instructions <name> <value-or-@file>".into())
-                })?;
-                Ok(CliAction::RepoSetInstructions {
-                    name,
-                    source: ValueSource::from_arg(value),
-                })
-            }
-            Some("set-setup") => {
-                let name = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-setup <name> <value-or-@file>".into())
-                })?;
-                let value = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-setup <name> <value-or-@file>".into())
-                })?;
-                Ok(CliAction::RepoSetSetup {
-                    name,
-                    source: ValueSource::from_arg(value),
-                })
-            }
-            Some("set-archive") => {
-                let name = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-archive <name> <value-or-@file>".into())
-                })?;
-                let value = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-archive <name> <value-or-@file>".into())
-                })?;
-                Ok(CliAction::RepoSetArchive {
-                    name,
-                    source: ValueSource::from_arg(value),
-                })
-            }
-            Some("edit-setup") => {
-                let name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo edit-setup <name>".into()))?;
-                Ok(CliAction::RepoEditSetup { name })
-            }
-            Some("edit-archive") => {
-                let name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo edit-archive <name>".into()))?;
-                Ok(CliAction::RepoEditArchive { name })
-            }
-            Some("set-pinned-commands") => {
-                let name = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-pinned-commands <name> <value-or-@file>".into())
-                })?;
-                let value = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-pinned-commands <name> <value-or-@file>".into())
-                })?;
-                Ok(CliAction::RepoSetPinnedCommands {
-                    name,
-                    source: ValueSource::from_arg(value),
-                })
-            }
-            Some("edit-pinned-commands") => {
-                let name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo edit-pinned-commands <name>".into()))?;
-                Ok(CliAction::RepoEditPinnedCommands { name })
-            }
-            Some("set-name") => {
-                let name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo set-name <name> <new-name>".into()))?;
-                let new_name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo set-name <name> <new-name>".into()))?;
-                Ok(CliAction::RepoSetName { name, new_name })
-            }
-            Some("set-related-repos") => {
-                let name = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-related-repos <name> <value-or-@file>".into())
-                })?;
-                let value = it.next().ok_or_else(|| {
-                    Error::UserInput("repo set-related-repos <name> <value-or-@file>".into())
-                })?;
-                Ok(CliAction::RepoSetRelatedRepos {
-                    name,
-                    source: ValueSource::from_arg(value),
-                })
-            }
-            Some("edit-related-repos") => {
-                let name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("repo edit-related-repos <name>".into()))?;
-                Ok(CliAction::RepoEditRelatedRepos { name })
-            }
-            other => Err(Error::UserInput(format!("unknown repo action: {other:?}"))),
-        },
-        Some("config") => match it.next().as_deref() {
-            Some("get") => {
-                let key = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("config get <key>".into()))?;
-                if !known_setting_key(&key) {
-                    return Err(Error::UserInput(format!("unknown setting key: {key}")));
-                }
-                Ok(CliAction::ConfigGet { key })
-            }
-            Some("set") => {
-                let key = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("config set <key> <value-or-@file>".into()))?;
-                if !known_setting_key(&key) {
-                    return Err(Error::UserInput(format!("unknown setting key: {key}")));
-                }
-                let value = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("config set <key> <value-or-@file>".into()))?;
-                Ok(CliAction::ConfigSet {
-                    key,
-                    source: ValueSource::from_arg(value),
-                })
-            }
-            Some("list") => Ok(CliAction::ConfigList),
-            Some("edit") => {
-                let key = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("config edit <key>".into()))?;
-                if !known_setting_key(&key) {
-                    return Err(Error::UserInput(format!("unknown setting key: {key}")));
-                }
-                Ok(CliAction::ConfigEdit { key })
-            }
-            other => Err(Error::UserInput(format!(
-                "unknown config action: {other:?}"
-            ))),
-        },
-        Some("remote") => match it.next() {
-            None => Ok(CliAction::RemoteList),
-            Some(name) => Ok(CliAction::RemoteRun { name }),
-        },
-        Some("workspace") => match it.next().as_deref() {
-            Some("create") => {
-                let repo = it.next().ok_or_else(|| {
-                    Error::UserInput(
-                        "workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex]"
-                            .into(),
-                    )
-                })?;
-                let mut name: Option<String> = None;
-                let mut yolo = false;
-                let mut agent: Option<String> = None;
-                while let Some(arg) = it.next() {
-                    match arg.as_str() {
-                        "--name" => {
-                            name =
-                                Some(it.next().ok_or_else(|| {
-                                    Error::UserInput("--name needs value".into())
-                                })?);
-                        }
-                        "--yolo" => yolo = true,
-                        "--agent" => {
-                            agent = Some(it.next().ok_or_else(|| {
-                                Error::UserInput(
-                                    "--agent needs value (claude, pi, hermes, or codex)".into(),
-                                )
-                            })?);
-                        }
-                        other => {
-                            return Err(Error::UserInput(format!("unknown arg: {other}")));
-                        }
+            Ok(CliAction::ConfigEdit { key })
+        }
+        other => Err(Error::Usage {
+            group: None,
+            msg: match other {
+                Some(cmd) => format!("unknown config command: {cmd}"),
+                None => "missing config command".into(),
+            },
+        }),
+    }
+}
+
+fn parse_remote(it: &mut Args) -> Result<CliAction> {
+    match it.next() {
+        None => Ok(CliAction::RemoteList),
+        Some(name) => Ok(CliAction::RemoteRun { name }),
+    }
+}
+
+fn parse_workspace(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("create") => {
+            let repo = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg:
+                    "workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex]"
+                        .into(),
+            })?;
+            let mut name: Option<String> = None;
+            let mut yolo = false;
+            let mut agent: Option<String> = None;
+            while let Some(arg) = it.next() {
+                match arg.as_str() {
+                    "--name" => {
+                        name = Some(it.next().ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--name needs value".into(),
+                        })?);
+                    }
+                    "--yolo" => yolo = true,
+                    "--agent" => {
+                        agent = Some(it.next().ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--agent needs value (claude, pi, hermes, or codex)".into(),
+                        })?);
+                    }
+                    other => {
+                        return Err(Error::Usage {
+                            group: None,
+                            msg: format!("unknown arg: {other}"),
+                        });
                     }
                 }
-                if let Some(ref a) = agent
-                    && a != "pi"
-                    && a != "claude"
-                    && a != "hermes"
-                    && a != "codex"
-                {
-                    return Err(Error::UserInput(format!(
-                        "--agent must be 'claude', 'pi', 'hermes', or 'codex', got '{a}'"
-                    )));
-                }
-                Ok(CliAction::WorkspaceCreate {
-                    repo,
-                    name,
-                    yolo,
-                    agent,
-                })
             }
-            Some("list") => {
-                let repo = it.next();
-                Ok(CliAction::WorkspaceList { repo })
+            if let Some(ref a) = agent
+                && a != "pi"
+                && a != "claude"
+                && a != "hermes"
+                && a != "codex"
+            {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("--agent must be 'claude', 'pi', 'hermes', or 'codex', got '{a}'"),
+                });
             }
-            Some("path") => {
-                let repo = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("workspace path <repo> <name>".into()))?;
-                let name = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("workspace path <repo> <name>".into()))?;
-                Ok(CliAction::WorkspacePath { repo, name })
-            }
-            Some("rename") => {
-                let repo = it.next().ok_or_else(|| {
-                    Error::UserInput("workspace rename <repo> <name> <new-name>".into())
-                })?;
-                let name = it.next().ok_or_else(|| {
-                    Error::UserInput("workspace rename <repo> <name> <new-name>".into())
-                })?;
-                let new_name = it.next().ok_or_else(|| {
-                    Error::UserInput("workspace rename <repo> <name> <new-name>".into())
-                })?;
-                Ok(CliAction::WorkspaceRename {
-                    repo,
-                    name,
-                    new_name,
-                })
-            }
-            Some("archive") => {
-                let repo = it.next().ok_or_else(|| {
-                    Error::UserInput(
-                        "workspace archive <repo> <name> [--keep-worktree] [--force-delete-branch]"
-                            .into(),
-                    )
-                })?;
-                let name = it.next().ok_or_else(|| {
-                    Error::UserInput(
-                        "workspace archive <repo> <name> [--keep-worktree] [--force-delete-branch]"
-                            .into(),
-                    )
-                })?;
-                let mut keep_worktree = false;
-                let mut force_delete_branch = false;
-                for arg in it.by_ref() {
-                    match arg.as_str() {
-                        "--keep-worktree" => keep_worktree = true,
-                        "--force-delete-branch" => force_delete_branch = true,
-                        other => {
-                            return Err(Error::UserInput(format!("unknown arg: {other}")));
-                        }
+            Ok(CliAction::WorkspaceCreate {
+                repo,
+                name,
+                yolo,
+                agent,
+            })
+        }
+        Some("list") => {
+            let repo = it.next();
+            Ok(CliAction::WorkspaceList { repo })
+        }
+        Some("path") => {
+            let repo = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace path <repo> <name>".into(),
+            })?;
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace path <repo> <name>".into(),
+            })?;
+            Ok(CliAction::WorkspacePath { repo, name })
+        }
+        Some("rename") => {
+            let repo = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace rename <repo> <name> <new-name>".into(),
+            })?;
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace rename <repo> <name> <new-name>".into(),
+            })?;
+            let new_name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace rename <repo> <name> <new-name>".into(),
+            })?;
+            Ok(CliAction::WorkspaceRename {
+                repo,
+                name,
+                new_name,
+            })
+        }
+        Some("archive") => {
+            let repo = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace archive <repo> <name> [--keep-worktree] [--force-delete-branch]"
+                    .into(),
+            })?;
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace archive <repo> <name> [--keep-worktree] [--force-delete-branch]"
+                    .into(),
+            })?;
+            let mut keep_worktree = false;
+            let mut force_delete_branch = false;
+            for arg in &mut *it {
+                match arg.as_str() {
+                    "--keep-worktree" => keep_worktree = true,
+                    "--force-delete-branch" => force_delete_branch = true,
+                    other => {
+                        return Err(Error::Usage {
+                            group: None,
+                            msg: format!("unknown arg: {other}"),
+                        });
                     }
                 }
-                Ok(CliAction::WorkspaceArchive {
-                    repo,
-                    name,
-                    keep_worktree,
-                    force_delete_branch,
-                })
             }
-            other => Err(Error::UserInput(format!(
-                "unknown workspace action: {other:?}"
-            ))),
-        },
-        Some("agent") => match it.next().as_deref() {
-            Some("list") => Ok(CliAction::AgentList),
-            Some("send") => {
-                let target = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("agent send <label> <prompt>".into()))?;
-                let rest: Vec<String> = it.collect();
-                if rest.is_empty() {
-                    return Err(Error::UserInput("agent send <label> <prompt>".into()));
-                }
-                let prompt = rest.join(" ");
-                Ok(CliAction::AgentSend { target, prompt })
+            Ok(CliAction::WorkspaceArchive {
+                repo,
+                name,
+                keep_worktree,
+                force_delete_branch,
+            })
+        }
+        other => Err(Error::Usage {
+            group: None,
+            msg: match other {
+                Some(cmd) => format!("unknown workspace command: {cmd}"),
+                None => "missing workspace command".into(),
+            },
+        }),
+    }
+}
+
+fn parse_agent(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("list") => Ok(CliAction::AgentList),
+        Some("send") => {
+            let target = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "agent send <label> <prompt>".into(),
+            })?;
+            let rest: Vec<String> = it.collect();
+            if rest.is_empty() {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "agent send <label> <prompt>".into(),
+                });
             }
-            Some("add") => {
-                let kind = it
-                    .next()
-                    .ok_or_else(|| Error::UserInput("agent add <kind>".into()))?;
-                // Validate against the canonical agent set so this can't drift
-                // from `AgentKind` as kinds are added/renamed.
-                use crate::pty::session::AgentKind;
-                if !AgentKind::ALL.iter().any(|k| k.display_name() == kind) {
-                    let valid = AgentKind::ALL
-                        .iter()
-                        .map(|k| k.display_name())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(Error::UserInput(format!(
-                        "agent add: kind must be one of [{valid}], got '{kind}'"
-                    )));
-                }
-                Ok(CliAction::AgentAdd { kind })
+            let prompt = rest.join(" ");
+            Ok(CliAction::AgentSend { target, prompt })
+        }
+        Some("add") => {
+            let kind = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "agent add <kind>".into(),
+            })?;
+            // Validate against the canonical agent set so this can't drift
+            // from `AgentKind` as kinds are added/renamed.
+            use crate::pty::session::AgentKind;
+            if !AgentKind::ALL.iter().any(|k| k.display_name() == kind) {
+                let valid = AgentKind::ALL
+                    .iter()
+                    .map(|k| k.display_name())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("agent add: kind must be one of [{valid}], got '{kind}'"),
+                });
             }
-            _ => Err(Error::UserInput("agent <list|send|add> ...".into())),
-        },
-        Some("setup") => match it.next().as_deref() {
-            Some("install-skill") => Ok(CliAction::SetupInstallSkill),
-            other => Err(Error::UserInput(format!("unknown setup action: {other:?}"))),
-        },
-        Some(other) => Err(Error::UserInput(format!("unknown command: {other}"))),
+            Ok(CliAction::AgentAdd { kind })
+        }
+        _ => Err(Error::Usage {
+            group: None,
+            msg: "agent <list|send|add> ...".into(),
+        }),
+    }
+}
+
+fn parse_setup(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("install-skill") => Ok(CliAction::SetupInstallSkill),
+        other => Err(Error::Usage {
+            group: None,
+            msg: match other {
+                Some(cmd) => format!("unknown setup command: {cmd}"),
+                None => "missing setup command".into(),
+            },
+        }),
     }
 }
 
@@ -518,6 +911,20 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     // Actions that don't need the wsx store run before we open it, so a
     // pure `wsx setup install-skill` on a fresh machine doesn't create
     // `~/.local/state/wsx/state.db` as a side effect.
+    match &action {
+        CliAction::Help(topic) => {
+            match topic {
+                HelpTopic::Root => print!("{}", render_root_help()),
+                HelpTopic::Group(g) => print!("{}", render_group_help(g)),
+            }
+            return Ok(());
+        }
+        CliAction::Version => {
+            println!("wsx {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        _ => {}
+    }
     if matches!(action, CliAction::SetupInstallSkill) {
         let targets = crate::agent::skill::default_install_targets().ok_or_else(|| {
             Error::UserInput("could not resolve home directory for skill install".into())
@@ -962,6 +1369,9 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             println!("added {}", inst.label());
         }
         CliAction::SetupInstallSkill => unreachable!("handled before store open"),
+        CliAction::Help(_) | CliAction::Version => {
+            unreachable!("handled before store open")
+        }
     }
     Ok(())
 }
@@ -1068,6 +1478,133 @@ mod tests {
     }
 
     #[test]
+    fn misuse_is_tagged_with_group() {
+        match parse(&["agent", "send"]) {
+            Err(Error::Usage {
+                group: Some("agent"),
+                ..
+            }) => {}
+            other => panic!("expected agent-tagged Usage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_command_is_untagged_usage() {
+        match parse(&["bogus"]) {
+            Err(Error::Usage { group: None, .. }) => {}
+            other => panic!("expected untagged Usage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_top_level_help_forms() {
+        for f in ["--help", "-h", "help"] {
+            assert!(matches!(
+                parse(&[f]).unwrap(),
+                CliAction::Help(HelpTopic::Root)
+            ));
+        }
+    }
+
+    #[test]
+    fn parses_version_forms() {
+        for f in ["--version", "-V"] {
+            assert!(matches!(parse(&[f]).unwrap(), CliAction::Version));
+        }
+    }
+
+    #[test]
+    fn bare_wsx_is_tui() {
+        assert!(matches!(parse(&[]).unwrap(), CliAction::Tui));
+    }
+
+    #[test]
+    fn parses_group_help_forms() {
+        let want = |a: CliAction| matches!(a, CliAction::Help(HelpTopic::Group("agent")));
+        assert!(want(parse(&["agent", "--help"]).unwrap()));
+        assert!(want(parse(&["agent", "-h"]).unwrap()));
+        assert!(want(parse(&["help", "agent"]).unwrap()));
+    }
+
+    #[test]
+    fn dashed_help_flag_triggers_group_help_anywhere() {
+        let want = |a: CliAction| matches!(a, CliAction::Help(HelpTopic::Group("agent")));
+        // After a valid subcommand, a dashed flag still surfaces group help.
+        assert!(want(parse(&["agent", "send", "--help"]).unwrap()));
+        assert!(want(parse(&["agent", "send", "-h"]).unwrap()));
+    }
+
+    #[test]
+    fn bare_help_is_a_subcommand_not_a_value() {
+        // `help` in the subcommand slot → group help.
+        assert!(matches!(
+            parse(&["repo", "help"]).unwrap(),
+            CliAction::Help(HelpTopic::Group("repo"))
+        ));
+        // `help` as an argument VALUE must NOT trigger help.
+        match parse(&["repo", "remove", "help"]).unwrap() {
+            CliAction::RepoRemove { name } => assert_eq!(name, "help"),
+            other => panic!("expected RepoRemove {{ name: \"help\" }}, got {other:?}"),
+        }
+        match parse(&["config", "set", "editor_cmd", "help"]).unwrap() {
+            CliAction::ConfigSet {
+                key,
+                source: ValueSource::Literal(v),
+            } => {
+                assert_eq!(key, "editor_cmd");
+                assert_eq!(v, "help");
+            }
+            other => panic!("expected ConfigSet value \"help\", got {other:?}"),
+        }
+        match parse(&["agent", "send", "claude", "help"]).unwrap() {
+            CliAction::AgentSend { target, prompt } => {
+                assert_eq!(target, "claude");
+                assert_eq!(prompt, "help");
+            }
+            other => panic!("expected AgentSend prompt \"help\", got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn help_for_unknown_group_falls_back_to_root() {
+        assert!(matches!(
+            parse(&["help", "bogus"]).unwrap(),
+            CliAction::Help(HelpTopic::Root)
+        ));
+    }
+
+    #[test]
+    fn group_name_resolves_known_and_unknown() {
+        assert_eq!(group_name("agent"), Some("agent"));
+        assert_eq!(group_name("workspace"), Some("workspace"));
+        assert_eq!(group_name("bogus"), None);
+    }
+
+    #[test]
+    fn root_help_lists_every_group() {
+        let h = render_root_help();
+        for g in GROUPS {
+            assert!(h.contains(g.name), "root help missing group {}", g.name);
+        }
+        assert!(h.contains("launches the TUI"));
+    }
+
+    #[test]
+    fn agent_group_help_lists_its_commands() {
+        let h = render_group_help("agent");
+        assert!(h.contains("list"));
+        assert!(h.contains("add <kind>"));
+        assert!(h.contains("send <label> <message...>"));
+    }
+
+    #[test]
+    fn usage_error_has_message_then_group_block() {
+        let s = render_usage_error(Some("agent"), "missing arguments");
+        assert!(s.starts_with("error: missing arguments"));
+        assert!(s.contains("send <label> <message...>"));
+    }
+
+    #[test]
     fn parses_config_set_literal() {
         let a = parse(&["config", "set", "branch_prefix", "bakedbean"]).unwrap();
         match a {
@@ -1101,6 +1638,34 @@ mod tests {
     fn rejects_unknown_setting_key() {
         assert!(parse(&["config", "set", "nope", "val"]).is_err());
         assert!(parse(&["config", "get", "nope"]).is_err());
+    }
+
+    #[test]
+    fn unknown_setting_key_is_tagged_config_usage() {
+        match parse(&["config", "set", "nope", "x"]) {
+            Err(Error::Usage {
+                group: Some("config"),
+                msg,
+            }) => {
+                assert_eq!(msg, "unknown setting key: nope");
+            }
+            other => panic!("expected config-tagged Usage, got {other:?}"),
+        }
+        // get and edit forms too
+        assert!(matches!(
+            parse(&["config", "get", "nope"]),
+            Err(Error::Usage {
+                group: Some("config"),
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(&["config", "edit", "nope"]),
+            Err(Error::Usage {
+                group: Some("config"),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -1585,5 +2150,60 @@ mod tests {
         let parsed: crate::config::detail_bar_config::DetailBarConfig =
             serde_json::from_str(&normalized).expect("re-parse normalized");
         assert_eq!(parsed.containers.len(), 4);
+    }
+
+    #[test]
+    fn report_cli_error_formats_usage_block() {
+        let e = Error::Usage {
+            group: Some("agent"),
+            msg: "agent send needs <label> <message...>".into(),
+        };
+        let s = report_cli_error(&e);
+        assert!(s.starts_with("error: agent send needs"));
+        assert!(s.contains("send <label> <message...>"));
+    }
+
+    #[test]
+    fn report_cli_error_falls_back_for_other_errors() {
+        let e = Error::UserInput("unknown setting key: nope".into());
+        let s = report_cli_error(&e);
+        assert!(s.contains("unknown setting key: nope"));
+    }
+
+    #[test]
+    fn unknown_subcommand_messages_are_clean() {
+        // No Debug-formatted Option (`None` / `Some("..")`) leaking into user text.
+        let missing = match parse(&["workspace"]) {
+            Err(e) => e.to_string(),
+            _ => panic!("expected error"),
+        };
+        assert_eq!(missing, "missing workspace command");
+        let unknown = match parse(&["workspace", "bogus"]) {
+            Err(e) => e.to_string(),
+            _ => panic!("expected error"),
+        };
+        assert_eq!(unknown, "unknown workspace command: bogus");
+        assert!(!missing.contains("None"));
+        assert!(!unknown.contains("Some("));
+    }
+
+    #[test]
+    fn registry_matches_dispatched_groups() {
+        // Every group the dispatcher accepts must have a help entry, and every
+        // help entry must be a real group. Update BOTH when adding a command group.
+        let dispatched = ["workspace", "agent", "repo", "config", "remote", "setup"];
+        let registry: Vec<&str> = GROUPS.iter().map(|g| g.name).collect();
+        for d in dispatched {
+            assert!(
+                registry.contains(&d),
+                "group `{d}` dispatched but missing from GROUPS"
+            );
+        }
+        for r in &registry {
+            assert!(
+                dispatched.contains(r),
+                "group `{r}` in GROUPS but not dispatched"
+            );
+        }
     }
 }

@@ -1,6 +1,6 @@
 ---
 name: wsx
-description: Use when working inside a wsx-managed worktree (CWD under ~/.local/state/wsx/worktrees/), when the user asks to create/list/rename/archive wsx workspaces, or when a system prompt mentions related wsx repos and a task requires changes in more than one of them.
+description: Use when working inside a wsx-managed worktree (CWD under ~/.local/state/wsx/worktrees/), when the user asks to create/list/rename/archive wsx workspaces, when adding or messaging peer agents in a workspace (wsx agent add/send/list), or when a system prompt mentions related wsx repos and a task requires changes in more than one of them.
 ---
 
 # wsx
@@ -22,7 +22,7 @@ wsx workspace list <repo>      # filter to one repo
 ## CLI surface
 
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex]
 wsx workspace path <repo> <slug>            # prints just the worktree path (script-friendly)
 wsx workspace rename <repo> <old> <new>     # renames slug AND git branch in sync
 wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
@@ -30,9 +30,19 @@ wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
 wsx repo list
 wsx repo set-prefix <repo> <prefix>
 wsx repo set-related-repos <repo> <comma-separated-names>
+
+# Multi-agent: operate on the CURRENT workspace — no <repo>/<slug> args.
+# The workspace is resolved from $WSX_WORKSPACE_ID, else the cwd's worktree.
+wsx agent list                              # peers here; (primary) marks the original agent
+wsx agent add <kind>                        # attach another agent: kind = claude|pi|hermes|codex
+wsx agent send <label> <message…>           # async message to a peer (label e.g. claude, claude#2)
 ```
 
-The full reference is the project README's "CLI reference" and "Related repos" sections — consult it for `wsx config` / `wsx remote` / setup scripts.
+Run `wsx --help` or `wsx <command> --help` to list commands and arguments directly from the CLI.
+
+`--agent` on `create` picks the workspace's first (primary) agent; `wsx agent add` attaches more on top. See [Multi-agent workspaces](#multi-agent-workspaces) below for how peers, labels, and messaging work.
+
+The full reference is the project README's "CLI reference", "Multi-agent workspaces", and "Related repos" sections — consult it for `wsx config` / `wsx remote` / setup scripts.
 
 ## Slug rules (read before typing --name)
 
@@ -90,7 +100,10 @@ and branch.
   tagged `[message from <you>]` so they know it came from you.
 - **Add a peer:** `wsx agent send` only reaches agents already attached. To
   attach one, use `wsx agent add <kind>` (kind = claude | pi | hermes | codex),
-  or the `^x a` panel in the TUI.
+  or the `^x a` panel in the TUI. You can use this proactively — e.g. spin up a
+  second `claude` to review your diff or work a parallel sub-task, then hand it
+  the task with `wsx agent send <its-label> "<instructions>"`. The new agent
+  shares this worktree, so scope its work to avoid overlapping edits.
 
 **Example — a reviewer agent pinging the primary about a finding:**
 

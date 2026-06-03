@@ -2,6 +2,131 @@ use crate::config::Dirs;
 use crate::error::{Error, Result};
 use std::path::PathBuf;
 
+pub struct CmdInfo {
+    pub usage: &'static str,
+    pub blurb: &'static str,
+}
+
+pub struct GroupInfo {
+    pub name: &'static str,
+    pub blurb: &'static str,
+    pub commands: &'static [CmdInfo],
+}
+
+pub static GROUPS: &[GroupInfo] = &[
+    GroupInfo {
+        name: "workspace",
+        blurb: "Create, list, rename, and archive workspaces",
+        commands: &[
+            CmdInfo { usage: "create <repo> [--name <slug>] [--yolo] [--agent <kind>]", blurb: "Create a workspace (branch + worktree)" },
+            CmdInfo { usage: "list [<repo>]", blurb: "List workspaces as TSV rows" },
+            CmdInfo { usage: "path <repo> <slug>", blurb: "Print a workspace's worktree path" },
+            CmdInfo { usage: "rename <repo> <old> <new>", blurb: "Rename a workspace slug and its branch" },
+            CmdInfo { usage: "archive <repo> <slug> [--keep-worktree] [--force-delete-branch]", blurb: "Archive a workspace" },
+        ],
+    },
+    GroupInfo {
+        name: "agent",
+        blurb: "List, add, and message agents in a workspace",
+        commands: &[
+            CmdInfo { usage: "list", blurb: "Show agents in the current workspace" },
+            CmdInfo { usage: "add <kind>", blurb: "Attach an agent (claude|pi|hermes|codex)" },
+            CmdInfo { usage: "send <label> <message...>", blurb: "Queue an async message to a peer agent" },
+        ],
+    },
+    GroupInfo {
+        name: "repo",
+        blurb: "Register and configure repositories",
+        commands: &[
+            CmdInfo { usage: "add <path> [--name <name>] [--prefix <prefix>]", blurb: "Register a repository" },
+            CmdInfo { usage: "list", blurb: "List registered repositories" },
+            CmdInfo { usage: "remove <name>", blurb: "Unregister a repository" },
+            CmdInfo { usage: "set-prefix <name> <prefix>", blurb: "Set the branch prefix" },
+            CmdInfo { usage: "set-base-branch <name> <ref-or-empty>", blurb: "Set the base branch" },
+            CmdInfo { usage: "set-instructions <name> <value-or-@file>", blurb: "Set custom instructions" },
+            CmdInfo { usage: "set-setup <name> <value-or-@file>", blurb: "Set the setup script" },
+            CmdInfo { usage: "set-archive <name> <value-or-@file>", blurb: "Set the archive script" },
+            CmdInfo { usage: "edit-setup <name>", blurb: "Edit the setup script in $EDITOR" },
+            CmdInfo { usage: "edit-archive <name>", blurb: "Edit the archive script in $EDITOR" },
+            CmdInfo { usage: "set-pinned-commands <name> <value-or-@file>", blurb: "Set pinned commands" },
+            CmdInfo { usage: "edit-pinned-commands <name>", blurb: "Edit pinned commands in $EDITOR" },
+            CmdInfo { usage: "set-name <name> <new-name>", blurb: "Rename a repository" },
+            CmdInfo { usage: "set-related-repos <name> <value-or-@file>", blurb: "Set related repos" },
+            CmdInfo { usage: "edit-related-repos <name>", blurb: "Edit related repos in $EDITOR" },
+        ],
+    },
+    GroupInfo {
+        name: "config",
+        blurb: "Get and set global settings",
+        commands: &[
+            CmdInfo { usage: "get <key>", blurb: "Print a setting value" },
+            CmdInfo { usage: "set <key> <value-or-@file>", blurb: "Set a setting" },
+            CmdInfo { usage: "list", blurb: "List all settings" },
+            CmdInfo { usage: "edit <key>", blurb: "Edit a setting in $EDITOR" },
+        ],
+    },
+    GroupInfo {
+        name: "remote",
+        blurb: "Run saved remote shortcuts",
+        commands: &[
+            CmdInfo { usage: "[<name>]", blurb: "List remotes, or run the named remote shortcut" },
+        ],
+    },
+    GroupInfo {
+        name: "setup",
+        blurb: "One-off setup helpers",
+        commands: &[
+            CmdInfo { usage: "install-skill", blurb: "Install the wsx Claude Code skill" },
+        ],
+    },
+];
+
+pub fn group_name(s: &str) -> Option<&'static str> {
+    GROUPS.iter().map(|g| g.name).find(|&n| n == s)
+}
+
+fn is_help(tok: &str) -> bool {
+    matches!(tok, "--help" | "-h" | "help")
+}
+
+fn is_version(tok: &str) -> bool {
+    matches!(tok, "--version" | "-V")
+}
+
+pub fn render_root_help() -> String {
+    let mut out = String::from("wsx — git-worktree workspace manager\n\n");
+    out.push_str("USAGE:\n  wsx [COMMAND]            (no command launches the TUI)\n\n");
+    out.push_str("COMMANDS:\n");
+    let width = GROUPS.iter().map(|g| g.name.len()).max().unwrap_or(0);
+    for g in GROUPS {
+        out.push_str(&format!("  {:<width$}   {}\n", g.name, g.blurb, width = width));
+    }
+    out.push_str("\nRun `wsx <command> --help` for command details.\n");
+    out
+}
+
+pub fn render_group_help(name: &str) -> String {
+    let Some(g) = GROUPS.iter().find(|g| g.name == name) else {
+        return render_root_help();
+    };
+    let mut out = format!("wsx {} — {}\n\n", g.name, g.blurb);
+    out.push_str(&format!("USAGE:\n  wsx {} <command> [args]\n\n", g.name));
+    out.push_str("COMMANDS:\n");
+    let width = g.commands.iter().map(|c| c.usage.len()).max().unwrap_or(0);
+    for c in g.commands {
+        out.push_str(&format!("  {:<width$}   {}\n", c.usage, c.blurb, width = width));
+    }
+    out
+}
+
+pub fn render_usage_error(group: Option<&str>, msg: &str) -> String {
+    let block = match group {
+        Some(g) => render_group_help(g),
+        None => render_root_help(),
+    };
+    format!("error: {msg}\n\n{block}")
+}
+
 #[derive(Debug)]
 pub enum CliAction {
     Tui,
@@ -1060,6 +1185,37 @@ mod tests {
         let mut v = vec!["wsx".to_string()];
         v.extend(args.iter().map(|s| s.to_string()));
         parse_args(v)
+    }
+
+    #[test]
+    fn group_name_resolves_known_and_unknown() {
+        assert_eq!(group_name("agent"), Some("agent"));
+        assert_eq!(group_name("workspace"), Some("workspace"));
+        assert_eq!(group_name("bogus"), None);
+    }
+
+    #[test]
+    fn root_help_lists_every_group() {
+        let h = render_root_help();
+        for g in GROUPS {
+            assert!(h.contains(g.name), "root help missing group {}", g.name);
+        }
+        assert!(h.contains("launches the TUI"));
+    }
+
+    #[test]
+    fn agent_group_help_lists_its_commands() {
+        let h = render_group_help("agent");
+        assert!(h.contains("list"));
+        assert!(h.contains("add <kind>"));
+        assert!(h.contains("send <label> <message...>"));
+    }
+
+    #[test]
+    fn usage_error_has_message_then_group_block() {
+        let s = render_usage_error(Some("agent"), "missing arguments");
+        assert!(s.starts_with("error: missing arguments"));
+        assert!(s.contains("send <label> <message...>"));
     }
 
     #[test]

@@ -551,6 +551,24 @@ impl Store {
             "UPDATE workspaces SET agent = ?1 WHERE id = ?2",
             rusqlite::params![agent.store_value(), id.0],
         )?;
+        // Keep the primary workspace_agents row in sync (the spec's single-writer
+        // invariant: workspaces.agent is a denormalized mirror of the primary
+        // instance's kind). Compute a collision-free ordinal for the new kind:
+        // the next free ordinal among existing rows of that kind (the primary
+        // currently holds its OLD kind, so it isn't counted) — which is 1 for the
+        // common single-agent replace, or MAX+1 if added instances of the new
+        // kind already exist.
+        let next_ordinal: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM workspace_agents
+             WHERE workspace_id = ?1 AND agent = ?2",
+            rusqlite::params![id.0, agent.store_value()],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            "UPDATE workspace_agents SET agent = ?1, ordinal = ?2
+             WHERE workspace_id = ?3 AND is_primary = 1",
+            rusqlite::params![agent.store_value(), next_ordinal, id.0],
+        )?;
         Ok(())
     }
 
@@ -1636,6 +1654,83 @@ mod tests {
             .find(|w| w.id == id)
             .expect("workspace present");
         assert_eq!(ws.agent, AgentKind::Hermes);
+    }
+
+    #[test]
+    fn set_workspace_agent_syncs_primary_instance_row() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "wsx/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .add_primary_agent(ws, crate::pty::session::AgentKind::Claude, 1)
+            .unwrap();
+
+        store
+            .set_workspace_agent(ws, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+
+        let primary = store
+            .workspace_agents(ws)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.is_primary)
+            .unwrap();
+        assert_eq!(primary.agent, crate::pty::session::AgentKind::Codex);
+        assert_eq!(primary.ordinal, 1); // no added codex existed → ordinal 1
+        assert_eq!(primary.label(), "codex");
+    }
+
+    #[test]
+    fn set_workspace_agent_avoids_ordinal_collision_with_added_instance() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "wsx/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .add_primary_agent(ws, crate::pty::session::AgentKind::Claude, 1)
+            .unwrap();
+        // An added codex already occupies (ws, codex, ordinal 1).
+        store
+            .add_workspace_agent(ws, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+
+        // Replacing the primary's kind to codex must NOT collide on UNIQUE(ws,agent,ordinal).
+        store
+            .set_workspace_agent(ws, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+
+        let all = store.workspace_agents(ws).unwrap();
+        let primary = all.iter().find(|i| i.is_primary).unwrap();
+        assert_eq!(primary.agent, crate::pty::session::AgentKind::Codex);
+        assert_eq!(primary.ordinal, 2); // codex#1 was taken by the added one
+        // Both codex instances coexist, distinct ordinals.
+        assert_eq!(
+            all.iter()
+                .filter(|i| i.agent == crate::pty::session::AgentKind::Codex)
+                .count(),
+            2
+        );
     }
 
     #[test]

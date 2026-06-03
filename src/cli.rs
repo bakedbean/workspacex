@@ -940,6 +940,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 .and_then(|s| s.parse::<i64>().ok())
                 .map(crate::data::store::AgentInstanceId);
             store.enqueue_message(ws.id, target_id, from, &prompt)?;
+            println!("queued message to {target}");
         }
         CliAction::AgentAdd { kind } => {
             let ws = resolve_current_workspace(&store)?;

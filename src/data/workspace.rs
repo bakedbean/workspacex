@@ -372,14 +372,16 @@ pub fn import_existing(
     name: &str,
 ) -> Result<WorkspaceId> {
     let branch = info.branch.clone().unwrap_or_else(|| "(detached)".into());
+    let agent = AgentKind::Claude;
     let id = store.insert_workspace(&NewWorkspace {
         repo_id: repo.id,
         name,
         branch: &branch,
         worktree_path: &info.path,
         yolo: false,
-        agent: AgentKind::Claude,
+        agent,
     })?;
+    store.add_primary_agent(id, agent, crate::data::store::now_ms())?;
     store.set_workspace_state(id, WorkspaceState::Ready)?;
     store.set_setup_status(id, SetupStatus::Skipped)?;
     Ok(id)

@@ -109,28 +109,12 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
         // V5-style: ▎ gutter in accent color when focused, idle when not;
         // workspace name in bold. Focused row gets the selection bg fill
         // so the focus indicator is unmistakable even at a glance.
-        let gutter_style = if pane.focused {
-            Style::default().fg(theme.waiting)
-        } else {
-            Style::default().fg(theme.idle)
-        };
-        let name_style = if pane.focused {
-            theme.selected_style().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.dim).add_modifier(Modifier::BOLD)
-        };
         let row_bg = if pane.focused {
             Style::default().bg(theme.selected_bg)
         } else {
             Style::default()
         };
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(3);
-        if let Some(agent) = pane.agent {
-            // Agent identity bar, left of the focus gutter → two-tone edge.
-            spans.push(Span::styled("▎".to_string(), theme.agent_style(agent)));
-        }
-        spans.push(Span::styled("▎".to_string(), gutter_style));
-        spans.push(Span::styled(format!(" {} ", pane.label), name_style));
+        let spans = title_bar_spans(pane.label, pane.agent, pane.focused, theme);
         f.render_widget(Paragraph::new(Line::from(spans)).style(row_bg), area);
     }
 
@@ -223,6 +207,37 @@ pub fn layout_chrome(
 pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
     let title: u16 = if multi_pane { 1 } else { 0 };
     let _ = session.resize(pane_rect.width, pane_rect.height.saturating_sub(title));
+}
+
+/// Build the spans for a pane's title bar: an optional per-agent identity
+/// bar, the focus gutter (accent when focused, idle otherwise), then the
+/// bold workspace label. Pure so the agent-bar branch is unit-testable
+/// without a live `Session`/`Frame` (see `render_one_pane`, which applies
+/// the row background separately).
+fn title_bar_spans(
+    label: &str,
+    agent: Option<AgentKind>,
+    focused: bool,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let gutter_style = if focused {
+        Style::default().fg(theme.waiting)
+    } else {
+        Style::default().fg(theme.idle)
+    };
+    let name_style = if focused {
+        theme.selected_style().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD)
+    };
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(3);
+    if let Some(agent) = agent {
+        // Agent identity bar, left of the focus gutter → two-tone edge.
+        spans.push(Span::styled("▎".to_string(), theme.agent_style(agent)));
+    }
+    spans.push(Span::styled("▎".to_string(), gutter_style));
+    spans.push(Span::styled(format!(" {} ", label), name_style));
+    spans
 }
 
 /// V5-styled footer: workspace label in `header_style`, then the `^x`
@@ -470,6 +485,29 @@ mod tests {
             "project-manager",
             "no leading bar for the PM pane"
         );
+    }
+
+    #[test]
+    fn title_bar_spans_prepend_agent_bar_when_present() {
+        let theme = Theme::wsx();
+        let spans = title_bar_spans("foo", Some(AgentKind::Pi), true, &theme);
+        assert_eq!(spans[0].content.as_ref(), "▎", "agent bar first");
+        assert_eq!(spans[0].style.fg, theme.agent_style(AgentKind::Pi).fg);
+        assert_eq!(spans[1].content.as_ref(), "▎", "focus gutter second");
+        assert_eq!(spans[2].content.as_ref(), " foo ", "label last");
+        assert_ne!(
+            spans[0].style.fg, spans[1].style.fg,
+            "agent and gutter colors differ (two-tone edge)"
+        );
+    }
+
+    #[test]
+    fn title_bar_spans_omit_agent_bar_when_none() {
+        let theme = Theme::wsx();
+        let spans = title_bar_spans("project-manager", None, false, &theme);
+        assert_eq!(spans[0].content.as_ref(), "▎", "only the focus gutter");
+        assert_eq!(spans[1].content.as_ref(), " project-manager ");
+        assert_eq!(spans.len(), 2, "no agent bar when None");
     }
 
     #[test]

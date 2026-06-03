@@ -222,9 +222,17 @@ pub fn render_usage_error(group: Option<&str>, msg: &str) -> String {
     format!("error: {msg}\n\n{block}")
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum HelpTopic {
+    Root,
+    Group(&'static str),
+}
+
 #[derive(Debug)]
 pub enum CliAction {
     Tui,
+    Help(HelpTopic),
+    Version,
     RepoAdd {
         path: PathBuf,
         name: String,
@@ -381,16 +389,41 @@ fn known_setting_key(k: &str) -> bool {
 }
 
 pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
-    let mut it = args.into_iter().skip(1);
-    match it.next().as_deref() {
-        None => Ok(CliAction::Tui),
-        Some("repo") => parse_repo(&mut it),
-        Some("config") => parse_config(&mut it),
-        Some("remote") => parse_remote(&mut it),
-        Some("workspace") => parse_workspace(&mut it),
-        Some("agent") => parse_agent(&mut it),
-        Some("setup") => parse_setup(&mut it),
-        Some(other) => Err(Error::UserInput(format!("unknown command: {other}"))),
+    let mut rest: Vec<String> = args.into_iter().skip(1).collect();
+    let first = if rest.is_empty() { None } else { Some(rest.remove(0)) };
+
+    match first.as_deref() {
+        None => return Ok(CliAction::Tui),
+        Some("help") => {
+            let topic = match rest.first().and_then(|s| group_name(s)) {
+                Some(g) => HelpTopic::Group(g),
+                None => HelpTopic::Root,
+            };
+            return Ok(CliAction::Help(topic));
+        }
+        Some(t) if is_help(t) => return Ok(CliAction::Help(HelpTopic::Root)),
+        Some(t) if is_version(t) => return Ok(CliAction::Version),
+        _ => {}
+    }
+
+    let group = first.as_deref().expect("None handled above");
+
+    // Per-group help: `wsx agent --help`, `wsx agent -h`, `wsx agent help`.
+    if rest.iter().any(|a| is_help(a)) {
+        if let Some(g) = group_name(group) {
+            return Ok(CliAction::Help(HelpTopic::Group(g)));
+        }
+    }
+
+    let mut it = rest.into_iter();
+    match group {
+        "repo" => parse_repo(&mut it),
+        "config" => parse_config(&mut it),
+        "remote" => parse_remote(&mut it),
+        "workspace" => parse_workspace(&mut it),
+        "agent" => parse_agent(&mut it),
+        "setup" => parse_setup(&mut it),
+        other => Err(Error::UserInput(format!("unknown command: {other}"))),
     }
 }
 
@@ -762,6 +795,20 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     // Actions that don't need the wsx store run before we open it, so a
     // pure `wsx setup install-skill` on a fresh machine doesn't create
     // `~/.local/state/wsx/state.db` as a side effect.
+    match &action {
+        CliAction::Help(topic) => {
+            match topic {
+                HelpTopic::Root => print!("{}", render_root_help()),
+                HelpTopic::Group(g) => print!("{}", render_group_help(g)),
+            }
+            return Ok(());
+        }
+        CliAction::Version => {
+            println!("wsx {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        _ => {}
+    }
     if matches!(action, CliAction::SetupInstallSkill) {
         let target = crate::agent::skill::default_install_path().ok_or_else(|| {
             Error::UserInput("could not resolve home directory for skill install".into())
@@ -1201,6 +1248,9 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             println!("added {}", inst.label());
         }
         CliAction::SetupInstallSkill => unreachable!("handled before store open"),
+        CliAction::Help(_) | CliAction::Version => {
+            unreachable!("handled before store open")
+        }
     }
     Ok(())
 }
@@ -1304,6 +1354,38 @@ mod tests {
         let mut v = vec!["wsx".to_string()];
         v.extend(args.iter().map(|s| s.to_string()));
         parse_args(v)
+    }
+
+    #[test]
+    fn parses_top_level_help_forms() {
+        for f in ["--help", "-h", "help"] {
+            assert!(matches!(parse(&[f]).unwrap(), CliAction::Help(HelpTopic::Root)));
+        }
+    }
+
+    #[test]
+    fn parses_version_forms() {
+        for f in ["--version", "-V"] {
+            assert!(matches!(parse(&[f]).unwrap(), CliAction::Version));
+        }
+    }
+
+    #[test]
+    fn bare_wsx_is_tui() {
+        assert!(matches!(parse(&[]).unwrap(), CliAction::Tui));
+    }
+
+    #[test]
+    fn parses_group_help_forms() {
+        let want = |a: CliAction| matches!(a, CliAction::Help(HelpTopic::Group("agent")));
+        assert!(want(parse(&["agent", "--help"]).unwrap()));
+        assert!(want(parse(&["agent", "-h"]).unwrap()));
+        assert!(want(parse(&["help", "agent"]).unwrap()));
+    }
+
+    #[test]
+    fn help_for_unknown_group_falls_back_to_root() {
+        assert!(matches!(parse(&["help", "bogus"]).unwrap(), CliAction::Help(HelpTopic::Root)));
     }
 
     #[test]

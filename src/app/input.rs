@@ -1429,7 +1429,7 @@ async fn handle_key_modal(
                     // Spawn it now. ensure_instance_session sets Modal::AgentMissing
                     // (and returns AgentMissing) if the binary is absent — in that
                     // case leave that modal up; otherwise close the panel.
-                    match ensure_instance_session(app, inst.id)? {
+                    match ensure_instance_session(app, inst.id, true)? {
                         AttachReady::AgentMissing => {} // ensure_instance_session set the modal
                         _ => app.modal = None,
                     }
@@ -1437,7 +1437,7 @@ async fn handle_key_modal(
                 KeyCode::Char('a') => {
                     for kind in AgentKind::ALL {
                         let inst = app.store.add_workspace_agent(workspace_id, kind)?;
-                        let _ = ensure_instance_session(app, inst.id)?;
+                        let _ = ensure_instance_session(app, inst.id, true)?;
                     }
                     app.modal = None;
                 }

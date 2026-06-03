@@ -14,6 +14,7 @@ pub mod activity;
 pub mod background;
 pub mod bell;
 pub mod input;
+pub mod messaging;
 pub mod render;
 pub use crate::app::activity::{ActivityState, classify_activity, classify_activity_with_events};
 pub use crate::app::background::{branch_drift_poll, tail_workspace_events};
@@ -444,7 +445,7 @@ impl App {
         // point the focused leaf at a sessionless instance, and the next
         // draw's "leaf session missing -> bounce to Dashboard" guard would
         // then collapse the whole split. Mirror attach_workspace and bail.
-        match ensure_instance_session(self, inst)? {
+        match ensure_instance_session(self, inst, true)? {
             AttachReady::Ok => {}
             AttachReady::AgentMissing => return Ok(()),
         }
@@ -738,7 +739,11 @@ pub async fn run<B: Backend + std::io::Write>(
                 // processes (e.g. `wsx workspace create` invoked by Claude
                 // during a related-repos flow). Cheap: PRAGMA data_version
                 // is in-process and only triggers refresh on external commits.
-                g.poll_external_changes();
+                // Only scan the inbox when a sibling commit was detected
+                // (e.g. a `wsx agent send`), avoiding a per-frame DB query.
+                if g.poll_external_changes() {
+                    g.drain_agent_messages();
+                }
                 let now_secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -1141,7 +1146,7 @@ pub(crate) fn restore_attached_state(
                 if app.sessions.get(leaf.instance).is_some() {
                     continue;
                 }
-                let _ = ensure_instance_session(app, leaf.instance);
+                let _ = ensure_instance_session(app, leaf.instance, true);
             }
             Some(crate::ui::AttachedState { tree, focus })
         }
@@ -1196,9 +1201,16 @@ pub(crate) fn ensure_workspace_session(
 /// spawn `Fresh` with an injected handoff note (see `build_added_spawn_info`).
 /// Mirrors `ensure_workspace_session`'s return/error conventions, including the
 /// `AgentMissing` modal for a missing agent binary.
+///
+/// `surface_missing` controls whether a missing-binary error raises
+/// `Modal::AgentMissing`. Pass `true` for interactive callers (keyboard
+/// handlers, `switch_focused_pane_to`, `restore_attached_state`) so the user
+/// sees the modal. Pass `false` for background callers (e.g. the message drain)
+/// so a missing binary doesn't pop a modal over the user's unrelated view.
 pub(crate) fn ensure_instance_session(
     app: &mut App,
     inst: crate::data::store::AgentInstanceId,
+    surface_missing: bool,
 ) -> Result<AttachReady> {
     if app.sessions.get(inst).is_some() {
         return Ok(AttachReady::Ok);
@@ -1221,11 +1233,13 @@ pub(crate) fn ensure_instance_session(
         {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
-                app.modal = Some(crate::ui::modal::Modal::AgentMissing {
-                    ws_id,
-                    agent: instance.agent,
-                    binary,
-                });
+                if surface_missing {
+                    app.modal = Some(crate::ui::modal::Modal::AgentMissing {
+                        ws_id,
+                        agent: instance.agent,
+                        binary,
+                    });
+                }
                 return Ok(AttachReady::AgentMissing);
             }
             Err(e) => return Err(e),

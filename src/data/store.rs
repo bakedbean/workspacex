@@ -575,20 +575,7 @@ impl Store {
             "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
              FROM workspaces WHERE repo_id = ?1 ORDER BY id",
         )?;
-        let rows = stmt.query_map([repo_id.0], |r| {
-            Ok(Workspace {
-                id: WorkspaceId(r.get(0)?),
-                repo_id: RepoId(r.get(1)?),
-                name: r.get(2)?,
-                branch: r.get(3)?,
-                worktree_path: PathBuf::from(r.get::<_, String>(4)?),
-                state: parse_state(&r.get::<_, String>(5)?),
-                setup_status: parse_setup(&r.get::<_, String>(6)?),
-                created_at: r.get(7)?,
-                yolo: r.get::<_, i64>(8)? != 0,
-                agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
-            })
-        })?;
+        let rows = stmt.query_map([repo_id.0], row_to_workspace)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
@@ -715,6 +702,30 @@ impl Store {
         Ok(out)
     }
 
+    /// Fetch a single workspace by its id.
+    pub fn workspace_by_id(&self, id: WorkspaceId) -> Result<Option<Workspace>> {
+        let r = self
+            .conn
+            .query_row(
+                "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
+                 FROM workspaces WHERE id = ?1",
+                [id.0],
+                row_to_workspace,
+            )
+            .optional()?;
+        Ok(r)
+    }
+
+    /// All workspaces across every repo (used by `resolve_current_workspace`).
+    pub fn all_workspaces(&self) -> Result<Vec<Workspace>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
+             FROM workspaces ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], row_to_workspace)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub(crate) fn conn(&self) -> &rusqlite::Connection {
         &self.conn
     }
@@ -807,6 +818,21 @@ pub(crate) fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {
+    Ok(Workspace {
+        id: WorkspaceId(r.get(0)?),
+        repo_id: RepoId(r.get(1)?),
+        name: r.get(2)?,
+        branch: r.get(3)?,
+        worktree_path: PathBuf::from(r.get::<_, String>(4)?),
+        state: parse_state(&r.get::<_, String>(5)?),
+        setup_status: parse_setup(&r.get::<_, String>(6)?),
+        created_at: r.get(7)?,
+        yolo: r.get::<_, i64>(8)? != 0,
+        agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
+    })
 }
 
 fn state_label(s: &WorkspaceState) -> &'static str {

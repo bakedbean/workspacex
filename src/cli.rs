@@ -98,6 +98,14 @@ pub enum CliAction {
         force_delete_branch: bool,
     },
     SetupInstallSkill,
+    AgentList,
+    AgentSend {
+        target: String,
+        prompt: String,
+    },
+    AgentAdd {
+        kind: String,
+    },
 }
 
 #[derive(Debug)]
@@ -463,6 +471,32 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
             other => Err(Error::UserInput(format!(
                 "unknown workspace action: {other:?}"
             ))),
+        },
+        Some("agent") => match it.next().as_deref() {
+            Some("list") => Ok(CliAction::AgentList),
+            Some("send") => {
+                let target = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("agent send <label> <prompt>".into()))?;
+                let rest: Vec<String> = it.collect();
+                if rest.is_empty() {
+                    return Err(Error::UserInput("agent send <label> <prompt>".into()));
+                }
+                let prompt = rest.join(" ");
+                Ok(CliAction::AgentSend { target, prompt })
+            }
+            Some("add") => {
+                let kind = it
+                    .next()
+                    .ok_or_else(|| Error::UserInput("agent add <kind>".into()))?;
+                if kind != "claude" && kind != "pi" && kind != "hermes" && kind != "codex" {
+                    return Err(Error::UserInput(format!(
+                        "agent add: kind must be 'claude', 'pi', 'hermes', or 'codex', got '{kind}'"
+                    )));
+                }
+                Ok(CliAction::AgentAdd { kind })
+            }
+            _ => Err(Error::UserInput("agent <list|send|add> ...".into())),
         },
         Some("setup") => match it.next().as_deref() {
             Some("install-skill") => Ok(CliAction::SetupInstallSkill),
@@ -885,9 +919,72 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             crate::data::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
             println!("archived workspace {}/{}", r.name, name);
         }
+        CliAction::AgentList => {
+            let ws = resolve_current_workspace(&store)?;
+            for inst in store.workspace_agents(ws.id)? {
+                let tag = if inst.is_primary { "  (primary)" } else { "" };
+                println!("{}{}", inst.label(), tag);
+            }
+        }
+        CliAction::AgentSend { target, prompt } => {
+            let ws = resolve_current_workspace(&store)?;
+            let target_id = store
+                .resolve_instance_label(ws.id, &target)?
+                .ok_or_else(|| {
+                    Error::UserInput(format!(
+                        "no agent '{target}' in this workspace; try `wsx agent list`"
+                    ))
+                })?;
+            let from = std::env::var("WSX_AGENT_INSTANCE_ID")
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+                .map(crate::data::store::AgentInstanceId);
+            store.enqueue_message(ws.id, target_id, from, &prompt)?;
+        }
+        CliAction::AgentAdd { kind } => {
+            let ws = resolve_current_workspace(&store)?;
+            let agent = crate::pty::session::AgentKind::from_str_or_default(Some(&kind));
+            let inst = store.add_workspace_agent(ws.id, agent)?;
+            println!("added {}", inst.label());
+        }
         CliAction::SetupInstallSkill => unreachable!("handled before store open"),
     }
     Ok(())
+}
+
+/// Resolve the workspace the current `wsx` invocation is acting within:
+/// prefer the `WSX_WORKSPACE_ID` env var (set when wsx spawns an agent), else
+/// fall back to matching the current directory against known worktree paths.
+fn resolve_current_workspace(
+    store: &crate::data::store::Store,
+) -> Result<crate::data::store::Workspace> {
+    use crate::data::store::WorkspaceId;
+    // 1. WSX_WORKSPACE_ID (reliable for agent-initiated calls)
+    if let Ok(s) = std::env::var("WSX_WORKSPACE_ID") {
+        if let Ok(id) = s.parse::<i64>() {
+            if let Some(ws) = store.workspace_by_id(WorkspaceId(id))? {
+                return Ok(ws);
+            }
+        }
+    }
+    // 2. cwd: find the workspace whose worktree_path is an ancestor-or-equal of cwd
+    // Note: this is a raw path-prefix match. If the user `cd`'d into the
+    // worktree through a symlink (e.g. macOS /var -> /private/var), cwd may not
+    // prefix the stored worktree_path and the match will miss. Setting
+    // WSX_WORKSPACE_ID (the agent-spawn path) avoids this entirely.
+    let cwd = std::env::current_dir()
+        .map_err(|e| Error::UserInput(format!("cannot determine current directory: {e}")))?;
+    let ws = store
+        .all_workspaces()?
+        .into_iter()
+        .filter(|w| cwd.starts_with(&w.worktree_path))
+        .max_by_key(|w| w.worktree_path.as_os_str().len())
+        .ok_or_else(|| {
+            Error::UserInput(
+                "not inside a wsx workspace (set WSX_WORKSPACE_ID or run from a worktree)".into(),
+            )
+        })?;
+    Ok(ws)
 }
 
 fn lookup_repo(store: &crate::data::store::Store, name: &str) -> Result<crate::data::store::Repo> {
@@ -1433,6 +1530,30 @@ mod tests {
     #[test]
     fn process_doctrine_is_a_known_setting() {
         assert!(known_setting_key("process_doctrine"));
+    }
+
+    #[test]
+    fn parses_agent_send_joins_prompt() {
+        match parse(&["agent", "send", "claude#2", "hello", "there"]).unwrap() {
+            CliAction::AgentSend { target, prompt } => {
+                assert_eq!(target, "claude#2");
+                assert_eq!(prompt, "hello there");
+            }
+            other => panic!("expected AgentSend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_agent_list_and_add() {
+        assert!(matches!(
+            parse(&["agent", "list"]).unwrap(),
+            CliAction::AgentList
+        ));
+        assert!(matches!(
+            parse(&["agent", "add", "codex"]).unwrap(),
+            CliAction::AgentAdd { .. }
+        ));
+        assert!(parse(&["agent", "add", "bogus"]).is_err());
     }
 
     #[test]

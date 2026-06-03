@@ -11,6 +11,9 @@ pub struct RepoId(pub i64);
 #[serde(transparent)]
 pub struct WorkspaceId(pub i64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AgentInstanceId(pub i64);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceState {
     Pending,

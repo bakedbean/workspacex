@@ -416,6 +416,7 @@ fn parse_pi_timestamp(v: Option<&serde_json::Value>) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::EnvGuard;
 
     #[test]
     fn encode_cwd_wraps_with_double_dash() {
@@ -448,20 +449,9 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(&newer, "{}").unwrap();
 
-        let original = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", home.path());
-        }
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
         let result = locate_session_file(work.path());
-        if let Some(h) = original {
-            unsafe {
-                std::env::set_var("HOME", h);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("HOME");
-            }
-        }
         assert_eq!(result, Some(newer));
     }
 
@@ -469,20 +459,9 @@ mod tests {
     fn locate_session_file_returns_none_when_dir_missing() {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
-        let original = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("HOME", home.path());
-        }
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
         let result = locate_session_file(work.path());
-        if let Some(h) = original {
-            unsafe {
-                std::env::set_var("HOME", h);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("HOME");
-            }
-        }
         assert!(result.is_none());
     }
 

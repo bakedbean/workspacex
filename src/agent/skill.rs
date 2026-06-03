@@ -36,6 +36,17 @@ pub fn default_codex_install_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".codex").join("skills").join("wsx").join("SKILL.md"))
 }
 
+/// Default Hermes install location (`~/.hermes/skills/wsx/SKILL.md`).
+/// Returns `None` if the home directory can't be resolved.
+pub fn default_hermes_install_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| {
+        h.join(".hermes")
+            .join("skills")
+            .join("wsx")
+            .join("SKILL.md")
+    })
+}
+
 /// Default install location kept for older call sites.
 pub fn default_install_path() -> Option<PathBuf> {
     default_claude_install_path()
@@ -46,7 +57,9 @@ pub fn default_install_path() -> Option<PathBuf> {
 /// Claude is always included because this command historically installs the
 /// bundled Claude Code skill. Codex is included only when it appears to be
 /// installed, either via `WSX_CODEX_BIN`, a `codex` executable on PATH, or an
-/// existing `~/.codex` directory from a prior Codex run.
+/// existing `~/.codex` directory from a prior Codex run. Hermes is included
+/// when `WSX_HERMES_BIN` is set, the `hermes` binary is on PATH, or
+/// `~/.hermes` exists.
 pub fn default_install_targets() -> Option<Vec<InstallTarget>> {
     let mut targets = vec![InstallTarget {
         agent: "Claude",
@@ -58,6 +71,12 @@ pub fn default_install_targets() -> Option<Vec<InstallTarget>> {
             path: default_codex_install_path()?,
         });
     }
+    if hermes_is_installed() {
+        targets.push(InstallTarget {
+            agent: "Hermes",
+            path: default_hermes_install_path()?,
+        });
+    }
     Some(targets)
 }
 
@@ -66,6 +85,14 @@ fn codex_is_installed() -> bool {
         || binary_on_path("codex")
         || dirs::home_dir()
             .map(|h| h.join(".codex").is_dir())
+            .unwrap_or(false)
+}
+
+fn hermes_is_installed() -> bool {
+    std::env::var_os("WSX_HERMES_BIN").is_some()
+        || binary_on_path("hermes")
+        || dirs::home_dir()
+            .map(|h| h.join(".hermes").is_dir())
             .unwrap_or(false)
 }
 
@@ -282,5 +309,81 @@ mod tests {
         let targets = default_install_targets().unwrap();
 
         assert!(targets.iter().any(|t| t.agent == "Codex"));
+    }
+
+    #[test]
+    fn default_targets_include_hermes_when_binary_is_on_path() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        let bin = TempDir::new().unwrap();
+        let hermes = bin.path().join("hermes");
+        std::fs::write(&hermes, "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&hermes, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        env.set("HOME", home.path());
+        env.set("PATH", bin.path());
+        env.remove("WSX_CODEX_BIN");
+        env.remove("WSX_HERMES_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(targets.iter().any(|t| {
+            t.agent == "Hermes"
+                && t.path
+                    == home
+                        .path()
+                        .join(".hermes")
+                        .join("skills")
+                        .join("wsx")
+                        .join("SKILL.md")
+        }));
+    }
+
+    #[test]
+    fn default_targets_include_hermes_when_hermes_home_exists() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        std::fs::create_dir(home.path().join(".hermes")).unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.remove("WSX_CODEX_BIN");
+        env.remove("WSX_HERMES_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(targets.iter().any(|t| t.agent == "Hermes"));
+    }
+
+    #[test]
+    fn default_targets_ignore_hermes_home_regular_file() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        std::fs::write(home.path().join(".hermes"), "").unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.remove("WSX_CODEX_BIN");
+        env.remove("WSX_HERMES_BIN");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(!targets.iter().any(|t| t.agent == "Hermes"));
+    }
+
+    #[test]
+    fn default_targets_include_hermes_when_hermes_bin_env_is_set() {
+        let mut env = EnvGuard::new();
+        let home = TempDir::new().unwrap();
+        env.set("HOME", home.path());
+        env.set("PATH", "");
+        env.remove("WSX_CODEX_BIN");
+        env.set("WSX_HERMES_BIN", "/custom/hermes");
+
+        let targets = default_install_targets().unwrap();
+
+        assert!(targets.iter().any(|t| t.agent == "Hermes"));
     }
 }

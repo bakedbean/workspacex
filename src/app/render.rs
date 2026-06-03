@@ -8,6 +8,16 @@ use crate::data::store::Store;
 use crate::ui::dashboard::row::ColumnWidths;
 use ratatui::layout::{Constraint, Direction, Layout};
 
+/// One attached pane's render inputs: session, label, rect, focus flag,
+/// and the workspace's coding agent (`None` for the project-manager pane).
+type PaneData = (
+    std::sync::Arc<crate::pty::session::Session>,
+    String,
+    ratatui::layout::Rect,
+    bool,
+    Option<crate::pty::session::AgentKind>,
+);
+
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     use crate::ui::{attached, dashboard, modal};
     let area = f.area();
@@ -438,13 +448,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
             // Build PaneSpec list. Use owned sessions + labels to keep
             // them alive while rendering.
-            let pane_data: Vec<(
-                std::sync::Arc<crate::pty::session::Session>,
-                String,
-                ratatui::layout::Rect,
-                bool,
-                Option<crate::pty::session::AgentKind>,
-            )> = panes
+            let pane_data: Vec<PaneData> = panes
                 .into_iter()
                 .filter_map(|(ws_id, path, rect)| {
                     let session = app.sessions.get(ws_id)?;

@@ -8,6 +8,16 @@ use crate::data::store::Store;
 use crate::ui::dashboard::row::ColumnWidths;
 use ratatui::layout::{Constraint, Direction, Layout};
 
+/// One attached pane's render inputs: session, label, rect, focus flag,
+/// and the workspace's coding agent (`None` for the project-manager pane).
+type PaneData = (
+    std::sync::Arc<crate::pty::session::Session>,
+    String,
+    ratatui::layout::Rect,
+    bool,
+    Option<crate::pty::session::AgentKind>,
+);
+
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     use crate::ui::{attached, dashboard, modal};
     let area = f.area();
@@ -82,6 +92,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .and_then(|e| e.latest.clone());
                     let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
                     let row = crate::ui::dashboard::row::RowInputs {
+                        agent: ws.agent,
                         status,
                         name: ws.name.clone(),
                         branch: ws.branch.clone(),
@@ -367,6 +378,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     }
                 })
                 .unwrap_or_default();
+            let focused_agent = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == focused_id)
+                .map(|(_, w)| w.agent);
 
             // Conservative right margin for the status row; `render_panes`
             // renders the attention line flush at `status_area.x` with no
@@ -432,32 +448,28 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
             // Build PaneSpec list. Use owned sessions + labels to keep
             // them alive while rendering.
-            let pane_data: Vec<(
-                std::sync::Arc<crate::pty::session::Session>,
-                String,
-                ratatui::layout::Rect,
-                bool,
-            )> = panes
+            let pane_data: Vec<PaneData> = panes
                 .into_iter()
                 .filter_map(|(ws_id, path, rect)| {
                     let session = app.sessions.get(ws_id)?;
-                    let label = app
+                    let (label, agent) = app
                         .workspaces
                         .iter()
                         .find(|(_, w)| w.id == ws_id)
-                        .map(|(_, w)| w.name.clone())
+                        .map(|(_, w)| (w.name.clone(), Some(w.agent)))
                         .unwrap_or_default();
                     let focused = path == state.focus;
-                    Some((session, label, rect, focused))
+                    Some((session, label, rect, focused, agent))
                 })
                 .collect();
             let specs: Vec<crate::ui::attached::PaneSpec<'_>> = pane_data
                 .iter()
-                .map(|(s, l, r, f)| crate::ui::attached::PaneSpec {
+                .map(|(s, l, r, f, a)| crate::ui::attached::PaneSpec {
                     session: s,
                     label: l.as_str(),
                     rect: *r,
                     focused: *f,
+                    agent: *a,
                 })
                 .collect();
 
@@ -469,6 +481,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 status_area,
                 footer_area,
                 &focused_label,
+                focused_agent,
                 multi_pane,
                 attention_line,
                 &pinned,
@@ -521,6 +534,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     label: "project-manager",
                     rect: pane_area,
                     focused: true,
+                    agent: None,
                 }];
                 let out = attached::render_panes(
                     f,
@@ -530,6 +544,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     status_area,
                     footer_area,
                     "project-manager",
+                    None,
                     false,
                     attention_line,
                     pinned,

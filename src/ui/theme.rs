@@ -1,4 +1,14 @@
+use crate::pty::session::AgentKind;
 use ratatui::style::{Color, Modifier, Style};
+
+/// Fixed per-agent identity colors. Independent of the active theme so the
+/// agent a workspace runs on stays recognizable when the user switches
+/// themes — agent identity is constant, unlike the status/lifecycle tones
+/// which each theme re-skins.
+const AGENT_CLAUDE: Color = Color::Rgb(0xe8, 0x8b, 0x3c); // orange
+const AGENT_PI: Color = Color::Rgb(0xa9, 0x7b, 0xd6); // purple
+const AGENT_HERMES: Color = Color::Rgb(0xf0, 0xd0, 0x66); // yellow
+const AGENT_CODEX: Color = Color::Rgb(0x5b, 0x9d, 0xe0); // blue
 
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
@@ -288,6 +298,20 @@ impl Theme {
         }
     }
 
+    /// Fixed identity color for a workspace's coding agent. Ignores `self`
+    /// by design — see the `AGENT_*` constants — but lives on `Theme` so
+    /// every color decision stays in one module, alongside `status_style`
+    /// and `lifecycle_style`.
+    pub fn agent_style(&self, agent: AgentKind) -> Style {
+        let fg = match agent {
+            AgentKind::Claude => AGENT_CLAUDE,
+            AgentKind::Pi => AGENT_PI,
+            AgentKind::Hermes => AGENT_HERMES,
+            AgentKind::Codex => AGENT_CODEX,
+        };
+        Style::default().fg(fg)
+    }
+
     pub fn status_style(&self, s: crate::ui::dashboard::status::Status) -> Style {
         use crate::ui::dashboard::status::Status::*;
         let fg = match s {
@@ -378,5 +402,37 @@ mod tests {
     #[test]
     fn by_name_resolves_wsx() {
         assert_eq!(Theme::by_name("wsx").question, Color::Rgb(0xe4, 0xba, 0x6c));
+    }
+
+    #[test]
+    fn agent_style_maps_each_kind_to_fixed_rgb() {
+        use crate::pty::session::AgentKind;
+        let t = Theme::wsx();
+        assert_eq!(
+            t.agent_style(AgentKind::Claude).fg,
+            Some(Color::Rgb(0xe8, 0x8b, 0x3c))
+        );
+        assert_eq!(
+            t.agent_style(AgentKind::Pi).fg,
+            Some(Color::Rgb(0xa9, 0x7b, 0xd6))
+        );
+        assert_eq!(
+            t.agent_style(AgentKind::Hermes).fg,
+            Some(Color::Rgb(0xf0, 0xd0, 0x66))
+        );
+        assert_eq!(
+            t.agent_style(AgentKind::Codex).fg,
+            Some(Color::Rgb(0x5b, 0x9d, 0xe0))
+        );
+    }
+
+    #[test]
+    fn agent_colors_are_theme_independent() {
+        use crate::pty::session::AgentKind;
+        let a = Theme::wsx();
+        let b = Theme::dracula();
+        for agent in AgentKind::ALL {
+            assert_eq!(a.agent_style(agent).fg, b.agent_style(agent).fg);
+        }
     }
 }

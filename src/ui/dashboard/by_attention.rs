@@ -250,6 +250,7 @@ mod tests {
                 out.push(FlatRow {
                     repo_name: r.name.clone(),
                     row: RowInputs {
+                        agent: crate::pty::session::AgentKind::Claude,
                         status: w.status,
                         name: w.name.clone(),
                         branch: w.branch.clone(),
@@ -406,6 +407,7 @@ mod tests {
         let row = FlatRow {
             repo_name: "wsx".into(),
             row: RowInputs {
+                agent: crate::pty::session::AgentKind::Claude,
                 status: Status::Question,
                 name: "repo-overview".into(),
                 branch: "bakedbean/repo-overview".into(),

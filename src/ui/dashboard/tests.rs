@@ -40,6 +40,7 @@ fn build_inputs<'a>(
                 workspace_id: id,
                 status: w.status,
                 row: row::RowInputs {
+                    agent: crate::pty::session::AgentKind::Claude,
                     status: w.status,
                     name: w.name.clone(),
                     branch: w.branch.clone(),
@@ -210,9 +211,10 @@ fn render_sets_list_state_to_selected_workspace_index() {
 #[test]
 fn selected_workspace_row_renders_with_thicker_gutter() {
     // End-to-end: when a workspace is selected, the rendered buffer for
-    // that row's leading cell must be `▍` (thicker bar). Other rows keep
-    // the thin `▎` gutter. This guards against the wiring regressing
-    // independently of row::render unit tests.
+    // that row's status gutter (column 1, immediately right of the
+    // per-agent identity bar in column 0) must be `▍` (thicker bar).
+    // Other rows keep the thin `▎` gutter. This guards against the wiring
+    // regressing independently of row::render unit tests.
     let fixtures = fixture::repos();
     let repos: Vec<Repo> = fixtures
         .iter()
@@ -246,8 +248,8 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
     let buf = term.backend().buffer().clone();
     let mut saw_thick = 0;
     for y in 0..buf.area.height {
-        let first_cell = buf[(0, y)].symbol().to_string();
-        if first_cell == "▍" {
+        let gutter_cell = buf[(1, y)].symbol().to_string();
+        if gutter_cell == "▍" {
             saw_thick += 1;
         }
     }

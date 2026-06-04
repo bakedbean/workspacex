@@ -29,6 +29,7 @@ pub struct ParsedLine {
     pub tool_use_resolves: Vec<String>,
     pub stop_reason: Option<StopReason>,
     pub is_user_text: bool,
+    pub first_user_text: Option<String>,
     pub last_assistant_text: Option<String>,
     pub longest_text_in_message: Option<String>,
 }
@@ -87,6 +88,7 @@ fn parse_user_message(payload: &serde_json::Value, ts: i64) -> ParsedLine {
             timestamp_ms: ts,
         }),
         is_user_text: true,
+        first_user_text: Some(trimmed.to_string()),
         ..ParsedLine::default()
     }
 }
@@ -300,6 +302,11 @@ pub fn tail_session(path: &Path, offset: u64) -> Result<TailUpdate> {
             update.human_replied_after_last_stop = true;
             update.last_user_interrupted = Some(false);
         }
+        if update.first_user_text.is_none()
+            && let Some(t) = parsed.first_user_text
+        {
+            update.first_user_text = Some(t);
+        }
         if let Some(longest) = parsed.longest_text_in_message {
             let len = longest.chars().count();
             let beats = update
@@ -383,6 +390,7 @@ mod tests {
         assert_eq!(ev.kind, EventKind::UserMessage);
         assert!(ev.display.contains("fix the billing bug"));
         assert!(p.is_user_text);
+        assert_eq!(p.first_user_text.as_deref(), Some("fix the billing bug"));
     }
 
     #[test]
@@ -471,6 +479,7 @@ mod tests {
         assert_eq!(u.events.len(), 2);
         assert_eq!(u.events[0].kind, EventKind::UserMessage);
         assert_eq!(u.events[1].kind, EventKind::AssistantToolUse);
+        assert_eq!(u.first_user_text.as_deref(), Some("hi"));
         assert_eq!(u.tool_use_starts.len(), 1);
 
         let u2 = tail_session(&path, u.new_offset).unwrap();

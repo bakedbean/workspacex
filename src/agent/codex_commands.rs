@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 use std::ffi::OsStr;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const PLUGIN_NAME: &str = "wsx-claude-commands";
@@ -76,11 +77,29 @@ fn default_marketplace() -> Value {
 }
 
 fn write_json(path: &Path, payload: &Value) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    let parent = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let file_name = path.file_name().and_then(OsStr::to_str).unwrap_or("json");
+    let tmp = parent.join(format!(
+        ".{file_name}.wsx-tmp.{}.{}",
+        std::process::id(),
+        rand::random::<u32>()
+    ));
+    let data = format!("{}\n", serde_json::to_string_pretty(payload)?);
+
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)?;
+        file.write_all(data.as_bytes())?;
+        file.sync_all()?;
     }
-    let data = serde_json::to_string_pretty(payload)?;
-    std::fs::write(path, format!("{data}\n"))
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 fn collect_command_files(dir: &Path) -> Vec<(PathBuf, PathBuf)> {
@@ -112,13 +131,13 @@ fn collect_command_files(dir: &Path) -> Vec<(PathBuf, PathBuf)> {
 
 fn sync_command_files(source_dir: &Path, commands_dir: &Path) -> std::io::Result<usize> {
     let files = collect_command_files(source_dir);
+    if commands_dir.exists() {
+        std::fs::remove_dir_all(commands_dir)?;
+    }
     if files.is_empty() {
         return Ok(0);
     }
 
-    if commands_dir.exists() {
-        std::fs::remove_dir_all(commands_dir)?;
-    }
     for (source, rel) in &files {
         let target = commands_dir.join(rel);
         if let Some(parent) = target.parent() {
@@ -132,13 +151,21 @@ fn sync_command_files(source_dir: &Path, commands_dir: &Path) -> std::io::Result
 fn ensure_marketplace_entry(path: &Path) -> std::io::Result<()> {
     let mut marketplace = if path.exists() {
         let text = std::fs::read_to_string(path)?;
-        serde_json::from_str::<Value>(&text).unwrap_or_else(|_| default_marketplace())
+        serde_json::from_str::<Value>(&text).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("parse {}: {e}", path.display()),
+            )
+        })?
     } else {
         default_marketplace()
     };
 
     if !marketplace.is_object() {
-        marketplace = default_marketplace();
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} must contain a JSON object", path.display()),
+        ));
     }
     if marketplace.get("name").and_then(Value::as_str).is_none() {
         marketplace["name"] = json!("personal");
@@ -151,6 +178,12 @@ fn ensure_marketplace_entry(path: &Path) -> std::io::Result<()> {
         .map(Value::is_array)
         .unwrap_or(false)
     {
+        if marketplace.get("plugins").is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{}.plugins must be an array", path.display()),
+            ));
+        }
         marketplace["plugins"] = json!([]);
     }
 
@@ -290,5 +323,42 @@ mod tests {
                 .exists()
         );
         assert!(!stale.exists());
+    }
+
+    #[test]
+    fn sync_empty_source_removes_stale_mirrored_commands() {
+        let mut env = EnvGuard::new();
+        let home = tempfile::tempdir().unwrap();
+        env.set("HOME", home.path());
+
+        let claude = home.path().join(".claude/commands");
+        std::fs::create_dir_all(&claude).unwrap();
+        let stale = home
+            .path()
+            .join("plugins/wsx-claude-commands/commands/stale.md");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "stale\n").unwrap();
+
+        sync_claude_commands_for_codex();
+
+        assert!(
+            !home
+                .path()
+                .join("plugins/wsx-claude-commands/commands")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn invalid_marketplace_json_is_not_overwritten() {
+        let home = tempfile::tempdir().unwrap();
+        let marketplace = home.path().join(".agents/plugins/marketplace.json");
+        std::fs::create_dir_all(marketplace.parent().unwrap()).unwrap();
+        std::fs::write(&marketplace, "{not json").unwrap();
+
+        let err = ensure_marketplace_entry(&marketplace).unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read_to_string(&marketplace).unwrap(), "{not json");
     }
 }

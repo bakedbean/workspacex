@@ -1453,6 +1453,7 @@ pub fn has_prior_codex_session(worktree: &Path) -> bool {
 /// Hermes) and hide the file from `git status`. Codex needs NO spawn-timestamp
 /// marker — session detection is cwd-in-file, not marker-based.
 fn prepare_codex_workspace(cwd: &Path, mode: &SpawnMode) {
+    #[cfg(not(test))]
     crate::agent::codex_commands::sync_claude_commands_for_codex();
     let injected = compose_injected_prompt(mode);
     let had_content = injected.is_some();

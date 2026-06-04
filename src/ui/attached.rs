@@ -67,6 +67,7 @@ pub fn render_panes(
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+    active_agent: Option<AgentInstanceId>,
     theme: &Theme,
 ) -> PanesDrawOutput {
     let show_titles = panes.len() > 1;
@@ -102,7 +103,7 @@ pub fn render_panes(
     let agent_chip_rects: Vec<(AgentInstanceId, Rect)> = if agents.is_empty() {
         Vec::new()
     } else {
-        let spans = agents_row_spans(agents, theme);
+        let spans = agents_row_spans(agents, active_agent, theme);
         f.render_widget(Paragraph::new(Line::from(spans)), agents_area);
         let rects = layout_agents_row(agents_area, agents);
         agents.iter().map(|(id, _, _, _)| *id).zip(rects).collect()
@@ -445,13 +446,25 @@ const AGENTS_ROW_PREFIX: &str = "agents:  ";
 /// Inter-pill separator width (in columns) in the agents row.
 const AGENTS_ROW_GAP: u16 = 3;
 
+/// Identity-bar glyph for an idle (non-focused) agent: a 1-cell quarter block.
+const AGENT_BAR_IDLE: &str = "▎";
+/// Identity-bar glyph for the active (focused-pane) agent: a 1-cell half block.
+/// Same column width as [`AGENT_BAR_IDLE`] but visually heavier, so the agent
+/// you're currently driving stands out without shifting any pill rects.
+const AGENT_BAR_ACTIVE: &str = "▌";
+
 /// Spans for the footer agents row: `agents:  ▎claude q   ▎codex w`.
 /// Each agent entry renders as a colored identity bar (`▎`), the agent
 /// label, and (when present) a switch key in the footer's key-pill style.
 /// Agents past the switch-key pool carry `None` and render keyless — they
 /// still show the color bar + label and remain clickable.
+///
+/// `active` is the agent instance shown in the focused pane; its bar renders
+/// with the heavier [`AGENT_BAR_ACTIVE`] glyph (and a bold label) so it reads
+/// as "the one you're on" when several agents are attached.
 pub fn agents_row_spans(
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+    active: Option<AgentInstanceId>,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
     let key_style = Style::default()
@@ -462,12 +475,26 @@ pub fn agents_row_spans(
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(1 + agents.len() * 6);
     spans.push(Span::raw(AGENTS_ROW_PREFIX.to_string()));
-    for (i, (_id, kind, label, key)) in agents.iter().enumerate() {
+    for (i, (id, kind, label, key)) in agents.iter().enumerate() {
         if i > 0 {
             spans.push(Span::raw(" ".repeat(AGENTS_ROW_GAP as usize)));
         }
-        spans.push(Span::styled("▎".to_string(), theme.agent_style(*kind)));
-        spans.push(Span::raw(format!("{label} ")));
+        let is_active = active == Some(*id);
+        let bar = if is_active {
+            AGENT_BAR_ACTIVE
+        } else {
+            AGENT_BAR_IDLE
+        };
+        spans.push(Span::styled(bar.to_string(), theme.agent_style(*kind)));
+        let label_span = if is_active {
+            Span::styled(
+                format!("{label} "),
+                Style::default().add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw(format!("{label} "))
+        };
+        spans.push(label_span);
         if let Some(key) = key {
             spans.push(Span::styled(" ".to_string(), pad_style));
             spans.push(Span::styled(key.to_string(), key_style));
@@ -718,12 +745,52 @@ mod tests {
                 Some('w'),
             ),
         ];
-        let spans = agents_row_spans(&agents, &theme);
+        let spans = agents_row_spans(&agents, None, &theme);
         let text: String = spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("claude"));
         assert!(text.contains("codex"));
         assert!(text.contains('q'));
         assert!(text.contains('w'));
+    }
+
+    #[test]
+    fn agents_row_spans_thickens_active_agent_bar() {
+        let theme = Theme::by_name("default");
+        let agents = vec![
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".to_string(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Codex,
+                "codex".to_string(),
+                Some('w'),
+            ),
+        ];
+
+        // With the second agent active, exactly one heavier bar is drawn and
+        // the idle bar still appears for the other agent.
+        let spans = agents_row_spans(&agents, Some(AgentInstanceId(2)), &theme);
+        let text: String = spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(
+            text.matches(AGENT_BAR_ACTIVE).count(),
+            1,
+            "active agent should get exactly one heavier bar"
+        );
+        assert_eq!(
+            text.matches(AGENT_BAR_IDLE).count(),
+            1,
+            "the non-active agent keeps the idle bar"
+        );
+
+        // With no active agent (e.g. the PM pane), every bar is idle.
+        let spans = agents_row_spans(&agents, None, &theme);
+        let text: String = spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(text.matches(AGENT_BAR_ACTIVE).count(), 0);
+        assert_eq!(text.matches(AGENT_BAR_IDLE).count(), 2);
     }
 
     #[test]

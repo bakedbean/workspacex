@@ -667,6 +667,8 @@ When a workspace uses `coding_agent: codex`, wsx spawns `codex` (or the path in 
 
 The block is rewritten every time Codex spawns and automatically cleaned up when there's nothing to inject. The file is git-excluded via `.git/info/exclude` if untracked, or will show as modified during a spawn if already tracked. The superpowers-skills doctrine clause is omitted for Codex (those skills install under `~/.claude` and Codex can't load them).
 
+**Claude slash commands**: before each Codex spawn, wsx mirrors Markdown files from `~/.claude/commands/` into a local Codex plugin at `~/plugins/wsx-claude-commands/commands/` and registers that plugin in the implicit personal marketplace at `~/.agents/plugins/marketplace.json`. The marketplace entry is marked `INSTALLED_BY_DEFAULT`, so commands such as `/pull-request` and `/commit-changes` are available in Codex without maintaining a second command set. Edits to the Claude command files are picked up on the next Codex spawn.
+
 **Spawn**: fresh workspaces launch bare `codex`. Non-yolo sessions use Codex's built-in interactive approvals + workspace-write sandbox; `--yolo` workspaces add `--dangerously-bypass-approvals-and-sandbox`.
 
 **Continue**: `codex resume --last`, which Codex filters to the current directory natively — so wsx resumes the worktree's own most-recent session.

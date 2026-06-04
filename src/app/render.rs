@@ -477,6 +477,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
             let multi_pane = panes.len() > 1;
 
+            // The agent instance in the focused pane is the "active" one; the
+            // footer agents row thickens its identity bar so it's clear which
+            // attached agent you're currently driving.
+            let active_agent = panes
+                .iter()
+                .find(|(_, path, _)| *path == state.focus)
+                .map(|(target, _, _)| target.instance);
+
             // Resize each session's PTY to its pane area (minus title row when multi-pane).
             for (target, _path, rect) in &panes {
                 if let Some(session) = app.sessions.get(target.instance) {
@@ -535,6 +543,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 attention_line,
                 &pinned,
                 &focused_agents_list,
+                active_agent,
                 &app.theme,
             );
             app.chip_rects = out.chip_rects;
@@ -601,6 +610,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     attention_line,
                     pinned,
                     &[],
+                    None,
                     &app.theme,
                 );
                 app.attached_pane_rects = out.pane_rects;

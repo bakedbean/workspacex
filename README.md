@@ -17,6 +17,7 @@ Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git workt
 
 
 ## Multi Agent Workflow Example
+### Deploy multiple coding harnesses to the same workspace using wsx's CLI to send messages across agents
 https://github.com/user-attachments/assets/5e5e28c7-d3fc-4301-be12-0be65163bcbf
 
 ## Table of contents

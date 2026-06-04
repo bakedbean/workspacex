@@ -4,6 +4,7 @@
 //! `related`), launch configuration (`remote_control`, `mcp`), session
 //! orchestration (`pm`), and skill installation (`skill`).
 
+pub mod codex_commands;
 pub mod doctrine;
 pub mod handoff;
 pub mod mcp;

@@ -1453,6 +1453,7 @@ pub fn has_prior_codex_session(worktree: &Path) -> bool {
 /// Hermes) and hide the file from `git status`. Codex needs NO spawn-timestamp
 /// marker — session detection is cwd-in-file, not marker-based.
 fn prepare_codex_workspace(cwd: &Path, mode: &SpawnMode) {
+    crate::agent::codex_commands::sync_claude_commands_for_codex();
     let injected = compose_injected_prompt(mode);
     let had_content = injected.is_some();
     write_agents_md_section(cwd, injected.as_deref());
@@ -3861,6 +3862,10 @@ mod tests {
 
     #[test]
     fn spawn_identity_env_vars_absent_when_none() {
+        let mut env = EnvGuard::new();
+        env.remove("WSX_WORKSPACE_ID");
+        env.remove("WSX_AGENT_INSTANCE_ID");
+
         let mut cmd = CommandBuilder::new("dummy");
         let identity: Option<SpawnIdentity> = None;
         if let Some(id) = identity {

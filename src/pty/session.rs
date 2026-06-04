@@ -613,6 +613,22 @@ fn resolve_gitdir(dot_git: &Path, worktree: &Path) -> Option<std::path::PathBuf>
 const HERMES_BLOCK_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
 const HERMES_BLOCK_END: &str = "<!-- END wsx-managed -->";
 
+/// Marker prefixing `CLAUDE.md` content copied into a freshly-created
+/// `AGENTS.md`, so a reader can tell where it came from.
+const CLAUDE_PROVENANCE_COMMENT: &str = "<!-- Copied from CLAUDE.md by wsx -->";
+
+/// Read a repo's root `CLAUDE.md`, returning its contents only if the file
+/// exists and holds non-whitespace text. Used to seed a newly-created
+/// `AGENTS.md` so Hermes/Codex get the same project instructions Claude reads
+/// natively. Best-effort: any IO error yields `None`.
+fn read_claude_md(cwd: &Path) -> Option<String> {
+    let contents = std::fs::read_to_string(cwd.join("CLAUDE.md")).ok()?;
+    if contents.trim().is_empty() {
+        return None;
+    }
+    Some(contents)
+}
+
 /// Rewrite the wsx-managed section of `AGENTS.md` in `cwd`.
 ///
 /// Strips any existing `BEGIN/END wsx-managed` block, then appends a new
@@ -622,6 +638,11 @@ const HERMES_BLOCK_END: &str = "<!-- END wsx-managed -->";
 /// Best-effort: any IO error is silently swallowed.
 fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
     let path = cwd.join("AGENTS.md");
+    // Capture existence before reading: when wsx creates AGENTS.md fresh we
+    // seed it with the repo's CLAUDE.md (if any) so Hermes/Codex get the same
+    // project instructions Claude reads natively. Checking emptiness after the
+    // read wouldn't distinguish a missing file from an empty one.
+    let file_existed = path.exists();
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let stripped = strip_wsx_block(&existing);
     let new = match content {
@@ -641,6 +662,20 @@ fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
             }
             s.push_str(HERMES_BLOCK_END);
             s.push('\n');
+            // On true first creation, append the repo's CLAUDE.md after the
+            // wsx block. One-time only — once the file exists, later spawns
+            // preserve this content as ordinary non-wsx text and never re-copy.
+            if !file_existed {
+                if let Some(claude) = read_claude_md(cwd) {
+                    s.push('\n');
+                    s.push_str(CLAUDE_PROVENANCE_COMMENT);
+                    s.push('\n');
+                    s.push_str(&claude);
+                    if !claude.ends_with('\n') {
+                        s.push('\n');
+                    }
+                }
+            }
             s
         }
         None => stripped.into_owned(),
@@ -3081,6 +3116,74 @@ mod tests {
             super::write_agents_md_section(tmp.path(), Some("inject"));
             // Restore perms so tempdir cleanup works.
             fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        #[test]
+        fn copies_claude_md_after_block_on_fresh_create() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::write(
+                tmp.path().join("CLAUDE.md"),
+                "# Project rules\n\nBe nice.\n",
+            )
+            .unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(
+                contents.contains(super::CLAUDE_PROVENANCE_COMMENT),
+                "missing provenance comment: {contents:?}"
+            );
+            assert!(
+                contents.contains("Be nice."),
+                "missing CLAUDE.md content: {contents:?}"
+            );
+            // CLAUDE.md content must come AFTER the wsx-managed block.
+            let end_idx = contents.find(super::HERMES_BLOCK_END).unwrap();
+            let prov_idx = contents.find(super::CLAUDE_PROVENANCE_COMMENT).unwrap();
+            assert!(
+                prov_idx > end_idx,
+                "CLAUDE.md content must follow the wsx block: {contents:?}"
+            );
+        }
+
+        #[test]
+        fn no_claude_md_means_no_copy() {
+            let tmp = tempfile::tempdir().unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(
+                !contents.contains(super::CLAUDE_PROVENANCE_COMMENT),
+                "should not add provenance comment when no CLAUDE.md: {contents:?}"
+            );
+        }
+
+        #[test]
+        fn does_not_copy_claude_md_when_agents_md_already_exists() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "# Existing notes\n").unwrap();
+            fs::write(tmp.path().join("CLAUDE.md"), "Be nice.\n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(
+                !contents.contains(super::CLAUDE_PROVENANCE_COMMENT),
+                "must not copy CLAUDE.md when AGENTS.md pre-existed: {contents:?}"
+            );
+            assert!(
+                !contents.contains("Be nice."),
+                "must not copy CLAUDE.md content: {contents:?}"
+            );
+        }
+
+        #[test]
+        fn blank_claude_md_is_not_copied() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::write(tmp.path().join("CLAUDE.md"), "   \n\n  \n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(
+                !contents.contains(super::CLAUDE_PROVENANCE_COMMENT),
+                "blank CLAUDE.md should not be copied: {contents:?}"
+            );
         }
     }
 

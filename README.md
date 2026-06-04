@@ -740,13 +740,15 @@ Since all agents write to the same files, prefer messaging to hand off work rath
 wsx agent list
 ```
 
-Prints one agent per line — its label, with `(primary)` appended for the primary — for the current workspace:
+Prints one agent per line — its instance id and label, with `(primary)` appended for the primary — for the current workspace:
 
 ```
-claude  (primary)
-claude#2
-codex
+1  claude  (primary)
+2  claude#2
+4  codex
 ```
+
+The leading number is the agent's instance id — the same value wsx injects as `$WSX_AGENT_INSTANCE_ID` into that agent's session.
 
 #### Agent identity and labels
 

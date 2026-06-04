@@ -1343,7 +1343,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let ws = resolve_current_workspace(&store)?;
             for inst in store.workspace_agents(ws.id)? {
                 let tag = if inst.is_primary { "  (primary)" } else { "" };
-                println!("{}{}", inst.label(), tag);
+                println!("{}  {}{}", inst.id.0, inst.label(), tag);
             }
         }
         CliAction::AgentSend { target, prompt } => {

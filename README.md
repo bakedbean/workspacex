@@ -17,7 +17,7 @@ Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git workt
 
 
 ## Multi Agent Workflow Example
-https://github.com/user-attachments/assets/d35bd0c1-325c-45f4-b243-fe5340afc5c8
+https://github.com/user-attachments/assets/5e5e28c7-d3fc-4301-be12-0be65163bcbf
 
 ## Table of contents
 

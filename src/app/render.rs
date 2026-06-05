@@ -34,6 +34,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.agent_chip_rects.clear();
     app.chronology_entry_rects.clear();
     app.chronology_bar_rect = None;
+    app.chronology_detail_rect = None;
     app.usage_graph_rect = None;
     app.usage_window_option_rects.clear();
 
@@ -552,6 +553,15 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 &mut app.chronology_last_workspace,
                 Some(focused_id),
             );
+            // Keep the keyboard selection in view (uses last frame's visible count).
+            if app.chronology_focused {
+                app.chronology_scroll = crate::ui::chronology_nav::adjust_scroll(
+                    app.chronology_scroll,
+                    app.chronology_sel.index(),
+                    app.chronology_visible_entries,
+                    chronology_events.len(),
+                );
+            }
             let chronology_scroll = app.chronology_scroll;
             let chronology_expanded = app.chronology_expanded;
 
@@ -567,8 +577,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     worktree,
                     scroll: chronology_scroll,
                     expanded: chronology_expanded,
-                    focused: false,
-                    sel: Default::default(),
+                    focused: app.chronology_focused,
+                    sel: app.chronology_sel,
                 }),
                 _ => None,
             };
@@ -653,6 +663,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             app.attached_pane_rects = out.pane_rects;
             app.agent_chip_rects = out.agent_chip_rects;
             app.chronology_entry_rects = out.chronology_entry_rects;
+            app.chronology_detail_rect = out.chronology_detail_rect;
+            app.chronology_visible_entries = out.chronology_visible_entries;
             app.chronology_bar_rect = bar_rect;
             app.pinned_commands_cache = pinned;
         }

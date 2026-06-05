@@ -1475,7 +1475,10 @@ async fn handle_key_modal(
             }
             KeyCode::Enter => {
                 let win = crate::config::usage_window::UsageWindow::from_index(selected);
-                if let Err(e) = app.store.set_setting("usage_graph_window", win.as_setting()) {
+                if let Err(e) = app
+                    .store
+                    .set_setting("usage_graph_window", win.as_setting())
+                {
                     tracing::warn!(error = %e, "failed to persist usage_graph_window");
                 }
                 app.modal = None;
@@ -1711,7 +1714,10 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                         && m.row < r.y.saturating_add(r.height)
                 }) {
                     let win = crate::config::usage_window::UsageWindow::from_index(idx);
-                    if let Err(e) = app.store.set_setting("usage_graph_window", win.as_setting()) {
+                    if let Err(e) = app
+                        .store
+                        .set_setting("usage_graph_window", win.as_setting())
+                    {
                         tracing::warn!(error = %e, "failed to persist usage_graph_window");
                     }
                 }

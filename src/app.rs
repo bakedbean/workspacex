@@ -346,7 +346,10 @@ impl App {
             .sweep_stale_pending(std::time::Duration::from_secs(300));
         // Load the retained bucketed activity for the sparkline (up to
         // MAX_ACTIVITY_HOURS); the configured window selects how much is shown.
-        if let Ok(buckets) = app.store.recent_activity_buckets(MAX_ACTIVITY_HOURS as usize) {
+        if let Ok(buckets) = app
+            .store
+            .recent_activity_buckets(MAX_ACTIVITY_HOURS as usize)
+        {
             app.activity_history.extend(buckets);
         }
         app.refresh()?;

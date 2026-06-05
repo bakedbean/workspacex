@@ -1,5 +1,6 @@
 pub mod attached;
 pub mod chronology_bar;
+pub mod chronology_nav;
 pub mod dashboard;
 pub mod modal;
 pub mod pm_pane;

@@ -1905,39 +1905,47 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
 
-            if let Some(idx) = app.chronology_entry_rects.iter().find_map(|(i, r)| {
+            // Chronology detail click → open the file at the line (mirrors the
+            // keyboard `Enter`-on-detail). Checked first because the detail block
+            // lies below the entry's header row.
+            if let Some((idx, _)) = app.chronology_detail_rect.filter(|(_, r)| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                let target = focused_attached_workspace(app).and_then(|(ws_id, worktree)| {
+                    app.chronology.get(&ws_id).and_then(|t| {
+                        t.events()
+                            .get(idx)
+                            .map(|ev| (worktree, ev.file_path.clone(), ev.detail.clone()))
+                    })
+                });
+                if let Some((worktree, file, detail)) = target {
+                    let line = crate::activity::chronology::resolve_line_in_file(&file, &detail);
+                    let editor = app.store.get_setting("editor_cmd").ok().flatten();
+                    if let Err(e) = crate::commands::external::open_in_editor_at(
+                        &worktree,
+                        &file,
+                        line,
+                        editor.as_deref(),
+                    ) {
+                        tracing::warn!(error = %e, "failed to open editor from chronology detail click");
+                    }
+                }
+                app.chronology_focused = true;
+                app.chronology_sel = crate::ui::chronology_nav::ChronoSel::Detail(idx);
+            } else if let Some(idx) = app.chronology_entry_rects.iter().find_map(|(i, r)| {
                 let hit = m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)
                     && m.row >= r.y
                     && m.row < r.y.saturating_add(r.height);
                 hit.then_some(*i)
             }) {
-                if app.chronology_expanded == Some(idx) {
-                    // Second click on the already-expanded entry → open editor.
-                    // Clone path+detail before any further `app` borrow.
-                    let target = focused_attached_workspace(app).and_then(|(ws_id, worktree)| {
-                        app.chronology.get(&ws_id).and_then(|t| {
-                            t.events()
-                                .get(idx)
-                                .map(|ev| (worktree, ev.file_path.clone(), ev.detail.clone()))
-                        })
-                    });
-                    if let Some((worktree, file, detail)) = target {
-                        let line =
-                            crate::activity::chronology::resolve_line_in_file(&file, &detail);
-                        let editor = app.store.get_setting("editor_cmd").ok().flatten();
-                        if let Err(e) = crate::commands::external::open_in_editor_at(
-                            &worktree,
-                            &file,
-                            line,
-                            editor.as_deref(),
-                        ) {
-                            tracing::warn!(error = %e, "failed to open editor from chronology click");
-                        }
-                    }
-                } else {
-                    app.chronology_expanded = Some(idx);
-                }
+                // Header click → focus the bar, select + expand this entry.
+                app.chronology_focused = true;
+                app.chronology_sel = crate::ui::chronology_nav::ChronoSel::Entry(idx);
+                app.chronology_expanded = Some(idx);
             } else if let Some(idx) = app.chip_rects.iter().position(|r| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

@@ -2,7 +2,7 @@
 
 Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git worktrees.
 
-> **A note on this project.** WorkspaceX approaches git worktree based agent development from a hands on perspective, choosing to delegate to other tools rather than be an all in one IDE.  If you want the power of multi agent worktree based development but like working in the terminal, want to use your own tools like Neovim, Emacs and Lazygit, then this might just be something you’d enjoy using too.  Feedback, ideas, and contributions are welcome.
+> **A note on this project.** wsx approaches git worktree based agent development from a hands on perspective, choosing to delegate to other tools rather than be an all in one IDE.  Many of wsx's features are only accessible from the CLI and empower the user to define their own behaviors. If you want the power of multi agent worktree based development but like working in the terminal, want to use your own tools like Neovim, Emacs and Lazygit, then this might just be something you’d enjoy using too.  Feedback, ideas, and contributions are welcome.
 
 
 ## Multi Agent Workflow Example

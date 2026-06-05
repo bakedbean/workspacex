@@ -732,8 +732,27 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .unwrap_or_default();
                 crate::ui::modal::render_agents_panel(f, area, &agents, *selected, &app.theme);
             }
+            crate::ui::modal::Modal::UsageWindowPicker { .. } => {
+                // Rendered separately below, anchored to the footer graph.
+            }
             other => modal::render(f, area, other, app.tick, &app.theme),
         }
+    }
+    // The usage-window picker renders anchored over the footer graph rather
+    // than centered, so it is handled outside the generic modal dispatch. We
+    // copy `selected` out first so the immutable borrow on `app.modal` ends
+    // before we assign the returned option rects back to `app`.
+    let picker_selected = match &app.modal {
+        Some(crate::ui::modal::Modal::UsageWindowPicker { selected }) => Some(*selected),
+        _ => None,
+    };
+    if let Some(selected) = picker_selected {
+        let current = crate::config::usage_window::resolve(&app.store);
+        let graph_rect = app.usage_graph_rect;
+        let rects = crate::ui::modal::render_usage_window_picker(
+            f, area, selected, current, graph_rect, &app.theme,
+        );
+        app.usage_window_option_rects = rects;
     }
 }
 

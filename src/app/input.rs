@@ -1456,6 +1456,9 @@ async fn handle_key_modal(
                 _ => {}
             }
         }
+        Modal::UsageWindowPicker { .. } => {
+            // Key handling for the usage-window picker is added in Task 8.
+        }
     }
     Ok(())
 }

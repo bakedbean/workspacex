@@ -108,6 +108,11 @@ pub enum StoppedKind {
     Complete,
 }
 
+/// How many hourly activity buckets to retain, in memory and in the DB. Sized
+/// to the largest selectable usage-graph window (30 days), so the setting is
+/// purely a view over already-collected data rather than affecting retention.
+const MAX_ACTIVITY_HOURS: u64 = 720;
+
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
@@ -239,6 +244,15 @@ pub struct App {
     /// retarget the focused pane on click. Mirrors the `chip_rects`
     /// draw-populates / input-reads pattern; cleared each frame.
     pub agent_chip_rects: Vec<(crate::data::store::AgentInstanceId, ratatui::layout::Rect)>,
+    /// Rect of the footer activity graph from the last draw, used by
+    /// `handle_mouse` to open the usage-window picker on click. `None` when the
+    /// footer is not currently drawn. Mirrors the `chip_rects` draw-populates /
+    /// input-reads pattern; reset each frame.
+    pub usage_graph_rect: Option<ratatui::layout::Rect>,
+    /// Per-option row rects of the open usage-window picker, in `UsageWindow::ALL`
+    /// order, consumed by `handle_mouse` to apply a clicked option. Cleared each
+    /// frame; only populated while the picker modal is open.
+    pub usage_window_option_rects: Vec<ratatui::layout::Rect>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
@@ -318,6 +332,8 @@ impl App {
             detail_container_rects: [None; 4],
             attached_pane_rects: Vec::new(),
             agent_chip_rects: Vec::new(),
+            usage_graph_rect: None,
+            usage_window_option_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),
@@ -328,8 +344,12 @@ impl App {
         let _ = app
             .store
             .sweep_stale_pending(std::time::Duration::from_secs(300));
-        // Load up to 24 hours of bucketed activity for the sparkline.
-        if let Ok(buckets) = app.store.recent_activity_buckets(24) {
+        // Load the retained bucketed activity for the sparkline (up to
+        // MAX_ACTIVITY_HOURS); the configured window selects how much is shown.
+        if let Ok(buckets) = app
+            .store
+            .recent_activity_buckets(MAX_ACTIVITY_HOURS as usize)
+        {
             app.activity_history.extend(buckets);
         }
         app.refresh()?;
@@ -771,10 +791,12 @@ pub async fn run<B: Backend + std::io::Write>(
                             let _ = g.store.set_activity_bucket(h, m);
                         }
                         g.activity_history.push_back((now_hour, live));
-                        while g.activity_history.len() > 24 {
+                        while g.activity_history.len() > MAX_ACTIVITY_HOURS as usize {
                             g.activity_history.pop_front();
                         }
-                        let _ = g.store.prune_activity_buckets_before(now_hour.saturating_sub(24 * 3600));
+                        let _ = g.store.prune_activity_buckets_before(
+                            now_hour.saturating_sub(MAX_ACTIVITY_HOURS * 3600),
+                        );
                     }
                 }
             }

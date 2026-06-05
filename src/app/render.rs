@@ -32,6 +32,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.detail_container_rects = [None; 4];
     app.attached_pane_rects.clear();
     app.agent_chip_rects.clear();
+    app.usage_graph_rect = None;
+    app.usage_window_option_rects.clear();
     match &app.view {
         crate::ui::View::Dashboard => {
             let selection_is_workspace =
@@ -201,7 +203,23 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 }
             }
 
-            let activity: Vec<u32> = app.activity_history.iter().map(|(_h, m)| *m).collect();
+            // Aggregate the retained hourly buckets into a fixed 24-bar,
+            // time-aligned sparkline for the configured window.
+            let window = crate::config::usage_window::resolve(&app.store);
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let now_hour = now_secs - (now_secs % 3600);
+            // VecDeque is non-contiguous; collect into a slice-able Vec so
+            // aggregate_buckets can take it as `&[(u64, u32)]`.
+            let history: Vec<(u64, u32)> = app.activity_history.iter().copied().collect();
+            let activity: Vec<u32> = crate::ui::dashboard::sparkline::aggregate_buckets(
+                &history,
+                now_hour,
+                window.hours(),
+                24,
+            );
             let column_widths = read_column_widths(&app.store);
             let inputs = dashboard::DashboardInputs {
                 repos: app.repos.iter().collect(),
@@ -344,7 +362,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
             // Render footer below detail/PM so the spec order
             // list / detail / pm / footer is respected.
-            dashboard::render_footer(f, footer_area, &activity, &app.theme);
+            let graph_rect =
+                dashboard::render_footer(f, footer_area, &activity, &app.theme, window.label());
+            app.usage_graph_rect = Some(graph_rect);
         }
         crate::ui::View::Attached(state) => {
             // If any leaf's session has gone away (e.g. workspace was
@@ -712,8 +732,27 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .unwrap_or_default();
                 crate::ui::modal::render_agents_panel(f, area, &agents, *selected, &app.theme);
             }
+            crate::ui::modal::Modal::UsageWindowPicker { .. } => {
+                // Rendered separately below, anchored to the footer graph.
+            }
             other => modal::render(f, area, other, app.tick, &app.theme),
         }
+    }
+    // The usage-window picker renders anchored over the footer graph rather
+    // than centered, so it is handled outside the generic modal dispatch. We
+    // copy `selected` out first so the immutable borrow on `app.modal` ends
+    // before we assign the returned option rects back to `app`.
+    let picker_selected = match &app.modal {
+        Some(crate::ui::modal::Modal::UsageWindowPicker { selected }) => Some(*selected),
+        _ => None,
+    };
+    if let Some(selected) = picker_selected {
+        let current = crate::config::usage_window::resolve(&app.store);
+        let graph_rect = app.usage_graph_rect;
+        let rects = crate::ui::modal::render_usage_window_picker(
+            f, area, selected, current, graph_rect, &app.theme,
+        );
+        app.usage_window_option_rects = rects;
     }
 }
 

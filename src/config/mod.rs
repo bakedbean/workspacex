@@ -5,6 +5,7 @@
 //! config from global + per-repo JSON.
 
 pub mod detail_bar_config;
+pub mod usage_window;
 
 use std::path::PathBuf;
 

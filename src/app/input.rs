@@ -243,6 +243,51 @@ fn toggle_focused_fold(app: &mut App) {
         app.dashboard.folded.insert(id, new_folded);
     }
 }
+/// Toggle the global change-chronology bar visibility and persist it to
+/// settings. Read live by the renderer via `resolve_global_only`.
+fn toggle_chronology_visible(app: &mut App) {
+    let mut cfg = crate::config::chronology::resolve_global_only(&app.store);
+    cfg.visible = !cfg.visible;
+    if let Ok(json) = serde_json::to_string(&cfg) {
+        if let Err(e) = app.store.set_setting("chronology_config", &json) {
+            tracing::warn!(error = %e, "failed to persist chronology_config (toggle)");
+        }
+    }
+}
+
+/// Swap the change-chronology bar to the opposite side and persist it.
+fn swap_chronology_side(app: &mut App) {
+    use crate::config::chronology::Side;
+    let mut cfg = crate::config::chronology::resolve_global_only(&app.store);
+    cfg.side = match cfg.side {
+        Side::Left => Side::Right,
+        Side::Right => Side::Left,
+    };
+    if let Ok(json) = serde_json::to_string(&cfg) {
+        if let Err(e) = app.store.set_setting("chronology_config", &json) {
+            tracing::warn!(error = %e, "failed to persist chronology_config (swap side)");
+        }
+    }
+}
+
+/// Focused attached workspace's id and worktree path, if the current view is
+/// Attached. Used by chronology mouse handling.
+fn focused_attached_workspace(
+    app: &App,
+) -> Option<(crate::data::store::WorkspaceId, std::path::PathBuf)> {
+    let crate::ui::View::Attached(state) = &app.view else {
+        return None;
+    };
+    let target = state.focused_target()?;
+    let ws_id = target.workspace_id;
+    let worktree = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == ws_id)
+        .map(|(_, w)| w.worktree_path.clone())?;
+    Some((ws_id, worktree))
+}
+
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
 /// [`toggle_focused_fold`], this is idempotent: pressing `h` on an
 /// already-folded repo leaves it folded.
@@ -802,6 +847,14 @@ async fn handle_key_attached(
                         });
                     }
                 }
+                return Ok(());
+            }
+            KeyCode::Char('c') => {
+                toggle_chronology_visible(app);
+                return Ok(());
+            }
+            KeyCode::Char('C') => {
+                swap_chronology_side(app);
                 return Ok(());
             }
             KeyCode::Char('t') => {
@@ -1676,6 +1729,34 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
         }
     }
 
+    // Change-chronology bar: a wheel over the bar scrolls the chronology
+    // entries rather than the PTY/scrollback. Checked before the pane-scroll
+    // block below so a wheel inside the bar returns early.
+    if matches!(
+        m.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) {
+        if let Some(rect) = app.chronology_bar_rect {
+            let inside = m.column >= rect.x
+                && m.column < rect.x.saturating_add(rect.width)
+                && m.row >= rect.y
+                && m.row < rect.y.saturating_add(rect.height);
+            if inside {
+                let len = focused_attached_workspace(app)
+                    .and_then(|(id, _)| app.chronology.get(&id))
+                    .map(|t| t.events().len())
+                    .unwrap_or(0);
+                let max_scroll = len.saturating_sub(1);
+                if matches!(m.kind, MouseEventKind::ScrollDown) {
+                    app.chronology_scroll = (app.chronology_scroll + 3).min(max_scroll);
+                } else {
+                    app.chronology_scroll = app.chronology_scroll.saturating_sub(3);
+                }
+                return;
+            }
+        }
+    }
+
     // Attached view: a plain wheel over a pane whose agent has mouse
     // reporting on is forwarded to that agent's PTY so it scrolls its own
     // view (notably its full-screen UI, where wsx has no scrollback).
@@ -1725,7 +1806,41 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
 
-            if let Some(idx) = app.chip_rects.iter().position(|r| {
+            if let Some(idx) = app.chronology_entry_rects.iter().find_map(|(i, r)| {
+                let hit = m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height);
+                hit.then_some(*i)
+            }) {
+                if app.chronology_expanded == Some(idx) {
+                    // Second click on the already-expanded entry → open editor.
+                    // Clone path+detail before any further `app` borrow.
+                    let target = focused_attached_workspace(app).and_then(|(ws_id, worktree)| {
+                        app.chronology.get(&ws_id).and_then(|t| {
+                            t.events()
+                                .get(idx)
+                                .map(|ev| (worktree, ev.file_path.clone(), ev.detail.clone()))
+                        })
+                    });
+                    if let Some((worktree, file, detail)) = target {
+                        let line =
+                            crate::activity::chronology::resolve_line_in_file(&file, &detail);
+                        let editor = app.store.get_setting("editor_cmd").ok().flatten();
+                        if let Err(e) = crate::commands::external::open_in_editor_at(
+                            &worktree,
+                            &file,
+                            line,
+                            editor.as_deref(),
+                        ) {
+                            tracing::warn!(error = %e, "failed to open editor from chronology click");
+                        }
+                    }
+                } else {
+                    app.chronology_expanded = Some(idx);
+                }
+                return;
+            } else if let Some(idx) = app.chip_rects.iter().position(|r| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)
                     && m.row >= r.y

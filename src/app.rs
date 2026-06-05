@@ -170,6 +170,9 @@ pub struct App {
     /// pane: `(entry_index, rect)`. Rebuilt each frame by the attached renderer
     /// and consumed by the input handler. Empty when the bar isn't shown.
     pub chronology_entry_rects: Vec<(usize, ratatui::layout::Rect)>,
+    /// Transient per-frame screen rect of the chronology bar (focused pane),
+    /// used for wheel-scroll hit-testing. `None` when the bar isn't shown.
+    pub chronology_bar_rect: Option<ratatui::layout::Rect>,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity:
         std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
@@ -323,6 +326,7 @@ impl App {
             chronology_scroll: 0,
             chronology_expanded: None,
             chronology_entry_rects: Vec::new(),
+            chronology_bar_rect: None,
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),

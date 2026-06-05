@@ -1456,9 +1456,35 @@ async fn handle_key_modal(
                 _ => {}
             }
         }
-        Modal::UsageWindowPicker { .. } => {
-            // Key handling for the usage-window picker is added in Task 8.
-        }
+        Modal::UsageWindowPicker { selected } => match k.code {
+            KeyCode::Up => {
+                let n = if selected == 0 {
+                    crate::config::usage_window::UsageWindow::ALL.len() - 1
+                } else {
+                    selected - 1
+                };
+                app.modal = Some(Modal::UsageWindowPicker { selected: n });
+            }
+            KeyCode::Down => {
+                let n = if selected + 1 >= crate::config::usage_window::UsageWindow::ALL.len() {
+                    0
+                } else {
+                    selected + 1
+                };
+                app.modal = Some(Modal::UsageWindowPicker { selected: n });
+            }
+            KeyCode::Enter => {
+                let win = crate::config::usage_window::UsageWindow::from_index(selected);
+                if let Err(e) = app.store.set_setting("usage_graph_window", win.as_setting()) {
+                    tracing::warn!(error = %e, "failed to persist usage_graph_window");
+                }
+                app.modal = None;
+            }
+            KeyCode::Esc => {
+                app.modal = None;
+            }
+            _ => {}
+        },
     }
     Ok(())
 }
@@ -1675,6 +1701,24 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::ScrollUp => scroll_active(app, 3, true),
         MouseEventKind::ScrollDown => scroll_active(app, 3, false),
         MouseEventKind::Down(MouseButton::Left) => {
+            // If the usage-window picker is open, a click either applies the
+            // option under the cursor or dismisses the picker (click-outside).
+            if matches!(app.modal, Some(Modal::UsageWindowPicker { .. })) {
+                if let Some(idx) = app.usage_window_option_rects.iter().position(|r| {
+                    m.column >= r.x
+                        && m.column < r.x.saturating_add(r.width)
+                        && m.row >= r.y
+                        && m.row < r.y.saturating_add(r.height)
+                }) {
+                    let win = crate::config::usage_window::UsageWindow::from_index(idx);
+                    if let Err(e) = app.store.set_setting("usage_graph_window", win.as_setting()) {
+                        tracing::warn!(error = %e, "failed to persist usage_graph_window");
+                    }
+                }
+                app.modal = None;
+                return;
+            }
+
             if let Some(idx) = app.chip_rects.iter().position(|r| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)
@@ -1704,6 +1748,20 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 if let Err(e) = app.switch_focused_pane_to(inst) {
                     tracing::warn!(error = %e, "failed to switch pane from agent-pill click");
                 }
+            } else if app.modal.is_none()
+                && app.usage_graph_rect.is_some_and(|r| {
+                    m.column >= r.x
+                        && m.column < r.x.saturating_add(r.width)
+                        && m.row >= r.y
+                        && m.row < r.y.saturating_add(r.height)
+                })
+            {
+                // Clicking the footer activity graph opens the window picker,
+                // seeded with the currently-applied window.
+                let current = crate::config::usage_window::resolve(&app.store);
+                app.modal = Some(Modal::UsageWindowPicker {
+                    selected: current.index(),
+                });
             }
         }
         _ => {}

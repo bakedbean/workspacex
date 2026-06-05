@@ -316,6 +316,25 @@ mod line_tests {
     }
 }
 
+/// Parse every line of a session file into `ChangeEvent`s. Malformed lines are
+/// skipped silently (matches the existing tail-loop tolerance).
+pub fn parse_file(path: &Path) -> Vec<ChangeEvent> {
+    use std::io::{BufRead, BufReader};
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in BufReader::new(file).lines().map_while(|l| l.ok()) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+            out.extend(extract_change_events(&v));
+        }
+    }
+    out
+}
+
 /// All `.jsonl` session files under `<home>/.claude/projects/<encoded-cwd>/`.
 /// Testable variant taking an explicit home dir and canonical worktree path.
 pub(crate) fn session_files_in(home: &Path, abs_worktree: &Path) -> Vec<PathBuf> {
@@ -371,6 +390,25 @@ mod locate_tests {
         let home = tempfile::TempDir::new().unwrap();
         let abs = std::path::PathBuf::from("/nonexistent/worktree");
         assert!(session_files_in(home.path(), &abs).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod parse_file_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn parses_events_from_a_jsonl_file_skipping_garbage() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"type":"assistant","timestamp":"2026-05-14T17:00:00.000Z","message":{{"content":[{{"type":"tool_use","name":"Write","input":{{"file_path":"/wt/x.rs","content":"pub fn x(){{}}"}}}}]}}}}"#).unwrap();
+        writeln!(f, "not json at all").unwrap();
+        writeln!(f, r#"{{"type":"user","message":{{"content":"hi"}}}}"#).unwrap();
+        let evs = parse_file(&path);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].tool, ChangeTool::Write);
     }
 }
 

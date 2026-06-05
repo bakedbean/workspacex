@@ -547,6 +547,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             crate::app::reset_chronology_state_on_workspace_change(
                 &mut app.chronology_scroll,
                 &mut app.chronology_expanded,
+                &mut app.chronology_focused,
+                &mut app.chronology_sel,
                 &mut app.chronology_last_workspace,
                 Some(focused_id),
             );

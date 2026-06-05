@@ -181,6 +181,15 @@ pub struct App {
     /// Transient per-frame screen rect of the chronology bar (focused pane),
     /// used for wheel-scroll hit-testing. `None` when the bar isn't shown.
     pub chronology_bar_rect: Option<ratatui::layout::Rect>,
+    /// Keyboard focus is in the chronology bar (intercept nav keys).
+    pub chronology_focused: bool,
+    /// In-pane cursor while focused.
+    pub chronology_sel: crate::ui::chronology_nav::ChronoSel,
+    /// Transient per-frame detail rect of the expanded entry `(index, rect)`,
+    /// for mouse "open at line". `None` when nothing is expanded/shown.
+    pub chronology_detail_rect: Option<(usize, ratatui::layout::Rect)>,
+    /// Entries drawn in the bar last frame (for keyboard auto-scroll).
+    pub chronology_visible_entries: usize,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity:
         std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
@@ -336,6 +345,10 @@ impl App {
             chronology_last_workspace: None,
             chronology_entry_rects: Vec::new(),
             chronology_bar_rect: None,
+            chronology_focused: false,
+            chronology_sel: crate::ui::chronology_nav::ChronoSel::default(),
+            chronology_detail_rect: None,
+            chronology_visible_entries: 0,
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
@@ -648,12 +661,16 @@ pub(crate) fn reset_detail_scroll_on_workspace_change(
 pub(crate) fn reset_chronology_state_on_workspace_change(
     scroll: &mut usize,
     expanded: &mut Option<usize>,
+    focused: &mut bool,
+    sel: &mut crate::ui::chronology_nav::ChronoSel,
     last_workspace: &mut Option<crate::data::store::WorkspaceId>,
     current: Option<crate::data::store::WorkspaceId>,
 ) {
     if *last_workspace != current {
         *scroll = 0;
         *expanded = None;
+        *focused = false;
+        *sel = crate::ui::chronology_nav::ChronoSel::Entry(0);
         *last_workspace = current;
     }
 }

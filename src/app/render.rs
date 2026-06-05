@@ -584,6 +584,12 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             };
             let (agent_pane_area, bar_rect) =
                 attached::split_for_chronology(pane_area, &chronology_draw);
+            // If the bar isn't shown this frame (auto-hidden when the terminal
+            // is too narrow, or toggled off), drop keyboard focus so keystrokes
+            // flow back to the agent instead of being swallowed by an invisible bar.
+            if bar_rect.is_none() {
+                app.chronology_focused = false;
+            }
 
             let crate::ui::split::LayoutResult { panes, dividers } = state.layout(agent_pane_area);
             let multi_pane = panes.len() > 1;

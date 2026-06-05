@@ -143,7 +143,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `↓` / `j` *(bar focused)* | Move selection down (toward older entries)                                            |
 | `g` *(bar focused)*        | Jump to the top (newest entry)                                                        |
 | `G` *(bar focused)*        | Jump to the bottom (oldest entry)                                                     |
-| `Enter` *(bar focused)*    | Expand the selected entry's diff peek (or, when inside a diff peek, open the file in your editor at the changed line) |
+| `Enter` *(bar focused)*    | Toggle expand/collapse the selected entry's diff peek (press again to collapse; or, when inside a diff peek, open the file in your editor at the changed line) |
 | `↓` *(entry expanded)*     | Move focus into the diff peek detail                                                  |
 | `↑` *(inside diff peek)*   | Return focus to the entry                                                             |
 | `Esc` *(bar focused)*      | Return focus to the agent pane                                                        |
@@ -622,7 +622,7 @@ The chronology bar is a focusable pane. While attached, press `Ctrl-x` then an a
 While the bar is focused, keystrokes are captured by the bar and do **not** reach the agent:
 
 - `↑` / `k` and `↓` / `j` move the selection; `g` jumps to the top (newest), `G` to the bottom.
-- `Enter` on an entry expands its diff peek inline. Press `↓` to move into the diff peek detail, then `Enter` again to open the file in your editor at the changed line. `↑` from the detail returns to the entry.
+- `Enter` on an entry expands its diff peek inline (press again to collapse). Press `↓` to move into the diff peek detail, then `Enter` again to open the file in your editor at the changed line. `↑` from the detail returns to the entry.
 - `Esc` (or `Ctrl-x` + arrow **away** from the bar's side) returns focus to the agent pane.
 
 #### Keybindings (attached view, under the `Ctrl-x` leader)

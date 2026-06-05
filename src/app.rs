@@ -169,6 +169,11 @@ pub struct App {
     pub chronology_scroll: usize,
     /// Index of the currently expanded chronology entry, if any.
     pub chronology_expanded: Option<usize>,
+    /// Sentinel for the workspace the chronology scroll/expanded state belongs
+    /// to. When the focused attached pane switches to a different workspace, the
+    /// scroll offset and expanded index are reset so they can't point at an
+    /// unrelated entry. Mirrors `detail_scroll_last_workspace`.
+    pub chronology_last_workspace: Option<crate::data::store::WorkspaceId>,
     /// Transient per-draw hit-test rects for chronology entries in the focused
     /// pane: `(entry_index, rect)`. Rebuilt each frame by the attached renderer
     /// and consumed by the input handler. Empty when the bar isn't shown.
@@ -328,6 +333,7 @@ impl App {
             chronology: std::collections::HashMap::new(),
             chronology_scroll: 0,
             chronology_expanded: None,
+            chronology_last_workspace: None,
             chronology_entry_rects: Vec::new(),
             chronology_bar_rect: None,
             workspace_activity: std::collections::HashMap::new(),
@@ -630,6 +636,24 @@ pub(crate) fn reset_detail_scroll_on_workspace_change(
 ) {
     if *last_workspace != current {
         *offsets = [0; 4];
+        *last_workspace = current;
+    }
+}
+
+/// Reset the chronology bar's scroll offset and expanded entry when the focused
+/// attached pane switches to a different workspace, so neither can point at an
+/// entry that belongs to an unrelated workspace. Mirrors
+/// `reset_detail_scroll_on_workspace_change`; takes the fields by `&mut` so the
+/// borrow checker can split disjoint borrows of `App` at the call site.
+pub(crate) fn reset_chronology_state_on_workspace_change(
+    scroll: &mut usize,
+    expanded: &mut Option<usize>,
+    last_workspace: &mut Option<crate::data::store::WorkspaceId>,
+    current: Option<crate::data::store::WorkspaceId>,
+) {
+    if *last_workspace != current {
+        *scroll = 0;
+        *expanded = None;
         *last_workspace = current;
     }
 }

@@ -542,6 +542,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .get(&focused_id)
                 .map(|t| t.events().to_vec())
                 .unwrap_or_default();
+            // If the focused pane switched to a different workspace, drop any
+            // stale scroll offset / expanded highlight before reading them.
+            crate::app::reset_chronology_state_on_workspace_change(
+                &mut app.chronology_scroll,
+                &mut app.chronology_expanded,
+                &mut app.chronology_last_workspace,
+                Some(focused_id),
+            );
             let chronology_scroll = app.chronology_scroll;
             let chronology_expanded = app.chronology_expanded;
 

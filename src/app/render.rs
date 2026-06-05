@@ -344,7 +344,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
             // Render footer below detail/PM so the spec order
             // list / detail / pm / footer is respected.
-            dashboard::render_footer(f, footer_area, &activity, &app.theme);
+            // TEMPORARY shim: replaced in Task 6 with the configurable window
+            // label + graph-rect storage. Keeps the build green meanwhile.
+            let _ = dashboard::render_footer(f, footer_area, &activity, &app.theme, "24h");
         }
         crate::ui::View::Attached(state) => {
             // If any leaf's session has gone away (e.g. workspace was

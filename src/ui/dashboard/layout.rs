@@ -91,7 +91,8 @@ pub fn footer(
     version: &str,
     width: usize,
     theme: &Theme,
-) -> Line<'static> {
+    window_label: &str,
+) -> (Line<'static>, u16) {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let keys = [
         ("↑↓", "nav"),
@@ -124,12 +125,14 @@ pub fn footer(
     }
 
     let spark = sparkline::render(activity_samples, 24);
-    let right = format!("{version}  24h {spark}");
+    let right = format!("{version}  {window_label} {spark}");
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let gap = width.saturating_sub(used + right.chars().count()).max(1);
     spans.push(Span::raw(" ".repeat(gap)));
     spans.push(Span::styled(right, Style::default().fg(theme.path)));
-    Line::from(spans)
+    // The clickable graph is the trailing "<label> <24-char sparkline>" run.
+    let graph_w = (window_label.chars().count() + 1 + 24) as u16;
+    (Line::from(spans), graph_w)
 }
 
 #[cfg(test)]
@@ -187,7 +190,7 @@ mod tests {
     fn footer_includes_keybinds_and_sparkline() {
         let theme = Theme::wsx();
         let samples = vec![1, 2, 3, 4, 5];
-        let line = footer(&samples, "v0.5.0", 200, &theme);
+        let (line, _) = footer(&samples, "v0.5.0", 200, &theme, "24h");
         let t = text(&line);
         // After the V5 pill treatment, key and label are separated by the
         // pill's trailing pad + the label's leading space (2 cells total).
@@ -207,7 +210,7 @@ mod tests {
         // text on the bar bg — a regression that re-extended bg_soft over
         // the label would visually merge key and label into one block.
         let theme = Theme::wsx();
-        let line = footer(&[1, 2, 3], "v0.5.0", 200, &theme);
+        let (line, _) = footer(&[1, 2, 3], "v0.5.0", 200, &theme, "24h");
         let key_span = line
             .spans
             .iter()
@@ -223,5 +226,16 @@ mod tests {
             label_span.style.bg, None,
             "label should not carry the chip bg"
         );
+    }
+
+    #[test]
+    fn footer_uses_provided_window_label_and_reports_graph_width() {
+        let theme = Theme::wsx();
+        let (line, graph_w) = footer(&[1, 2, 3], "9.9.9", 120, &theme, "1w");
+        let rendered = text(&line);
+        assert!(rendered.contains("1w"), "label should appear: {rendered}");
+        assert!(!rendered.contains("24h"), "old hardcoded label gone");
+        // graph segment = label chars + 1 space + 24 sparkline chars.
+        assert_eq!(graph_w, ("1w".chars().count() + 1 + 24) as u16);
     }
 }

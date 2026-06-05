@@ -86,7 +86,7 @@ pub fn render(
         ])
         .split(area);
     render_without_footer(f, chunks[0], inputs, state, tick, theme);
-    render_footer(f, chunks[1], inputs.activity, theme);
+    let _ = render_footer(f, chunks[1], inputs.activity, theme, "24h");
 }
 
 /// Render chrome, status strip, and the workspace list into `area` without
@@ -138,17 +138,32 @@ pub fn render_without_footer(
 }
 
 /// Render only the footer line (key hints + sparkline) into `area`.
-/// `area` should be exactly 1 row tall.
-pub fn render_footer(f: &mut Frame, area: Rect, activity: &[u32], theme: &Theme) {
-    f.render_widget(
-        Paragraph::new(layout::footer(
-            activity,
-            env!("CARGO_PKG_VERSION"),
-            area.width as usize,
-            theme,
-        )),
-        area,
+/// `area` should be exactly 1 row tall. Returns the on-screen `Rect` of the
+/// clickable activity graph (the trailing "<label> <sparkline>" run), so the
+/// caller can hit-test clicks on it.
+pub fn render_footer(
+    f: &mut Frame,
+    area: Rect,
+    activity: &[u32],
+    theme: &Theme,
+    window_label: &str,
+) -> Rect {
+    let (line, graph_w) = layout::footer(
+        activity,
+        env!("CARGO_PKG_VERSION"),
+        area.width as usize,
+        theme,
+        window_label,
     );
+    f.render_widget(Paragraph::new(line), area);
+    // The graph is right-aligned within the footer row.
+    let x = area.x + area.width.saturating_sub(graph_w);
+    Rect {
+        x,
+        y: area.y,
+        width: graph_w.min(area.width),
+        height: 1,
+    }
 }
 
 /// Return the sequence of selectable targets in *visible order*, matching

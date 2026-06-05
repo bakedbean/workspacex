@@ -565,6 +565,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     worktree,
                     scroll: chronology_scroll,
                     expanded: chronology_expanded,
+                    focused: false,
+                    sel: Default::default(),
                 }),
                 _ => None,
             };

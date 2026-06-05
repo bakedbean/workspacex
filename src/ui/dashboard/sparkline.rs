@@ -27,14 +27,17 @@ pub fn render(samples: &[u32], len: usize) -> String {
 /// the most recent `window_hours`, ending at the end of `now_hour`. Each output
 /// bar spans `window_hours / bars` hours and takes the MAX of the buckets whose
 /// `hour_epoch` falls inside it; spans with no buckets yield 0. Output length is
-/// always `bars`. Bar 0 is oldest, bar `bars-1` is most recent.
+/// always `bars` (so `bars == 0` yields an empty vec). Bar 0 is oldest, bar
+/// `bars-1` is most recent.
 pub fn aggregate_buckets(
     buckets: &[(u64, u32)],
     now_hour: u64,
     window_hours: u64,
     bars: usize,
 ) -> Vec<u32> {
-    let bars = bars.max(1);
+    if bars == 0 {
+        return Vec::new();
+    }
     let span_hours = (window_hours / bars as u64).max(1);
     let span_secs = span_hours * 3600;
     let total_secs = span_secs * bars as u64;
@@ -134,5 +137,11 @@ mod tests {
         assert_eq!(aggregate_buckets(&[], now, 24, 24).len(), 24);
         assert_eq!(aggregate_buckets(&[], now, 168, 24).len(), 24);
         assert_eq!(aggregate_buckets(&[], now, 720, 24).len(), 24);
+    }
+
+    #[test]
+    fn zero_bars_yields_empty() {
+        let now = now_hour();
+        assert!(aggregate_buckets(&[(now, 5)], now, 24, 0).is_empty());
     }
 }

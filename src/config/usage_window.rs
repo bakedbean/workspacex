@@ -40,8 +40,11 @@ impl UsageWindow {
     }
 
     /// Parse a canonical token; anything unrecognized falls back to `Day`.
+    /// Surrounding whitespace is ignored so values read from a file
+    /// (`wsx config set <key> @file`, often with a trailing newline) still
+    /// parse.
     pub fn from_setting(s: &str) -> UsageWindow {
-        match s {
+        match s.trim() {
             "24h" => Self::Day,
             "1w" => Self::Week,
             "1mo" => Self::Month,
@@ -96,6 +99,13 @@ mod tests {
         assert_eq!(UsageWindow::from_setting("1d"), UsageWindow::Day);
         assert_eq!(UsageWindow::from_setting(""), UsageWindow::Day);
         assert_eq!(UsageWindow::from_setting("garbage"), UsageWindow::Day);
+    }
+
+    #[test]
+    fn from_setting_ignores_surrounding_whitespace() {
+        assert_eq!(UsageWindow::from_setting("1w\n"), UsageWindow::Week);
+        assert_eq!(UsageWindow::from_setting("  24h  "), UsageWindow::Day);
+        assert_eq!(UsageWindow::from_setting("1mo\r\n"), UsageWindow::Month);
     }
 
     #[test]

@@ -1176,6 +1176,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             } else {
                 let value = if key == "detail_bar_config" {
                     detail_bar_config_validate_and_normalize(&value)?
+                } else if key == "usage_graph_window" {
+                    usage_window_validate_and_normalize(&value)?
                 } else {
                     value
                 };
@@ -1215,6 +1217,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             } else {
                 let normalized = if key == "detail_bar_config" {
                     detail_bar_config_validate_and_normalize(&new_value)?
+                } else if key == "usage_graph_window" {
+                    usage_window_validate_and_normalize(&new_value)?
                 } else {
                     new_value.clone()
                 };
@@ -1468,6 +1472,24 @@ fn detail_bar_config_validate_and_normalize(raw: &str) -> Result<String> {
         .map_err(|e| Error::UserInput(format!("detail_bar_config: serialize failed: {e}")))
 }
 
+/// Validate a `usage_graph_window` value: accept only the canonical tokens
+/// (`24h`/`1w`/`1mo`), ignoring surrounding whitespace, and store the trimmed
+/// canonical form. Rejects anything else so a CLI typo fails loudly instead of
+/// silently falling back to `24h` at render time.
+fn usage_window_validate_and_normalize(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if crate::config::usage_window::UsageWindow::ALL
+        .iter()
+        .any(|w| w.as_setting() == trimmed)
+    {
+        Ok(trimmed.to_string())
+    } else {
+        Err(Error::UserInput(format!(
+            "usage_graph_window: expected one of 24h, 1w, 1mo (got {trimmed:?})"
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1683,6 +1705,25 @@ mod tests {
     #[test]
     fn accepts_usage_graph_window() {
         assert!(known_setting_key("usage_graph_window"));
+    }
+
+    #[test]
+    fn usage_window_validate_accepts_canonical_tokens() {
+        assert_eq!(usage_window_validate_and_normalize("24h").unwrap(), "24h");
+        assert_eq!(usage_window_validate_and_normalize("1w").unwrap(), "1w");
+        assert_eq!(usage_window_validate_and_normalize("1mo").unwrap(), "1mo");
+    }
+
+    #[test]
+    fn usage_window_validate_trims_whitespace() {
+        assert_eq!(usage_window_validate_and_normalize(" 1w\n").unwrap(), "1w");
+    }
+
+    #[test]
+    fn usage_window_validate_rejects_garbage() {
+        assert!(usage_window_validate_and_normalize("week").is_err());
+        assert!(usage_window_validate_and_normalize("").is_err());
+        assert!(usage_window_validate_and_normalize("1d").is_err());
     }
 
     #[test]

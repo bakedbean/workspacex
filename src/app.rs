@@ -155,6 +155,21 @@ pub struct App {
         crate::data::store::WorkspaceId,
         crate::activity::events::WorkspaceEvents,
     >,
+    /// Per-workspace change-chronology timelines, keyed by workspace id.
+    /// Lazily built/refreshed while attached.
+    pub chronology: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::activity::chronology::Timeline,
+    >,
+    /// Scroll offset (entries from the top) of the chronology bar in the
+    /// focused attached pane.
+    pub chronology_scroll: usize,
+    /// Index of the currently expanded chronology entry, if any.
+    pub chronology_expanded: Option<usize>,
+    /// Transient per-draw hit-test rects for chronology entries in the focused
+    /// pane: `(entry_index, rect)`. Rebuilt each frame by the attached renderer
+    /// and consumed by the input handler. Empty when the bar isn't shown.
+    pub chronology_entry_rects: Vec<(usize, ratatui::layout::Rect)>,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity:
         std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
@@ -304,6 +319,10 @@ impl App {
             pr_last_poll_ms: std::collections::HashMap::new(),
             diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
+            chronology: std::collections::HashMap::new(),
+            chronology_scroll: 0,
+            chronology_expanded: None,
+            chronology_entry_rects: Vec::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
@@ -424,6 +443,20 @@ impl App {
         self.next_archive_gen = self.next_archive_gen.wrapping_add(1);
         self.pending_archive_gen = Some(g);
         g
+    }
+
+    /// Refresh the chronology timeline for `worktree`/`workspace_id` from the
+    /// on-disk session logs. Cheap when nothing changed (per-file cache).
+    pub fn refresh_chronology(
+        &mut self,
+        workspace_id: crate::data::store::WorkspaceId,
+        worktree: &std::path::Path,
+    ) {
+        let files = crate::activity::chronology::claude_session_files(worktree);
+        self.chronology
+            .entry(workspace_id)
+            .or_default()
+            .refresh(&files);
     }
 
     pub fn selected_target(&self) -> Option<SelectionTarget> {

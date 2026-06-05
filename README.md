@@ -298,8 +298,6 @@ vertically. Four built-in modules ship today: `session_summary`,
 controlled by the `detail_bar_config` setting — globally via `wsx config`,
 with optional per-repo overrides.
 
-<img width="2558" height="492" alt="Screenshot 2026-06-04 at 8 43 40 PM" src="https://github.com/user-attachments/assets/590207eb-78de-4c17-900a-ad138d967622" />
-
 #### Schema and defaults
 
 The global value is a full `DetailBarConfig` JSON blob. Every field is

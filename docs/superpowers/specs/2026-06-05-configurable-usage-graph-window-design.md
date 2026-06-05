@@ -90,7 +90,8 @@ the label change.
 ### 1. The setting and `UsageWindow` enum
 
 New global setting key `usage_graph_window`, stored in the existing `settings`
-table. Canonical values: `24h` (default), `1w`, `1mo`.
+table. Canonical values: `24h` (default), `1w`, `1mo` — these exact tokens only;
+unrecognized values fall back to `24h`.
 
 ```rust
 // e.g. src/config/usage_window.rs
@@ -106,8 +107,8 @@ impl UsageWindow {
     /// Compact footer label: "24h" / "1w" / "1mo".
     pub fn label(self) -> &'static str { match self { Self::Day => "24h", Self::Week => "1w", Self::Month => "1mo" } }
 
-    /// Lenient parse; unknown → Day. Accepts canonical tokens plus a few aliases.
-    pub fn from_setting(s: &str) -> UsageWindow { /* "24h"|"day"|"1d" → Day, etc. */ }
+    /// Parse a canonical token ("24h"|"1w"|"1mo"); anything else → Day.
+    pub fn from_setting(s: &str) -> UsageWindow { /* match exact canonical tokens */ }
 
     /// Canonical token for persistence.
     pub fn as_setting(self) -> &'static str { self.label() }
@@ -257,7 +258,7 @@ Pure functions, unit-tested:
   - 1w window → buckets grouped into 7h spans, each bar = max of its span.
   - Empty spans (gaps/downtime) render as 0.
   - Output length always 24 for every window.
-- `UsageWindow`: `from_setting` token/alias mapping; unknown → `Day`;
+- `UsageWindow`: `from_setting` canonical-token mapping; unknown → `Day`;
   `hours()`/`label()`/`as_setting()` round-trip; `index()`/`from_index()` inverse.
 - `picker_rect`: graph near right edge → clamped within screen width; near top →
   clamped; normal case → sits directly above the footer, left-aligned to graph.

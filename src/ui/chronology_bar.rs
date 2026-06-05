@@ -175,7 +175,13 @@ mod tests {
 
     #[test]
     fn header_highlight_reverses_first_line() {
-        let lines = entry_lines(&ev("/wt/a.rs", "fn foo()"), Path::new("/wt"), true, 40, EntryHighlight::Header);
+        let lines = entry_lines(
+            &ev("/wt/a.rs", "fn foo()"),
+            Path::new("/wt"),
+            true,
+            40,
+            EntryHighlight::Header,
+        );
         let has_rev = lines[0]
             .spans
             .iter()
@@ -185,23 +191,42 @@ mod tests {
 
     #[test]
     fn detail_highlight_reverses_peek_lines_only() {
-        let lines = entry_lines(&ev("/wt/a.rs", "fn foo()"), Path::new("/wt"), true, 40, EntryHighlight::Detail);
+        let lines = entry_lines(
+            &ev("/wt/a.rs", "fn foo()"),
+            Path::new("/wt"),
+            true,
+            40,
+            EntryHighlight::Detail,
+        );
         assert!(
-            !lines[0].spans.iter().any(|s| s.style.add_modifier.contains(Modifier::REVERSED)),
+            !lines[0]
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::REVERSED)),
             "header must NOT be highlighted in Detail mode"
         );
-        let peek_rev = lines
-            .iter()
-            .skip(2)
-            .any(|l| l.spans.iter().any(|s| s.style.add_modifier.contains(Modifier::REVERSED)));
+        let peek_rev = lines.iter().skip(2).any(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+        });
         assert!(peek_rev, "detail peek should be highlighted");
     }
 
     #[test]
     fn no_highlight_leaves_lines_unreversed() {
-        let lines = entry_lines(&ev("/wt/a.rs", "fn foo()"), Path::new("/wt"), false, 40, EntryHighlight::None);
+        let lines = entry_lines(
+            &ev("/wt/a.rs", "fn foo()"),
+            Path::new("/wt"),
+            false,
+            40,
+            EntryHighlight::None,
+        );
         assert!(
-            !lines.iter().any(|l| l.spans.iter().any(|s| s.style.add_modifier.contains(Modifier::REVERSED))),
+            !lines.iter().any(|l| l
+                .spans
+                .iter()
+                .any(|s| s.style.add_modifier.contains(Modifier::REVERSED))),
             "no highlight expected"
         );
     }

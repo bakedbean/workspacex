@@ -420,8 +420,14 @@ impl Timeline {
             .values()
             .flat_map(|(_, evs)| evs.iter().cloned())
             .collect();
-        // Newest first; stable so same-timestamp events keep file order.
-        merged.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+        // Newest first. Tie-break on file_path so equal-timestamp events have a
+        // deterministic order across refreshes (the per_file source is a HashMap
+        // whose iteration order is not stable).
+        merged.sort_by(|a, b| {
+            b.timestamp_ms
+                .cmp(&a.timestamp_ms)
+                .then_with(|| a.file_path.cmp(&b.file_path))
+        });
         self.merged = merged;
     }
 
@@ -575,5 +581,22 @@ mod timeline_tests {
         tl.refresh(&[a.clone()]);
         assert_eq!(tl.parse_count(), 2, "size changed → reparse");
         assert_eq!(tl.events().len(), 2);
+    }
+
+    #[test]
+    fn removed_file_events_drop_from_merged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let a = dir.path().join("a.jsonl");
+        let b = dir.path().join("b.jsonl");
+        write_event(&a, "2026-05-14T17:00:00.000Z", "/wt/a.rs");
+        write_event(&b, "2026-05-14T18:00:00.000Z", "/wt/b.rs");
+        let mut tl = Timeline::default();
+        tl.refresh(&[a.clone(), b.clone()]);
+        assert_eq!(tl.events().len(), 2);
+        // b.jsonl no longer in the file list → its events must disappear.
+        tl.refresh(&[a.clone()]);
+        let evs = tl.events();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].file_path, PathBuf::from("/wt/a.rs"));
     }
 }

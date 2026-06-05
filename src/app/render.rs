@@ -203,7 +203,23 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 }
             }
 
-            let activity: Vec<u32> = app.activity_history.iter().map(|(_h, m)| *m).collect();
+            // Aggregate the retained hourly buckets into a fixed 24-bar,
+            // time-aligned sparkline for the configured window.
+            let window = crate::config::usage_window::resolve(&app.store);
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let now_hour = now_secs - (now_secs % 3600);
+            // VecDeque is non-contiguous; collect into a slice-able Vec so
+            // aggregate_buckets can take it as `&[(u64, u32)]`.
+            let history: Vec<(u64, u32)> = app.activity_history.iter().copied().collect();
+            let activity: Vec<u32> = crate::ui::dashboard::sparkline::aggregate_buckets(
+                &history,
+                now_hour,
+                window.hours(),
+                24,
+            );
             let column_widths = read_column_widths(&app.store);
             let inputs = dashboard::DashboardInputs {
                 repos: app.repos.iter().collect(),
@@ -346,9 +362,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
             // Render footer below detail/PM so the spec order
             // list / detail / pm / footer is respected.
-            // TEMPORARY shim: replaced in Task 6 with the configurable window
-            // label + graph-rect storage. Keeps the build green meanwhile.
-            let _ = dashboard::render_footer(f, footer_area, &activity, &app.theme, "24h");
+            let graph_rect =
+                dashboard::render_footer(f, footer_area, &activity, &app.theme, window.label());
+            app.usage_graph_rect = Some(graph_rect);
         }
         crate::ui::View::Attached(state) => {
             // If any leaf's session has gone away (e.g. workspace was

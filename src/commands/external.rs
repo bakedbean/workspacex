@@ -155,7 +155,15 @@ fn spawn_resolved(
     substitutions: &[(&str, &str)],
     fallback_when_no_placeholder: Option<&str>,
 ) -> Result<()> {
-    let mut parts = resolve_argv(cmd, substitutions, fallback_when_no_placeholder)?;
+    let parts = resolve_argv(cmd, substitutions, fallback_when_no_placeholder)?;
+    spawn_parts(parts, cwd)
+}
+
+/// Spawn `parts` (program + argv) detached, with cwd = `cwd`.
+fn spawn_parts(mut parts: Vec<String>, cwd: &Path) -> Result<()> {
+    if parts.is_empty() {
+        return Err(Error::UserInput("command is empty".into()));
+    }
     let program = parts.remove(0);
     let mut command = std::process::Command::new(&program);
     command.args(&parts).current_dir(cwd);
@@ -250,15 +258,8 @@ pub fn open_in_editor_at(
 ) -> Result<()> {
     let cmd = resolve_editor_cmd(configured)?;
     let file_str = file.to_string_lossy();
-    let mut parts = resolve_editor_at_argv(&cmd, file_str.as_ref(), line)?;
-    let program = parts.remove(0);
-    let mut command = std::process::Command::new(&program);
-    command.args(&parts).current_dir(worktree);
-    detach_io(&mut command);
-    command
-        .spawn()
-        .map_err(|e| Error::UserInput(format!("spawn {program}: {e}")))?;
-    Ok(())
+    let parts = resolve_editor_at_argv(&cmd, file_str.as_ref(), line)?;
+    spawn_parts(parts, worktree)
 }
 
 fn detach_io(cmd: &mut std::process::Command) {
@@ -490,5 +491,11 @@ mod tests {
     fn editor_at_unknown_editor_appends_file_only() {
         let argv = resolve_editor_at_argv("myeditor", "/tmp/wt/a.rs", 3).unwrap();
         assert_eq!(argv, vec!["myeditor", "/tmp/wt/a.rs"]);
+    }
+
+    #[test]
+    fn editor_at_substitutes_placeholders_in_separate_tokens() {
+        let argv = resolve_editor_at_argv("nvim +{line} {file}", "/tmp/wt/a.rs", 9).unwrap();
+        assert_eq!(argv, vec!["nvim", "+9", "/tmp/wt/a.rs"]);
     }
 }

@@ -1839,7 +1839,6 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 } else {
                     app.chronology_expanded = Some(idx);
                 }
-                return;
             } else if let Some(idx) = app.chip_rects.iter().position(|r| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

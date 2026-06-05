@@ -21,17 +21,12 @@ fn default_max_cols() -> u16 {
     60
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Left,
+    #[default]
     Right,
-}
-
-impl Default for Side {
-    fn default() -> Self {
-        Side::Right
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

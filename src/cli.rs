@@ -398,6 +398,7 @@ fn known_setting_key(k: &str) -> bool {
             | "coding_agent"
             | "detail_bar_config"
             | "usage_graph_window"
+            | "chronology_config"
     )
 }
 
@@ -1178,6 +1179,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     detail_bar_config_validate_and_normalize(&value)?
                 } else if key == "usage_graph_window" {
                     usage_window_validate_and_normalize(&value)?
+                } else if key == "chronology_config" {
+                    chronology_config_validate_and_normalize(&value)?
                 } else {
                     value
                 };
@@ -1204,6 +1207,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let current = store.get_setting(&key)?.unwrap_or_default();
             let seed = if key == "detail_bar_config" && current.is_empty() {
                 detail_bar_config_seed_for_empty()
+            } else if key == "chronology_config" && current.is_empty() {
+                chronology_config_seed_for_empty()
             } else {
                 current.clone()
             };
@@ -1219,6 +1224,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     detail_bar_config_validate_and_normalize(&new_value)?
                 } else if key == "usage_graph_window" {
                     usage_window_validate_and_normalize(&new_value)?
+                } else if key == "chronology_config" {
+                    chronology_config_validate_and_normalize(&new_value)?
                 } else {
                     new_value.clone()
                 };
@@ -1470,6 +1477,23 @@ fn detail_bar_config_validate_and_normalize(raw: &str) -> Result<String> {
     cfg.sanitize();
     serde_json::to_string_pretty(&cfg)
         .map_err(|e| Error::UserInput(format!("detail_bar_config: serialize failed: {e}")))
+}
+
+/// Seed text for the editor when the global `chronology_config`
+/// setting is empty — the pretty-printed default config.
+fn chronology_config_seed_for_empty() -> String {
+    serde_json::to_string_pretty(&crate::config::chronology::ChronologyConfig::default())
+        .unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Parse, sanitize, and re-serialize a global `chronology_config`
+/// blob. Returns the pretty-printed normalized JSON.
+fn chronology_config_validate_and_normalize(raw: &str) -> Result<String> {
+    let mut cfg: crate::config::chronology::ChronologyConfig = serde_json::from_str(raw)
+        .map_err(|e| Error::UserInput(format!("chronology_config: invalid JSON: {e}")))?;
+    cfg.sanitize();
+    serde_json::to_string_pretty(&cfg)
+        .map_err(|e| Error::UserInput(format!("chronology_config: serialize failed: {e}")))
 }
 
 /// Validate a `usage_graph_window` value: accept only the canonical tokens
@@ -2156,6 +2180,23 @@ mod tests {
     #[test]
     fn process_doctrine_is_a_known_setting() {
         assert!(known_setting_key("process_doctrine"));
+    }
+
+    #[test]
+    fn chronology_config_validate_accepts_partial_json() {
+        let out = super::chronology_config_validate_and_normalize(r#"{"side":"left"}"#).unwrap();
+        assert!(out.contains("\"side\""));
+    }
+
+    #[test]
+    fn chronology_config_validate_rejects_bad_json() {
+        assert!(super::chronology_config_validate_and_normalize("{not json").is_err());
+    }
+
+    #[test]
+    fn chronology_config_seed_is_valid_json() {
+        let seed = super::chronology_config_seed_for_empty();
+        assert!(serde_json::from_str::<serde_json::Value>(&seed).is_ok());
     }
 
     #[test]

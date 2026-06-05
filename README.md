@@ -10,7 +10,7 @@ Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git workt
 https://github.com/user-attachments/assets/5e5e28c7-d3fc-4301-be12-0be65163bcbf
 
 ## Using external tools
-### View diffs via a custom diff view or with Lazygit
+### View diffs via a custom diff command or with Lazygit
 https://github.com/user-attachments/assets/c3ce1a7e-5904-471c-9a33-2a6fb55a16cd
 
 ## Table of contents

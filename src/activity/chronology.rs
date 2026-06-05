@@ -316,6 +316,64 @@ mod line_tests {
     }
 }
 
+/// All `.jsonl` session files under `<home>/.claude/projects/<encoded-cwd>/`.
+/// Testable variant taking an explicit home dir and canonical worktree path.
+pub(crate) fn session_files_in(home: &Path, abs_worktree: &Path) -> Vec<PathBuf> {
+    let dir = home
+        .join(".claude/projects")
+        .join(encode_cwd(abs_worktree));
+    let mut files = Vec::new();
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return files;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// Production entry point: resolve the real home dir and canonical worktree.
+pub fn claude_session_files(worktree: &Path) -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let Ok(abs) = std::fs::canonicalize(worktree) else {
+        return Vec::new();
+    };
+    session_files_in(&home, &abs)
+}
+
+#[cfg(test)]
+mod locate_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn lists_all_jsonl_files_in_session_dir() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let abs = std::fs::canonicalize(work.path()).unwrap();
+        let dir = home.path().join(".claude/projects").join(encode_cwd(&abs));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.jsonl", "b.jsonl", "notes.txt"] {
+            let mut f = std::fs::File::create(dir.join(name)).unwrap();
+            writeln!(f, "{{}}").unwrap();
+        }
+        let files = session_files_in(home.path(), &abs);
+        assert_eq!(files.len(), 2, "only .jsonl files counted");
+    }
+
+    #[test]
+    fn missing_dir_returns_empty() {
+        let home = tempfile::TempDir::new().unwrap();
+        let abs = std::path::PathBuf::from("/nonexistent/worktree");
+        assert!(session_files_in(home.path(), &abs).is_empty());
+    }
+}
+
 #[cfg(test)]
 mod summary_tests {
     use super::*;

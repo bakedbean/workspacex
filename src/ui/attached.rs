@@ -279,7 +279,7 @@ fn render_chronology_bar(
         }
         let expanded = Some(i) == draw.expanded;
         let lines =
-            crate::ui::chronology_bar::entry_lines(ev, draw.worktree, expanded, inner_width);
+            crate::ui::chronology_bar::entry_lines(ev, draw.worktree, expanded, inner_width, crate::ui::chronology_bar::EntryHighlight::None);
         let available = body_bottom.saturating_sub(cursor_y);
         let drawn = (lines.len() as u16).min(available);
         if drawn == 0 {

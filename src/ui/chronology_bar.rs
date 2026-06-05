@@ -34,6 +34,15 @@ fn hhmm(timestamp_ms: i64) -> String {
     format!("{h:02}:{m:02}")
 }
 
+/// Which part of an entry is keyboard-selected (for highlight). `None` when the
+/// entry isn't the cursor target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryHighlight {
+    None,
+    Header,
+    Detail,
+}
+
 /// Render one entry into lines. Line 1: `HH:MM file`. Line 2: dim summary.
 /// When `expanded`, appends up to a few diff-peek lines from `detail`.
 pub fn entry_lines(
@@ -41,6 +50,7 @@ pub fn entry_lines(
     worktree: &Path,
     expanded: bool,
     width: u16,
+    highlight: EntryHighlight,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let rel = relative_display(&ev.file_path, worktree);
@@ -79,6 +89,24 @@ pub fn entry_lines(
                 clipped,
                 Style::default().add_modifier(Modifier::DIM),
             )));
+        }
+    }
+    match highlight {
+        EntryHighlight::None => {}
+        EntryHighlight::Header => {
+            if let Some(first) = out.first_mut() {
+                for s in &mut first.spans {
+                    s.style = s.style.add_modifier(Modifier::REVERSED);
+                }
+            }
+        }
+        EntryHighlight::Detail => {
+            // peek lines are everything after the header (0) and summary (1)
+            for line in out.iter_mut().skip(2) {
+                for s in &mut line.spans {
+                    s.style = s.style.add_modifier(Modifier::REVERSED);
+                }
+            }
         }
     }
     out
@@ -128,6 +156,7 @@ mod tests {
             Path::new("/wt"),
             false,
             40,
+            EntryHighlight::None,
         );
         assert_eq!(lines.len(), 2, "B fidelity: header + summary, no diff peek");
     }
@@ -139,7 +168,41 @@ mod tests {
             Path::new("/wt"),
             true,
             40,
+            EntryHighlight::None,
         );
         assert!(lines.len() > 2, "expanded entry includes diff peek");
+    }
+
+    #[test]
+    fn header_highlight_reverses_first_line() {
+        let lines = entry_lines(&ev("/wt/a.rs", "fn foo()"), Path::new("/wt"), true, 40, EntryHighlight::Header);
+        let has_rev = lines[0]
+            .spans
+            .iter()
+            .any(|s| s.style.add_modifier.contains(Modifier::REVERSED));
+        assert!(has_rev, "header line should be highlighted");
+    }
+
+    #[test]
+    fn detail_highlight_reverses_peek_lines_only() {
+        let lines = entry_lines(&ev("/wt/a.rs", "fn foo()"), Path::new("/wt"), true, 40, EntryHighlight::Detail);
+        assert!(
+            !lines[0].spans.iter().any(|s| s.style.add_modifier.contains(Modifier::REVERSED)),
+            "header must NOT be highlighted in Detail mode"
+        );
+        let peek_rev = lines
+            .iter()
+            .skip(2)
+            .any(|l| l.spans.iter().any(|s| s.style.add_modifier.contains(Modifier::REVERSED)));
+        assert!(peek_rev, "detail peek should be highlighted");
+    }
+
+    #[test]
+    fn no_highlight_leaves_lines_unreversed() {
+        let lines = entry_lines(&ev("/wt/a.rs", "fn foo()"), Path::new("/wt"), false, 40, EntryHighlight::None);
+        assert!(
+            !lines.iter().any(|l| l.spans.iter().any(|s| s.style.add_modifier.contains(Modifier::REVERSED))),
+            "no highlight expected"
+        );
     }
 }

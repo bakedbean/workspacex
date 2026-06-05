@@ -149,6 +149,37 @@ pub fn resolve(repo: &Repo, store: &Store) -> ChronologyConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::store::{Repo, RepoId};
+    use std::path::PathBuf;
+
+    fn test_repo(chronology_config: Option<&str>) -> Repo {
+        Repo {
+            id: RepoId(1),
+            name: "demo".into(),
+            path: PathBuf::from("/r"),
+            branch_prefix: String::new(),
+            custom_instructions: None,
+            setup_script: None,
+            archive_script: None,
+            pinned_commands: None,
+            related_repos: None,
+            base_branch: None,
+            detail_bar_config: None,
+            chronology_config: chronology_config.map(|s| s.to_string()),
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn resolve_applies_repo_override_with_global_unset() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = test_repo(Some(r#"{"side":"left"}"#));
+        let cfg = resolve(&repo, &store);
+        assert_eq!(cfg.side, Side::Left, "repo override flips side to left");
+        // Unspecified fields remain at global defaults.
+        assert_eq!(cfg.visible, ChronologyConfig::default().visible);
+        assert_eq!(cfg.width, ChronologyConfig::default().width);
+    }
 
     #[test]
     fn default_is_visible_right_sane_width() {

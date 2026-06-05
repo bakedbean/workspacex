@@ -59,10 +59,11 @@ pub enum RepoSettingField {
     PinnedCommands,
     RelatedRepos,
     DetailBarConfig,
+    ChronologyConfig,
 }
 
 impl RepoSettingField {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::RepoName,
         Self::BranchPrefix,
         Self::BaseBranch,
@@ -72,6 +73,7 @@ impl RepoSettingField {
         Self::PinnedCommands,
         Self::RelatedRepos,
         Self::DetailBarConfig,
+        Self::ChronologyConfig,
     ];
 
     pub fn label(self) -> &'static str {
@@ -85,6 +87,7 @@ impl RepoSettingField {
             Self::PinnedCommands => "pinned_commands",
             Self::RelatedRepos => "related_repos",
             Self::DetailBarConfig => "detail_bar_config",
+            Self::ChronologyConfig => "chronology_config",
         }
     }
 }
@@ -708,6 +711,13 @@ where
                     .unwrap_or_else(|| "{}\n".to_string());
                 (raw, "json")
             }
+            RepoSettingField::ChronologyConfig => {
+                let raw = repo
+                    .chronology_config
+                    .clone()
+                    .unwrap_or_else(|| "{}\n".to_string());
+                (raw, "json")
+            }
         }
     };
 
@@ -954,6 +964,21 @@ pub(crate) fn apply_repo_setting(
                     Ok(_) => app.store.set_repo_detail_bar_config(repo_id, Some(trimmed)),
                     Err(e) => Err(crate::error::Error::UserInput(format!(
                         "detail_bar_config is not valid JSON: {e}"
+                    ))),
+                }
+            }
+        }
+        RepoSettingField::ChronologyConfig => {
+            if trimmed.is_empty() {
+                app.store.set_repo_chronology_config(repo_id, None)
+            } else {
+                // Validate. Use ChronologyOverride (not ChronologyConfig)
+                // because per-repo entries are partial overrides.
+                match serde_json::from_str::<crate::config::chronology::ChronologyOverride>(trimmed)
+                {
+                    Ok(_) => app.store.set_repo_chronology_config(repo_id, Some(trimmed)),
+                    Err(e) => Err(crate::error::Error::UserInput(format!(
+                        "chronology_config is not valid JSON: {e}"
                     ))),
                 }
             }

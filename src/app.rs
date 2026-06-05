@@ -108,6 +108,11 @@ pub enum StoppedKind {
     Complete,
 }
 
+/// How many hourly activity buckets to retain, in memory and in the DB. Sized
+/// to the largest selectable usage-graph window (30 days), so the setting is
+/// purely a view over already-collected data rather than affecting retention.
+const MAX_ACTIVITY_HOURS: u64 = 720;
+
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
@@ -328,8 +333,9 @@ impl App {
         let _ = app
             .store
             .sweep_stale_pending(std::time::Duration::from_secs(300));
-        // Load up to 24 hours of bucketed activity for the sparkline.
-        if let Ok(buckets) = app.store.recent_activity_buckets(24) {
+        // Load the retained bucketed activity for the sparkline (up to
+        // MAX_ACTIVITY_HOURS); the configured window selects how much is shown.
+        if let Ok(buckets) = app.store.recent_activity_buckets(MAX_ACTIVITY_HOURS as usize) {
             app.activity_history.extend(buckets);
         }
         app.refresh()?;
@@ -771,10 +777,12 @@ pub async fn run<B: Backend + std::io::Write>(
                             let _ = g.store.set_activity_bucket(h, m);
                         }
                         g.activity_history.push_back((now_hour, live));
-                        while g.activity_history.len() > 24 {
+                        while g.activity_history.len() > MAX_ACTIVITY_HOURS as usize {
                             g.activity_history.pop_front();
                         }
-                        let _ = g.store.prune_activity_buckets_before(now_hour.saturating_sub(24 * 3600));
+                        let _ = g.store.prune_activity_buckets_before(
+                            now_hour.saturating_sub(MAX_ACTIVITY_HOURS * 3600),
+                        );
                     }
                 }
             }

@@ -198,6 +198,69 @@ fn resolve_argv(
     Ok(parts)
 }
 
+/// Resolve the editor command into argv that opens `file` at `line`.
+///
+/// If the template contains `{file}`/`{line}` placeholders, substitute them.
+/// Otherwise fall back to the goto convention of common editors detected from
+/// the program name: VS Code (`code --goto file:line`), vim/nvim/vi
+/// (`+line file`), emacs/emacsclient (`+line file`); any other editor gets the
+/// file appended with the line omitted.
+fn resolve_editor_at_argv(cmd: &str, file: &str, line: u32) -> Result<Vec<String>> {
+    let line_s = line.to_string();
+    let mut parts = shlex::split(cmd)
+        .ok_or_else(|| Error::UserInput(format!("could not parse command: {cmd}")))?;
+    if parts.is_empty() {
+        return Err(Error::UserInput("command is empty".into()));
+    }
+    let used_placeholder = parts
+        .iter()
+        .any(|p| p.contains("{file}") || p.contains("{line}"));
+    if used_placeholder {
+        for part in &mut parts {
+            *part = part.replace("{file}", file).replace("{line}", &line_s);
+        }
+        return Ok(parts);
+    }
+    let prog = std::path::Path::new(&parts[0])
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&parts[0])
+        .to_string();
+    match prog.as_str() {
+        "code" | "codium" | "cursor" => {
+            parts.push("--goto".to_string());
+            parts.push(format!("{file}:{line_s}"));
+        }
+        "vim" | "nvim" | "vi" | "emacs" | "emacsclient" => {
+            parts.push(format!("+{line_s}"));
+            parts.push(file.to_string());
+        }
+        _ => parts.push(file.to_string()),
+    }
+    Ok(parts)
+}
+
+/// Resolve and launch the user's editor on `file`, positioned at `line`.
+/// Spawns with cwd = `worktree`. Used by the chronology bar's entry clicks.
+pub fn open_in_editor_at(
+    worktree: &Path,
+    file: &Path,
+    line: u32,
+    configured: Option<&str>,
+) -> Result<()> {
+    let cmd = resolve_editor_cmd(configured)?;
+    let file_str = file.to_string_lossy();
+    let mut parts = resolve_editor_at_argv(&cmd, file_str.as_ref(), line)?;
+    let program = parts.remove(0);
+    let mut command = std::process::Command::new(&program);
+    command.args(&parts).current_dir(worktree);
+    detach_io(&mut command);
+    command
+        .spawn()
+        .map_err(|e| Error::UserInput(format!("spawn {program}: {e}")))?;
+    Ok(())
+}
+
 fn detach_io(cmd: &mut std::process::Command) {
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -392,5 +455,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(argv, vec!["tool", "--base={base}", "/tmp/wt"]);
+    }
+
+    #[test]
+    fn editor_at_substitutes_file_and_line_placeholders() {
+        let argv = resolve_editor_at_argv(
+            "code --goto {file}:{line}",
+            "/tmp/wt/src/main.rs",
+            42,
+        )
+        .unwrap();
+        assert_eq!(argv, vec!["code", "--goto", "/tmp/wt/src/main.rs:42"]);
+    }
+
+    #[test]
+    fn editor_at_vim_fallback_uses_plus_line() {
+        let argv = resolve_editor_at_argv("nvim", "/tmp/wt/src/main.rs", 42).unwrap();
+        assert_eq!(argv, vec!["nvim", "+42", "/tmp/wt/src/main.rs"]);
+    }
+
+    #[test]
+    fn editor_at_code_fallback_uses_goto() {
+        let argv = resolve_editor_at_argv("code", "/tmp/wt/src/main.rs", 7).unwrap();
+        assert_eq!(argv, vec!["code", "--goto", "/tmp/wt/src/main.rs:7"]);
+    }
+
+    #[test]
+    fn editor_at_emacs_fallback_uses_plus_line() {
+        let argv = resolve_editor_at_argv("emacsclient", "/tmp/wt/a.rs", 3).unwrap();
+        assert_eq!(argv, vec!["emacsclient", "+3", "/tmp/wt/a.rs"]);
+    }
+
+    #[test]
+    fn editor_at_unknown_editor_appends_file_only() {
+        let argv = resolve_editor_at_argv("myeditor", "/tmp/wt/a.rs", 3).unwrap();
+        assert_eq!(argv, vec!["myeditor", "/tmp/wt/a.rs"]);
     }
 }

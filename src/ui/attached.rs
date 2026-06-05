@@ -68,11 +68,11 @@ pub fn split_for_chronology(area: Rect, draw: &Option<ChronologyDraw<'_>>) -> (R
     match draw.config.side {
         Side::Right => {
             let agent = Rect {
-                width: area.width - bar_cols,
+                width: area.width.saturating_sub(bar_cols),
                 ..area
             };
             let bar = Rect {
-                x: area.x + area.width - bar_cols,
+                x: area.x.saturating_add(area.width).saturating_sub(bar_cols),
                 width: bar_cols,
                 ..area
             };
@@ -84,8 +84,8 @@ pub fn split_for_chronology(area: Rect, draw: &Option<ChronologyDraw<'_>>) -> (R
                 ..area
             };
             let agent = Rect {
-                x: area.x + bar_cols,
-                width: area.width - bar_cols,
+                x: area.x.saturating_add(bar_cols),
+                width: area.width.saturating_sub(bar_cols),
                 ..area
             };
             (agent, Some(bar))

@@ -460,12 +460,8 @@ mod tests {
 
     #[test]
     fn editor_at_substitutes_file_and_line_placeholders() {
-        let argv = resolve_editor_at_argv(
-            "code --goto {file}:{line}",
-            "/tmp/wt/src/main.rs",
-            42,
-        )
-        .unwrap();
+        let argv =
+            resolve_editor_at_argv("code --goto {file}:{line}", "/tmp/wt/src/main.rs", 42).unwrap();
         assert_eq!(argv, vec!["code", "--goto", "/tmp/wt/src/main.rs:42"]);
     }
 

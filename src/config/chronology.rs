@@ -8,17 +8,30 @@
 use crate::data::store::{Repo, Store};
 use serde::{Deserialize, Serialize};
 
-fn default_visible() -> bool { true }
-fn default_percent() -> u8 { 32 }
-fn default_min_cols() -> u16 { 24 }
-fn default_max_cols() -> u16 { 60 }
+fn default_visible() -> bool {
+    true
+}
+fn default_percent() -> u8 {
+    32
+}
+fn default_min_cols() -> u16 {
+    24
+}
+fn default_max_cols() -> u16 {
+    60
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Side { Left, Right }
+pub enum Side {
+    Left,
+    Right,
+}
 
 impl Default for Side {
-    fn default() -> Self { Side::Right }
+    fn default() -> Self {
+        Side::Right
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,7 +181,10 @@ mod tests {
         c.width.max_cols = 10;
         c.sanitize();
         assert!(c.width.percent <= 80);
-        assert!(c.width.min_cols <= c.width.max_cols, "inverted min/max swapped");
+        assert!(
+            c.width.min_cols <= c.width.max_cols,
+            "inverted min/max swapped"
+        );
     }
 
     #[test]
@@ -177,7 +193,15 @@ mod tests {
         c.width.percent = 50;
         c.width.min_cols = 20;
         c.width.max_cols = 30;
-        assert_eq!(c.resolved_width(200), 30, "50% of 200 = 100, clamped to max 30");
-        assert_eq!(c.resolved_width(20), 20, "50% of 20 = 10, clamped to min 20");
+        assert_eq!(
+            c.resolved_width(200),
+            30,
+            "50% of 200 = 100, clamped to max 30"
+        );
+        assert_eq!(
+            c.resolved_width(20),
+            20,
+            "50% of 20 = 10, clamped to min 20"
+        );
     }
 }

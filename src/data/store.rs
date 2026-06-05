@@ -1091,13 +1091,26 @@ mod tests {
     fn chronology_config_column_round_trips() {
         let store = Store::open_in_memory().unwrap();
         let id = store.add_repo(Path::new("/tmp/r"), "r", "wsx/").unwrap();
-        let repo = store.repos().unwrap().into_iter().find(|r| r.id == id).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
         assert!(repo.chronology_config.is_none());
         store
             .set_repo_chronology_config(id, Some(r#"{"visible":false}"#))
             .unwrap();
-        let repo = store.repos().unwrap().into_iter().find(|r| r.id == id).unwrap();
-        assert_eq!(repo.chronology_config.as_deref(), Some(r#"{"visible":false}"#));
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(
+            repo.chronology_config.as_deref(),
+            Some(r#"{"visible":false}"#)
+        );
     }
 
     #[test]

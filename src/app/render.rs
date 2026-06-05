@@ -32,6 +32,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.detail_container_rects = [None; 4];
     app.attached_pane_rects.clear();
     app.agent_chip_rects.clear();
+    app.chronology_entry_rects.clear();
     app.usage_graph_rect = None;
     app.usage_window_option_rects.clear();
 

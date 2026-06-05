@@ -45,7 +45,10 @@ pub fn entry_lines(
     let mut out = Vec::new();
     let rel = relative_display(&ev.file_path, worktree);
     out.push(Line::from(vec![
-        Span::styled(hhmm(ev.timestamp_ms), Style::default().add_modifier(Modifier::DIM)),
+        Span::styled(
+            hhmm(ev.timestamp_ms),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
         Span::raw(" "),
         Span::raw(rel),
     ]));
@@ -93,7 +96,10 @@ mod tests {
             tool: ChangeTool::Edit,
             file_path: PathBuf::from(file),
             summary: summary.to_string(),
-            detail: ChangeDetail::Edit { old: "a".into(), new: "b".into() },
+            detail: ChangeDetail::Edit {
+                old: "a".into(),
+                new: "b".into(),
+            },
         }
     }
 
@@ -117,13 +123,23 @@ mod tests {
 
     #[test]
     fn entry_produces_header_and_summary_lines() {
-        let lines = entry_lines(&ev("/wt/src/main.rs", "fn foo()"), Path::new("/wt"), false, 40);
+        let lines = entry_lines(
+            &ev("/wt/src/main.rs", "fn foo()"),
+            Path::new("/wt"),
+            false,
+            40,
+        );
         assert_eq!(lines.len(), 2, "B fidelity: header + summary, no diff peek");
     }
 
     #[test]
     fn expanded_entry_adds_diff_peek_lines() {
-        let lines = entry_lines(&ev("/wt/src/main.rs", "fn foo()"), Path::new("/wt"), true, 40);
+        let lines = entry_lines(
+            &ev("/wt/src/main.rs", "fn foo()"),
+            Path::new("/wt"),
+            true,
+            40,
+        );
         assert!(lines.len() > 2, "expanded entry includes diff peek");
     }
 }

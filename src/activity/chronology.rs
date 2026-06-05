@@ -63,8 +63,8 @@ pub(crate) const SUMMARY_MAX_CHARS: usize = 80;
 fn looks_like_decl(line: &str) -> bool {
     let t = line.trim_start();
     const KW: [&str; 11] = [
-        "fn ", "pub ", "def ", "class ", "struct ", "impl ", "enum ", "trait ",
-        "func ", "type ", "const ",
+        "fn ", "pub ", "def ", "class ", "struct ", "impl ", "enum ", "trait ", "func ", "type ",
+        "const ",
     ];
     KW.iter().any(|k| t.starts_with(k))
 }
@@ -161,7 +161,9 @@ pub fn extract_change_events(v: &serde_json::Value) -> Vec<ChangeEvent> {
                     tool,
                     file_path,
                     summary: summarize_write(content),
-                    detail: ChangeDetail::Write { head: clip(content) },
+                    detail: ChangeDetail::Write {
+                        head: clip(content),
+                    },
                 });
             }
             ChangeTool::MultiEdit => {
@@ -175,7 +177,10 @@ pub fn extract_change_events(v: &serde_json::Value) -> Vec<ChangeEvent> {
                             tool,
                             file_path: file_path.clone(),
                             summary: summarize_edit(old, new),
-                            detail: ChangeDetail::Edit { old: clip(old), new: clip(new) },
+                            detail: ChangeDetail::Edit {
+                                old: clip(old),
+                                new: clip(new),
+                            },
                         });
                     }
                 }
@@ -195,7 +200,10 @@ pub fn extract_change_events(v: &serde_json::Value) -> Vec<ChangeEvent> {
                     tool,
                     file_path,
                     summary: summarize_edit(old, new),
-                    detail: ChangeDetail::Edit { old: clip(old), new: clip(new) },
+                    detail: ChangeDetail::Edit {
+                        old: clip(old),
+                        new: clip(new),
+                    },
                 });
             }
         }
@@ -221,29 +229,40 @@ mod extract_tests {
 
     #[test]
     fn extracts_edit_event() {
-        let v = line(r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/wt/a.rs","old_string":"let x=1;","new_string":"pub fn foo() {}"}}]}}"#);
+        let v = line(
+            r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/wt/a.rs","old_string":"let x=1;","new_string":"pub fn foo() {}"}}]}}"#,
+        );
         let evs = extract_change_events(&v);
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].tool, ChangeTool::Edit);
         assert_eq!(evs[0].file_path, std::path::PathBuf::from("/wt/a.rs"));
         assert_eq!(evs[0].summary, "pub fn foo() {}");
         assert!(matches!(evs[0].detail, ChangeDetail::Edit { .. }));
-        assert_eq!(evs[0].timestamp_ms, parse_iso8601_ms("2026-05-14T17:32:02.744Z").unwrap());
+        assert_eq!(
+            evs[0].timestamp_ms,
+            parse_iso8601_ms("2026-05-14T17:32:02.744Z").unwrap()
+        );
     }
 
     #[test]
     fn extracts_write_event() {
-        let v = line(r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t2","name":"Write","input":{"file_path":"/wt/new.rs","content":"pub struct Z;"}}]}}"#);
+        let v = line(
+            r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t2","name":"Write","input":{"file_path":"/wt/new.rs","content":"pub struct Z;"}}]}}"#,
+        );
         let evs = extract_change_events(&v);
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].tool, ChangeTool::Write);
         assert_eq!(evs[0].summary, "pub struct Z;");
-        assert!(matches!(&evs[0].detail, ChangeDetail::Write { head } if head.contains("struct Z")));
+        assert!(
+            matches!(&evs[0].detail, ChangeDetail::Write { head } if head.contains("struct Z"))
+        );
     }
 
     #[test]
     fn multiedit_emits_one_event_per_edit() {
-        let v = line(r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t3","name":"MultiEdit","input":{"file_path":"/wt/a.rs","edits":[{"old_string":"a","new_string":"pub fn one(){}"},{"old_string":"b","new_string":"pub fn two(){}"}]}}]}}"#);
+        let v = line(
+            r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t3","name":"MultiEdit","input":{"file_path":"/wt/a.rs","edits":[{"old_string":"a","new_string":"pub fn one(){}"},{"old_string":"b","new_string":"pub fn two(){}"}]}}]}}"#,
+        );
         let evs = extract_change_events(&v);
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[0].tool, ChangeTool::MultiEdit);
@@ -252,13 +271,17 @@ mod extract_tests {
 
     #[test]
     fn ignores_read_and_bash() {
-        let v = line(r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t4","name":"Read","input":{"file_path":"/wt/a.rs"}},{"type":"tool_use","id":"t5","name":"Bash","input":{"command":"ls"}}]}}"#);
+        let v = line(
+            r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t4","name":"Read","input":{"file_path":"/wt/a.rs"}},{"type":"tool_use","id":"t5","name":"Bash","input":{"command":"ls"}}]}}"#,
+        );
         assert!(extract_change_events(&v).is_empty());
     }
 
     #[test]
     fn ignores_non_assistant_lines() {
-        let v = line(r#"{"type":"user","timestamp":"2026-05-14T17:32:02.744Z","message":{"role":"user","content":"hi"}}"#);
+        let v = line(
+            r#"{"type":"user","timestamp":"2026-05-14T17:32:02.744Z","message":{"role":"user","content":"hi"}}"#,
+        );
         assert!(extract_change_events(&v).is_empty());
     }
 }
@@ -296,19 +319,27 @@ mod line_tests {
     #[test]
     fn finds_line_of_old_string_first_line() {
         let file = "fn a() {}\nfn b() {}\nfn c() {}\n";
-        let detail = ChangeDetail::Edit { old: "fn b() {}".into(), new: "fn b2() {}".into() };
+        let detail = ChangeDetail::Edit {
+            old: "fn b() {}".into(),
+            new: "fn b2() {}".into(),
+        };
         assert_eq!(resolve_line(file, &detail), 2);
     }
 
     #[test]
     fn write_resolves_to_line_one() {
-        let detail = ChangeDetail::Write { head: "anything".into() };
+        let detail = ChangeDetail::Write {
+            head: "anything".into(),
+        };
         assert_eq!(resolve_line("whatever\n", &detail), 1);
     }
 
     #[test]
     fn missing_old_string_falls_back_to_line_one() {
-        let detail = ChangeDetail::Edit { old: "nonexistent".into(), new: "x".into() };
+        let detail = ChangeDetail::Edit {
+            old: "nonexistent".into(),
+            new: "x".into(),
+        };
         assert_eq!(resolve_line("fn a() {}\n", &detail), 1);
     }
 
@@ -340,9 +371,7 @@ pub fn parse_file(path: &Path) -> Vec<ChangeEvent> {
 /// All `.jsonl` session files under `<home>/.claude/projects/<encoded-cwd>/`.
 /// Testable variant taking an explicit home dir and canonical worktree path.
 pub(crate) fn session_files_in(home: &Path, abs_worktree: &Path) -> Vec<PathBuf> {
-    let dir = home
-        .join(".claude/projects")
-        .join(encode_cwd(abs_worktree));
+    let dir = home.join(".claude/projects").join(encode_cwd(abs_worktree));
     let mut files = Vec::new();
     let Ok(rd) = std::fs::read_dir(&dir) else {
         return files;
@@ -554,7 +583,11 @@ mod timeline_tests {
         tl.refresh(&[a.clone(), b.clone()]);
         let evs = tl.events();
         assert_eq!(evs.len(), 2);
-        assert_eq!(evs[0].file_path, PathBuf::from("/wt/new.rs"), "newest first");
+        assert_eq!(
+            evs[0].file_path,
+            PathBuf::from("/wt/new.rs"),
+            "newest first"
+        );
         assert_eq!(evs[1].file_path, PathBuf::from("/wt/old.rs"));
     }
 

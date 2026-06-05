@@ -32,6 +32,7 @@ https://github.com/user-attachments/assets/c3ce1a7e-5904-471c-9a33-2a6fb55a16cd
   - [Global settings](#global-settings)
   - [Themes](#themes)
   - [Auto-rename modes](#auto-rename-modes)
+  - [Change chronology](#change-chronology)
   - [Coding agents](#coding-agents)
   - [Multi-agent workspaces](#multi-agent-workspaces)
   - [Per-repo setup scripts](#per-repo-setup-scripts)
@@ -134,6 +135,8 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x v`       | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`)                  |
 | `Ctrl-x k`       | Show processes running under the attached workspace's worktree                                              |
 | `Ctrl-x x`       | Send a literal `Ctrl-x` to claude                                                                           |
+| `Ctrl-x c`       | Toggle the change chronology bar on/off                                                                     |
+| `Ctrl-x C`       | Swap the chronology bar's side (left ↔ right)                                                               |
 
 When a workspace has more than one agent, the footer also binds bare keys `q w r y i o p s h j` (no leader) to switch the focused pane between agents — see [Multi-agent workspaces](#multi-agent-workspaces).
 
@@ -552,6 +555,7 @@ Known keys:
 | `dashboard_name_width`   | Width (chars) of the workspace-name column on the dashboard. Default `24`. Clamped to `10..=60`.                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `dashboard_branch_width` | Width (chars) of the `⎇ branch` column on the dashboard. Default `28`. Clamped to `10..=80`.                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `detail_bar_config`      | JSON blob controlling the per-workspace detail bar (visibility, height, and the container/module layout). See [Workspace detail bar](#workspace-detail-bar) for the schema, defaults, and per-repo override flow. Out-of-range values are clamped on save.                                                                                                                                                                                                                                                       |
+| `chronology_config`      | JSON blob controlling the change chronology bar in the attached view (visibility, side, and width). See [Change chronology](#change-chronology) for the schema, defaults, and per-repo override flow.                                                                                                                                                                                                                                                                                                            |
 
 Value sources:
 
@@ -592,6 +596,57 @@ After your first prompt in a freshly-created workspace, wsx renames the workspac
 | `off`              | No auto-rename. Workspaces keep their generated `<adjective>-<plant>` name forever.                                                                                                                                                |
 
 The rename only fires on workspaces whose name still matches the generated `<adjective>-<plant>` pattern.
+
+### Change chronology
+
+When an agent is actively editing files, it's easy to lose track of what changed, where, and when — especially across a long session with many small edits. The change chronology bar is a toggleable vertical panel docked to the side of the **attached** view that rebuilds your spatial and temporal memory of what the agent touched.
+
+The bar shows a newest-first, time-ordered list of individual file edits the agent made — one entry per change, not per commit. Each entry shows the time, filename, and a one-line summary of the edit. Clicking an entry expands a short diff peek inline; clicking the already-expanded entry opens your editor at the changed line.
+
+Currently the chronology is reconstructed from Claude Code's on-disk session logs. Support for other agents is added incrementally as those log formats are covered.
+
+#### Keybindings (attached view, under the `Ctrl-x` leader)
+
+| Key        | Action                                          |
+| ---------- | ----------------------------------------------- |
+| `Ctrl-x c` | Toggle the chronology bar on/off                |
+| `Ctrl-x C` | Swap the bar's side (left ↔ right)              |
+
+Mouse wheel over the bar scrolls it. Click an entry to expand its diff peek; click the expanded entry again to open your editor at `file:line`.
+
+The click-to-open jump requires `editor_cmd` to be configured (see [Editor, terminal, and diff integration](#editor-terminal-and-diff-integration)). If your command contains `{file}` and `{line}` placeholders they are substituted in place. For recognized editors without explicit placeholders, wsx falls back to goto syntax: `code --goto file:line` for VS Code and Cursor; `+line file` for Vim/Neovim/Vi and Emacs/Emacsclient.
+
+#### Schema and defaults
+
+`chronology_config` is a JSON blob set globally via `wsx config set` or overridden per-repo via the repo settings modal (`s` on the dashboard, select the `chronology_config` row). Every field is optional; missing fields fall back to defaults.
+
+| Field            | Type                  | Default  | Effect                                                                 |
+| ---------------- | --------------------- | -------- | ---------------------------------------------------------------------- |
+| `visible`        | bool                  | `true`   | Master toggle. `false` hides the bar entirely (same as `Ctrl-x c`).   |
+| `side`           | `"left"` / `"right"`  | `"right"` | Which side of the attach area the bar is docked to.                   |
+| `width.percent`  | u8                    | `32`     | Target width as a percent of the attach area's columns.                |
+| `width.min_cols` | u16                   | `24`     | Minimum width in columns.                                              |
+| `width.max_cols` | u16                   | `60`     | Maximum width in columns.                                              |
+
+#### Setting the global value
+
+```bash
+wsx config set chronology_config '{"side":"left","width":{"min_cols":30}}'
+wsx config get chronology_config
+wsx config set chronology_config ""   # clear (reverts to defaults)
+```
+
+Partial JSON is fine — unspecified fields inherit defaults. Malformed JSON is rejected with a non-zero exit and the previous value is preserved.
+
+#### Per-repo override
+
+Open the repo settings modal with `s` on the dashboard, select the `chronology_config` row, and press Enter. `$EDITOR` opens on `{}\n` (or the current override). Save to apply; press `d` to clear the override and fall back to the global value.
+
+Example — pin the bar to the left for a repo with a wide main pane:
+
+```json
+{ "side": "left", "width": { "percent": 28 } }
+```
 
 ### Coding agents
 
@@ -792,6 +847,7 @@ row's repo. The modal lists the per-repo fields:
 - `pinned_commands`
 - `related_repos`
 - `detail_bar_config` (see [Workspace detail bar](#workspace-detail-bar))
+- `chronology_config` (see [Change chronology](#change-chronology))
 
 `↑/↓` selects a field. Press `Enter` to edit — wsx temporarily leaves
 the TUI, opens `$EDITOR` (or `vi` if unset) on a tempfile prepopulated

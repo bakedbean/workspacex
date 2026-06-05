@@ -137,6 +137,16 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x x`       | Send a literal `Ctrl-x` to claude                                                                           |
 | `Ctrl-x c`       | Toggle the change chronology bar on/off                                                                     |
 | `Ctrl-x C`       | Swap the chronology bar's side (left ↔ right)                                                               |
+| `Ctrl-x →` (bar on right) / `Ctrl-x ←` (bar on left) | Move keyboard focus into the chronology bar (from the adjacent edge pane only) |
+| `Ctrl-x ←` (bar on right) / `Ctrl-x →` (bar on left) | Return focus from the bar to the agent pane                                    |
+| `↑` / `k` *(bar focused)* | Move selection up (toward newer entries)                                              |
+| `↓` / `j` *(bar focused)* | Move selection down (toward older entries)                                            |
+| `g` *(bar focused)*        | Jump to the top (newest entry)                                                        |
+| `G` *(bar focused)*        | Jump to the bottom (oldest entry)                                                     |
+| `Enter` *(bar focused)*    | Expand the selected entry's diff peek (or, when inside a diff peek, open the file in your editor at the changed line) |
+| `↓` *(entry expanded)*     | Move focus into the diff peek detail                                                  |
+| `↑` *(inside diff peek)*   | Return focus to the entry                                                             |
+| `Esc` *(bar focused)*      | Return focus to the agent pane                                                        |
 
 When a workspace has more than one agent, the footer also binds bare keys `q w r y i o p s h j` (no leader) to switch the focused pane between agents — see [Multi-agent workspaces](#multi-agent-workspaces).
 
@@ -601,9 +611,19 @@ The rename only fires on workspaces whose name still matches the generated `<adj
 
 When an agent is actively editing files, it's easy to lose track of what changed, where, and when — especially across a long session with many small edits. The change chronology bar is a toggleable vertical panel docked to the side of the **attached** view that rebuilds your spatial and temporal memory of what the agent touched.
 
-The bar shows a newest-first, time-ordered list of individual file edits the agent made — one entry per change, not per commit. Each entry shows the time, filename, and a one-line summary of the edit. Clicking an entry expands a short diff peek inline; clicking the already-expanded entry opens your editor at the changed line.
+The bar shows a newest-first, time-ordered list of individual file edits the agent made — one entry per change, not per commit. Each entry shows the time, filename, and a one-line summary of the edit.
 
 Currently the chronology is reconstructed from Claude Code's on-disk session logs. Support for other agents is added incrementally as those log formats are covered.
+
+#### Keyboard navigation
+
+The chronology bar is a focusable pane. While attached, press `Ctrl-x` then an arrow key **toward the bar's side** to move keyboard focus into it (bar on the right → `Ctrl-x →`; bar on the left → `Ctrl-x ←`). This only works from the edge pane adjacent to the bar; otherwise `Ctrl-x`+arrow keeps moving between agent split panes as normal.
+
+While the bar is focused, keystrokes are captured by the bar and do **not** reach the agent:
+
+- `↑` / `k` and `↓` / `j` move the selection; `g` jumps to the top (newest), `G` to the bottom.
+- `Enter` on an entry expands its diff peek inline. Press `↓` to move into the diff peek detail, then `Enter` again to open the file in your editor at the changed line. `↑` from the detail returns to the entry.
+- `Esc` (or `Ctrl-x` + arrow **away** from the bar's side) returns focus to the agent pane.
 
 #### Keybindings (attached view, under the `Ctrl-x` leader)
 
@@ -612,7 +632,7 @@ Currently the chronology is reconstructed from Claude Code's on-disk session log
 | `Ctrl-x c` | Toggle the chronology bar on/off                |
 | `Ctrl-x C` | Swap the bar's side (left ↔ right)              |
 
-Mouse wheel over the bar scrolls it. Click an entry to expand its diff peek; click the expanded entry again to open your editor at `file:line`.
+Mouse wheel over the bar scrolls it. Click an entry to focus the bar, select the entry, and expand its diff peek. Click the expanded diff peek to open your editor at the changed line.
 
 The click-to-open jump requires `editor_cmd` to be configured (see [Editor, terminal, and diff integration](#editor-terminal-and-diff-integration)). If your command contains `{file}` and `{line}` placeholders they are substituted in place. For recognized editors without explicit placeholders, wsx falls back to goto syntax: `code --goto file:line` for VS Code and Cursor; `+line file` for Vim/Neovim/Vi and Emacs/Emacsclient.
 

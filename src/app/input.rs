@@ -288,6 +288,18 @@ fn focused_attached_workspace(
     Some((ws_id, worktree))
 }
 
+/// Resolve the configured chronology side for the focused attached workspace.
+fn focused_chronology_side(app: &App) -> Option<crate::config::chronology::Side> {
+    let crate::ui::View::Attached(state) = &app.view else {
+        return None;
+    };
+    let target = state.focused_target()?;
+    let ws_id = target.workspace_id;
+    let (rid, _w) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
+    let repo = app.repos.iter().find(|r| r.id == *rid)?;
+    Some(crate::config::chronology::resolve(repo, &app.store).side)
+}
+
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
 /// [`toggle_focused_fold`], this is idempotent: pressing `h` on an
 /// already-folded repo leaves it folded.
@@ -810,6 +822,39 @@ async fn handle_key_attached(
                     KeyCode::Down => Arrow::Down,
                     _ => unreachable!(),
                 };
+                use crate::config::chronology::Side;
+                let side = focused_chronology_side(app);
+                let toward_bar = matches!(
+                    (side, arrow),
+                    (Some(Side::Right), Arrow::Right) | (Some(Side::Left), Arrow::Left)
+                );
+                let away_from_bar = matches!(
+                    (side, arrow),
+                    (Some(Side::Right), Arrow::Left) | (Some(Side::Left), Arrow::Right)
+                );
+                if app.chronology_focused {
+                    if away_from_bar {
+                        app.chronology_focused = false; // focus returns to the agent pane
+                    }
+                    // toward/parallel arrows while focused: ignored
+                    return Ok(());
+                }
+                if toward_bar && app.chronology_bar_rect.is_some() {
+                    // Enter the bar only if there's no agent pane further toward it
+                    // (we're at the edge). focus_direction returns false when it
+                    // could not move.
+                    let moved = if let View::Attached(state) = &mut app.view {
+                        state.focus_direction(arrow)
+                    } else {
+                        false
+                    };
+                    if !moved {
+                        app.chronology_focused = true;
+                        app.chronology_sel = crate::ui::chronology_nav::ChronoSel::Entry(0);
+                        app.chronology_scroll = 0;
+                    }
+                    return Ok(());
+                }
                 if let View::Attached(state) = &mut app.view {
                     state.focus_direction(arrow);
                 }
@@ -949,6 +994,60 @@ async fn handle_key_attached(
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
+        return Ok(());
+    }
+    if app.chronology_focused {
+        use crate::ui::chronology_nav::{NavAction, NavKey, nav};
+        let navkey = match k.code {
+            KeyCode::Down | KeyCode::Char('j') => Some(NavKey::Down),
+            KeyCode::Up | KeyCode::Char('k') => Some(NavKey::Up),
+            KeyCode::Char('g') => Some(NavKey::Top),
+            KeyCode::Char('G') => Some(NavKey::Bottom),
+            KeyCode::Enter => Some(NavKey::Enter),
+            KeyCode::Esc => Some(NavKey::Esc),
+            _ => None,
+        };
+        if let Some(navkey) = navkey {
+            // Compute the entry count first (immutable borrow), then mutate.
+            let len = focused_attached_workspace(app)
+                .and_then(|(id, _)| app.chronology.get(&id))
+                .map(|t| t.events().len())
+                .unwrap_or(0);
+            let (new_sel, action) = nav(app.chronology_sel, navkey, app.chronology_expanded, len);
+            app.chronology_sel = new_sel;
+            match action {
+                NavAction::None => {}
+                NavAction::Expand(i) => app.chronology_expanded = Some(i),
+                NavAction::Collapse(_) => app.chronology_expanded = None,
+                NavAction::Exit => app.chronology_focused = false,
+                NavAction::Open(i) => {
+                    // Clone path+detail out of the chronology borrow before
+                    // touching app.store / spawning the editor.
+                    if let Some((worktree, file, detail)) = focused_attached_workspace(app)
+                        .and_then(|(ws_id, worktree)| {
+                            app.chronology.get(&ws_id).and_then(|t| {
+                                t.events()
+                                    .get(i)
+                                    .map(|ev| (worktree, ev.file_path.clone(), ev.detail.clone()))
+                            })
+                        })
+                    {
+                        let line =
+                            crate::activity::chronology::resolve_line_in_file(&file, &detail);
+                        let editor = app.store.get_setting("editor_cmd").ok().flatten();
+                        if let Err(e) = crate::commands::external::open_in_editor_at(
+                            &worktree,
+                            &file,
+                            line,
+                            editor.as_deref(),
+                        ) {
+                            tracing::warn!(error = %e, "failed to open editor from chronology keyboard");
+                        }
+                    }
+                }
+            }
+        }
+        // While focused, swallow ALL keys — the agent PTY must not receive them.
         return Ok(());
     }
     let bytes = encode_key(k);

@@ -34,6 +34,29 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.agent_chip_rects.clear();
     app.usage_graph_rect = None;
     app.usage_window_option_rects.clear();
+
+    // Refresh the focused workspace's change-chronology timeline before the
+    // render borrow of `app.view` is taken below. `refresh_chronology` is the
+    // only `&mut app` the attached chronology bar needs; doing it here (in a
+    // short scope that drops the `&app.view` borrow first) keeps the render
+    // arm's immutable borrows of `app` conflict-free.
+    {
+        let focused: Option<(crate::data::store::WorkspaceId, std::path::PathBuf)> =
+            if let crate::ui::View::Attached(state) = &app.view {
+                state.focused_target().and_then(|t| {
+                    app.workspaces
+                        .iter()
+                        .find(|(_, w)| w.id == t.workspace_id)
+                        .map(|(_, w)| (t.workspace_id, w.worktree_path.clone()))
+                })
+            } else {
+                None
+            };
+        if let Some((ws_id, worktree)) = focused {
+            app.refresh_chronology(ws_id, &worktree);
+        }
+    }
+
     match &app.view {
         crate::ui::View::Dashboard => {
             let selection_is_workspace =
@@ -494,7 +517,51 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     })
                     .unwrap_or_default();
             let attention_line = attention.map(|a| a.line);
-            let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
+
+            // Change-chronology bar for the focused workspace. The timeline was
+            // already refreshed before this match (the only `&mut app` the bar
+            // needs). Resolve the focused workspace's worktree + repo config,
+            // then clone events + worktree into locals so the `ChronologyDraw`
+            // borrows nothing from `app` — leaving the final `&mut app` write of
+            // the entry rects unobstructed.
+            let chronology_worktree: Option<std::path::PathBuf> = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == focused_id)
+                .map(|(_, w)| w.worktree_path.clone());
+            let chronology_cfg: Option<crate::config::chronology::ChronologyConfig> = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == focused_id)
+                .and_then(|(rid, _)| app.repos.iter().find(|r| r.id == *rid))
+                .map(|repo| crate::config::chronology::resolve(repo, &app.store));
+            let chronology_events: Vec<crate::activity::chronology::ChangeEvent> = app
+                .chronology
+                .get(&focused_id)
+                .map(|t| t.events().to_vec())
+                .unwrap_or_default();
+            let chronology_scroll = app.chronology_scroll;
+            let chronology_expanded = app.chronology_expanded;
+
+            // Build the draw data (borrows only the locals above) and carve the
+            // bar's side column out of `pane_area` BEFORE laying out the panes,
+            // so the agent PTYs get the narrowed area and never draw under the
+            // bar. `split_for_chronology` returns `None` for the bar when the
+            // config is absent/hidden or the area is too narrow.
+            let chronology_draw = match (chronology_cfg.as_ref(), chronology_worktree.as_deref()) {
+                (Some(config), Some(worktree)) => Some(crate::ui::attached::ChronologyDraw {
+                    config,
+                    events: &chronology_events,
+                    worktree,
+                    scroll: chronology_scroll,
+                    expanded: chronology_expanded,
+                }),
+                _ => None,
+            };
+            let (agent_pane_area, bar_rect) =
+                attached::split_for_chronology(pane_area, &chronology_draw);
+
+            let crate::ui::split::LayoutResult { panes, dividers } = state.layout(agent_pane_area);
             let multi_pane = panes.len() > 1;
 
             // The agent instance in the focused pane is the "active" one; the
@@ -564,12 +631,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 &pinned,
                 &focused_agents_list,
                 active_agent,
+                bar_rect.zip(chronology_draw),
                 &app.theme,
             );
             app.chip_rects = out.chip_rects;
             app.attention_rects = attention_rects;
             app.attached_pane_rects = out.pane_rects;
             app.agent_chip_rects = out.agent_chip_rects;
+            app.chronology_entry_rects = out.chronology_entry_rects;
             app.pinned_commands_cache = pinned;
         }
         crate::ui::View::AttachedPm => {
@@ -630,6 +699,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     attention_line,
                     pinned,
                     &[],
+                    None,
                     None,
                     &app.theme,
                 );

@@ -261,6 +261,61 @@ mod extract_tests {
     }
 }
 
+/// 1-based line to open the editor at, given the file's current contents and
+/// the change detail. For an Edit, locate the first line of `old` in `contents`;
+/// for a Write (or anything not found), line 1.
+pub fn resolve_line(contents: &str, detail: &ChangeDetail) -> u32 {
+    let needle = match detail {
+        ChangeDetail::Edit { old, .. } => old.lines().find(|l| !l.trim().is_empty()),
+        _ => None,
+    };
+    let Some(needle) = needle else { return 1 };
+    for (i, line) in contents.lines().enumerate() {
+        if line.contains(needle) {
+            return (i + 1) as u32;
+        }
+    }
+    1
+}
+
+/// Read the file at `path` and resolve the line for `detail`. Returns 1 when
+/// the file can't be read (deleted/renamed since the edit).
+pub fn resolve_line_in_file(path: &Path, detail: &ChangeDetail) -> u32 {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => resolve_line(&contents, detail),
+        Err(_) => 1,
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    #[test]
+    fn finds_line_of_old_string_first_line() {
+        let file = "fn a() {}\nfn b() {}\nfn c() {}\n";
+        let detail = ChangeDetail::Edit { old: "fn b() {}".into(), new: "fn b2() {}".into() };
+        assert_eq!(resolve_line(file, &detail), 2);
+    }
+
+    #[test]
+    fn write_resolves_to_line_one() {
+        let detail = ChangeDetail::Write { head: "anything".into() };
+        assert_eq!(resolve_line("whatever\n", &detail), 1);
+    }
+
+    #[test]
+    fn missing_old_string_falls_back_to_line_one() {
+        let detail = ChangeDetail::Edit { old: "nonexistent".into(), new: "x".into() };
+        assert_eq!(resolve_line("fn a() {}\n", &detail), 1);
+    }
+
+    #[test]
+    fn none_detail_falls_back_to_line_one() {
+        assert_eq!(resolve_line("fn a() {}\n", &ChangeDetail::None), 1);
+    }
+}
+
 #[cfg(test)]
 mod summary_tests {
     use super::*;

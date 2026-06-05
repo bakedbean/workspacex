@@ -282,6 +282,7 @@ fn footer_line(
             ("d", "close-pane"),
             ("←→", "focus"),
             ("u", "updates"),
+            ("a", "agents"),
             ("e", "edit"),
             ("t", "term"),
             ("v", "diff"),
@@ -293,6 +294,7 @@ fn footer_line(
         &[
             ("d", "detach"),
             ("u", "updates"),
+            ("a", "agents"),
             ("e", "edit"),
             ("t", "term"),
             ("v", "diff"),

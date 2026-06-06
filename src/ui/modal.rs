@@ -80,6 +80,15 @@ pub enum Modal {
         /// (applied) window is read separately from the store at render time.
         selected: usize,
     },
+    /// Full diff of a chronology change, scrollable.
+    ChangeDetail {
+        title: String,
+        lines: Vec<String>,
+        scroll: usize,
+        worktree: std::path::PathBuf,
+        file: std::path::PathBuf,
+        line: u32,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -113,6 +122,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             | Modal::RepoSettings { .. }
             | Modal::AgentsPanel { .. }
             | Modal::UsageWindowPicker { .. }
+            | Modal::ChangeDetail { .. }
     ) {
         return;
     }
@@ -163,6 +173,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         Modal::UsageWindowPicker { .. } => {
             unreachable!("UsageWindowPicker must not reach render()")
         }
+        Modal::ChangeDetail { .. } => unreachable!("ChangeDetail must not reach render()"),
         Modal::AgentMissing { agent, binary, .. } => (
             "agent not installed",
             format!(

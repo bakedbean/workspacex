@@ -91,6 +91,13 @@ pub fn nav(
     }
 }
 
+/// Clamp a scroll offset so a `body`-row viewport never scrolls past the end of
+/// `len` lines. Returns 0 when everything fits.
+pub fn clamp_scroll(scroll: usize, len: usize, body: usize) -> usize {
+    let max = len.saturating_sub(body);
+    scroll.min(max)
+}
+
 /// Adjust the viewport `scroll` so the selected entry index stays visible,
 /// given how many entries were visible last frame. One-frame lag is fine.
 pub fn adjust_scroll(scroll: usize, sel_index: usize, visible: usize, len: usize) -> usize {
@@ -104,6 +111,18 @@ pub fn adjust_scroll(scroll: usize, sel_index: usize, visible: usize, len: usize
         return sel_index + 1 - visible;
     }
     scroll
+}
+
+#[cfg(test)]
+mod clamp_scroll_tests {
+    use super::*;
+
+    #[test]
+    fn clamp_scroll_bounds() {
+        assert_eq!(clamp_scroll(85, 100, 20), 80);
+        assert_eq!(clamp_scroll(5, 100, 20), 5);
+        assert_eq!(clamp_scroll(7, 10, 20), 0);
+    }
 }
 
 #[cfg(test)]

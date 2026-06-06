@@ -838,6 +838,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             crate::ui::modal::Modal::UsageWindowPicker { .. } => {
                 // Rendered separately below, anchored to the footer graph.
             }
+            crate::ui::modal::Modal::ChangeDetail {
+                title,
+                lines,
+                scroll,
+                ..
+            } => {
+                render_change_detail_modal(f, area, title, lines, *scroll, &app.theme);
+            }
             other => modal::render(f, area, other, app.tick, &app.theme),
         }
     }
@@ -1018,6 +1026,75 @@ pub(crate) fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::Ac
         ActivityState::Waiting => U::Waiting,
         ActivityState::Off => U::Off,
     }
+}
+
+fn render_change_detail_modal(
+    f: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    title: &str,
+    lines: &[String],
+    scroll: usize,
+    theme: &crate::ui::theme::Theme,
+) {
+    use ratatui::layout::Rect;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+    let w = area.width.saturating_mul(9) / 10;
+    let h = area.height.saturating_mul(9) / 10;
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let modal = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, modal);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "))
+        .border_style(ratatui::style::Style::default().fg(theme.path));
+    let inner = block.inner(modal);
+    f.render_widget(block, modal);
+    let body_h = inner.height.saturating_sub(1) as usize;
+    let scroll = crate::ui::chronology_nav::clamp_scroll(scroll, lines.len(), body_h);
+    let visible: Vec<Line> = lines
+        .iter()
+        .skip(scroll)
+        .take(body_h)
+        .map(|l| {
+            Line::from(Span::raw(
+                l.chars().take(inner.width as usize).collect::<String>(),
+            ))
+        })
+        .collect();
+    let body_area = Rect {
+        height: inner.height.saturating_sub(1),
+        ..inner
+    };
+    f.render_widget(Paragraph::new(visible), body_area);
+    let end = (scroll + body_h).min(lines.len());
+    let footer = format!(
+        "↑/↓ j/k  PgUp/PgDn  g/G  ·  e editor  ·  Esc close    {}-{}/{}",
+        scroll + 1,
+        end,
+        lines.len()
+    );
+    let footer_area = Rect {
+        y: inner.y + inner.height.saturating_sub(1),
+        height: 1,
+        ..inner
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            footer
+                .chars()
+                .take(inner.width as usize)
+                .collect::<String>(),
+            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+        ))),
+        footer_area,
+    );
 }
 
 #[cfg(test)]

@@ -328,6 +328,36 @@ fn open_focused_change(app: &mut App, idx: usize) {
     }
 }
 
+/// Open `file` at `line` using the configured editor, surfacing a Modal::Error
+/// when unset or on failure. Shared by the detail modal's `e`.
+fn open_change_in_editor(
+    app: &mut App,
+    worktree: &std::path::Path,
+    file: &std::path::Path,
+    line: u32,
+) {
+    use crate::commands::external::{EditorOpenDecision, editor_open_decision};
+    let editor_cmd = app.store.get_setting("editor_cmd").ok().flatten();
+    match editor_open_decision(editor_cmd.as_deref()) {
+        EditorOpenDecision::NeedsConfig => {
+            app.modal = Some(crate::ui::modal::Modal::Error {
+                message: "No editor_cmd configured. Set one to open changes in your \
+                          editor, e.g.\n  wsx config set editor_cmd 'alacritty -e nvim'"
+                    .to_string(),
+            });
+        }
+        EditorOpenDecision::Launch(cmd) => {
+            if let Err(e) =
+                crate::commands::external::open_in_editor_at(worktree, file, line, Some(&cmd))
+            {
+                app.modal = Some(crate::ui::modal::Modal::Error {
+                    message: format!("Failed to open editor: {e}"),
+                });
+            }
+        }
+    }
+}
+
 /// Resolve the configured chronology side for the focused attached workspace.
 fn focused_chronology_side(app: &App) -> Option<crate::config::chronology::Side> {
     let crate::ui::View::Attached(state) = &app.view else {
@@ -1656,6 +1686,92 @@ async fn handle_key_modal(
             }
             _ => {}
         },
+        Modal::ChangeDetail {
+            lines,
+            mut scroll,
+            worktree,
+            file,
+            line,
+            title,
+        } => {
+            const PAGE: usize = 10;
+            let len = lines.len();
+            match k.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    scroll = scroll.saturating_add(1).min(len.saturating_sub(1));
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    scroll = scroll.saturating_sub(1);
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::PageDown => {
+                    scroll = scroll.saturating_add(PAGE).min(len.saturating_sub(1));
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::PageUp => {
+                    scroll = scroll.saturating_sub(PAGE);
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::Char('g') => {
+                    scroll = 0;
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::Char('G') => {
+                    scroll = len.saturating_sub(1);
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::Esc => {
+                    app.modal = None;
+                }
+                KeyCode::Char('e') => {
+                    open_change_in_editor(app, &worktree, &file, line);
+                }
+                _ => {}
+            }
+        }
     }
     Ok(())
 }
@@ -1841,6 +1957,28 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
             let up = matches!(m.kind, MouseEventKind::ScrollUp);
             adjust_detail_scroll(app, slot, 3, up);
             return;
+        }
+    }
+
+    // ChangeDetail modal: wheel scrolls the overlay; left-click closes it.
+    if matches!(app.modal, Some(Modal::ChangeDetail { .. })) {
+        match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if let Some(Modal::ChangeDetail { lines, scroll, .. }) = &mut app.modal {
+                    let len = lines.len();
+                    if matches!(m.kind, MouseEventKind::ScrollDown) {
+                        *scroll = scroll.saturating_add(1).min(len.saturating_sub(1));
+                    } else {
+                        *scroll = scroll.saturating_sub(1);
+                    }
+                }
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                app.modal = None;
+                return;
+            }
+            _ => {}
         }
     }
 

@@ -760,4 +760,42 @@ mod source_tests {
         };
         assert!(load_full_change(&ev).is_none());
     }
+
+    #[test]
+    fn parse_file_then_load_full_change_returns_untruncated() {
+        // End-to-end: the in-memory event is clipped, but its source lets the
+        // modal re-extract the whole change. Proves parse_file populates source
+        // and index_in_line lines up with the full re-extraction.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let big = "x".repeat(DETAIL_MAX_CHARS + 50);
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","timestamp":"2026-05-14T17:00:00.000Z","message":{{"content":[{{"type":"tool_use","name":"Write","input":{{"file_path":"/wt/a.rs","content":"{big}"}}}}]}}}}"#
+        )
+        .unwrap();
+        let evs = parse_file(&path);
+        assert_eq!(evs.len(), 1);
+        match &evs[0].detail {
+            ChangeDetail::Write { head } => {
+                assert_eq!(
+                    head.chars().count(),
+                    DETAIL_MAX_CHARS,
+                    "in-memory detail is clipped"
+                );
+            }
+            _ => panic!("expected Write"),
+        }
+        match load_full_change(&evs[0]).expect("full re-extract") {
+            ChangeDetail::Write { head } => {
+                assert_eq!(
+                    head.chars().count(),
+                    DETAIL_MAX_CHARS + 50,
+                    "full content recovered"
+                );
+            }
+            _ => panic!("expected Write"),
+        }
+    }
 }

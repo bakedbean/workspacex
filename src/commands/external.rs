@@ -284,6 +284,26 @@ pub fn open_in_editor_at(
     spawn_parts(parts, worktree)
 }
 
+/// Outcome of deciding whether the chronology open-at-line can launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorOpenDecision {
+    /// Launch the trimmed command.
+    Launch(String),
+    /// No usable `editor_cmd`; the caller should prompt the user to configure one.
+    NeedsConfig,
+}
+
+/// Decide whether the chronology open-at-line can launch. A non-empty,
+/// non-whitespace `editor_cmd` yields `Launch`; anything else `NeedsConfig`.
+/// Unlike `open_in_editor`, this path does NOT fall back to `$VISUAL`/`$EDITOR`
+/// — opening a file at a line needs an editor the user has chosen to wire up.
+pub fn editor_open_decision(editor_cmd: Option<&str>) -> EditorOpenDecision {
+    match editor_cmd {
+        Some(c) if !c.trim().is_empty() => EditorOpenDecision::Launch(c.trim().to_string()),
+        _ => EditorOpenDecision::NeedsConfig,
+    }
+}
+
 fn detach_io(cmd: &mut std::process::Command) {
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -542,5 +562,26 @@ mod tests {
     fn editor_at_nano_uses_plus_line() {
         let argv = resolve_editor_at_argv("nano", "/wt/a.rs", 5).unwrap();
         assert_eq!(argv, vec!["nano", "+5", "/wt/a.rs"]);
+    }
+
+    #[test]
+    fn editor_decision_needs_config_when_unset_or_blank() {
+        assert_eq!(editor_open_decision(None), EditorOpenDecision::NeedsConfig);
+        assert_eq!(
+            editor_open_decision(Some("")),
+            EditorOpenDecision::NeedsConfig
+        );
+        assert_eq!(
+            editor_open_decision(Some("   ")),
+            EditorOpenDecision::NeedsConfig
+        );
+    }
+
+    #[test]
+    fn editor_decision_launches_trimmed_command() {
+        assert_eq!(
+            editor_open_decision(Some("  alacritty -e nvim  ")),
+            EditorOpenDecision::Launch("alacritty -e nvim".to_string())
+        );
     }
 }

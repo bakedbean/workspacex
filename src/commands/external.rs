@@ -233,12 +233,17 @@ fn known_editor_goto(basename: &str) -> Option<GotoStyle> {
 ///    `alacritty -e nvim` detect the inner editor and keep the line).
 /// 3. Else append the file (line dropped); the user can add `{file}`/`{line}`
 ///    placeholders for an unrecognized editor.
-fn resolve_editor_at_argv(cmd: &str, file: &str, line: u32) -> Result<Vec<String>> {
+fn resolve_editor_at_argv(cmd: &str, path: &str, file: &str, line: u32) -> Result<Vec<String>> {
     let line_s = line.to_string();
     let mut parts = shlex::split(cmd)
         .ok_or_else(|| Error::UserInput(format!("could not parse command: {cmd}")))?;
     if parts.is_empty() {
         return Err(Error::UserInput("command is empty".into()));
+    }
+    // Substitute {path} (the worktree / working dir) first, so an editor_cmd
+    // shared with the dir-open action — which also uses {path} — works here too.
+    for part in &mut parts {
+        *part = part.replace("{path}", path);
     }
     let used_placeholder = parts
         .iter()
@@ -279,8 +284,9 @@ pub fn open_in_editor_at(
     configured: Option<&str>,
 ) -> Result<()> {
     let cmd = resolve_editor_cmd(configured)?;
+    let worktree_str = worktree.to_string_lossy();
     let file_str = file.to_string_lossy();
-    let parts = resolve_editor_at_argv(&cmd, file_str.as_ref(), line)?;
+    let parts = resolve_editor_at_argv(&cmd, worktree_str.as_ref(), file_str.as_ref(), line)?;
     spawn_parts(parts, worktree)
 }
 
@@ -502,50 +508,56 @@ mod tests {
 
     #[test]
     fn editor_at_substitutes_file_and_line_placeholders() {
-        let argv =
-            resolve_editor_at_argv("code --goto {file}:{line}", "/tmp/wt/src/main.rs", 42).unwrap();
+        let argv = resolve_editor_at_argv(
+            "code --goto {file}:{line}",
+            "/tmp/wt",
+            "/tmp/wt/src/main.rs",
+            42,
+        )
+        .unwrap();
         assert_eq!(argv, vec!["code", "--goto", "/tmp/wt/src/main.rs:42"]);
     }
 
     #[test]
     fn editor_at_vim_fallback_uses_plus_line() {
-        let argv = resolve_editor_at_argv("nvim", "/tmp/wt/src/main.rs", 42).unwrap();
+        let argv = resolve_editor_at_argv("nvim", "/tmp/wt", "/tmp/wt/src/main.rs", 42).unwrap();
         assert_eq!(argv, vec!["nvim", "+42", "/tmp/wt/src/main.rs"]);
     }
 
     #[test]
     fn editor_at_code_fallback_uses_goto() {
-        let argv = resolve_editor_at_argv("code", "/tmp/wt/src/main.rs", 7).unwrap();
+        let argv = resolve_editor_at_argv("code", "/tmp/wt", "/tmp/wt/src/main.rs", 7).unwrap();
         assert_eq!(argv, vec!["code", "--goto", "/tmp/wt/src/main.rs:7"]);
     }
 
     #[test]
     fn editor_at_emacs_fallback_uses_plus_line() {
-        let argv = resolve_editor_at_argv("emacsclient", "/tmp/wt/a.rs", 3).unwrap();
+        let argv = resolve_editor_at_argv("emacsclient", "/tmp/wt", "/tmp/wt/a.rs", 3).unwrap();
         assert_eq!(argv, vec!["emacsclient", "+3", "/tmp/wt/a.rs"]);
     }
 
     #[test]
     fn editor_at_unknown_editor_appends_file_only() {
-        let argv = resolve_editor_at_argv("myeditor", "/tmp/wt/a.rs", 3).unwrap();
+        let argv = resolve_editor_at_argv("myeditor", "/tmp/wt", "/tmp/wt/a.rs", 3).unwrap();
         assert_eq!(argv, vec!["myeditor", "/tmp/wt/a.rs"]);
     }
 
     #[test]
     fn editor_at_substitutes_placeholders_in_separate_tokens() {
-        let argv = resolve_editor_at_argv("nvim +{line} {file}", "/tmp/wt/a.rs", 9).unwrap();
+        let argv =
+            resolve_editor_at_argv("nvim +{line} {file}", "/tmp/wt", "/tmp/wt/a.rs", 9).unwrap();
         assert_eq!(argv, vec!["nvim", "+9", "/tmp/wt/a.rs"]);
     }
 
     #[test]
     fn editor_at_wrapper_terminal_editor_keeps_line() {
-        let argv = resolve_editor_at_argv("alacritty -e nvim", "/wt/a.rs", 42).unwrap();
+        let argv = resolve_editor_at_argv("alacritty -e nvim", "/wt", "/wt/a.rs", 42).unwrap();
         assert_eq!(argv, vec!["alacritty", "-e", "nvim", "+42", "/wt/a.rs"]);
     }
 
     #[test]
     fn editor_at_wrapper_gui_editor_uses_goto() {
-        let argv = resolve_editor_at_argv("wezterm start -- code", "/wt/a.rs", 7).unwrap();
+        let argv = resolve_editor_at_argv("wezterm start -- code", "/wt", "/wt/a.rs", 7).unwrap();
         assert_eq!(
             argv,
             vec!["wezterm", "start", "--", "code", "--goto", "/wt/a.rs:7"]
@@ -554,20 +566,20 @@ mod tests {
 
     #[test]
     fn editor_at_zed_uses_goto() {
-        let argv = resolve_editor_at_argv("zed", "/wt/a.rs", 5).unwrap();
+        let argv = resolve_editor_at_argv("zed", "/wt", "/wt/a.rs", 5).unwrap();
         assert_eq!(argv, vec!["zed", "--goto", "/wt/a.rs:5"]);
     }
 
     #[test]
     fn editor_at_nano_uses_plus_line() {
-        let argv = resolve_editor_at_argv("nano", "/wt/a.rs", 5).unwrap();
+        let argv = resolve_editor_at_argv("nano", "/wt", "/wt/a.rs", 5).unwrap();
         assert_eq!(argv, vec!["nano", "+5", "/wt/a.rs"]);
     }
 
     #[test]
     fn editor_at_unknown_wrapped_editor_appends_file_only() {
         // No known editor token and no placeholders → append the file, line dropped.
-        let argv = resolve_editor_at_argv("myterm -e myed", "/wt/a.rs", 9).unwrap();
+        let argv = resolve_editor_at_argv("myterm -e myed", "/wt", "/wt/a.rs", 9).unwrap();
         assert_eq!(argv, vec!["myterm", "-e", "myed", "/wt/a.rs"]);
     }
 
@@ -575,8 +587,36 @@ mod tests {
     fn editor_at_first_known_editor_token_wins() {
         // When more than one known editor appears, the first match decides the
         // goto style (here `code` → --goto, even though `vim` follows).
-        let argv = resolve_editor_at_argv("code --diff vim", "/wt/a.rs", 3).unwrap();
+        let argv = resolve_editor_at_argv("code --diff vim", "/wt", "/wt/a.rs", 3).unwrap();
         assert_eq!(argv, vec!["code", "--diff", "vim", "--goto", "/wt/a.rs:3"]);
+    }
+
+    #[test]
+    fn editor_at_substitutes_path_placeholder() {
+        // {path} is the worktree (shared with the dir-open action); the inner
+        // editor is still detected and the line appended.
+        let argv =
+            resolve_editor_at_argv("xdg-terminal-exec --dir={path} nvim", "/wt", "/wt/a.rs", 42)
+                .unwrap();
+        assert_eq!(
+            argv,
+            vec!["xdg-terminal-exec", "--dir=/wt", "nvim", "+42", "/wt/a.rs"]
+        );
+    }
+
+    #[test]
+    fn editor_at_substitutes_path_with_file_and_line_placeholders() {
+        let argv = resolve_editor_at_argv(
+            "term --dir={path} -- nvim +{line} {file}",
+            "/wt",
+            "/wt/a.rs",
+            9,
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec!["term", "--dir=/wt", "--", "nvim", "+9", "/wt/a.rs"]
+        );
     }
 
     #[test]

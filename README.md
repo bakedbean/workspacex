@@ -642,8 +642,8 @@ Both the keyboard path (`Enter` while the diff peek detail is focused) and the m
 
 **File and line injection.** When `editor_cmd` is set, wsx injects the file path and line number at runtime using one of two strategies:
 
-- **Placeholders**: if your command contains `{file}` and/or `{line}`, they are substituted in place. Use this for editors wsx doesn't recognize or when you need exact control over argument order.
-- **Auto-detection**: if no placeholders are present, wsx scans the command for a known editor name and appends the appropriate goto arguments:
+- **Placeholders**: if your command contains `{file}`, `{line}`, and/or `{path}`, they are substituted in place. `{path}` is the worktree root (the same value substituted by the `[e]` dir-open action), so a single `editor_cmd` works for both actions. Use placeholders for editors wsx doesn't recognize or when you need exact control over argument order.
+- **Auto-detection**: if no `{file}` or `{line}` placeholders are present, wsx scans the command for a known editor name and appends the appropriate goto arguments (after substituting any `{path}` first):
   - `code`, `codium`, `cursor`, `zed` → `--goto <file>:<line>`
   - `vim`, `nvim`, `vi`, `nano`, `emacs`, `emacsclient` → `+<line> <file>`
 
@@ -651,6 +651,12 @@ Detection matches the editor name **anywhere** in the command, so a terminal wra
 
 ```bash
 wsx config set editor_cmd 'alacritty -e nvim'
+```
+
+Commands with `{path}` also work — the worktree is substituted first, then the editor is auto-detected or `{file}`/`{line}` are substituted:
+
+```bash
+wsx config set editor_cmd 'xdg-terminal-exec --dir={path} nvim'
 ```
 
 For an editor wsx doesn't recognize, add `{file}` and `{line}` placeholders to control the exact syntax:

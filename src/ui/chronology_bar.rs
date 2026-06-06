@@ -178,7 +178,7 @@ pub fn entry_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activity::chronology::ChangeTool;
+    use crate::activity::chronology::{ChangeSource, ChangeTool};
     use std::path::PathBuf;
 
     fn ev(file: &str, summary: &str) -> ChangeEvent {
@@ -191,6 +191,7 @@ mod tests {
                 old: "a".into(),
                 new: "b".into(),
             },
+            source: ChangeSource::default(),
         }
     }
 
@@ -350,6 +351,7 @@ mod tests {
                 old: "old0\nold1".into(),
                 new: "new0\nnew1".into(),
             },
+            source: ChangeSource::default(),
         };
         let lines = entry_lines(&ev, Path::new("/wt"), true, 60, 42, EntryHighlight::None);
         let texts: Vec<String> = lines.iter().map(line_text).collect();
@@ -382,6 +384,7 @@ mod tests {
             detail: ChangeDetail::Write {
                 head: "l1\nl2\nl3".into(),
             },
+            source: ChangeSource::default(),
         };
         let lines = entry_lines(&ev, Path::new("/wt"), true, 60, 1, EntryHighlight::None);
         let texts: Vec<String> = lines.iter().map(line_text).collect();

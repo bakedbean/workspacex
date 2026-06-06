@@ -43,6 +43,15 @@ pub enum ChangeDetail {
     None,
 }
 
+/// Where a `ChangeEvent` was extracted from, so the full (un-clipped) change can
+/// be re-read on demand for the detail modal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChangeSource {
+    pub session_file: PathBuf,
+    pub line_index: usize,
+    pub index_in_line: usize,
+}
+
 /// One change the agent made at one moment in time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeEvent {
@@ -55,6 +64,8 @@ pub struct ChangeEvent {
     pub summary: String,
     /// Change text for the C-expand peek.
     pub detail: ChangeDetail,
+    /// Back-reference to the session log line for full re-extraction.
+    pub source: ChangeSource,
 }
 
 pub(crate) const SUMMARY_MAX_CHARS: usize = 80;
@@ -103,8 +114,8 @@ pub(crate) fn summarize_edit(old: &str, new: &str) -> String {
 /// Bounded number of characters retained per side of a diff peek.
 const DETAIL_MAX_CHARS: usize = 600;
 
-fn clip(s: &str) -> String {
-    s.chars().take(DETAIL_MAX_CHARS).collect()
+fn clip(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 fn tool_from_name(name: &str) -> Option<ChangeTool> {
@@ -120,7 +131,9 @@ fn tool_from_name(name: &str) -> Option<ChangeTool> {
 /// Extract zero or more `ChangeEvent`s from one parsed Claude JSONL line.
 /// Only `type == "assistant"` lines with mutating `tool_use` blocks produce
 /// events. A `MultiEdit` produces one event per element of its `edits` array.
-pub fn extract_change_events(v: &serde_json::Value) -> Vec<ChangeEvent> {
+/// `detail_max` caps the chars retained per diff side; pass `DETAIL_MAX_CHARS`
+/// for normal use or `usize::MAX` for full unclipped re-extraction.
+pub fn extract_change_events(v: &serde_json::Value, detail_max: usize) -> Vec<ChangeEvent> {
     let mut out = Vec::new();
     if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
         return out;
@@ -162,7 +175,12 @@ pub fn extract_change_events(v: &serde_json::Value) -> Vec<ChangeEvent> {
                     file_path,
                     summary: summarize_write(content),
                     detail: ChangeDetail::Write {
-                        head: clip(content),
+                        head: clip(content, detail_max),
+                    },
+                    source: ChangeSource {
+                        session_file: PathBuf::new(),
+                        line_index: 0,
+                        index_in_line: out.len(),
                     },
                 });
             }
@@ -178,8 +196,13 @@ pub fn extract_change_events(v: &serde_json::Value) -> Vec<ChangeEvent> {
                             file_path: file_path.clone(),
                             summary: summarize_edit(old, new),
                             detail: ChangeDetail::Edit {
-                                old: clip(old),
-                                new: clip(new),
+                                old: clip(old, detail_max),
+                                new: clip(new, detail_max),
+                            },
+                            source: ChangeSource {
+                                session_file: PathBuf::new(),
+                                line_index: 0,
+                                index_in_line: out.len(),
                             },
                         });
                     }
@@ -201,8 +224,13 @@ pub fn extract_change_events(v: &serde_json::Value) -> Vec<ChangeEvent> {
                     file_path,
                     summary: summarize_edit(old, new),
                     detail: ChangeDetail::Edit {
-                        old: clip(old),
-                        new: clip(new),
+                        old: clip(old, detail_max),
+                        new: clip(new, detail_max),
+                    },
+                    source: ChangeSource {
+                        session_file: PathBuf::new(),
+                        line_index: 0,
+                        index_in_line: out.len(),
                     },
                 });
             }
@@ -232,7 +260,7 @@ mod extract_tests {
         let v = line(
             r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/wt/a.rs","old_string":"let x=1;","new_string":"pub fn foo() {}"}}]}}"#,
         );
-        let evs = extract_change_events(&v);
+        let evs = extract_change_events(&v, DETAIL_MAX_CHARS);
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].tool, ChangeTool::Edit);
         assert_eq!(evs[0].file_path, std::path::PathBuf::from("/wt/a.rs"));
@@ -249,7 +277,7 @@ mod extract_tests {
         let v = line(
             r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t2","name":"Write","input":{"file_path":"/wt/new.rs","content":"pub struct Z;"}}]}}"#,
         );
-        let evs = extract_change_events(&v);
+        let evs = extract_change_events(&v, DETAIL_MAX_CHARS);
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].tool, ChangeTool::Write);
         assert_eq!(evs[0].summary, "pub struct Z;");
@@ -263,7 +291,7 @@ mod extract_tests {
         let v = line(
             r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t3","name":"MultiEdit","input":{"file_path":"/wt/a.rs","edits":[{"old_string":"a","new_string":"pub fn one(){}"},{"old_string":"b","new_string":"pub fn two(){}"}]}}]}}"#,
         );
-        let evs = extract_change_events(&v);
+        let evs = extract_change_events(&v, DETAIL_MAX_CHARS);
         assert_eq!(evs.len(), 2);
         assert_eq!(evs[0].tool, ChangeTool::MultiEdit);
         assert_eq!(evs[1].summary, "pub fn two(){}");
@@ -274,7 +302,7 @@ mod extract_tests {
         let v = line(
             r#"{"type":"assistant","timestamp":"2026-05-14T17:32:02.744Z","message":{"content":[{"type":"tool_use","id":"t4","name":"Read","input":{"file_path":"/wt/a.rs"}},{"type":"tool_use","id":"t5","name":"Bash","input":{"command":"ls"}}]}}"#,
         );
-        assert!(extract_change_events(&v).is_empty());
+        assert!(extract_change_events(&v, DETAIL_MAX_CHARS).is_empty());
     }
 
     #[test]
@@ -282,7 +310,7 @@ mod extract_tests {
         let v = line(
             r#"{"type":"user","timestamp":"2026-05-14T17:32:02.744Z","message":{"role":"user","content":"hi"}}"#,
         );
-        assert!(extract_change_events(&v).is_empty());
+        assert!(extract_change_events(&v, DETAIL_MAX_CHARS).is_empty());
     }
 }
 
@@ -360,15 +388,43 @@ pub fn parse_file(path: &Path) -> Vec<ChangeEvent> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for line in BufReader::new(file).lines().map_while(|l| l.ok()) {
+    for (line_index, line) in BufReader::new(file)
+        .lines()
+        .map_while(|l| l.ok())
+        .enumerate()
+    {
         if line.trim().is_empty() {
             continue;
         }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
-            out.extend(extract_change_events(&v));
+            for mut ev in extract_change_events(&v, DETAIL_MAX_CHARS) {
+                ev.source.session_file = path.to_path_buf();
+                ev.source.line_index = line_index;
+                out.push(ev);
+            }
         }
     }
     out
+}
+
+/// Re-read the un-clipped change for `ev` from its session log. `None` when the
+/// source is empty/unreadable or the line/event is gone (callers fall back to
+/// the clipped `detail`).
+pub fn load_full_change(ev: &ChangeEvent) -> Option<ChangeDetail> {
+    use std::io::{BufRead, BufReader};
+    if ev.source.session_file.as_os_str().is_empty() {
+        return None;
+    }
+    let file = std::fs::File::open(&ev.source.session_file).ok()?;
+    let line = BufReader::new(file)
+        .lines()
+        .map_while(|l| l.ok())
+        .nth(ev.source.line_index)?;
+    let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+    let evs = extract_change_events(&v, usize::MAX);
+    evs.into_iter()
+        .nth(ev.source.index_in_line)
+        .map(|e| e.detail)
 }
 
 /// All `.jsonl` session files under `<home>/.claude/projects/<encoded-cwd>/`.
@@ -634,5 +690,74 @@ mod timeline_tests {
         let evs = tl.events();
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].file_path, PathBuf::from("/wt/a.rs"));
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn extract_assigns_index_in_line_and_respects_detail_max() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"type":"assistant","timestamp":"2026-05-14T17:00:00.000Z","message":{"content":[{"type":"tool_use","name":"MultiEdit","input":{"file_path":"/wt/a.rs","edits":[{"old_string":"aaaa","new_string":"bbbb"},{"old_string":"cccc","new_string":"dddd"}]}}]}}"#).unwrap();
+        let clipped = extract_change_events(&v, 2);
+        assert_eq!(clipped.len(), 2);
+        assert_eq!(clipped[0].source.index_in_line, 0);
+        assert_eq!(clipped[1].source.index_in_line, 1);
+        if let ChangeDetail::Edit { new, .. } = &clipped[0].detail {
+            assert_eq!(new, "bb", "detail_max=2 clips new_string");
+        } else {
+            panic!("expected Edit");
+        }
+        let full = extract_change_events(&v, usize::MAX);
+        if let ChangeDetail::Edit { new, .. } = &full[1].detail {
+            assert_eq!(new, "dddd", "usize::MAX keeps full text");
+        } else {
+            panic!("expected Edit");
+        }
+    }
+
+    #[test]
+    fn load_full_change_round_trips_uncliped() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "{{}}").unwrap();
+        writeln!(f, r#"{{"type":"assistant","timestamp":"2026-05-14T17:00:00.000Z","message":{{"content":[{{"type":"tool_use","name":"Edit","input":{{"file_path":"/wt/a.rs","old_string":"OLD","new_string":"A_VERY_LONG_NEW_STRING_BEYOND_ANY_CLIP"}}}}]}}}}"#).unwrap();
+        let ev = ChangeEvent {
+            timestamp_ms: 0,
+            tool: ChangeTool::Edit,
+            file_path: PathBuf::from("/wt/a.rs"),
+            summary: String::new(),
+            detail: ChangeDetail::Edit {
+                old: "OLD".into(),
+                new: "A_VERY".into(),
+            },
+            source: ChangeSource {
+                session_file: path.clone(),
+                line_index: 1,
+                index_in_line: 0,
+            },
+        };
+        let full = load_full_change(&ev).expect("re-extract");
+        if let ChangeDetail::Edit { new, .. } = full {
+            assert_eq!(new, "A_VERY_LONG_NEW_STRING_BEYOND_ANY_CLIP");
+        } else {
+            panic!("expected Edit");
+        }
+    }
+
+    #[test]
+    fn load_full_change_none_when_source_empty() {
+        let ev = ChangeEvent {
+            timestamp_ms: 0,
+            tool: ChangeTool::Write,
+            file_path: PathBuf::from("/wt/a.rs"),
+            summary: String::new(),
+            detail: ChangeDetail::Write { head: "x".into() },
+            source: ChangeSource::default(),
+        };
+        assert!(load_full_change(&ev).is_none());
     }
 }

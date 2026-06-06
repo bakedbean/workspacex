@@ -287,11 +287,12 @@ mod extract_tests {
 }
 
 /// 1-based line to open the editor at, given the file's current contents and
-/// the change detail. For an Edit, locate the first line of `old` in `contents`;
-/// for a Write (or anything not found), line 1.
+/// the change detail. The chronology records changes that were already applied,
+/// so the file holds the NEW text — locate the first non-blank line of `new` in
+/// `contents`; for a Write (or anything not found), line 1.
 pub fn resolve_line(contents: &str, detail: &ChangeDetail) -> u32 {
     let needle = match detail {
-        ChangeDetail::Edit { old, .. } => old.lines().find(|l| !l.trim().is_empty()),
+        ChangeDetail::Edit { new, .. } => new.lines().find(|l| !l.trim().is_empty()),
         _ => None,
     };
     let Some(needle) = needle else { return 1 };
@@ -317,8 +318,10 @@ mod line_tests {
     use super::*;
 
     #[test]
-    fn finds_line_of_old_string_first_line() {
-        let file = "fn a() {}\nfn b() {}\nfn c() {}\n";
+    fn finds_line_of_new_string_first_line() {
+        // The edit was already applied, so the file holds the NEW text and the
+        // `old` string is gone. resolve_line must locate the NEW line.
+        let file = "fn a() {}\nfn b2() {}\nfn c() {}\n";
         let detail = ChangeDetail::Edit {
             old: "fn b() {}".into(),
             new: "fn b2() {}".into(),
@@ -335,10 +338,10 @@ mod line_tests {
     }
 
     #[test]
-    fn missing_old_string_falls_back_to_line_one() {
+    fn missing_new_string_falls_back_to_line_one() {
         let detail = ChangeDetail::Edit {
-            old: "nonexistent".into(),
-            new: "x".into(),
+            old: "x".into(),
+            new: "nonexistent".into(),
         };
         assert_eq!(resolve_line("fn a() {}\n", &detail), 1);
     }

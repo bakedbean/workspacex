@@ -550,7 +550,7 @@ Known keys:
 | `process_doctrine`       | Standing "operating doctrine" injected into every developer session (new and resumed) across all agents: think and plan before scope is set, use the superpowers skills by default (Claude/Pi only), break work into logical commits, and load the wsx skill. Not applied to the Project Manager session. Set this to replace the default text verbatim (`@file` supported); set it to `off` / `none` / `disabled` to suppress injection entirely. A blank value restores the default (it is not an off switch). |
 | `coding_agent`           | Default coding agent for new workspaces _and_ the Project Manager pane: `claude` (default) / `pi` / `hermes` / `codex`. Per-workspace override via `wsx workspace create <repo> --agent <agent>` (does not affect the PM). See [Coding agents](#coding-agents).                                                                                                                                                                                                                                                  |
 | `nerd_fonts`             | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable.                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `editor_cmd`             | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`.                                                                                                                                                                                                                                                                         |
+| `editor_cmd`             | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`. Also required for the chronology bar's "open at changed line" action; see [Change chronology](#change-chronology) for the `{file}`/`{line}` injection details.                                                                                                          |
 | `terminal_cmd`           | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`.                                                                                                                                                                                                                                                                                                                                       |
 | `notifications`          | Ring the terminal bell and show a `!` marker when a workspace transitions to `waiting` (claude paused for ≥30s). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                     |
 | `theme`                  | Color theme. One of `default` (palette-adaptive ANSI), `dracula` (RGB), `jellybeans` (RGB), `nord` (RGB). Unknown values fall back to `default`. Restart wsx after changing.                                                                                                                                                                                                                                                                                                                                     |
@@ -634,7 +634,32 @@ While the bar is focused, keystrokes are captured by the bar and do **not** reac
 
 Mouse wheel over the bar scrolls it. Click an entry to focus the bar, select the entry, and expand its diff peek. Click the expanded diff peek to open your editor at the changed line.
 
-The click-to-open jump requires `editor_cmd` to be configured (see [Editor, terminal, and diff integration](#editor-terminal-and-diff-integration)). If your command contains `{file}` and `{line}` placeholders they are substituted in place. For recognized editors without explicit placeholders, wsx falls back to goto syntax: `code --goto file:line` for VS Code and Cursor; `+line file` for Vim/Neovim/Vi and Emacs/Emacsclient.
+#### Opening a file at the changed line
+
+Both the keyboard path (`Enter` while the diff peek detail is focused) and the mouse path (click the expanded diff peek) open the file in your editor, jumping directly to the modified line.
+
+**`editor_cmd` is required for this action.** If `editor_cmd` is unset, wsx shows a dismissible prompt telling you to configure it. There is no silent fallback to `$VISUAL` or `$EDITOR` for this specific action — those env-var fallbacks still apply to the separate `[e]` / `Ctrl-x e` "open workspace in editor" actions, which are unchanged.
+
+**File and line injection.** When `editor_cmd` is set, wsx injects the file path and line number at runtime using one of two strategies:
+
+- **Placeholders**: if your command contains `{file}` and/or `{line}`, they are substituted in place. Use this for editors wsx doesn't recognize or when you need exact control over argument order.
+- **Auto-detection**: if no placeholders are present, wsx scans the command for a known editor name and appends the appropriate goto arguments:
+  - `code`, `codium`, `cursor`, `zed` → `--goto <file>:<line>`
+  - `vim`, `nvim`, `vi`, `nano`, `emacs`, `emacsclient` → `+<line> <file>`
+
+Detection matches the editor name **anywhere** in the command, so a terminal wrapper works transparently. For example, `alacritty -e nvim` is detected as nvim and becomes `alacritty -e nvim +<line> <file>`, opening the file at the changed line in a new terminal window.
+
+```bash
+wsx config set editor_cmd 'alacritty -e nvim'
+```
+
+For an editor wsx doesn't recognize, add `{file}` and `{line}` placeholders to control the exact syntax:
+
+```bash
+wsx config set editor_cmd 'myed --line {line} {file}'
+```
+
+**Error visibility.** If the editor fails to launch, wsx surfaces the error in a dismissible prompt — failures are no longer silent.
 
 #### Schema and defaults
 

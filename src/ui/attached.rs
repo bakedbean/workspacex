@@ -337,12 +337,19 @@ fn render_chronology_bar(
         } else {
             EntryHighlight::None
         };
+        // Number the detail peek from the change's resolved line. Only the
+        // expanded entry shows a peek, so only it needs the (file-reading) lookup.
+        let base_line = if expanded {
+            crate::activity::chronology::resolve_line_in_file(&ev.file_path, &ev.detail)
+        } else {
+            1
+        };
         let lines = crate::ui::chronology_bar::entry_lines(
             ev,
             draw.worktree,
             expanded,
             inner_width,
-            1,
+            base_line,
             highlight,
         );
         let available = body_bottom.saturating_sub(cursor_y);

@@ -24,6 +24,55 @@ pub fn should_auto_hide(area_cols: u16, bar_cols: u16) -> bool {
     area_cols.saturating_sub(bar_cols) < MIN_AGENT_COLS
 }
 
+/// Front-truncate `s` to `max` columns with a leading `…` so the tail (the
+/// filename) stays visible. Counts characters, not bytes.
+fn ellipsize_start(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let tail: String = s.chars().skip(n - (max - 1)).collect();
+    format!("…{tail}")
+}
+
+/// Fit a worktree-relative path into `max` columns. If it already fits, return
+/// it unchanged. Otherwise abbreviate each ancestor directory (everything
+/// before the parent directory) to its first character, keeping the parent
+/// directory and filename intact (e.g. `docs/superpowers/specs/foo.md` →
+/// `d/s/specs/foo.md`). If still too wide, front-truncate with `…`.
+fn abbreviate_path(rel: &str, max: usize) -> String {
+    if rel.chars().count() <= max {
+        return rel.to_string();
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    if parts.len() > 2 {
+        let last = parts.len() - 1;
+        let mut out = String::new();
+        for (i, p) in parts.iter().enumerate() {
+            if i > 0 {
+                out.push('/');
+            }
+            // Ancestors (everything before the parent dir) collapse to their
+            // first character; the parent dir and filename are kept whole.
+            if i + 2 <= last {
+                if let Some(c) = p.chars().next() {
+                    out.push(c);
+                }
+            } else {
+                out.push_str(p);
+            }
+        }
+        if out.chars().count() <= max {
+            return out;
+        }
+        return ellipsize_start(&out, max);
+    }
+    ellipsize_start(rel, max)
+}
+
 fn hhmm(timestamp_ms: i64) -> String {
     // Wall-clock HH:MM (UTC) derived from epoch ms without pulling in chrono —
     // a relative glance, not a precise local timestamp. Matches the
@@ -43,8 +92,9 @@ pub enum EntryHighlight {
     Detail,
 }
 
-/// Render one entry into lines. Line 1: `HH:MM file`. Line 2: dim summary.
-/// When `expanded`, appends up to a few diff-peek lines from `detail`.
+/// Render one entry into lines. Line 1: `HH:MM <path>`, where the path is
+/// abbreviated (ancestor dirs collapsed to their first letter) to fit the
+/// width. When `expanded`, appends up to a few diff-peek lines from `detail`.
 pub fn entry_lines(
     ev: &ChangeEvent,
     worktree: &Path,
@@ -54,18 +104,18 @@ pub fn entry_lines(
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let rel = relative_display(&ev.file_path, worktree);
+    // The header is `HH:MM ` (6 cols) followed by the path; budget the path to
+    // the remaining width so long paths abbreviate instead of overflowing.
+    let path_budget = (width as usize).saturating_sub(6);
+    let path = abbreviate_path(&rel, path_budget);
     out.push(Line::from(vec![
         Span::styled(
             hhmm(ev.timestamp_ms),
             Style::default().add_modifier(Modifier::DIM),
         ),
         Span::raw(" "),
-        Span::raw(rel),
+        Span::raw(path),
     ]));
-    out.push(Line::from(Span::styled(
-        ev.summary.clone(),
-        Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC),
-    )));
     if expanded {
         let peek: Vec<String> = match &ev.detail {
             ChangeDetail::Edit { old, new } => {
@@ -101,8 +151,8 @@ pub fn entry_lines(
             }
         }
         EntryHighlight::Detail => {
-            // peek lines are everything after the header (0) and summary (1)
-            for line in out.iter_mut().skip(2) {
+            // peek lines are everything after the header (index 0)
+            for line in out.iter_mut().skip(1) {
                 for s in &mut line.spans {
                     s.style = s.style.add_modifier(Modifier::REVERSED);
                 }
@@ -150,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn entry_produces_header_and_summary_lines() {
+    fn collapsed_entry_is_a_single_header_line() {
         let lines = entry_lines(
             &ev("/wt/src/main.rs", "fn foo()"),
             Path::new("/wt"),
@@ -158,7 +208,11 @@ mod tests {
             40,
             EntryHighlight::None,
         );
-        assert_eq!(lines.len(), 2, "B fidelity: header + summary, no diff peek");
+        assert_eq!(
+            lines.len(),
+            1,
+            "collapsed: just the time+path header (no summary)"
+        );
     }
 
     #[test]
@@ -170,7 +224,39 @@ mod tests {
             40,
             EntryHighlight::None,
         );
-        assert!(lines.len() > 2, "expanded entry includes diff peek");
+        assert!(
+            lines.len() > 1,
+            "expanded entry is the header plus diff-peek lines"
+        );
+    }
+
+    #[test]
+    fn abbreviate_keeps_short_paths_whole() {
+        assert_eq!(abbreviate_path("src/main.rs", 40), "src/main.rs");
+    }
+
+    #[test]
+    fn abbreviate_collapses_ancestors_keeping_parent_and_file() {
+        // 32 cols doesn't fit in 30 → ancestors (src, ui) collapse to first
+        // char; the parent dir (widgets) and filename are kept whole.
+        let out = abbreviate_path("src/ui/widgets/chronology_bar.rs", 30);
+        assert_eq!(out, "s/u/widgets/chronology_bar.rs");
+    }
+
+    #[test]
+    fn abbreviate_front_truncates_when_still_too_long() {
+        let out = abbreviate_path("docs/superpowers/specs/2026-06-05-foo.md", 15);
+        assert!(out.chars().count() <= 15, "fits within max");
+        assert!(out.starts_with('…'), "front-truncated");
+        assert!(out.ends_with("foo.md"), "filename tail preserved");
+    }
+
+    #[test]
+    fn abbreviate_parent_and_file_only_front_truncates() {
+        // No ancestors to collapse → falls back to front-truncation.
+        let out = abbreviate_path("widgets/chronology_bar.rs", 12);
+        assert!(out.chars().count() <= 12);
+        assert!(out.ends_with(".rs"));
     }
 
     #[test]
@@ -205,7 +291,7 @@ mod tests {
                 .any(|s| s.style.add_modifier.contains(Modifier::REVERSED)),
             "header must NOT be highlighted in Detail mode"
         );
-        let peek_rev = lines.iter().skip(2).any(|l| {
+        let peek_rev = lines.iter().skip(1).any(|l| {
             l.spans
                 .iter()
                 .any(|s| s.style.add_modifier.contains(Modifier::REVERSED))

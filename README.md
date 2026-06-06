@@ -611,7 +611,7 @@ The rename only fires on workspaces whose name still matches the generated `<adj
 
 When an agent is actively editing files, it's easy to lose track of what changed, where, and when — especially across a long session with many small edits. The change chronology bar is a toggleable vertical panel docked to the side of the **attached** view that rebuilds your spatial and temporal memory of what the agent touched.
 
-The bar shows a newest-first, time-ordered list of individual file edits the agent made — one entry per change, not per commit. Each entry shows the time, filename, and a one-line summary of the edit.
+The bar shows a newest-first, time-ordered list of individual file edits the agent made — one entry per change, not per commit. Each entry is a single line: the time and the file path. Long paths are abbreviated by collapsing the ancestor directories to their first letter, keeping the parent directory and filename readable (e.g. `docs/superpowers/specs/2026-06-05-foo.md` shows as `d/s/specs/2026-06-05-foo.md`). Expand an entry to see a short diff peek of the change.
 
 Currently the chronology is reconstructed from Claude Code's on-disk session logs. Support for other agents is added incrementally as those log formats are covered.
 

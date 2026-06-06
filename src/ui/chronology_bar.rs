@@ -385,20 +385,9 @@ mod tests {
         };
         let lines = entry_lines(&ev, Path::new("/wt"), true, 60, 1, EntryHighlight::None);
         let texts: Vec<String> = lines.iter().map(line_text).collect();
-        assert!(
-            texts[1].contains("1") && texts[1].contains("+ l1"),
-            "{:?}",
-            texts[1]
-        );
-        assert!(
-            texts[2].contains("2") && texts[2].contains("+ l2"),
-            "{:?}",
-            texts[2]
-        );
-        assert!(
-            texts[3].contains("3") && texts[3].contains("+ l3"),
-            "{:?}",
-            texts[3]
-        );
+        // Assert the full gutter so a missing number can't pass via "l1" etc.
+        assert_eq!(texts[1], "   1 + l1", "{:?}", texts[1]);
+        assert_eq!(texts[2], "   2 + l2", "{:?}", texts[2]);
+        assert_eq!(texts[3], "   3 + l3", "{:?}", texts[3]);
     }
 }

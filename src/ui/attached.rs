@@ -342,6 +342,7 @@ fn render_chronology_bar(
             draw.worktree,
             expanded,
             inner_width,
+            1,
             highlight,
         );
         let available = body_bottom.saturating_sub(cursor_y);

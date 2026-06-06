@@ -94,12 +94,16 @@ pub enum EntryHighlight {
 
 /// Render one entry into lines. Line 1: `HH:MM <path>`, where the path is
 /// abbreviated (ancestor dirs collapsed to their first letter) to fit the
-/// width. When `expanded`, appends up to a few diff-peek lines from `detail`.
+/// width. When `expanded`, appends up to a few diff-peek lines from `detail`,
+/// each prefixed with a 4-wide line-number gutter: added (`+`) lines are
+/// numbered from `base_line`, removed (`-`) lines have a 5-space blank gutter
+/// so columns align.
 pub fn entry_lines(
     ev: &ChangeEvent,
     worktree: &Path,
     expanded: bool,
     width: u16,
+    base_line: u32,
     highlight: EntryHighlight,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
@@ -117,24 +121,33 @@ pub fn entry_lines(
         Span::raw(path),
     ]));
     if expanded {
-        let peek: Vec<String> = match &ev.detail {
+        // (line number, marker, text). `+` (added) lines carry a current-file
+        // line number starting at base_line; `-` (removed) lines have none.
+        let mut peek: Vec<(Option<u32>, char, String)> = Vec::new();
+        match &ev.detail {
             ChangeDetail::Edit { old, new } => {
-                let mut v = Vec::new();
                 for l in old.lines().take(2) {
-                    v.push(format!("- {l}"));
+                    peek.push((None, '-', l.to_string()));
                 }
-                for l in new.lines().take(2) {
-                    v.push(format!("+ {l}"));
+                for (k, l) in new.lines().take(2).enumerate() {
+                    peek.push((Some(base_line.saturating_add(k as u32)), '+', l.to_string()));
                 }
-                v
             }
             ChangeDetail::Write { head } => {
-                head.lines().take(3).map(|l| format!("+ {l}")).collect()
+                for (k, l) in head.lines().take(3).enumerate() {
+                    peek.push((Some(base_line.saturating_add(k as u32)), '+', l.to_string()));
+                }
             }
-            ChangeDetail::None => Vec::new(),
-        };
-        for l in peek {
-            let clipped: String = l.chars().take(width as usize).collect();
+            ChangeDetail::None => {}
+        }
+        for (gutter, marker, text) in peek {
+            // 4-col right-aligned number + a space, then marker + text. Removed
+            // lines use a 5-space blank gutter so the columns line up.
+            let line = match gutter {
+                Some(n) => format!("{n:>4} {marker} {text}"),
+                None => format!("     {marker} {text}"),
+            };
+            let clipped: String = line.chars().take(width as usize).collect();
             out.push(Line::from(Span::styled(
                 clipped,
                 Style::default().add_modifier(Modifier::DIM),
@@ -206,6 +219,7 @@ mod tests {
             Path::new("/wt"),
             false,
             40,
+            1,
             EntryHighlight::None,
         );
         assert_eq!(
@@ -222,6 +236,7 @@ mod tests {
             Path::new("/wt"),
             true,
             40,
+            1,
             EntryHighlight::None,
         );
         assert!(
@@ -266,6 +281,7 @@ mod tests {
             Path::new("/wt"),
             true,
             40,
+            1,
             EntryHighlight::Header,
         );
         let has_rev = lines[0]
@@ -282,6 +298,7 @@ mod tests {
             Path::new("/wt"),
             true,
             40,
+            1,
             EntryHighlight::Detail,
         );
         assert!(
@@ -306,6 +323,7 @@ mod tests {
             Path::new("/wt"),
             false,
             40,
+            1,
             EntryHighlight::None,
         );
         assert!(
@@ -314,6 +332,73 @@ mod tests {
                 .iter()
                 .any(|s| s.style.add_modifier.contains(Modifier::REVERSED))),
             "no highlight expected"
+        );
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn peek_numbers_added_lines_and_blanks_removed_gutter() {
+        let ev = ChangeEvent {
+            timestamp_ms: 0,
+            tool: ChangeTool::Edit,
+            file_path: PathBuf::from("/wt/a.rs"),
+            summary: String::new(),
+            detail: ChangeDetail::Edit {
+                old: "old0\nold1".into(),
+                new: "new0\nnew1".into(),
+            },
+        };
+        let lines = entry_lines(&ev, Path::new("/wt"), true, 60, 42, EntryHighlight::None);
+        let texts: Vec<String> = lines.iter().map(line_text).collect();
+        // out[0] header; out[1..3] removed (blank gutter); out[3..5] added (42, 43)
+        assert!(
+            texts[1].starts_with("     -"),
+            "removed gutter blank: {:?}",
+            texts[1]
+        );
+        assert!(texts[2].starts_with("     -"), "{:?}", texts[2]);
+        assert!(
+            texts[3].contains("42") && texts[3].contains("+ new0"),
+            "{:?}",
+            texts[3]
+        );
+        assert!(
+            texts[4].contains("43") && texts[4].contains("+ new1"),
+            "{:?}",
+            texts[4]
+        );
+    }
+
+    #[test]
+    fn write_peek_numbers_from_base_line() {
+        let ev = ChangeEvent {
+            timestamp_ms: 0,
+            tool: ChangeTool::Write,
+            file_path: PathBuf::from("/wt/a.rs"),
+            summary: String::new(),
+            detail: ChangeDetail::Write {
+                head: "l1\nl2\nl3".into(),
+            },
+        };
+        let lines = entry_lines(&ev, Path::new("/wt"), true, 60, 1, EntryHighlight::None);
+        let texts: Vec<String> = lines.iter().map(line_text).collect();
+        assert!(
+            texts[1].contains("1") && texts[1].contains("+ l1"),
+            "{:?}",
+            texts[1]
+        );
+        assert!(
+            texts[2].contains("2") && texts[2].contains("+ l2"),
+            "{:?}",
+            texts[2]
+        );
+        assert!(
+            texts[3].contains("3") && texts[3].contains("+ l3"),
+            "{:?}",
+            texts[3]
         );
     }
 }

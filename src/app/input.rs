@@ -288,44 +288,36 @@ fn focused_attached_workspace(
     Some((ws_id, worktree))
 }
 
-/// Open the chronology entry at `idx` in the user's configured editor at the
-/// changed line. Requires `editor_cmd` (no `$EDITOR` fallback for this path):
-/// surfaces a `Modal::Error` when it's unset or when the spawn fails.
-fn open_focused_change(app: &mut App, idx: usize) {
-    use crate::commands::external::{EditorOpenDecision, editor_open_decision};
-    // Clone the path + detail out of the chronology borrow before touching
-    // app.store / app.modal.
-    let Some((worktree, file, detail)) =
-        focused_attached_workspace(app).and_then(|(ws_id, worktree)| {
-            app.chronology.get(&ws_id).and_then(|t| {
-                t.events()
-                    .get(idx)
-                    .map(|ev| (worktree, ev.file_path.clone(), ev.detail.clone()))
-            })
-        })
+/// Open the chronology entry at `idx` in the full-change detail modal.
+fn open_change_modal(app: &mut App, idx: usize) {
+    let Some((ws_id, worktree)) = focused_attached_workspace(app) else {
+        return;
+    };
+    let Some(ev) = app
+        .chronology
+        .get(&ws_id)
+        .and_then(|t| t.events().get(idx).cloned())
     else {
         return;
     };
-    let editor_cmd = app.store.get_setting("editor_cmd").ok().flatten();
-    match editor_open_decision(editor_cmd.as_deref()) {
-        EditorOpenDecision::NeedsConfig => {
-            app.modal = Some(crate::ui::modal::Modal::Error {
-                message: "No editor_cmd configured. Set one to open changes in your \
-                          editor, e.g.\n  wsx config set editor_cmd 'alacritty -e nvim'"
-                    .to_string(),
-            });
-        }
-        EditorOpenDecision::Launch(cmd) => {
-            let line = crate::activity::chronology::resolve_line_in_file(&file, &detail);
-            if let Err(e) =
-                crate::commands::external::open_in_editor_at(&worktree, &file, line, Some(&cmd))
-            {
-                app.modal = Some(crate::ui::modal::Modal::Error {
-                    message: format!("Failed to open editor: {e}"),
-                });
-            }
-        }
-    }
+    let detail =
+        crate::activity::chronology::load_full_change(&ev).unwrap_or_else(|| ev.detail.clone());
+    let line = crate::activity::chronology::resolve_line_in_file(&ev.file_path, &detail);
+    let lines = crate::ui::chronology_bar::change_detail_lines(&detail, line);
+    let rel = crate::ui::chronology_bar::relative_display(&ev.file_path, &worktree);
+    let title = format!(
+        "{} {}",
+        crate::ui::chronology_bar::hhmm(ev.timestamp_ms),
+        rel
+    );
+    app.modal = Some(crate::ui::modal::Modal::ChangeDetail {
+        title,
+        lines,
+        scroll: 0,
+        worktree,
+        file: ev.file_path.clone(),
+        line,
+    });
 }
 
 /// Open `file` at `line` using the configured editor, surfacing a Modal::Error
@@ -920,7 +912,7 @@ async fn handle_key_attached(
                     };
                     if !moved {
                         app.chronology_focused = true;
-                        app.chronology_sel = crate::ui::chronology_nav::ChronoSel::Entry(0);
+                        app.chronology_sel = 0;
                         app.chronology_scroll = 0;
                     }
                     return Ok(());
@@ -1083,14 +1075,12 @@ async fn handle_key_attached(
                 .and_then(|(id, _)| app.chronology.get(&id))
                 .map(|t| t.events().len())
                 .unwrap_or(0);
-            let (new_sel, action) = nav(app.chronology_sel, navkey, app.chronology_expanded, len);
+            let (new_sel, action) = nav(app.chronology_sel, navkey, len);
             app.chronology_sel = new_sel;
             match action {
                 NavAction::None => {}
-                NavAction::Expand(i) => app.chronology_expanded = Some(i),
-                NavAction::Collapse(_) => app.chronology_expanded = None,
                 NavAction::Exit => app.chronology_focused = false,
-                NavAction::Open(i) => open_focused_change(app, i),
+                NavAction::Open(i) => open_change_modal(app, i),
             }
         }
         // While focused, swallow ALL keys — the agent PTY must not receive them.
@@ -2059,29 +2049,18 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
 
-            // Chronology detail click → open the file at the line (mirrors the
-            // keyboard `Enter`-on-detail). Checked first because the detail block
-            // lies below the entry's header row.
-            if let Some((idx, _)) = app.chronology_detail_rect.filter(|(_, r)| {
-                m.column >= r.x
-                    && m.column < r.x.saturating_add(r.width)
-                    && m.row >= r.y
-                    && m.row < r.y.saturating_add(r.height)
-            }) {
-                open_focused_change(app, idx);
-                app.chronology_focused = true;
-                app.chronology_sel = crate::ui::chronology_nav::ChronoSel::Detail(idx);
-            } else if let Some(idx) = app.chronology_entry_rects.iter().find_map(|(i, r)| {
+            // Chronology entry click → focus the bar, select it, and open the
+            // full-change detail modal.
+            if let Some(idx) = app.chronology_entry_rects.iter().find_map(|(i, r)| {
                 let hit = m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)
                     && m.row >= r.y
                     && m.row < r.y.saturating_add(r.height);
                 hit.then_some(*i)
             }) {
-                // Header click → focus the bar, select + expand this entry.
                 app.chronology_focused = true;
-                app.chronology_sel = crate::ui::chronology_nav::ChronoSel::Entry(idx);
-                app.chronology_expanded = Some(idx);
+                app.chronology_sel = idx;
+                open_change_modal(app, idx);
             } else if let Some(idx) = app.chip_rects.iter().position(|r| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

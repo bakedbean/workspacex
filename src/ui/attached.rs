@@ -32,19 +32,16 @@ pub struct ChronologyDraw<'a> {
     pub events: &'a [crate::activity::chronology::ChangeEvent],
     pub worktree: &'a std::path::Path,
     pub scroll: usize,
-    pub expanded: Option<usize>,
     /// Keyboard focus is in the bar (drives the active header + selection highlight).
     pub focused: bool,
     /// In-pane cursor while focused.
-    pub sel: crate::ui::chronology_nav::ChronoSel,
+    pub sel: usize,
 }
 
 /// Mouse/scroll hit targets produced by painting the chronology bar.
 pub struct ChronologyHits {
     /// `(entry_index, header_rect)` per drawn entry.
     pub entries: Vec<(usize, Rect)>,
-    /// The expanded entry's detail block `(entry_index, rect)`, if any was drawn.
-    pub detail: Option<(usize, Rect)>,
     /// Number of entries drawn this frame (for auto-scroll).
     pub visible_entries: usize,
 }
@@ -62,8 +59,6 @@ pub struct PanesDrawOutput {
     /// `(entry_index, clickable_rect)` for each rendered chronology entry in the
     /// focused pane's bar. Empty when the bar isn't shown.
     pub chronology_entry_rects: Vec<(usize, Rect)>,
-    /// The expanded entry's detail rect (for mouse "open at line"), if shown.
-    pub chronology_detail_rect: Option<(usize, Rect)>,
     /// Entries drawn in the chronology bar this frame (for keyboard auto-scroll).
     pub chronology_visible_entries: usize,
 }
@@ -160,7 +155,6 @@ pub fn render_panes(
         Some((bar_rect, draw)) => render_chronology_bar(f, bar_rect, &draw, theme),
         None => ChronologyHits {
             entries: Vec::new(),
-            detail: None,
             visible_entries: 0,
         },
     };
@@ -199,7 +193,6 @@ pub fn render_panes(
         pane_rects,
         agent_chip_rects,
         chronology_entry_rects: chronology_hits.entries,
-        chronology_detail_rect: chronology_hits.detail,
         chronology_visible_entries: chronology_hits.visible_entries,
     }
 }
@@ -207,8 +200,8 @@ pub fn render_panes(
 /// Paint the change-chronology bar into `bar_rect` (absolute screen coords):
 /// a 1-col divider on the bar's inner edge, a `CHANGE CHRONOLOGY` header with a
 /// side indicator, then the timeline entries from `draw.scroll` down. Returns
-/// [`ChronologyHits`] with per-entry header rects, the expanded detail rect, and
-/// visible entry count — all for click hit-testing and keyboard auto-scroll.
+/// [`ChronologyHits`] with per-entry header rects and visible entry count —
+/// both for click hit-testing and keyboard auto-scroll.
 /// Entries that don't fit vertically are dropped from the end.
 fn render_chronology_bar(
     f: &mut Frame,
@@ -219,7 +212,6 @@ fn render_chronology_bar(
     if bar_rect.width == 0 || bar_rect.height == 0 {
         return ChronologyHits {
             entries: Vec::new(),
-            detail: None,
             visible_entries: 0,
         };
     }
@@ -259,7 +251,6 @@ fn render_chronology_bar(
     if content.width == 0 || content.height == 0 {
         return ChronologyHits {
             entries: Vec::new(),
-            detail: None,
             visible_entries: 0,
         };
     }
@@ -291,7 +282,6 @@ fn render_chronology_bar(
     if body_y >= body_bottom {
         return ChronologyHits {
             entries: Vec::new(),
-            detail: None,
             visible_entries: 0,
         };
     }
@@ -312,46 +302,20 @@ fn render_chronology_bar(
         );
         return ChronologyHits {
             entries: Vec::new(),
-            detail: None,
             visible_entries: 0,
         };
     }
 
-    use crate::ui::chronology_bar::EntryHighlight;
-    use crate::ui::chronology_nav::ChronoSel;
     let mut entry_rects: Vec<(usize, Rect)> = Vec::new();
-    let mut detail_rect: Option<(usize, Rect)> = None;
     let mut visible_entries = 0usize;
     let mut cursor_y = body_y;
     for (i, ev) in draw.events.iter().enumerate().skip(draw.scroll) {
         if cursor_y >= body_bottom {
             break;
         }
-        let expanded = Some(i) == draw.expanded;
-        let highlight = if draw.focused {
-            match draw.sel {
-                ChronoSel::Entry(s) if s == i => EntryHighlight::Header,
-                ChronoSel::Detail(s) if s == i => EntryHighlight::Detail,
-                _ => EntryHighlight::None,
-            }
-        } else {
-            EntryHighlight::None
-        };
-        // Number the detail peek from the change's resolved line. Only the
-        // expanded entry shows a peek, so only it needs the (file-reading) lookup.
-        let base_line = if expanded {
-            crate::activity::chronology::resolve_line_in_file(&ev.file_path, &ev.detail)
-        } else {
-            1
-        };
-        let lines = crate::ui::chronology_bar::entry_lines(
-            ev,
-            draw.worktree,
-            expanded,
-            inner_width,
-            base_line,
-            highlight,
-        );
+        let selected = draw.focused && i == draw.sel;
+        let lines =
+            crate::ui::chronology_bar::entry_lines(ev, draw.worktree, inner_width, selected);
         let available = body_bottom.saturating_sub(cursor_y);
         let drawn = (lines.len() as u16).min(available);
         if drawn == 0 {
@@ -374,24 +338,12 @@ fn render_chronology_bar(
                 height: 1,
             },
         ));
-        if expanded && drawn > 1 {
-            detail_rect = Some((
-                i,
-                Rect {
-                    x: content.x,
-                    y: cursor_y.saturating_add(1),
-                    width: inner_width,
-                    height: drawn - 1,
-                },
-            ));
-        }
         visible_entries += 1;
         cursor_y = cursor_y.saturating_add(drawn);
     }
 
     ChronologyHits {
         entries: entry_rects,
-        detail: detail_rect,
         visible_entries,
     }
 }
@@ -850,9 +802,8 @@ mod tests {
             events: &events,
             worktree: std::path::Path::new("/wt"),
             scroll: 0,
-            expanded: None,
             focused: false,
-            sel: Default::default(),
+            sel: 0,
         };
         let area = Rect {
             x: 0,
@@ -875,9 +826,8 @@ mod tests {
             events: &events,
             worktree: std::path::Path::new("/wt"),
             scroll: 0,
-            expanded: None,
             focused: false,
-            sel: Default::default(),
+            sel: 0,
         };
         let area = Rect {
             x: 0,

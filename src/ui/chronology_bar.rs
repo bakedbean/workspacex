@@ -73,7 +73,7 @@ fn abbreviate_path(rel: &str, max: usize) -> String {
     ellipsize_start(rel, max)
 }
 
-fn hhmm(timestamp_ms: i64) -> String {
+pub fn hhmm(timestamp_ms: i64) -> String {
     // Wall-clock HH:MM (UTC) derived from epoch ms without pulling in chrono —
     // a relative glance, not a precise local timestamp. Matches the
     // chrono-free style of activity/events.rs.
@@ -83,96 +83,31 @@ fn hhmm(timestamp_ms: i64) -> String {
     format!("{h:02}:{m:02}")
 }
 
-/// Which part of an entry is keyboard-selected (for highlight). `None` when the
-/// entry isn't the cursor target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntryHighlight {
-    None,
-    Header,
-    Detail,
-}
-
-/// Render one entry into lines. Line 1: `HH:MM <path>`, where the path is
-/// abbreviated (ancestor dirs collapsed to their first letter) to fit the
-/// width. When `expanded`, appends up to a few diff-peek lines from `detail`,
-/// each prefixed with a 4-wide line-number gutter: added (`+`) lines are
-/// numbered from `base_line`, removed (`-`) lines have a 5-space blank gutter
-/// so columns align.
+/// One bar row: `HH:MM <abbreviated path>`, reversed when `selected`.
 pub fn entry_lines(
     ev: &ChangeEvent,
     worktree: &Path,
-    expanded: bool,
     width: u16,
-    base_line: u32,
-    highlight: EntryHighlight,
+    selected: bool,
 ) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
     let rel = relative_display(&ev.file_path, worktree);
-    // The header is `HH:MM ` (6 cols) followed by the path; budget the path to
-    // the remaining width so long paths abbreviate instead of overflowing.
     let path_budget = (width as usize).saturating_sub(6);
     let path = abbreviate_path(&rel, path_budget);
-    out.push(Line::from(vec![
-        Span::styled(
-            hhmm(ev.timestamp_ms),
-            Style::default().add_modifier(Modifier::DIM),
-        ),
-        Span::raw(" "),
-        Span::raw(path),
-    ]));
-    if expanded {
-        // (line number, marker, text). `+` (added) lines carry a current-file
-        // line number starting at base_line; `-` (removed) lines have none.
-        let mut peek: Vec<(Option<u32>, char, String)> = Vec::new();
-        match &ev.detail {
-            ChangeDetail::Edit { old, new } => {
-                for l in old.lines().take(2) {
-                    peek.push((None, '-', l.to_string()));
-                }
-                for (k, l) in new.lines().take(2).enumerate() {
-                    peek.push((Some(base_line.saturating_add(k as u32)), '+', l.to_string()));
-                }
-            }
-            ChangeDetail::Write { head } => {
-                for (k, l) in head.lines().take(3).enumerate() {
-                    peek.push((Some(base_line.saturating_add(k as u32)), '+', l.to_string()));
-                }
-            }
-            ChangeDetail::None => {}
-        }
-        for (gutter, marker, text) in peek {
-            // 4-col right-aligned number + a space, then marker + text. Removed
-            // lines use a 5-space blank gutter so the columns line up.
-            let line = match gutter {
-                Some(n) => format!("{n:>4} {marker} {text}"),
-                None => format!("     {marker} {text}"),
-            };
-            let clipped: String = line.chars().take(width as usize).collect();
-            out.push(Line::from(Span::styled(
-                clipped,
-                Style::default().add_modifier(Modifier::DIM),
-            )));
-        }
-    }
-    match highlight {
-        EntryHighlight::None => {}
-        EntryHighlight::Header => {
-            if let Some(first) = out.first_mut() {
-                for s in &mut first.spans {
-                    s.style = s.style.add_modifier(Modifier::REVERSED);
-                }
-            }
-        }
-        EntryHighlight::Detail => {
-            // peek lines are everything after the header (index 0)
-            for line in out.iter_mut().skip(1) {
-                for s in &mut line.spans {
-                    s.style = s.style.add_modifier(Modifier::REVERSED);
-                }
-            }
-        }
-    }
-    out
+    let style = if selected {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+    let time_style = if selected {
+        Style::default().add_modifier(Modifier::REVERSED | Modifier::DIM)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    vec![Line::from(vec![
+        Span::styled(hhmm(ev.timestamp_ms), time_style),
+        Span::styled(" ", style),
+        Span::styled(path, style),
+    ])]
 }
 
 /// Full change as gutter-formatted display strings (no line cap — the modal
@@ -240,35 +175,30 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_entry_is_a_single_header_line() {
+    fn entry_is_a_single_header_line() {
         let lines = entry_lines(
             &ev("/wt/src/main.rs", "fn foo()"),
             Path::new("/wt"),
-            false,
             40,
-            1,
-            EntryHighlight::None,
+            false,
         );
-        assert_eq!(
-            lines.len(),
-            1,
-            "collapsed: just the time+path header (no summary)"
-        );
+        assert_eq!(lines.len(), 1, "one row: the time+path header");
     }
 
     #[test]
-    fn expanded_entry_adds_diff_peek_lines() {
+    fn selected_entry_reverses_its_spans() {
         let lines = entry_lines(
             &ev("/wt/src/main.rs", "fn foo()"),
             Path::new("/wt"),
-            true,
             40,
-            1,
-            EntryHighlight::None,
+            true,
         );
         assert!(
-            lines.len() > 1,
-            "expanded entry is the header plus diff-peek lines"
+            lines[0]
+                .spans
+                .iter()
+                .all(|s| s.style.add_modifier.contains(Modifier::REVERSED)),
+            "selected row should be fully reversed"
         );
     }
 
@@ -302,105 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn header_highlight_reverses_first_line() {
-        let lines = entry_lines(
-            &ev("/wt/a.rs", "fn foo()"),
-            Path::new("/wt"),
-            true,
-            40,
-            1,
-            EntryHighlight::Header,
-        );
-        let has_rev = lines[0]
-            .spans
-            .iter()
-            .any(|s| s.style.add_modifier.contains(Modifier::REVERSED));
-        assert!(has_rev, "header line should be highlighted");
-    }
-
-    #[test]
-    fn detail_highlight_reverses_peek_lines_only() {
-        let lines = entry_lines(
-            &ev("/wt/a.rs", "fn foo()"),
-            Path::new("/wt"),
-            true,
-            40,
-            1,
-            EntryHighlight::Detail,
-        );
-        assert!(
-            !lines[0]
-                .spans
-                .iter()
-                .any(|s| s.style.add_modifier.contains(Modifier::REVERSED)),
-            "header must NOT be highlighted in Detail mode"
-        );
-        let peek_rev = lines.iter().skip(1).any(|l| {
-            l.spans
-                .iter()
-                .any(|s| s.style.add_modifier.contains(Modifier::REVERSED))
-        });
-        assert!(peek_rev, "detail peek should be highlighted");
-    }
-
-    #[test]
-    fn no_highlight_leaves_lines_unreversed() {
-        let lines = entry_lines(
-            &ev("/wt/a.rs", "fn foo()"),
-            Path::new("/wt"),
-            false,
-            40,
-            1,
-            EntryHighlight::None,
-        );
-        assert!(
-            !lines.iter().any(|l| l
-                .spans
-                .iter()
-                .any(|s| s.style.add_modifier.contains(Modifier::REVERSED))),
-            "no highlight expected"
-        );
-    }
-
-    fn line_text(line: &Line<'_>) -> String {
-        line.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    #[test]
-    fn peek_numbers_added_lines_and_blanks_removed_gutter() {
-        let ev = ChangeEvent {
-            timestamp_ms: 0,
-            tool: ChangeTool::Edit,
-            file_path: PathBuf::from("/wt/a.rs"),
-            summary: String::new(),
-            detail: ChangeDetail::Edit {
-                old: "old0\nold1".into(),
-                new: "new0\nnew1".into(),
-            },
-            source: ChangeSource::default(),
-        };
-        let lines = entry_lines(&ev, Path::new("/wt"), true, 60, 42, EntryHighlight::None);
-        let texts: Vec<String> = lines.iter().map(line_text).collect();
-        // out[0] header; out[1..3] removed (blank gutter); out[3..5] added (42, 43)
-        assert!(
-            texts[1].starts_with("     -"),
-            "removed gutter blank: {:?}",
-            texts[1]
-        );
-        assert!(texts[2].starts_with("     -"), "{:?}", texts[2]);
-        assert!(
-            texts[3].contains("42") && texts[3].contains("+ new0"),
-            "{:?}",
-            texts[3]
-        );
-        assert!(
-            texts[4].contains("43") && texts[4].contains("+ new1"),
-            "{:?}",
-            texts[4]
-        );
-    }
-
-    #[test]
     fn change_detail_lines_edit_full_no_cap() {
         let detail = ChangeDetail::Edit {
             old: "o1\no2\no3".into(),
@@ -425,25 +256,5 @@ mod tests {
     #[test]
     fn change_detail_lines_none_is_empty() {
         assert!(change_detail_lines(&ChangeDetail::None, 1).is_empty());
-    }
-
-    #[test]
-    fn write_peek_numbers_from_base_line() {
-        let ev = ChangeEvent {
-            timestamp_ms: 0,
-            tool: ChangeTool::Write,
-            file_path: PathBuf::from("/wt/a.rs"),
-            summary: String::new(),
-            detail: ChangeDetail::Write {
-                head: "l1\nl2\nl3".into(),
-            },
-            source: ChangeSource::default(),
-        };
-        let lines = entry_lines(&ev, Path::new("/wt"), true, 60, 1, EntryHighlight::None);
-        let texts: Vec<String> = lines.iter().map(line_text).collect();
-        // Assert the full gutter so a missing number can't pass via "l1" etc.
-        assert_eq!(texts[1], "   1 + l1", "{:?}", texts[1]);
-        assert_eq!(texts[2], "   2 + l2", "{:?}", texts[2]);
-        assert_eq!(texts[3], "   3 + l3", "{:?}", texts[3]);
     }
 }

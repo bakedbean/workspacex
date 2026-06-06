@@ -175,6 +175,32 @@ pub fn entry_lines(
     out
 }
 
+/// Full change as gutter-formatted display strings (no line cap — the modal
+/// scrolls). Removed (`-`) lines get a 5-space blank gutter; added (`+`) lines
+/// are numbered from `base_line` (4-wide right-aligned).
+pub fn change_detail_lines(detail: &ChangeDetail, base_line: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    match detail {
+        ChangeDetail::Edit { old, new } => {
+            for l in old.lines() {
+                out.push(format!("     - {l}"));
+            }
+            for (k, l) in new.lines().enumerate() {
+                let n = base_line.saturating_add(k as u32);
+                out.push(format!("{n:>4} + {l}"));
+            }
+        }
+        ChangeDetail::Write { head } => {
+            for (k, l) in head.lines().enumerate() {
+                let n = base_line.saturating_add(k as u32);
+                out.push(format!("{n:>4} + {l}"));
+            }
+        }
+        ChangeDetail::None => {}
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,6 +398,33 @@ mod tests {
             "{:?}",
             texts[4]
         );
+    }
+
+    #[test]
+    fn change_detail_lines_edit_full_no_cap() {
+        let detail = ChangeDetail::Edit {
+            old: "o1\no2\no3".into(),
+            new: "n1\nn2\nn3".into(),
+        };
+        let lines = change_detail_lines(&detail, 10);
+        assert_eq!(lines.len(), 6, "all 3 old + 3 new, no take(2) cap");
+        assert!(lines[0].starts_with("     - o1"), "{:?}", lines[0]);
+        assert_eq!(lines[3], "  10 + n1");
+        assert_eq!(lines[5], "  12 + n3");
+    }
+
+    #[test]
+    fn change_detail_lines_write_numbers_all() {
+        let detail = ChangeDetail::Write {
+            head: "a\nb".into(),
+        };
+        let lines = change_detail_lines(&detail, 1);
+        assert_eq!(lines, vec!["   1 + a".to_string(), "   2 + b".to_string()]);
+    }
+
+    #[test]
+    fn change_detail_lines_none_is_empty() {
+        assert!(change_detail_lines(&ChangeDetail::None, 1).is_empty());
     }
 
     #[test]

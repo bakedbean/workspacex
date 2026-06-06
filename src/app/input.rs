@@ -288,6 +288,46 @@ fn focused_attached_workspace(
     Some((ws_id, worktree))
 }
 
+/// Open the chronology entry at `idx` in the user's configured editor at the
+/// changed line. Requires `editor_cmd` (no `$EDITOR` fallback for this path):
+/// surfaces a `Modal::Error` when it's unset or when the spawn fails.
+fn open_focused_change(app: &mut App, idx: usize) {
+    use crate::commands::external::{EditorOpenDecision, editor_open_decision};
+    // Clone the path + detail out of the chronology borrow before touching
+    // app.store / app.modal.
+    let Some((worktree, file, detail)) =
+        focused_attached_workspace(app).and_then(|(ws_id, worktree)| {
+            app.chronology.get(&ws_id).and_then(|t| {
+                t.events()
+                    .get(idx)
+                    .map(|ev| (worktree, ev.file_path.clone(), ev.detail.clone()))
+            })
+        })
+    else {
+        return;
+    };
+    let editor_cmd = app.store.get_setting("editor_cmd").ok().flatten();
+    match editor_open_decision(editor_cmd.as_deref()) {
+        EditorOpenDecision::NeedsConfig => {
+            app.modal = Some(crate::ui::modal::Modal::Error {
+                message: "No editor_cmd configured. Set one to open changes in your \
+                          editor, e.g.\n  wsx config set editor_cmd 'alacritty -e nvim'"
+                    .to_string(),
+            });
+        }
+        EditorOpenDecision::Launch(cmd) => {
+            let line = crate::activity::chronology::resolve_line_in_file(&file, &detail);
+            if let Err(e) =
+                crate::commands::external::open_in_editor_at(&worktree, &file, line, Some(&cmd))
+            {
+                app.modal = Some(crate::ui::modal::Modal::Error {
+                    message: format!("Failed to open editor: {e}"),
+                });
+            }
+        }
+    }
+}
+
 /// Resolve the configured chronology side for the focused attached workspace.
 fn focused_chronology_side(app: &App) -> Option<crate::config::chronology::Side> {
     let crate::ui::View::Attached(state) = &app.view else {
@@ -1020,31 +1060,7 @@ async fn handle_key_attached(
                 NavAction::Expand(i) => app.chronology_expanded = Some(i),
                 NavAction::Collapse(_) => app.chronology_expanded = None,
                 NavAction::Exit => app.chronology_focused = false,
-                NavAction::Open(i) => {
-                    // Clone path+detail out of the chronology borrow before
-                    // touching app.store / spawning the editor.
-                    if let Some((worktree, file, detail)) = focused_attached_workspace(app)
-                        .and_then(|(ws_id, worktree)| {
-                            app.chronology.get(&ws_id).and_then(|t| {
-                                t.events()
-                                    .get(i)
-                                    .map(|ev| (worktree, ev.file_path.clone(), ev.detail.clone()))
-                            })
-                        })
-                    {
-                        let line =
-                            crate::activity::chronology::resolve_line_in_file(&file, &detail);
-                        let editor = app.store.get_setting("editor_cmd").ok().flatten();
-                        if let Err(e) = crate::commands::external::open_in_editor_at(
-                            &worktree,
-                            &file,
-                            line,
-                            editor.as_deref(),
-                        ) {
-                            tracing::warn!(error = %e, "failed to open editor from chronology keyboard");
-                        }
-                    }
-                }
+                NavAction::Open(i) => open_focused_change(app, i),
             }
         }
         // While focused, swallow ALL keys — the agent PTY must not receive them.
@@ -1914,25 +1930,7 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                     && m.row >= r.y
                     && m.row < r.y.saturating_add(r.height)
             }) {
-                let target = focused_attached_workspace(app).and_then(|(ws_id, worktree)| {
-                    app.chronology.get(&ws_id).and_then(|t| {
-                        t.events()
-                            .get(idx)
-                            .map(|ev| (worktree, ev.file_path.clone(), ev.detail.clone()))
-                    })
-                });
-                if let Some((worktree, file, detail)) = target {
-                    let line = crate::activity::chronology::resolve_line_in_file(&file, &detail);
-                    let editor = app.store.get_setting("editor_cmd").ok().flatten();
-                    if let Err(e) = crate::commands::external::open_in_editor_at(
-                        &worktree,
-                        &file,
-                        line,
-                        editor.as_deref(),
-                    ) {
-                        tracing::warn!(error = %e, "failed to open editor from chronology detail click");
-                    }
-                }
+                open_focused_change(app, idx);
                 app.chronology_focused = true;
                 app.chronology_sel = crate::ui::chronology_nav::ChronoSel::Detail(idx);
             } else if let Some(idx) = app.chronology_entry_rects.iter().find_map(|(i, r)| {

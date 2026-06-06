@@ -143,9 +143,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `↓` / `j` *(bar focused)* | Move selection down (toward older entries)                                            |
 | `g` *(bar focused)*        | Jump to the top (newest entry)                                                        |
 | `G` *(bar focused)*        | Jump to the bottom (oldest entry)                                                     |
-| `Enter` *(bar focused)*    | Toggle expand/collapse the selected entry's diff peek (press again to collapse; or, when inside a diff peek, open the file in your editor at the changed line) |
-| `↓` *(entry expanded)*     | Move focus into the diff peek detail                                                  |
-| `↑` *(inside diff peek)*   | Return focus to the entry                                                             |
+| `Enter` *(bar focused)*    | Open the full-change detail modal for the selected entry                              |
 | `Esc` *(bar focused)*      | Return focus to the agent pane                                                        |
 
 When a workspace has more than one agent, the footer also binds bare keys `q w r y i o p s h j` (no leader) to switch the focused pane between agents — see [Multi-agent workspaces](#multi-agent-workspaces).
@@ -611,7 +609,7 @@ The rename only fires on workspaces whose name still matches the generated `<adj
 
 When an agent is actively editing files, it's easy to lose track of what changed, where, and when — especially across a long session with many small edits. The change chronology bar is a toggleable vertical panel docked to the side of the **attached** view that rebuilds your spatial and temporal memory of what the agent touched.
 
-The bar shows a newest-first, time-ordered list of individual file edits the agent made — one entry per change, not per commit. Each entry is a single line: the time and the file path. Long paths are abbreviated by collapsing the ancestor directories to their first letter, keeping the parent directory and filename readable (e.g. `docs/superpowers/specs/2026-06-05-foo.md` shows as `d/s/specs/2026-06-05-foo.md`). Expand an entry to see a short diff peek of the change; the peek includes a line-number gutter — added (`+`) lines are numbered with their current file line (the same line the editor opens to), while removed (`-`) lines show a blank gutter.
+The bar shows a newest-first, time-ordered list of individual file edits the agent made — one entry per change, not per commit. Each entry is a single line: the time and the file path. Long paths are abbreviated by collapsing the ancestor directories to their first letter, keeping the parent directory and filename readable (e.g. `docs/superpowers/specs/2026-06-05-foo.md` shows as `d/s/specs/2026-06-05-foo.md`). Press `Enter` on an entry (or click it) to open the **full-change detail modal**, a scrollable overlay showing the complete diff with a line-number gutter — added (`+`) lines are numbered with their current file line (the same line the editor opens to), while removed (`-`) lines show a blank gutter.
 
 Currently the chronology is reconstructed from Claude Code's on-disk session logs. Support for other agents is added incrementally as those log formats are covered.
 
@@ -622,8 +620,16 @@ The chronology bar is a focusable pane. While attached, press `Ctrl-x` then an a
 While the bar is focused, keystrokes are captured by the bar and do **not** reach the agent:
 
 - `↑` / `k` and `↓` / `j` move the selection; `g` jumps to the top (newest), `G` to the bottom.
-- `Enter` on an entry expands its diff peek inline (press again to collapse). Press `↓` to move into the diff peek detail, then `Enter` again to open the file in your editor at the changed line. `↑` from the detail returns to the entry.
+- `Enter` on an entry opens the full-change detail modal for that entry.
 - `Esc` (or `Ctrl-x` + arrow **away** from the bar's side) returns focus to the agent pane.
+
+#### Detail modal
+
+The modal is a scrollable overlay showing the full diff of the selected change:
+
+- Scroll with `↑` / `↓`, `j` / `k`, `PgUp` / `PgDn`, `g` / `G`, or the mouse wheel.
+- Press `e` to open the file in your editor at the changed line (requires `editor_cmd` — see below).
+- Press `Esc` or click outside the modal to close it and return to the bar.
 
 #### Keybindings (attached view, under the `Ctrl-x` leader)
 
@@ -632,11 +638,11 @@ While the bar is focused, keystrokes are captured by the bar and do **not** reac
 | `Ctrl-x c` | Toggle the chronology bar on/off                |
 | `Ctrl-x C` | Swap the bar's side (left ↔ right)              |
 
-Mouse wheel over the bar scrolls it. Click an entry to focus the bar, select the entry, and expand its diff peek. Click the expanded diff peek to open your editor at the changed line.
+Mouse wheel over the bar scrolls it. Click an entry to focus the bar, select the entry, and open the detail modal.
 
 #### Opening a file at the changed line
 
-Both the keyboard path (`Enter` while the diff peek detail is focused) and the mouse path (click the expanded diff peek) open the file in your editor, jumping directly to the modified line.
+Pressing `e` inside the detail modal opens the file in your editor, jumping directly to the modified line.
 
 **`editor_cmd` is required for this action.** If `editor_cmd` is unset, wsx shows a dismissible prompt telling you to configure it. There is no silent fallback to `$VISUAL` or `$EDITOR` for this specific action — those env-var fallbacks still apply to the separate `[e]` / `Ctrl-x e` "open workspace in editor" actions, which are unchanged.
 

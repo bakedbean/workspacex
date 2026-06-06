@@ -565,6 +565,21 @@ mod tests {
     }
 
     #[test]
+    fn editor_at_unknown_wrapped_editor_appends_file_only() {
+        // No known editor token and no placeholders → append the file, line dropped.
+        let argv = resolve_editor_at_argv("myterm -e myed", "/wt/a.rs", 9).unwrap();
+        assert_eq!(argv, vec!["myterm", "-e", "myed", "/wt/a.rs"]);
+    }
+
+    #[test]
+    fn editor_at_first_known_editor_token_wins() {
+        // When more than one known editor appears, the first match decides the
+        // goto style (here `code` → --goto, even though `vim` follows).
+        let argv = resolve_editor_at_argv("code --diff vim", "/wt/a.rs", 3).unwrap();
+        assert_eq!(argv, vec!["code", "--diff", "vim", "--goto", "/wt/a.rs:3"]);
+    }
+
+    #[test]
     fn editor_decision_needs_config_when_unset_or_blank() {
         assert_eq!(editor_open_decision(None), EditorOpenDecision::NeedsConfig);
         assert_eq!(

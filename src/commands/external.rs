@@ -206,13 +206,33 @@ fn resolve_argv(
     Ok(parts)
 }
 
+/// How an editor wants a file+line on its command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GotoStyle {
+    /// VS Code family: `--goto file:line`.
+    Goto,
+    /// vi/emacs family: `+line file`.
+    PlusLine,
+}
+
+/// Map an editor program basename to its goto style, if known.
+fn known_editor_goto(basename: &str) -> Option<GotoStyle> {
+    match basename {
+        "code" | "codium" | "cursor" | "zed" => Some(GotoStyle::Goto),
+        "vim" | "nvim" | "vi" | "nano" | "emacs" | "emacsclient" => Some(GotoStyle::PlusLine),
+        _ => None,
+    }
+}
+
 /// Resolve the editor command into argv that opens `file` at `line`.
 ///
-/// If the template contains `{file}`/`{line}` placeholders, substitute them.
-/// Otherwise fall back to the goto convention of common editors detected from
-/// the program name: VS Code (`code --goto file:line`), vim/nvim/vi
-/// (`+line file`), emacs/emacsclient (`+line file`); any other editor gets the
-/// file appended with the line omitted.
+/// Resolution order:
+/// 1. If the command contains `{file}`/`{line}` placeholders, substitute them.
+/// 2. Else scan ALL tokens for the first one whose basename is a known editor
+///    and append that editor's goto syntax (so window-wrapper commands like
+///    `alacritty -e nvim` detect the inner editor and keep the line).
+/// 3. Else append the file (line dropped); the user can add `{file}`/`{line}`
+///    placeholders for an unrecognized editor.
 fn resolve_editor_at_argv(cmd: &str, file: &str, line: u32) -> Result<Vec<String>> {
     let line_s = line.to_string();
     let mut parts = shlex::split(cmd)
@@ -229,21 +249,23 @@ fn resolve_editor_at_argv(cmd: &str, file: &str, line: u32) -> Result<Vec<String
         }
         return Ok(parts);
     }
-    let prog = std::path::Path::new(&parts[0])
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(&parts[0])
-        .to_string();
-    match prog.as_str() {
-        "code" | "codium" | "cursor" => {
+    let style = parts.iter().find_map(|p| {
+        let base = std::path::Path::new(p)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(p);
+        known_editor_goto(base)
+    });
+    match style {
+        Some(GotoStyle::Goto) => {
             parts.push("--goto".to_string());
             parts.push(format!("{file}:{line_s}"));
         }
-        "vim" | "nvim" | "vi" | "emacs" | "emacsclient" => {
+        Some(GotoStyle::PlusLine) => {
             parts.push(format!("+{line_s}"));
             parts.push(file.to_string());
         }
-        _ => parts.push(file.to_string()),
+        None => parts.push(file.to_string()),
     }
     Ok(parts)
 }
@@ -493,5 +515,32 @@ mod tests {
     fn editor_at_substitutes_placeholders_in_separate_tokens() {
         let argv = resolve_editor_at_argv("nvim +{line} {file}", "/tmp/wt/a.rs", 9).unwrap();
         assert_eq!(argv, vec!["nvim", "+9", "/tmp/wt/a.rs"]);
+    }
+
+    #[test]
+    fn editor_at_wrapper_terminal_editor_keeps_line() {
+        let argv = resolve_editor_at_argv("alacritty -e nvim", "/wt/a.rs", 42).unwrap();
+        assert_eq!(argv, vec!["alacritty", "-e", "nvim", "+42", "/wt/a.rs"]);
+    }
+
+    #[test]
+    fn editor_at_wrapper_gui_editor_uses_goto() {
+        let argv = resolve_editor_at_argv("wezterm start -- code", "/wt/a.rs", 7).unwrap();
+        assert_eq!(
+            argv,
+            vec!["wezterm", "start", "--", "code", "--goto", "/wt/a.rs:7"]
+        );
+    }
+
+    #[test]
+    fn editor_at_zed_uses_goto() {
+        let argv = resolve_editor_at_argv("zed", "/wt/a.rs", 5).unwrap();
+        assert_eq!(argv, vec!["zed", "--goto", "/wt/a.rs:5"]);
+    }
+
+    #[test]
+    fn editor_at_nano_uses_plus_line() {
+        let argv = resolve_editor_at_argv("nano", "/wt/a.rs", 5).unwrap();
+        assert_eq!(argv, vec!["nano", "+5", "/wt/a.rs"]);
     }
 }

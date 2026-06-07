@@ -656,9 +656,9 @@ mod timeline_tests {
         let a = dir.path().join("a.jsonl");
         write_event(&a, "2026-05-14T17:00:00.000Z", "/wt/old.rs");
         let mut tl = Timeline::default();
-        tl.refresh(&[a.clone()]);
+        tl.refresh(std::slice::from_ref(&a));
         assert_eq!(tl.parse_count(), 1);
-        tl.refresh(&[a.clone()]); // same size+mtime → cache hit
+        tl.refresh(std::slice::from_ref(&a)); // same size+mtime → cache hit
         assert_eq!(tl.parse_count(), 1, "should not reparse unchanged file");
     }
 
@@ -668,9 +668,9 @@ mod timeline_tests {
         let a = dir.path().join("a.jsonl");
         write_event(&a, "2026-05-14T17:00:00.000Z", "/wt/old.rs");
         let mut tl = Timeline::default();
-        tl.refresh(&[a.clone()]);
+        tl.refresh(std::slice::from_ref(&a));
         write_event(&a, "2026-05-14T19:00:00.000Z", "/wt/newer.rs");
-        tl.refresh(&[a.clone()]);
+        tl.refresh(std::slice::from_ref(&a));
         assert_eq!(tl.parse_count(), 2, "size changed → reparse");
         assert_eq!(tl.events().len(), 2);
     }
@@ -686,7 +686,7 @@ mod timeline_tests {
         tl.refresh(&[a.clone(), b.clone()]);
         assert_eq!(tl.events().len(), 2);
         // b.jsonl no longer in the file list → its events must disappear.
-        tl.refresh(&[a.clone()]);
+        tl.refresh(std::slice::from_ref(&a));
         let evs = tl.events();
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].file_path, PathBuf::from("/wt/a.rs"));

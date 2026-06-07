@@ -418,9 +418,13 @@ pub enum EventKind {
 }
 
 /// Encode an absolute path the way Claude Code does for `~/.claude/projects/`.
-/// Mirrors [`crate::pty::session::has_prior_session`].
+///
+/// Delegates to chronox, the single source of truth for this encoding, so wsx
+/// and the chronology library can never drift. (They previously each replaced
+/// only `/` and `.`, missing spaces and other punctuation — repos with a space
+/// in the name then resolved to a non-existent directory.)
 pub fn encode_cwd(path: &Path) -> String {
-    path.to_string_lossy().replace(['/', '.'], "-")
+    chronox::extract::encode_cwd(path)
 }
 
 /// Locate the active session file for a worktree.
@@ -1037,6 +1041,18 @@ fn is_pure_short_question(s: &str) -> bool {
 mod tests {
     use super::*;
     use crate::test_support::EnvGuard;
+
+    #[test]
+    fn encode_cwd_maps_every_non_alphanumeric_to_dash() {
+        // Worktree paths for repos with spaces (e.g. "meals backend") must
+        // encode the space to '-' to match the real ~/.claude/projects dir.
+        assert_eq!(
+            encode_cwd(Path::new(
+                "/home/eben/.local/state/wsx/worktrees/meals backend/miniature-lupin"
+            )),
+            "-home-eben--local-state-wsx-worktrees-meals-backend-miniature-lupin"
+        );
+    }
 
     #[test]
     fn parses_user_text_message() {

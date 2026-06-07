@@ -104,7 +104,8 @@ impl AgentKind {
 
 /// True if Claude Code has a persisted session JSONL for this worktree.
 /// Claude Code stores sessions at `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`,
-/// where the encoding replaces `/` and `.` with `-`.
+/// where the cwd encoding maps every non-alphanumeric character to `-`
+/// (see [`crate::activity::events::encode_cwd`], which delegates to chronox).
 pub fn has_prior_session(worktree: &Path) -> bool {
     let Some(home) = dirs::home_dir() else {
         return false;
@@ -113,7 +114,7 @@ pub fn has_prior_session(worktree: &Path) -> bool {
         Ok(p) => p,
         Err(_) => return false,
     };
-    let encoded = abs.to_string_lossy().replace(['/', '.'], "-");
+    let encoded = crate::activity::events::encode_cwd(&abs);
     let session_dir = home.join(".claude/projects").join(encoded);
     if !session_dir.is_dir() {
         return false;
@@ -1960,7 +1961,7 @@ mod tests {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
         let abs = std::fs::canonicalize(work.path()).unwrap();
-        let encoded = abs.to_string_lossy().replace(['/', '.'], "-");
+        let encoded = crate::activity::events::encode_cwd(&abs);
         let session_dir = home.path().join(".claude/projects").join(&encoded);
         std::fs::create_dir_all(&session_dir).unwrap();
         std::fs::write(session_dir.join("abc.jsonl"), "{}").unwrap();
@@ -1970,6 +1971,30 @@ mod tests {
         let result = has_prior_session(work.path());
         assert!(
             result,
+            "expected to find prior session at {}",
+            session_dir.display()
+        );
+    }
+
+    #[test]
+    fn has_prior_session_finds_jsonl_for_path_with_space() {
+        // Regression: a repo whose name contains a space (e.g. "meals backend")
+        // yields a worktree path with a space. The encoder must map it to '-'
+        // to match the real ~/.claude/projects directory Claude writes.
+        let home = tempfile::TempDir::new().unwrap();
+        let parent = tempfile::TempDir::new().unwrap();
+        let work = parent.path().join("meals backend");
+        std::fs::create_dir_all(&work).unwrap();
+        let abs = std::fs::canonicalize(&work).unwrap();
+        let encoded = crate::activity::events::encode_cwd(&abs);
+        let session_dir = home.path().join(".claude/projects").join(&encoded);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("abc.jsonl"), "{}").unwrap();
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(
+            has_prior_session(&work),
             "expected to find prior session at {}",
             session_dir.display()
         );

@@ -5,6 +5,7 @@ pub mod dashboard;
 pub mod modal;
 pub mod pm_pane;
 pub mod split;
+pub mod syntax;
 pub mod theme;
 pub mod updates_bar;
 

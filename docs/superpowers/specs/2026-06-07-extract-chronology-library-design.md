@@ -19,7 +19,7 @@ the `wsx` crate shrinks behind a clean boundary.
 
 ## Goal
 
-Move the chronology feature into a new crate, `claude-change-chronology`, in its
+Move the chronology feature into a new crate, `chronox`, in its
 own git repository, and have `wsx` consume it as a **git dependency**. The crate
 splits into two layers:
 
@@ -53,7 +53,7 @@ deferred.
 ## Scope
 
 - **In scope:**
-  - New crate `claude-change-chronology` with `core` + `ratatui`-feature layers.
+  - New crate `chronox` with `core` + `ratatui`-feature layers.
   - Decouple the syntax tokenizer from ratatui (neutral `TokenKind`; ratatui
     styling moves to the feature layer).
   - Decouple config resolution from `wsx`'s `Store`/`Repo` (a small trait /
@@ -90,7 +90,7 @@ deferred.
 ## Architecture
 
 ```
-repo: claude-change-chronology
+repo: chronox
 └── src/
     ├── lib.rs        re-exports; documents the core vs ratatui split
     ├── event.rs      ChangeEvent, ChangeDetail, ChangeTool, ChangeSource   [core]
@@ -117,7 +117,7 @@ Cargo.toml
 
 ```
 consumer: wsx (unchanged behaviour)
-  App.chronology: HashMap<WorkspaceId, claude_change_chronology::Timeline>
+  App.chronology: HashMap<WorkspaceId, chronox::Timeline>
   App::refresh_chronology(..)  -> uses crate's parse_file / session discovery
   Modal::ChangeDetail { .. }   -> built from crate's change_detail_lines_styled
   input.rs / render.rs / attached.rs -> call crate fns, same as today
@@ -242,7 +242,7 @@ modal `e`    ──► wsx editor launch (wsx owns)
 
 - `wsx`'s `Cargo.toml` gains:
   ```toml
-  claude-change-chronology = { git = "https://…/claude-change-chronology", rev = "<sha>", features = ["ratatui"] }
+  chronox = { git = "https://…/chronox", rev = "<sha>", features = ["ratatui"] }
   ```
   Pinned to a rev (reproducible builds; bump deliberately). `ratatui` feature on so
   `wsx` gets the UI layer.
@@ -303,7 +303,7 @@ modal `e`    ──► wsx editor launch (wsx owns)
 
 ## Files
 
-### New repository: `claude-change-chronology`
+### New repository: `chronox`
 - `Cargo.toml`, `src/lib.rs`, `src/event.rs`, `src/extract.rs`, `src/timeline.rs`,
   `src/nav.rs`, `src/syntax.rs`, `src/config.rs`, `src/render.rs` (feature-gated),
   `.gitignore`. (README/CI/LICENSE only in the deferred publish phase.)
@@ -315,7 +315,7 @@ modal `e`    ──► wsx editor launch (wsx owns)
   (their content now lives in the crate).
 - `src/activity/mod.rs`, `src/config/mod.rs`, `src/ui/mod.rs` — drop the removed
   modules; re-export crate types where the old paths were used, or update imports.
-- `src/app.rs` — `chronology: HashMap<_, claude_change_chronology::Timeline>`;
+- `src/app.rs` — `chronology: HashMap<_, chronox::Timeline>`;
   `refresh_chronology` calls the crate.
 - `src/app/input.rs`, `src/app/render.rs`, `src/ui/attached.rs`,
   `src/ui/modal.rs` — update `use` paths to the crate; behaviour unchanged.
@@ -324,7 +324,6 @@ modal `e`    ──► wsx editor launch (wsx owns)
 
 ## Naming
 
-Working crate/repo name: **`claude-change-chronology`**. Alternatives if preferred:
-`agent-change-chronology` (forward-looking to other agents), `chronolog`,
-`wsx-chronology` (ties it to wsx — discouraged given the reuse goal). Final name is
-a cheap decision; confirm at spec review.
+Crate/repo name: **`chronox`** (decided). The repository lives at `~/chronox`
+(`/home/eben/chronox`); `wsx` consumes it via an absolute path dependency during
+development and a pinned git rev once pushed to a remote.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Move the change-chronology feature out of `wsx` into a new standalone crate `claude-change-chronology` (core + optional `ratatui` UI feature) in its own git repo, and have `wsx` consume it as a git dependency with no change in on-screen behaviour.
+**Goal:** Move the change-chronology feature out of `wsx` into a new standalone crate `chronox` (core + optional `ratatui` UI feature) in its own git repo, and have `wsx` consume it as a git dependency with no change in on-screen behaviour.
 
 **Architecture:** Build the crate first in a fresh repo, porting the existing five modules with their ~400 lines of tests. Three seams are cut while moving: (1) the syntax tokenizer is split into a ratatui-free core emitting neutral `TokenKind` tokens plus a feature-gated ratatui renderer; (2) config resolution is inverted onto a `ConfigSource` trait instead of `wsx`'s `Store`/`Repo`; (3) two `activity/events.rs` helpers are inlined. Then `wsx` deletes the moved modules, adds the git dependency, supplies a `ConfigSource` adapter, and updates import paths. Everything else is a mechanical file move.
 
@@ -22,7 +22,7 @@
 
 ## File Structure
 
-**New repo `claude-change-chronology/`:**
+**New repo `chronox/`:**
 - `Cargo.toml` — deps, `ratatui` optional feature, `default = ["ratatui"]`.
 - `src/lib.rs` — module decls + re-exports; documents core vs ratatui split.
 - `src/event.rs` — `ChangeEvent`, `ChangeDetail`, `ChangeTool`, `ChangeSource` [core].
@@ -45,24 +45,24 @@
 ## Task 1: Scaffold the crate repo
 
 **Files:**
-- Create: `claude-change-chronology/Cargo.toml`
-- Create: `claude-change-chronology/src/lib.rs`
-- Create: `claude-change-chronology/.gitignore`
+- Create: `chronox/Cargo.toml`
+- Create: `chronox/src/lib.rs`
+- Create: `chronox/.gitignore`
 
-The crate is created as a sibling directory to the `wsx` repo (adjust the parent path to taste; it must be its own git repo).
+The crate lives in its own repo at `~/chronox` (already created).
 
-- [ ] **Step 1: Create the repo and Cargo.toml**
+- [ ] **Step 1: Initialize the repo and create src/**
 
 ```bash
-mkdir -p ../claude-change-chronology/src
-cd ../claude-change-chronology && git init -q
+mkdir -p ~/chronox/src
+cd ~/chronox && git init -q
 ```
 
-`claude-change-chronology/Cargo.toml`:
+`chronox/Cargo.toml`:
 
 ```toml
 [package]
-name = "claude-change-chronology"
+name = "chronox"
 version = "0.1.0"
 edition = "2024"
 description = "Parse Claude Code session logs into a navigable timeline of file changes, with an optional ratatui UI."
@@ -82,7 +82,7 @@ default = ["ratatui"]
 ratatui = ["dep:ratatui"]
 ```
 
-`claude-change-chronology/.gitignore`:
+`chronox/.gitignore`:
 
 ```
 /target
@@ -91,7 +91,7 @@ Cargo.lock
 
 - [ ] **Step 2: Minimal lib.rs that compiles in both feature modes**
 
-`claude-change-chronology/src/lib.rs`:
+`chronox/src/lib.rs`:
 
 ```rust
 //! Parse Claude Code session logs into a timeline of file changes.
@@ -124,7 +124,7 @@ This will not compile until the modules exist (Tasks 2–6). That is expected; d
 
 ```bash
 git add -A
-git commit -q -m "chore: scaffold claude-change-chronology crate"
+git commit -q -m "chore: scaffold chronox crate"
 ```
 
 ---
@@ -716,7 +716,7 @@ Work back in the `wsx` repo for the rest of the plan.
 In `wsx/Cargo.toml` `[dependencies]`:
 
 ```toml
-claude-change-chronology = { path = "../claude-change-chronology", features = ["ratatui"] }
+chronox = { path = "/home/eben/chronox", features = ["ratatui"] }
 ```
 
 (Replaced by a pinned `git`+`rev` in Task 10. Do not commit this path form as final.)
@@ -729,7 +729,7 @@ claude-change-chronology = { path = "../claude-change-chronology", features = ["
 //! Adapter implementing the crate's `ConfigSource` over wsx's `Store`/`Repo`.
 
 use crate::data::store::{Repo, Store};
-use claude_change_chronology::ConfigSource;
+use chronox::ConfigSource;
 
 /// Borrows the global store and an optional repo to feed the chronology config
 /// resolver.
@@ -750,7 +750,7 @@ impl ConfigSource for StoreConfigSource<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claude_change_chronology::{Side, resolve};
+    use chronox::{Side, resolve};
 
     #[test]
     fn adapter_resolves_repo_override() {
@@ -779,7 +779,7 @@ Expected: PASS (the crate resolves via the adapter). The wider build may still f
 
 ```bash
 git add Cargo.toml src/config/chronology_source.rs src/config/mod.rs
-git commit -q -m "feat: depend on claude-change-chronology + ConfigSource adapter"
+git commit -q -m "feat: depend on chronox + ConfigSource adapter"
 ```
 
 ---
@@ -802,22 +802,22 @@ Remove the corresponding `mod chronology;` / `mod chronology_nav;` / `mod chrono
 - [ ] **Step 2: Re-point every import to the crate**
 
 Build and let the compiler enumerate the breaks: `cargo build 2>&1 | head -50`. Fix each by replacing the old path with the crate path. Expected substitutions:
-- `crate::activity::chronology::{ChangeEvent, ChangeDetail, ChangeTool, ChangeSource, Timeline, extract_change_events, parse_file, load_full_change, resolve_line_in_file, …}` → `claude_change_chronology::{…}` (same item names).
-- `crate::ui::chronology_nav::{nav, NavKey, NavAction, adjust_scroll, clamp_scroll}` → `claude_change_chronology::nav::{…}` (or the `NavKey`/`NavAction` re-exports at crate root).
-- `crate::ui::chronology_bar::{entry_lines, relative_display, hhmm, abbreviate_path, should_auto_hide}` → `claude_change_chronology::{entry_lines, …}` / `claude_change_chronology::render::{…}` for the non-re-exported helpers.
-- `crate::ui::syntax::{change_detail_lines_styled, clip_line_to_width, lang_for_path, LangSpec}` → `claude_change_chronology::{change_detail_lines_styled, clip_line_to_width, lang_for_path, LangSpec}`.
-- `crate::config::chronology::{resolve, resolve_global_only, ChronologyConfig, Side, …}` → call sites now build a `StoreConfigSource { store, repo }` and call `claude_change_chronology::resolve(&src)` / `resolve_global_only(&src)`. Config *types* → `claude_change_chronology::{ChronologyConfig, Side, WidthSpec, …}`.
+- `crate::activity::chronology::{ChangeEvent, ChangeDetail, ChangeTool, ChangeSource, Timeline, extract_change_events, parse_file, load_full_change, resolve_line_in_file, …}` → `chronox::{…}` (same item names).
+- `crate::ui::chronology_nav::{nav, NavKey, NavAction, adjust_scroll, clamp_scroll}` → `chronox::nav::{…}` (or the `NavKey`/`NavAction` re-exports at crate root).
+- `crate::ui::chronology_bar::{entry_lines, relative_display, hhmm, abbreviate_path, should_auto_hide}` → `chronox::{entry_lines, …}` / `chronox::render::{…}` for the non-re-exported helpers.
+- `crate::ui::syntax::{change_detail_lines_styled, clip_line_to_width, lang_for_path, LangSpec}` → `chronox::{change_detail_lines_styled, clip_line_to_width, lang_for_path, LangSpec}`.
+- `crate::config::chronology::{resolve, resolve_global_only, ChronologyConfig, Side, …}` → call sites now build a `StoreConfigSource { store, repo }` and call `chronox::resolve(&src)` / `resolve_global_only(&src)`. Config *types* → `chronox::{ChronologyConfig, Side, WidthSpec, …}`.
 
 - [ ] **Step 3: Switch the App cache type**
 
-In `src/app.rs`: `chronology: HashMap<WorkspaceId, claude_change_chronology::Timeline>` and any `Timeline::default()`/method calls now resolve to the crate type (same API: `refresh`, `events`). `refresh_chronology` uses `claude_change_chronology::parse_file` / the crate's session-discovery fn exactly as before.
+In `src/app.rs`: `chronology: HashMap<WorkspaceId, chronox::Timeline>` and any `Timeline::default()`/method calls now resolve to the crate type (same API: `refresh`, `events`). `refresh_chronology` uses `chronox::parse_file` / the crate's session-discovery fn exactly as before.
 
 - [ ] **Step 4: Fix config resolver call sites**
 
 Wherever `wsx` previously called `config::chronology::resolve(repo, store)` (e.g. in `attached.rs`/`render.rs` when building `ChronologyDraw`), replace with:
 ```rust
 let src = crate::config::chronology_source::StoreConfigSource { store: &app.store, repo: repo_opt };
-let cfg = claude_change_chronology::resolve(&src);
+let cfg = chronox::resolve(&src);
 ```
 Match the actual variable names/borrows at each site.
 
@@ -845,7 +845,7 @@ Build and run `wsx`; attach to a workspace with recent Claude activity:
 
 ```bash
 git add -A
-git commit -q -m "refactor: consume claude-change-chronology crate; remove in-tree modules"
+git commit -q -m "refactor: consume chronox crate; remove in-tree modules"
 ```
 
 ---
@@ -856,26 +856,26 @@ git commit -q -m "refactor: consume claude-change-chronology crate; remove in-tr
 
 - [ ] **Step 1: Push the crate to its remote**
 
-In the crate repo: create the remote (e.g. `gh repo create claude-change-chronology --private --source . --remote origin`), `git push -u origin main`. Capture the pushed commit sha.
+In the crate repo: create the remote (e.g. `gh repo create chronox --private --source . --remote origin`), `git push -u origin main`. Capture the pushed commit sha.
 
 - [ ] **Step 2: Replace the path dependency with a pinned git rev**
 
 In `wsx/Cargo.toml`:
 
 ```toml
-claude-change-chronology = { git = "https://github.com/<owner>/claude-change-chronology", rev = "<sha-from-Task-6/7>", features = ["ratatui"] }
+chronox = { git = "https://github.com/<owner>/chronox", rev = "<sha-from-Task-6/7>", features = ["ratatui"] }
 ```
 
 - [ ] **Step 3: Verify against the pinned rev**
 
-Run: `cargo update -p claude-change-chronology` then `cargo build` then `cargo test`.
+Run: `cargo update -p chronox` then `cargo build` then `cargo test`.
 Expected: resolves from git, builds, tests pass — identical behaviour to the path build.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add Cargo.toml Cargo.lock
-git commit -q -m "build: pin claude-change-chronology to a git rev"
+git commit -q -m "build: pin chronox to a git rev"
 ```
 
 - [ ] **Step 5: Open the wsx PR**

@@ -319,9 +319,9 @@ mod tests {
         std::fs::create_dir_all(&failed).unwrap();
 
         // Stub a session log for `ready-with-session` so has_prior_session
-        // returns true for it. Path encoding mirrors events::encode_cwd.
+        // returns true for it. Use the canonical encoder so setup never drifts.
         let canon = std::fs::canonicalize(&ready_with_session).unwrap();
-        let encoded = canon.to_string_lossy().replace(['/', '.'], "-");
+        let encoded = crate::activity::events::encode_cwd(&canon);
         let log_dir = home.path().join(".claude/projects").join(&encoded);
         std::fs::create_dir_all(&log_dir).unwrap();
         std::fs::write(log_dir.join("session.jsonl"), "{}\n").unwrap();
@@ -527,7 +527,7 @@ mod tests {
         let pm_root = dir.path().join("pm");
         std::fs::create_dir_all(&pm_root).unwrap();
         let canon = std::fs::canonicalize(&pm_root).unwrap();
-        let encoded = canon.to_string_lossy().replace(['/', '.'], "-");
+        let encoded = crate::activity::events::encode_cwd(&canon);
         let log_dir = home.path().join(".claude/projects").join(&encoded);
         std::fs::create_dir_all(&log_dir).unwrap();
         std::fs::write(log_dir.join("prior.jsonl"), "{}\n").unwrap();

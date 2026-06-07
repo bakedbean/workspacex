@@ -4,6 +4,7 @@
 //! `detail_bar_config` submodule resolves the workspace detail-bar display
 //! config from global + per-repo JSON.
 
+pub mod chronology;
 pub mod detail_bar_config;
 pub mod usage_window;
 

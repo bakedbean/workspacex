@@ -80,6 +80,15 @@ pub enum Modal {
         /// (applied) window is read separately from the store at render time.
         selected: usize,
     },
+    /// Full diff of a chronology change, scrollable.
+    ChangeDetail {
+        title: String,
+        lines: Vec<ratatui::text::Line<'static>>,
+        scroll: usize,
+        worktree: std::path::PathBuf,
+        file: std::path::PathBuf,
+        line: u32,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -113,6 +122,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             | Modal::RepoSettings { .. }
             | Modal::AgentsPanel { .. }
             | Modal::UsageWindowPicker { .. }
+            | Modal::ChangeDetail { .. }
     ) {
         return;
     }
@@ -163,6 +173,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         Modal::UsageWindowPicker { .. } => {
             unreachable!("UsageWindowPicker must not reach render()")
         }
+        Modal::ChangeDetail { .. } => unreachable!("ChangeDetail must not reach render()"),
         Modal::AgentMissing { agent, binary, .. } => (
             "agent not installed",
             format!(
@@ -672,7 +683,7 @@ pub fn render_repo_settings(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let rows: [(crate::app::RepoSettingField, Option<&str>); 9] = [
+    let rows: [(crate::app::RepoSettingField, Option<&str>); 10] = [
         (
             crate::app::RepoSettingField::RepoName,
             Some(repo.name.as_str()),
@@ -712,6 +723,10 @@ pub fn render_repo_settings(
         (
             crate::app::RepoSettingField::DetailBarConfig,
             repo.detail_bar_config.as_deref(),
+        ),
+        (
+            crate::app::RepoSettingField::ChronologyConfig,
+            repo.chronology_config.as_deref(),
         ),
     ];
 

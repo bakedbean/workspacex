@@ -32,8 +32,46 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.detail_container_rects = [None; 4];
     app.attached_pane_rects.clear();
     app.agent_chip_rects.clear();
+    app.chronology_entry_rects.clear();
+    app.chronology_bar_rect = None;
     app.usage_graph_rect = None;
     app.usage_window_option_rects.clear();
+
+    // Refresh the focused workspace's change-chronology timeline before the
+    // render borrow of `app.view` is taken below. `refresh_chronology` is the
+    // only `&mut app` the attached chronology bar needs; doing it here (in a
+    // short scope that drops the `&app.view` borrow first) keeps the render
+    // arm's immutable borrows of `app` conflict-free.
+    {
+        let focused: Option<(crate::data::store::WorkspaceId, std::path::PathBuf)> =
+            if let crate::ui::View::Attached(state) = &app.view {
+                state.focused_target().and_then(|t| {
+                    app.workspaces
+                        .iter()
+                        .find(|(_, w)| w.id == t.workspace_id)
+                        .map(|(_, w)| (t.workspace_id, w.worktree_path.clone()))
+                })
+            } else {
+                None
+            };
+        if let Some((ws_id, worktree)) = focused {
+            // Throttle the session-log re-scan: `refresh_chronology` does a
+            // `read_dir` + per-file `stat` (the parse itself is (size,mtime)-
+            // cached), so running it on every frame is wasteful. Refresh at most
+            // ~3×/sec, but immediately the first time a workspace is focused so
+            // its bar isn't briefly empty.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let stale = now.saturating_sub(app.chronology_last_refresh_ms) >= 300;
+            if stale || !app.chronology.contains_key(&ws_id) {
+                app.chronology_last_refresh_ms = now;
+                app.refresh_chronology(ws_id, &worktree);
+            }
+        }
+    }
+
     match &app.view {
         crate::ui::View::Dashboard => {
             let selection_is_workspace =
@@ -494,7 +532,75 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     })
                     .unwrap_or_default();
             let attention_line = attention.map(|a| a.line);
-            let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
+
+            // Change-chronology bar for the focused workspace. The timeline was
+            // already refreshed before this match (the only `&mut app` the bar
+            // needs). Resolve the focused workspace's worktree + repo config,
+            // then clone events + worktree into locals so the `ChronologyDraw`
+            // borrows nothing from `app` — leaving the final `&mut app` write of
+            // the entry rects unobstructed.
+            let chronology_worktree: Option<std::path::PathBuf> = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == focused_id)
+                .map(|(_, w)| w.worktree_path.clone());
+            let chronology_cfg: Option<crate::config::chronology::ChronologyConfig> = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == focused_id)
+                .and_then(|(rid, _)| app.repos.iter().find(|r| r.id == *rid))
+                .map(|repo| crate::config::chronology::resolve(repo, &app.store));
+            let chronology_events: Vec<crate::activity::chronology::ChangeEvent> = app
+                .chronology
+                .get(&focused_id)
+                .map(|t| t.events().to_vec())
+                .unwrap_or_default();
+            // If the focused pane switched to a different workspace, drop any
+            // stale scroll offset / selection before reading them.
+            crate::app::reset_chronology_state_on_workspace_change(
+                &mut app.chronology_scroll,
+                &mut app.chronology_sel,
+                &mut app.chronology_focused,
+                &mut app.chronology_last_workspace,
+                Some(focused_id),
+            );
+            // Keep the keyboard selection in view (uses last frame's visible count).
+            if app.chronology_focused {
+                app.chronology_scroll = crate::ui::chronology_nav::adjust_scroll(
+                    app.chronology_scroll,
+                    app.chronology_sel,
+                    app.chronology_visible_entries,
+                    chronology_events.len(),
+                );
+            }
+            let chronology_scroll = app.chronology_scroll;
+
+            // Build the draw data (borrows only the locals above) and carve the
+            // bar's side column out of `pane_area` BEFORE laying out the panes,
+            // so the agent PTYs get the narrowed area and never draw under the
+            // bar. `split_for_chronology` returns `None` for the bar when the
+            // config is absent/hidden or the area is too narrow.
+            let chronology_draw = match (chronology_cfg.as_ref(), chronology_worktree.as_deref()) {
+                (Some(config), Some(worktree)) => Some(crate::ui::attached::ChronologyDraw {
+                    config,
+                    events: &chronology_events,
+                    worktree,
+                    scroll: chronology_scroll,
+                    focused: app.chronology_focused,
+                    sel: app.chronology_sel,
+                }),
+                _ => None,
+            };
+            let (agent_pane_area, bar_rect) =
+                attached::split_for_chronology(pane_area, &chronology_draw);
+            // If the bar isn't shown this frame (auto-hidden when the terminal
+            // is too narrow, or toggled off), drop keyboard focus so keystrokes
+            // flow back to the agent instead of being swallowed by an invisible bar.
+            if bar_rect.is_none() {
+                app.chronology_focused = false;
+            }
+
+            let crate::ui::split::LayoutResult { panes, dividers } = state.layout(agent_pane_area);
             let multi_pane = panes.len() > 1;
 
             // The agent instance in the focused pane is the "active" one; the
@@ -564,12 +670,16 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 &pinned,
                 &focused_agents_list,
                 active_agent,
+                bar_rect.zip(chronology_draw),
                 &app.theme,
             );
             app.chip_rects = out.chip_rects;
             app.attention_rects = attention_rects;
             app.attached_pane_rects = out.pane_rects;
             app.agent_chip_rects = out.agent_chip_rects;
+            app.chronology_entry_rects = out.chronology_entry_rects;
+            app.chronology_visible_entries = out.chronology_visible_entries;
+            app.chronology_bar_rect = bar_rect;
             app.pinned_commands_cache = pinned;
         }
         crate::ui::View::AttachedPm => {
@@ -630,6 +740,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     attention_line,
                     pinned,
                     &[],
+                    None,
                     None,
                     &app.theme,
                 );
@@ -734,6 +845,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
             crate::ui::modal::Modal::UsageWindowPicker { .. } => {
                 // Rendered separately below, anchored to the footer graph.
+            }
+            crate::ui::modal::Modal::ChangeDetail {
+                title,
+                lines,
+                scroll,
+                ..
+            } => {
+                render_change_detail_modal(f, area, title, lines, *scroll, &app.theme);
             }
             other => modal::render(f, area, other, app.tick, &app.theme),
         }
@@ -915,6 +1034,73 @@ pub(crate) fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::Ac
         ActivityState::Waiting => U::Waiting,
         ActivityState::Off => U::Off,
     }
+}
+
+fn render_change_detail_modal(
+    f: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    title: &str,
+    lines: &[ratatui::text::Line<'static>],
+    scroll: usize,
+    theme: &crate::ui::theme::Theme,
+) {
+    use ratatui::layout::Rect;
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+    let w = area.width.saturating_mul(9) / 10;
+    let h = area.height.saturating_mul(9) / 10;
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let modal = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, modal);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "))
+        .border_style(ratatui::style::Style::default().fg(theme.path));
+    let inner = block.inner(modal);
+    f.render_widget(block, modal);
+    let body_h = inner.height.saturating_sub(1) as usize;
+    let scroll = crate::ui::chronology_nav::clamp_scroll(scroll, lines.len(), body_h);
+    let visible: Vec<Line> = lines
+        .iter()
+        .skip(scroll)
+        .take(body_h)
+        .map(|l| crate::ui::syntax::clip_line_to_width(l, inner.width as usize))
+        .collect();
+    let body_area = Rect {
+        height: inner.height.saturating_sub(1),
+        ..inner
+    };
+    f.render_widget(Paragraph::new(visible), body_area);
+    let end = (scroll + body_h).min(lines.len());
+    // Show 0-based "0-0/0" for an empty change rather than a confusing "1-0/0".
+    let start = if lines.is_empty() { 0 } else { scroll + 1 };
+    let footer = format!(
+        "↑/↓ j/k  PgUp/PgDn  g/G  ·  e editor  ·  Esc close    {}-{}/{}",
+        start,
+        end,
+        lines.len()
+    );
+    let footer_area = Rect {
+        y: inner.y + inner.height.saturating_sub(1),
+        height: 1,
+        ..inner
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            footer
+                .chars()
+                .take(inner.width as usize)
+                .collect::<String>(),
+            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+        ))),
+        footer_area,
+    );
 }
 
 #[cfg(test)]

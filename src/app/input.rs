@@ -243,6 +243,126 @@ fn toggle_focused_fold(app: &mut App) {
         app.dashboard.folded.insert(id, new_folded);
     }
 }
+/// Toggle the global change-chronology bar visibility and persist it to
+/// settings. Read live by the renderer via `resolve_global_only`.
+fn toggle_chronology_visible(app: &mut App) {
+    let mut cfg = crate::config::chronology::resolve_global_only(&app.store);
+    cfg.visible = !cfg.visible;
+    if let Ok(json) = serde_json::to_string(&cfg) {
+        if let Err(e) = app.store.set_setting("chronology_config", &json) {
+            tracing::warn!(error = %e, "failed to persist chronology_config (toggle)");
+        }
+    }
+}
+
+/// Swap the change-chronology bar to the opposite side and persist it.
+fn swap_chronology_side(app: &mut App) {
+    use crate::config::chronology::Side;
+    let mut cfg = crate::config::chronology::resolve_global_only(&app.store);
+    cfg.side = match cfg.side {
+        Side::Left => Side::Right,
+        Side::Right => Side::Left,
+    };
+    if let Ok(json) = serde_json::to_string(&cfg) {
+        if let Err(e) = app.store.set_setting("chronology_config", &json) {
+            tracing::warn!(error = %e, "failed to persist chronology_config (swap side)");
+        }
+    }
+}
+
+/// Focused attached workspace's id and worktree path, if the current view is
+/// Attached. Used by chronology mouse handling.
+fn focused_attached_workspace(
+    app: &App,
+) -> Option<(crate::data::store::WorkspaceId, std::path::PathBuf)> {
+    let crate::ui::View::Attached(state) = &app.view else {
+        return None;
+    };
+    let target = state.focused_target()?;
+    let ws_id = target.workspace_id;
+    let worktree = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == ws_id)
+        .map(|(_, w)| w.worktree_path.clone())?;
+    Some((ws_id, worktree))
+}
+
+/// Open the chronology entry at `idx` in the full-change detail modal.
+fn open_change_modal(app: &mut App, idx: usize) {
+    let Some((ws_id, worktree)) = focused_attached_workspace(app) else {
+        return;
+    };
+    let Some(ev) = app
+        .chronology
+        .get(&ws_id)
+        .and_then(|t| t.events().get(idx).cloned())
+    else {
+        return;
+    };
+    let detail =
+        crate::activity::chronology::load_full_change(&ev).unwrap_or_else(|| ev.detail.clone());
+    let line = crate::activity::chronology::resolve_line_in_file(&ev.file_path, &detail);
+    let lang = crate::ui::syntax::lang_for_path(&ev.file_path);
+    let lines = crate::ui::syntax::change_detail_lines_styled(&detail, line, lang);
+    let rel = crate::ui::chronology_bar::relative_display(&ev.file_path, &worktree);
+    let title = format!(
+        "{} {}",
+        crate::ui::chronology_bar::hhmm(ev.timestamp_ms),
+        rel
+    );
+    app.modal = Some(crate::ui::modal::Modal::ChangeDetail {
+        title,
+        lines,
+        scroll: 0,
+        worktree,
+        file: ev.file_path.clone(),
+        line,
+    });
+}
+
+/// Open `file` at `line` using the configured editor, surfacing a Modal::Error
+/// when unset or on failure. Shared by the detail modal's `e`.
+fn open_change_in_editor(
+    app: &mut App,
+    worktree: &std::path::Path,
+    file: &std::path::Path,
+    line: u32,
+) {
+    use crate::commands::external::{EditorOpenDecision, editor_open_decision};
+    let editor_cmd = app.store.get_setting("editor_cmd").ok().flatten();
+    match editor_open_decision(editor_cmd.as_deref()) {
+        EditorOpenDecision::NeedsConfig => {
+            app.modal = Some(crate::ui::modal::Modal::Error {
+                message: "No editor_cmd configured. Set one to open changes in your \
+                          editor, e.g.\n  wsx config set editor_cmd 'alacritty -e nvim'"
+                    .to_string(),
+            });
+        }
+        EditorOpenDecision::Launch(cmd) => {
+            if let Err(e) =
+                crate::commands::external::open_in_editor_at(worktree, file, line, Some(&cmd))
+            {
+                app.modal = Some(crate::ui::modal::Modal::Error {
+                    message: format!("Failed to open editor: {e}"),
+                });
+            }
+        }
+    }
+}
+
+/// Resolve the configured chronology side for the focused attached workspace.
+fn focused_chronology_side(app: &App) -> Option<crate::config::chronology::Side> {
+    let crate::ui::View::Attached(state) = &app.view else {
+        return None;
+    };
+    let target = state.focused_target()?;
+    let ws_id = target.workspace_id;
+    let (rid, _w) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
+    let repo = app.repos.iter().find(|r| r.id == *rid)?;
+    Some(crate::config::chronology::resolve(repo, &app.store).side)
+}
+
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
 /// [`toggle_focused_fold`], this is idempotent: pressing `h` on an
 /// already-folded repo leaves it folded.
@@ -765,6 +885,39 @@ async fn handle_key_attached(
                     KeyCode::Down => Arrow::Down,
                     _ => unreachable!(),
                 };
+                use crate::config::chronology::Side;
+                let side = focused_chronology_side(app);
+                let toward_bar = matches!(
+                    (side, arrow),
+                    (Some(Side::Right), Arrow::Right) | (Some(Side::Left), Arrow::Left)
+                );
+                let away_from_bar = matches!(
+                    (side, arrow),
+                    (Some(Side::Right), Arrow::Left) | (Some(Side::Left), Arrow::Right)
+                );
+                if app.chronology_focused {
+                    if away_from_bar {
+                        app.chronology_focused = false; // focus returns to the agent pane
+                    }
+                    // toward/parallel arrows while focused: ignored
+                    return Ok(());
+                }
+                if toward_bar && app.chronology_bar_rect.is_some() {
+                    // Enter the bar only if there's no agent pane further toward it
+                    // (we're at the edge). focus_direction returns false when it
+                    // could not move.
+                    let moved = if let View::Attached(state) = &mut app.view {
+                        state.focus_direction(arrow)
+                    } else {
+                        false
+                    };
+                    if !moved {
+                        app.chronology_focused = true;
+                        app.chronology_sel = 0;
+                        app.chronology_scroll = 0;
+                    }
+                    return Ok(());
+                }
                 if let View::Attached(state) = &mut app.view {
                     state.focus_direction(arrow);
                 }
@@ -802,6 +955,14 @@ async fn handle_key_attached(
                         });
                     }
                 }
+                return Ok(());
+            }
+            KeyCode::Char('c') => {
+                toggle_chronology_visible(app);
+                return Ok(());
+            }
+            KeyCode::Char('C') => {
+                swap_chronology_side(app);
                 return Ok(());
             }
             KeyCode::Char('t') => {
@@ -896,6 +1057,34 @@ async fn handle_key_attached(
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
+        return Ok(());
+    }
+    if app.chronology_focused {
+        use crate::ui::chronology_nav::{NavAction, NavKey, nav};
+        let navkey = match k.code {
+            KeyCode::Down | KeyCode::Char('j') => Some(NavKey::Down),
+            KeyCode::Up | KeyCode::Char('k') => Some(NavKey::Up),
+            KeyCode::Char('g') => Some(NavKey::Top),
+            KeyCode::Char('G') => Some(NavKey::Bottom),
+            KeyCode::Enter => Some(NavKey::Enter),
+            KeyCode::Esc => Some(NavKey::Esc),
+            _ => None,
+        };
+        if let Some(navkey) = navkey {
+            // Compute the entry count first (immutable borrow), then mutate.
+            let len = focused_attached_workspace(app)
+                .and_then(|(id, _)| app.chronology.get(&id))
+                .map(|t| t.events().len())
+                .unwrap_or(0);
+            let (new_sel, action) = nav(app.chronology_sel, navkey, len);
+            app.chronology_sel = new_sel;
+            match action {
+                NavAction::None => {}
+                NavAction::Exit => app.chronology_focused = false,
+                NavAction::Open(i) => open_change_modal(app, i),
+            }
+        }
+        // While focused, swallow ALL keys — the agent PTY must not receive them.
         return Ok(());
     }
     let bytes = encode_key(k);
@@ -1488,6 +1677,92 @@ async fn handle_key_modal(
             }
             _ => {}
         },
+        Modal::ChangeDetail {
+            lines,
+            mut scroll,
+            worktree,
+            file,
+            line,
+            title,
+        } => {
+            const PAGE: usize = 10;
+            let len = lines.len();
+            match k.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    scroll = scroll.saturating_add(1).min(len.saturating_sub(1));
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    scroll = scroll.saturating_sub(1);
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::PageDown => {
+                    scroll = scroll.saturating_add(PAGE).min(len.saturating_sub(1));
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::PageUp => {
+                    scroll = scroll.saturating_sub(PAGE);
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::Char('g') => {
+                    scroll = 0;
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::Char('G') => {
+                    scroll = len.saturating_sub(1);
+                    app.modal = Some(Modal::ChangeDetail {
+                        title,
+                        lines,
+                        scroll,
+                        worktree,
+                        file,
+                        line,
+                    });
+                }
+                KeyCode::Esc => {
+                    app.modal = None;
+                }
+                KeyCode::Char('e') => {
+                    open_change_in_editor(app, &worktree, &file, line);
+                }
+                _ => {}
+            }
+        }
     }
     Ok(())
 }
@@ -1676,6 +1951,60 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
         }
     }
 
+    // ChangeDetail modal: wheel scrolls the overlay; left-click closes it.
+    if matches!(app.modal, Some(Modal::ChangeDetail { .. })) {
+        match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if let Some(Modal::ChangeDetail { lines, scroll, .. }) = &mut app.modal {
+                    let len = lines.len();
+                    if matches!(m.kind, MouseEventKind::ScrollDown) {
+                        *scroll = scroll.saturating_add(1).min(len.saturating_sub(1));
+                    } else {
+                        *scroll = scroll.saturating_sub(1);
+                    }
+                }
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                app.modal = None;
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    // Change-chronology bar: a wheel over the bar scrolls the chronology
+    // entries rather than the PTY/scrollback. Checked before the pane-scroll
+    // block below so a wheel inside the bar returns early.
+    if matches!(
+        m.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) {
+        if let Some(rect) = app.chronology_bar_rect {
+            let inside = m.column >= rect.x
+                && m.column < rect.x.saturating_add(rect.width)
+                && m.row >= rect.y
+                && m.row < rect.y.saturating_add(rect.height);
+            if inside {
+                let len = focused_attached_workspace(app)
+                    .and_then(|(id, _)| app.chronology.get(&id))
+                    .map(|t| t.events().len())
+                    .unwrap_or(0);
+                // Clamp to the last *page* (len - visible_rows), not len-1, so the
+                // wheel can't scroll into empty space past the last entry.
+                let visible = app.chronology_visible_entries;
+                let target = if matches!(m.kind, MouseEventKind::ScrollDown) {
+                    app.chronology_scroll.saturating_add(3)
+                } else {
+                    app.chronology_scroll.saturating_sub(3)
+                };
+                app.chronology_scroll =
+                    crate::ui::chronology_nav::clamp_scroll(target, len, visible);
+                return;
+            }
+        }
+    }
+
     // Attached view: a plain wheel over a pane whose agent has mouse
     // reporting on is forwarded to that agent's PTY so it scrolls its own
     // view (notably its full-screen UI, where wsx has no scrollback).
@@ -1725,7 +2054,19 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
 
-            if let Some(idx) = app.chip_rects.iter().position(|r| {
+            // Chronology entry click → focus the bar, select it, and open the
+            // full-change detail modal.
+            if let Some(idx) = app.chronology_entry_rects.iter().find_map(|(i, r)| {
+                let hit = m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height);
+                hit.then_some(*i)
+            }) {
+                app.chronology_focused = true;
+                app.chronology_sel = idx;
+                open_change_modal(app, idx);
+            } else if let Some(idx) = app.chip_rects.iter().position(|r| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)
                     && m.row >= r.y

@@ -45,6 +45,7 @@ pub struct Repo {
     pub related_repos: Option<String>,
     pub base_branch: Option<String>,
     pub detail_bar_config: Option<String>,
+    pub chronology_config: Option<String>,
     pub created_at: i64,
 }
 
@@ -235,6 +236,18 @@ impl Store {
             )?;
             self.conn.execute("PRAGMA user_version = 12", [])?;
         }
+        if v < 13 {
+            let has_chronology: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'chronology_config'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_chronology == 0 {
+                self.conn
+                    .execute("ALTER TABLE repos ADD COLUMN chronology_config TEXT", [])?;
+            }
+            self.conn.execute("PRAGMA user_version = 13", [])?;
+        }
         Ok(())
     }
 
@@ -274,7 +287,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, path, branch_prefix, custom_instructions, \
                     setup_script, archive_script, pinned_commands, \
-                    related_repos, base_branch, detail_bar_config, created_at \
+                    related_repos, base_branch, detail_bar_config, \
+                    chronology_config, created_at \
              FROM repos ORDER BY id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -290,7 +304,8 @@ impl Store {
                 related_repos: r.get(8)?,
                 base_branch: r.get(9)?,
                 detail_bar_config: r.get(10)?,
-                created_at: r.get(11)?,
+                chronology_config: r.get(11)?,
+                created_at: r.get(12)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -425,6 +440,14 @@ impl Store {
     pub fn set_repo_detail_bar_config(&self, id: RepoId, value: Option<&str>) -> Result<()> {
         self.conn.execute(
             "UPDATE repos SET detail_bar_config = ?1 WHERE id = ?2",
+            rusqlite::params![value, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_repo_chronology_config(&self, id: RepoId, value: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE repos SET chronology_config = ?1 WHERE id = ?2",
             rusqlite::params![value, id.0],
         )?;
         Ok(())
@@ -1062,6 +1085,32 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         assert!(repo.detail_bar_config.is_none());
+    }
+
+    #[test]
+    fn chronology_config_column_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/tmp/r"), "r", "wsx/").unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert!(repo.chronology_config.is_none());
+        store
+            .set_repo_chronology_config(id, Some(r#"{"visible":false}"#))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(
+            repo.chronology_config.as_deref(),
+            Some(r#"{"visible":false}"#)
+        );
     }
 
     #[test]
@@ -1810,6 +1859,6 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 12);
+        assert_eq!(v, 13);
     }
 }

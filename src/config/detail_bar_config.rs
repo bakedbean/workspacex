@@ -231,6 +231,7 @@ mod tests {
             related_repos: None,
             base_branch: None,
             detail_bar_config: detail_bar_config.map(|s| s.to_string()),
+            chronology_config: None,
             created_at: 0,
         }
     }

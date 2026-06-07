@@ -631,6 +631,8 @@ The modal is a scrollable overlay showing the full diff of the selected change:
 - Press `e` to open the file in your editor at the changed line (requires `editor_cmd` — see below).
 - Press `Esc` or click outside the modal to close it and return to the bar.
 
+The diff is displayed with basic syntax highlighting for Rust, Python, Shell, and a generic C-like family (C/C++/JS/TS/Go/Java/JSON, and similar); other file types are shown plain. Added (`+`) lines are tinted green and removed (`-`) lines red; the line-number gutter stays dim. Highlighting is per-line — multi-line strings or block comments may not be perfectly colored.
+
 #### Keybindings (attached view, under the `Ctrl-x` leader)
 
 | Key        | Action                                          |

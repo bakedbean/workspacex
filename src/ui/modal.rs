@@ -83,7 +83,7 @@ pub enum Modal {
     /// Full diff of a chronology change, scrollable.
     ChangeDetail {
         title: String,
-        lines: Vec<String>,
+        lines: Vec<ratatui::text::Line<'static>>,
         scroll: usize,
         worktree: std::path::PathBuf,
         file: std::path::PathBuf,

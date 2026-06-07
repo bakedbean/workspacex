@@ -303,7 +303,8 @@ fn open_change_modal(app: &mut App, idx: usize) {
     let detail =
         crate::activity::chronology::load_full_change(&ev).unwrap_or_else(|| ev.detail.clone());
     let line = crate::activity::chronology::resolve_line_in_file(&ev.file_path, &detail);
-    let lines = crate::ui::chronology_bar::change_detail_lines(&detail, line);
+    let lang = crate::ui::syntax::lang_for_path(&ev.file_path);
+    let lines = crate::ui::syntax::change_detail_lines_styled(&detail, line, lang);
     let rel = crate::ui::chronology_bar::relative_display(&ev.file_path, &worktree);
     let title = format!(
         "{} {}",

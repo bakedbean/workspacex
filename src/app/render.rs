@@ -1027,7 +1027,7 @@ fn render_change_detail_modal(
     f: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     title: &str,
-    lines: &[String],
+    lines: &[ratatui::text::Line<'static>],
     scroll: usize,
     theme: &crate::ui::theme::Theme,
 ) {
@@ -1057,11 +1057,7 @@ fn render_change_detail_modal(
         .iter()
         .skip(scroll)
         .take(body_h)
-        .map(|l| {
-            Line::from(Span::raw(
-                l.chars().take(inner.width as usize).collect::<String>(),
-            ))
-        })
+        .map(|l| crate::ui::syntax::clip_line_to_width(l, inner.width as usize))
         .collect();
     let body_area = Rect {
         height: inner.height.saturating_sub(1),

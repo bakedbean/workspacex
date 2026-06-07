@@ -5,6 +5,7 @@
 //! config from global + per-repo JSON.
 
 pub mod chronology;
+pub mod chronology_source;
 pub mod detail_bar_config;
 pub mod usage_window;
 

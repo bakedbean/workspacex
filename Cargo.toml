@@ -28,6 +28,7 @@ name = "wsx"
 path = "src/main.rs"
 
 [dependencies]
+chronox = { path = "/home/eben/chronox", features = ["ratatui"] }
 ratatui = "0.29"
 crossterm = { version = "0.29", features = ["event-stream", "bracketed-paste"] }
 portable-pty = "0.9"

@@ -55,7 +55,20 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 None
             };
         if let Some((ws_id, worktree)) = focused {
-            app.refresh_chronology(ws_id, &worktree);
+            // Throttle the session-log re-scan: `refresh_chronology` does a
+            // `read_dir` + per-file `stat` (the parse itself is (size,mtime)-
+            // cached), so running it on every frame is wasteful. Refresh at most
+            // ~3×/sec, but immediately the first time a workspace is focused so
+            // its bar isn't briefly empty.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let stale = now.saturating_sub(app.chronology_last_refresh_ms) >= 300;
+            if stale || !app.chronology.contains_key(&ws_id) {
+                app.chronology_last_refresh_ms = now;
+                app.refresh_chronology(ws_id, &worktree);
+            }
         }
     }
 
@@ -1065,9 +1078,11 @@ fn render_change_detail_modal(
     };
     f.render_widget(Paragraph::new(visible), body_area);
     let end = (scroll + body_h).min(lines.len());
+    // Show 0-based "0-0/0" for an empty change rather than a confusing "1-0/0".
+    let start = if lines.is_empty() { 0 } else { scroll + 1 };
     let footer = format!(
         "↑/↓ j/k  PgUp/PgDn  g/G  ·  e editor  ·  Esc close    {}-{}/{}",
-        scroll + 1,
+        start,
         end,
         lines.len()
     );

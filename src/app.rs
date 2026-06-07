@@ -185,6 +185,9 @@ pub struct App {
     pub chronology_sel: usize,
     /// Entries drawn in the bar last frame (for keyboard auto-scroll).
     pub chronology_visible_entries: usize,
+    /// Epoch-ms of the last chronology timeline refresh (throttles the
+    /// per-frame session-log re-scan; see `draw`).
+    pub chronology_last_refresh_ms: i64,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity:
         std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
@@ -342,6 +345,7 @@ impl App {
             chronology_focused: false,
             chronology_sel: 0,
             chronology_visible_entries: 0,
+            chronology_last_refresh_ms: 0,
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),

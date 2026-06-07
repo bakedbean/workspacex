@@ -1990,12 +1990,16 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                     .and_then(|(id, _)| app.chronology.get(&id))
                     .map(|t| t.events().len())
                     .unwrap_or(0);
-                let max_scroll = len.saturating_sub(1);
-                if matches!(m.kind, MouseEventKind::ScrollDown) {
-                    app.chronology_scroll = (app.chronology_scroll + 3).min(max_scroll);
+                // Clamp to the last *page* (len - visible_rows), not len-1, so the
+                // wheel can't scroll into empty space past the last entry.
+                let visible = app.chronology_visible_entries;
+                let target = if matches!(m.kind, MouseEventKind::ScrollDown) {
+                    app.chronology_scroll.saturating_add(3)
                 } else {
-                    app.chronology_scroll = app.chronology_scroll.saturating_sub(3);
-                }
+                    app.chronology_scroll.saturating_sub(3)
+                };
+                app.chronology_scroll =
+                    crate::ui::chronology_nav::clamp_scroll(target, len, visible);
                 return;
             }
         }

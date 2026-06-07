@@ -1,10 +1,12 @@
 //! App settings and filesystem layout.
 //!
-//! This module owns the `Dirs` state/db/log path layout; the
-//! `detail_bar_config` submodule resolves the workspace detail-bar display
-//! config from global + per-repo JSON.
+//! This module owns the `Dirs` state/db/log path layout. The
+//! `detail_bar_config` submodule resolves the detail-bar display config from
+//! global + per-repo JSON; the `chronology_source` submodule adapts wsx's
+//! `Store`/`Repo` to `chronox::ConfigSource` so the `chronox` crate can resolve
+//! the chronology config.
 
-pub mod chronology;
+pub mod chronology_source;
 pub mod detail_bar_config;
 pub mod usage_window;
 

@@ -102,6 +102,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "chronox"
+version = "0.1.0"
+source = "git+https://github.com/bakedbean/chronox?rev=deacc9ad8698acd95dbb1fb0aea35b1becf5e8bd#deacc9ad8698acd95dbb1fb0aea35b1becf5e8bd"
+dependencies = [
+ "dirs",
+ "log",
+ "ratatui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "compact_str"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1822,6 +1834,7 @@ dependencies = [
 name = "wsx"
 version = "0.1.0"
 dependencies = [
+ "chronox",
  "crossterm 0.29.0",
  "dirs",
  "fnug-vt100",

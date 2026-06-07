@@ -544,13 +544,19 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .iter()
                 .find(|(_, w)| w.id == focused_id)
                 .map(|(_, w)| w.worktree_path.clone());
-            let chronology_cfg: Option<crate::config::chronology::ChronologyConfig> = app
+            let chronology_cfg: Option<chronox::ChronologyConfig> = app
                 .workspaces
                 .iter()
                 .find(|(_, w)| w.id == focused_id)
                 .and_then(|(rid, _)| app.repos.iter().find(|r| r.id == *rid))
-                .map(|repo| crate::config::chronology::resolve(repo, &app.store));
-            let chronology_events: Vec<crate::activity::chronology::ChangeEvent> = app
+                .map(|repo| {
+                    let src = crate::config::chronology_source::StoreConfigSource {
+                        store: &app.store,
+                        repo: Some(repo),
+                    };
+                    chronox::resolve(&src)
+                });
+            let chronology_events: Vec<chronox::ChangeEvent> = app
                 .chronology
                 .get(&focused_id)
                 .map(|t| t.events().to_vec())
@@ -566,7 +572,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             );
             // Keep the keyboard selection in view (uses last frame's visible count).
             if app.chronology_focused {
-                app.chronology_scroll = crate::ui::chronology_nav::adjust_scroll(
+                app.chronology_scroll = chronox::nav::adjust_scroll(
                     app.chronology_scroll,
                     app.chronology_sel,
                     app.chronology_visible_entries,
@@ -1065,12 +1071,12 @@ fn render_change_detail_modal(
     let inner = block.inner(modal);
     f.render_widget(block, modal);
     let body_h = inner.height.saturating_sub(1) as usize;
-    let scroll = crate::ui::chronology_nav::clamp_scroll(scroll, lines.len(), body_h);
+    let scroll = chronox::nav::clamp_scroll(scroll, lines.len(), body_h);
     let visible: Vec<Line> = lines
         .iter()
         .skip(scroll)
         .take(body_h)
-        .map(|l| crate::ui::syntax::clip_line_to_width(l, inner.width as usize))
+        .map(|l| chronox::clip_line_to_width(l, inner.width as usize))
         .collect();
     let body_area = Rect {
         height: inner.height.saturating_sub(1),

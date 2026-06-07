@@ -2,8 +2,9 @@
 //! A single generic tokenizer driven by a per-language `LangSpec`. Per-line,
 //! no cross-line state — "basic" fidelity for a glanceable diff.
 
-use ratatui::style::{Color, Style};
-use ratatui::text::Span;
+use crate::activity::chronology::ChangeDetail;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use std::path::Path;
 
 /// Minimal language description driving the generic tokenizer.
@@ -196,9 +197,138 @@ pub fn highlight_code(text: &str, spec: &LangSpec) -> Vec<Span<'static>> {
     spans
 }
 
+fn code_spans(code: &str, lang: Option<&LangSpec>) -> Vec<Span<'static>> {
+    match lang {
+        Some(spec) => highlight_code(code, spec),
+        None => vec![Span::raw(code.to_string())],
+    }
+}
+
+/// Build the modal's styled diff lines: dim 4-col gutter, green `+` / red `-`
+/// marker, then highlighted code (or a plain span when `lang` is None). Added
+/// lines numbered from `base_line`; removed lines blank gutter. No line cap.
+pub fn change_detail_lines_styled(
+    detail: &ChangeDetail,
+    base_line: u32,
+    lang: Option<&LangSpec>,
+) -> Vec<Line<'static>> {
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let add = Style::default().fg(Color::Green);
+    let del = Style::default().fg(Color::Red);
+    let mut out = Vec::new();
+    let push = |gutter: String,
+                marker_style: Style,
+                marker: &str,
+                code: &str,
+                out: &mut Vec<Line<'static>>| {
+        let mut spans = vec![
+            Span::styled(gutter, dim),
+            Span::styled(marker.to_string(), marker_style),
+        ];
+        spans.extend(code_spans(code, lang));
+        out.push(Line::from(spans));
+    };
+    match detail {
+        ChangeDetail::Edit { old, new } => {
+            for l in old.lines() {
+                push("     ".to_string(), del, "- ", l, &mut out);
+            }
+            for (k, l) in new.lines().enumerate() {
+                let n = base_line.saturating_add(k as u32);
+                push(format!("{n:>4} "), add, "+ ", l, &mut out);
+            }
+        }
+        ChangeDetail::Write { head } => {
+            for (k, l) in head.lines().enumerate() {
+                let n = base_line.saturating_add(k as u32);
+                push(format!("{n:>4} "), add, "+ ", l, &mut out);
+            }
+        }
+        ChangeDetail::None => {}
+    }
+    out
+}
+
+/// Truncate a styled `Line` to `width` display columns (char-based), preserving
+/// span styles; the boundary span is trimmed.
+pub fn clip_line_to_width(line: &Line<'static>, width: usize) -> Line<'static> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for span in &line.spans {
+        if used >= width {
+            break;
+        }
+        let remaining = width - used;
+        let cnt = span.content.chars().count();
+        if cnt <= remaining {
+            out.push(span.clone());
+            used += cnt;
+        } else {
+            let truncated: String = span.content.chars().take(remaining).collect();
+            out.push(Span::styled(truncated, span.style));
+            break;
+        }
+    }
+    Line::from(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::activity::chronology::ChangeDetail;
+
+    fn line_text(line: &Line<'static>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn styled_lines_marker_colors_and_gutter() {
+        let detail = ChangeDetail::Edit {
+            old: "old".into(),
+            new: "let y = 1".into(),
+        };
+        let lines = change_detail_lines_styled(&detail, 7, lang_for_path(Path::new("a.rs")));
+        // removed line: dim gutter (5 spaces), red "- " marker
+        assert_eq!(lines[0].spans[0].content.as_ref(), "     ");
+        assert!(lines[0].spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(lines[0].spans[1].content.as_ref(), "- ");
+        assert_eq!(lines[0].spans[1].style.fg, Some(Color::Red));
+        // added line: gutter "   7 ", green "+ ", code highlighted (let = magenta)
+        assert_eq!(lines[1].spans[0].content.as_ref(), "   7 ");
+        assert_eq!(lines[1].spans[1].content.as_ref(), "+ ");
+        assert_eq!(lines[1].spans[1].style.fg, Some(Color::Green));
+        assert!(
+            lines[1]
+                .spans
+                .iter()
+                .any(|s| s.content.as_ref() == "let" && s.style.fg == Some(Color::Magenta))
+        );
+    }
+
+    #[test]
+    fn styled_lines_plain_when_no_lang() {
+        let detail = ChangeDetail::Write {
+            head: "let y = 1".into(),
+        };
+        let lines = change_detail_lines_styled(&detail, 1, None);
+        // code is a single default span (no highlighting): spans = [gutter, marker, code]
+        assert_eq!(lines[0].spans[2].content.as_ref(), "let y = 1");
+        assert_eq!(lines[0].spans[2].style.fg, None);
+    }
+
+    #[test]
+    fn clip_line_preserves_styles_and_truncates() {
+        let detail = ChangeDetail::Write {
+            head: "abcdefgh".into(),
+        };
+        let line = &change_detail_lines_styled(&detail, 1, None)[0]; // "   1 + abcdefgh"
+        let clipped = clip_line_to_width(line, 7);
+        assert_eq!(line_text(&clipped), "   1 + ");
+        assert_eq!(clip_line_to_width(line, 0).spans.len(), 0);
+        let wide = clip_line_to_width(line, 999);
+        assert_eq!(line_text(&wide), "   1 + abcdefgh");
+    }
 
     #[test]
     fn lang_for_path_maps_extensions() {

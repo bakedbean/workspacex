@@ -1,10 +1,10 @@
 use crate::commands::pinned::{PinnedCommand, truncate_label};
-use crate::config::chronology::Side;
 use crate::data::store::AgentInstanceId;
 use crate::pty::render::render_screen;
 use crate::pty::session::{AgentKind, Session};
 use crate::ui::split::{Divider, SplitDirection};
 use crate::ui::theme::Theme;
+use chronox::Side;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::style::Modifier;
@@ -28,8 +28,8 @@ pub struct PaneSpec<'a> {
 /// Everything `render_panes` needs to draw the chronology bar for the focused
 /// pane. `None` at the call site means the bar is disabled/hidden.
 pub struct ChronologyDraw<'a> {
-    pub config: &'a crate::config::chronology::ChronologyConfig,
-    pub events: &'a [crate::activity::chronology::ChangeEvent],
+    pub config: &'a chronox::ChronologyConfig,
+    pub events: &'a [chronox::ChangeEvent],
     pub worktree: &'a std::path::Path,
     pub scroll: usize,
     /// Keyboard focus is in the bar (drives the active header + selection highlight).
@@ -75,7 +75,7 @@ pub fn split_for_chronology(area: Rect, draw: &Option<ChronologyDraw<'_>>) -> (R
         return (area, None);
     }
     let bar_cols = draw.config.resolved_width(area.width);
-    if crate::ui::chronology_bar::should_auto_hide(area.width, bar_cols) {
+    if chronox::should_auto_hide(area.width, bar_cols) {
         return (area, None);
     }
     match draw.config.side {
@@ -314,8 +314,7 @@ fn render_chronology_bar(
             break;
         }
         let selected = draw.focused && i == draw.sel;
-        let lines =
-            crate::ui::chronology_bar::entry_lines(ev, draw.worktree, inner_width, selected);
+        let lines = chronox::entry_lines(ev, draw.worktree, inner_width, selected);
         let available = body_bottom.saturating_sub(cursor_y);
         let drawn = (lines.len() as u16).min(available);
         if drawn == 0 {
@@ -795,8 +794,8 @@ mod tests {
 
     #[test]
     fn split_right_carves_bar_on_right() {
-        let cfg = crate::config::chronology::ChronologyConfig::default();
-        let events: Vec<crate::activity::chronology::ChangeEvent> = Vec::new();
+        let cfg = chronox::ChronologyConfig::default();
+        let events: Vec<chronox::ChangeEvent> = Vec::new();
         let draw = ChronologyDraw {
             config: &cfg,
             events: &events,
@@ -819,8 +818,8 @@ mod tests {
 
     #[test]
     fn split_hidden_when_too_narrow() {
-        let cfg = crate::config::chronology::ChronologyConfig::default();
-        let events: Vec<crate::activity::chronology::ChangeEvent> = Vec::new();
+        let cfg = chronox::ChronologyConfig::default();
+        let events: Vec<chronox::ChangeEvent> = Vec::new();
         let draw = ChronologyDraw {
             config: &cfg,
             events: &events,

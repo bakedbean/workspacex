@@ -246,7 +246,11 @@ fn toggle_focused_fold(app: &mut App) {
 /// Toggle the global change-chronology bar visibility and persist it to
 /// settings. Read live by the renderer via `resolve_global_only`.
 fn toggle_chronology_visible(app: &mut App) {
-    let mut cfg = crate::config::chronology::resolve_global_only(&app.store);
+    let src = crate::config::chronology_source::StoreConfigSource {
+        store: &app.store,
+        repo: None,
+    };
+    let mut cfg = chronox::resolve_global_only(&src);
     cfg.visible = !cfg.visible;
     if let Ok(json) = serde_json::to_string(&cfg) {
         if let Err(e) = app.store.set_setting("chronology_config", &json) {
@@ -257,8 +261,12 @@ fn toggle_chronology_visible(app: &mut App) {
 
 /// Swap the change-chronology bar to the opposite side and persist it.
 fn swap_chronology_side(app: &mut App) {
-    use crate::config::chronology::Side;
-    let mut cfg = crate::config::chronology::resolve_global_only(&app.store);
+    use chronox::Side;
+    let src = crate::config::chronology_source::StoreConfigSource {
+        store: &app.store,
+        repo: None,
+    };
+    let mut cfg = chronox::resolve_global_only(&src);
     cfg.side = match cfg.side {
         Side::Left => Side::Right,
         Side::Right => Side::Left,
@@ -300,17 +308,12 @@ fn open_change_modal(app: &mut App, idx: usize) {
     else {
         return;
     };
-    let detail =
-        crate::activity::chronology::load_full_change(&ev).unwrap_or_else(|| ev.detail.clone());
-    let line = crate::activity::chronology::resolve_line_in_file(&ev.file_path, &detail);
-    let lang = crate::ui::syntax::lang_for_path(&ev.file_path);
-    let lines = crate::ui::syntax::change_detail_lines_styled(&detail, line, lang);
-    let rel = crate::ui::chronology_bar::relative_display(&ev.file_path, &worktree);
-    let title = format!(
-        "{} {}",
-        crate::ui::chronology_bar::hhmm(ev.timestamp_ms),
-        rel
-    );
+    let detail = chronox::extract::load_full_change(&ev).unwrap_or_else(|| ev.detail.clone());
+    let line = chronox::extract::resolve_line_in_file(&ev.file_path, &detail);
+    let lang = chronox::lang_for_path(&ev.file_path);
+    let lines = chronox::change_detail_lines_styled(&detail, line, lang);
+    let rel = chronox::relative_display(&ev.file_path, &worktree);
+    let title = format!("{} {}", chronox::hhmm(ev.timestamp_ms), rel);
     app.modal = Some(crate::ui::modal::Modal::ChangeDetail {
         title,
         lines,
@@ -352,7 +355,7 @@ fn open_change_in_editor(
 }
 
 /// Resolve the configured chronology side for the focused attached workspace.
-fn focused_chronology_side(app: &App) -> Option<crate::config::chronology::Side> {
+fn focused_chronology_side(app: &App) -> Option<chronox::Side> {
     let crate::ui::View::Attached(state) = &app.view else {
         return None;
     };
@@ -360,7 +363,11 @@ fn focused_chronology_side(app: &App) -> Option<crate::config::chronology::Side>
     let ws_id = target.workspace_id;
     let (rid, _w) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
     let repo = app.repos.iter().find(|r| r.id == *rid)?;
-    Some(crate::config::chronology::resolve(repo, &app.store).side)
+    let src = crate::config::chronology_source::StoreConfigSource {
+        store: &app.store,
+        repo: Some(repo),
+    };
+    Some(chronox::resolve(&src).side)
 }
 
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
@@ -885,7 +892,7 @@ async fn handle_key_attached(
                     KeyCode::Down => Arrow::Down,
                     _ => unreachable!(),
                 };
-                use crate::config::chronology::Side;
+                use chronox::Side;
                 let side = focused_chronology_side(app);
                 let toward_bar = matches!(
                     (side, arrow),
@@ -1060,7 +1067,7 @@ async fn handle_key_attached(
         return Ok(());
     }
     if app.chronology_focused {
-        use crate::ui::chronology_nav::{NavAction, NavKey, nav};
+        use chronox::nav::{NavAction, NavKey, nav};
         let navkey = match k.code {
             KeyCode::Down | KeyCode::Char('j') => Some(NavKey::Down),
             KeyCode::Up | KeyCode::Char('k') => Some(NavKey::Up),
@@ -1998,8 +2005,7 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 } else {
                     app.chronology_scroll.saturating_sub(3)
                 };
-                app.chronology_scroll =
-                    crate::ui::chronology_nav::clamp_scroll(target, len, visible);
+                app.chronology_scroll = chronox::nav::clamp_scroll(target, len, visible);
                 return;
             }
         }

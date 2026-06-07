@@ -3,8 +3,8 @@ use crate::data::store::{Repo, Store};
 use chronox::ConfigSource;
 
 pub struct StoreConfigSource<'a> {
-    pub store: &'a Store,
-    pub repo: Option<&'a Repo>,
+    pub(crate) store: &'a Store,
+    pub(crate) repo: Option<&'a Repo>,
 }
 
 impl ConfigSource for StoreConfigSource<'_> {

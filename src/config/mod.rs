@@ -1,8 +1,8 @@
 //! App settings and filesystem layout.
 //!
 //! This module owns the `Dirs` state/db/log path layout; the
-//! `detail_bar_config` submodule resolves the workspace detail-bar display
-//! config from global + per-repo JSON.
+//! `detail_bar_config` and `chronology_source` submodules resolve workspace
+//! display configs from global + per-repo JSON.
 
 pub mod chronology_source;
 pub mod detail_bar_config;

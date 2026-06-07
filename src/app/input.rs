@@ -11,10 +11,12 @@ use crate::app::{
     reconcile_create_result, rescan_processes, restore_attached_state, save_layout_for,
     schedule_detach_refresh,
 };
+use crate::config::chronology_source::StoreConfigSource;
 use crate::error::Result;
 use crate::ui::View;
 use crate::ui::modal::Modal;
 use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
+use chronox::Side;
 use crossterm::event::{
     Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -246,7 +248,7 @@ fn toggle_focused_fold(app: &mut App) {
 /// Toggle the global change-chronology bar visibility and persist it to
 /// settings. Read live by the renderer via `resolve_global_only`.
 fn toggle_chronology_visible(app: &mut App) {
-    let src = crate::config::chronology_source::StoreConfigSource {
+    let src = StoreConfigSource {
         store: &app.store,
         repo: None,
     };
@@ -261,8 +263,7 @@ fn toggle_chronology_visible(app: &mut App) {
 
 /// Swap the change-chronology bar to the opposite side and persist it.
 fn swap_chronology_side(app: &mut App) {
-    use chronox::Side;
-    let src = crate::config::chronology_source::StoreConfigSource {
+    let src = StoreConfigSource {
         store: &app.store,
         repo: None,
     };
@@ -363,7 +364,7 @@ fn focused_chronology_side(app: &App) -> Option<chronox::Side> {
     let ws_id = target.workspace_id;
     let (rid, _w) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
     let repo = app.repos.iter().find(|r| r.id == *rid)?;
-    let src = crate::config::chronology_source::StoreConfigSource {
+    let src = StoreConfigSource {
         store: &app.store,
         repo: Some(repo),
     };
@@ -892,7 +893,6 @@ async fn handle_key_attached(
                     KeyCode::Down => Arrow::Down,
                     _ => unreachable!(),
                 };
-                use chronox::Side;
                 let side = focused_chronology_side(app);
                 let toward_bar = matches!(
                     (side, arrow),

@@ -286,6 +286,10 @@ pub struct App {
     /// footer is not currently drawn. Mirrors the `chip_rects` draw-populates /
     /// input-reads pattern; reset each frame.
     pub usage_graph_rect: Option<ratatui::layout::Rect>,
+    /// `(rect, action)` for each clickable footer keybind hint from the last
+    /// draw (dashboard, attached, and PM footers). Consumed by `handle_mouse`
+    /// to fire the matching key/leader on click. Cleared each frame.
+    pub footer_hint_rects: Vec<(ratatui::layout::Rect, crate::ui::footer::FooterHintAction)>,
     /// Per-option row rects of the open usage-window picker, in `UsageWindow::ALL`
     /// order, consumed by `handle_mouse` to apply a clicked option. Cleared each
     /// frame; only populated while the picker modal is open.
@@ -381,6 +385,7 @@ impl App {
             attached_pane_rects: Vec::new(),
             agent_chip_rects: Vec::new(),
             usage_graph_rect: None,
+            footer_hint_rects: Vec::new(),
             usage_window_option_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),

@@ -36,6 +36,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.chronology_entry_rects.clear();
     app.chronology_bar_rect = None;
     app.usage_graph_rect = None;
+    app.footer_hint_rects.clear();
     app.usage_window_option_rects.clear();
 
     // Refresh the focused workspace's change-chronology timeline before the
@@ -402,9 +403,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
             // Render footer below detail/PM so the spec order
             // list / detail / pm / footer is respected.
-            let graph_rect =
+            let (graph_rect, footer_hint_rects) =
                 dashboard::render_footer(f, footer_area, &activity, &app.theme, window.label());
             app.usage_graph_rect = Some(graph_rect);
+            app.footer_hint_rects = footer_hint_rects;
         }
         crate::ui::View::Attached(state) => {
             // If any leaf's session has gone away (e.g. workspace was
@@ -688,6 +690,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             app.chronology_entry_rects = out.chronology_entry_rects;
             app.chronology_visible_entries = out.chronology_visible_entries;
             app.chronology_bar_rect = bar_rect;
+            app.footer_hint_rects = out.footer_hint_rects;
             app.pinned_commands_cache = pinned;
         }
         crate::ui::View::AttachedPm => {
@@ -754,6 +757,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 );
                 app.attached_pane_rects = out.pane_rects;
                 app.attention_rects = attention_rects;
+                app.footer_hint_rects = out.footer_hint_rects;
             } else {
                 // PM session went away; bounce to dashboard on next event.
                 app.leader_pending = false;

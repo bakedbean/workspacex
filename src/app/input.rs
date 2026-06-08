@@ -1950,6 +1950,48 @@ fn adjust_detail_scroll(app: &mut App, slot: usize, delta: u16, up: bool) {
     };
 }
 
+/// Fire a footer nav-hint click. Footer hints mirror the printed keybinds, so
+/// this routes a synthetic key press through the focused view's key handler —
+/// arming the attached-view leader first when the view's footer lists
+/// leader-prefixed commands (`^x …`). Clicking the `^x` pill arms the leader
+/// alone, exactly like pressing `Ctrl-x`.
+async fn dispatch_footer_hint(app: &mut App, action: crate::ui::footer::FooterHintAction) {
+    use crate::ui::footer::FooterHintAction;
+    match action {
+        // The `^x` pill arms the attached-view leader. On the dashboard footer
+        // this variant is never produced, so a stray one is a harmless no-op.
+        FooterHintAction::ArmLeader => {
+            if matches!(app.view, View::Attached(_) | View::AttachedPm) {
+                app.leader_pending = true;
+            }
+        }
+        FooterHintAction::Key(k) => match &app.view {
+            View::Dashboard => {
+                // The dashboard footer lists direct (non-leader) keys.
+                if let Err(e) = handle_key_dashboard(app, k).await {
+                    tracing::warn!(error = %e, "footer-hint dashboard dispatch failed");
+                }
+            }
+            // Attached/PM footers list leader-prefixed commands; arm the
+            // leader, then dispatch the follow-up key.
+            View::Attached(state) => {
+                if let Some(target) = state.focused_target() {
+                    app.leader_pending = true;
+                    if let Err(e) = handle_key_attached(app, target, k).await {
+                        tracing::warn!(error = %e, "footer-hint attached dispatch failed");
+                    }
+                }
+            }
+            View::AttachedPm => {
+                app.leader_pending = true;
+                if let Err(e) = handle_key_attached_pm(app, k).await {
+                    tracing::warn!(error = %e, "footer-hint pm dispatch failed");
+                }
+            }
+        },
+    }
+}
+
 async fn handle_mouse(app: &mut App, m: MouseEvent) {
     // Detail-bar container scroll: consume wheel events on the Dashboard
     // view when the cursor is over a container rect. Fall through for
@@ -2066,6 +2108,24 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
                 app.modal = None;
                 return;
+            }
+
+            // Footer keybind hint click → behave exactly like pressing the
+            // printed key. Only when no modal is open (a modal overlays the
+            // footer, so clicks "through" it shouldn't fire hints). The footer
+            // row doesn't overlap any other click target, so this is checked
+            // first and returns early.
+            if app.modal.is_none() {
+                if let Some(action) = app.footer_hint_rects.iter().find_map(|(r, a)| {
+                    let hit = m.column >= r.x
+                        && m.column < r.x.saturating_add(r.width)
+                        && m.row >= r.y
+                        && m.row < r.y.saturating_add(r.height);
+                    hit.then_some(*a)
+                }) {
+                    dispatch_footer_hint(app, action).await;
+                    return;
+                }
             }
 
             // Chronology entry click → focus the bar, select it, and open the

@@ -1749,6 +1749,112 @@ mod pm_state_tests {
         );
     }
 
+    /// Clicking a dashboard footer hint fires the corresponding key, exactly
+    /// as if it had been pressed. `/` enters filter mode.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_dashboard_footer_hint_fires_key() {
+        use crate::ui::footer::FooterHintAction;
+        use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.view = crate::ui::View::Dashboard;
+
+        app.footer_hint_rects = vec![(
+            ratatui::layout::Rect {
+                x: 0,
+                y: 40,
+                width: 8,
+                height: 1,
+            },
+            FooterHintAction::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
+        )];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 40,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        assert!(
+            app.dashboard.filter.is_some(),
+            "clicking the `/` footer hint must enter filter mode"
+        );
+    }
+
+    /// Clicking the `^x` leader pill in the attached footer arms the leader,
+    /// exactly like pressing Ctrl-x.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_attached_footer_leader_pill_arms_leader() {
+        use crate::ui::footer::FooterHintAction;
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let _ws_id = spawn_attached_workspace(&mut app);
+
+        app.footer_hint_rects = vec![(
+            ratatui::layout::Rect {
+                x: 10,
+                y: 40,
+                width: 4,
+                height: 1,
+            },
+            FooterHintAction::ArmLeader,
+        )];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 11,
+            row: 40,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        assert!(
+            app.leader_pending,
+            "clicking the ^x pill must arm the attached-view leader"
+        );
+    }
+
+    /// Clicking an attached footer keybind hint arms the leader and dispatches
+    /// the command in one click. `^x a` opens the agents panel.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_attached_footer_hint_dispatches_leader_command() {
+        use crate::ui::footer::FooterHintAction;
+        use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let _ws_id = spawn_attached_workspace(&mut app);
+
+        app.footer_hint_rects = vec![(
+            ratatui::layout::Rect {
+                x: 20,
+                y: 40,
+                width: 9,
+                height: 1,
+            },
+            FooterHintAction::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+        )];
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 22,
+            row: 40,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        assert!(
+            matches!(app.modal, Some(crate::ui::modal::Modal::AgentsPanel { .. })),
+            "clicking the `a` footer hint must open the agents panel via the leader"
+        );
+        assert!(
+            !app.leader_pending,
+            "leader must clear once the click's follow-up key is consumed"
+        );
+    }
+
     /// Chip click from `View::Dashboard` dispatches the command to the selected
     /// workspace's session, not `active_session` (which returns `None` in the
     /// dashboard view).

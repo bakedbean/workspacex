@@ -99,20 +99,16 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
 }
 
 /// The argv (after the `gh` program name) that opens `branch`'s PR in the
-/// browser. Split out as a pure function so it can be unit-tested.
-pub(crate) fn pr_web_argv(branch: &str) -> Vec<String> {
-    vec![
-        "pr".to_string(),
-        "view".to_string(),
-        branch.to_string(),
-        "--web".to_string(),
-    ]
+/// browser. Split out as a pure function so it can be unit-tested. Borrows
+/// `branch` to match the `&[&str]` argv style used by `fetch_pr_status`.
+pub(crate) fn pr_web_argv(branch: &str) -> Vec<&str> {
+    vec!["pr", "view", branch, "--web"]
 }
 
 /// Open the PR for `branch` in the default browser via `gh pr view --web`.
 /// Fire-and-forget: spawns detached and only logs spawn failures (gh itself
 /// handles "no PR" / auth errors and we don't surface them on a click).
-pub fn open_pr_in_browser(worktree: &Path, branch: &str) {
+pub(crate) fn open_pr_in_browser(worktree: &Path, branch: &str) {
     let mut cmd = std::process::Command::new("gh");
     cmd.args(pr_web_argv(branch))
         .current_dir(worktree)
@@ -130,15 +126,7 @@ mod tests {
 
     #[test]
     fn pr_web_argv_builds_expected() {
-        assert_eq!(
-            pr_web_argv("feature/foo"),
-            vec![
-                "pr".to_string(),
-                "view".to_string(),
-                "feature/foo".to_string(),
-                "--web".to_string()
-            ]
-        );
+        assert_eq!(pr_web_argv("feature/foo"), vec!["pr", "view", "feature/foo", "--web"]);
     }
 
     #[test]

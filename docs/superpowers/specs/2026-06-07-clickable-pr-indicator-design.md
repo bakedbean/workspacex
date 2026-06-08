@@ -42,8 +42,8 @@ Scope is the **dashboard detail bar header** (not the attached-view footer).
 `src/git/forge.rs`:
 
 - Add `number` to the `gh pr view <branch> --json …` field list and to the
-  `GhPrView` struct (`#[serde(default)] number: Option<u64>`).
-- Introduce `pub struct PrStatus { pub lifecycle: BranchLifecycle, pub number: Option<u64> }`.
+  `GhPrView` struct (`#[serde(default)] number: Option<u32>`).
+- Introduce `pub struct PrStatus { pub lifecycle: BranchLifecycle, pub number: Option<u32> }`.
 - Rename `fetch_branch_lifecycle` → `fetch_pr_status`, returning
   `Result<Option<PrStatus>>`. The existing parse logic produces a `PrStatus`.
   For the `NoPr` (stderr heuristic) path, `number` is `None`.
@@ -51,7 +51,7 @@ Scope is the **dashboard detail bar header** (not the attached-view footer).
 
 `src/app.rs`:
 
-- Add a parallel map `pr_number: HashMap<WorkspaceId, u64>` alongside
+- Add a parallel map `pr_number: HashMap<WorkspaceId, u32>` alongside
   `pr_lifecycle`. Parallel per-workspace maps are the established idiom
   (`pr_last_poll_ms`, `workspace_diff*`, etc.). Keeping `BranchLifecycle`
   as the stored lifecycle value means `row.rs` / `updates_bar.rs` / modal
@@ -61,13 +61,13 @@ Scope is the **dashboard detail bar header** (not the attached-view footer).
 
 - The PR poll calls `fetch_pr_status`; on success it writes `pr_lifecycle`
   and (when `number` is `Some`) `pr_number` together.
-- The workspace-removal path (~line 278) clears both maps.
+- The branch-drift/rename invalidation path (~line 278) clears both maps.
 
 ### 2. Rendering — show the number + report the chip's rect
 
 `src/ui/dashboard/detail.rs`:
 
-- `build_header_strip` gains a `pr_number: Option<u64>` parameter and, when
+- `build_header_strip` gains a `pr_number: Option<u32>` parameter and, when
   building the lifecycle chip, renders `#<n>` between the glyph and label:
   `format!("{glyph} #{n} {label}")` when a number is present, falling back
   to the current `{glyph} {label}` when it isn't.
@@ -104,7 +104,7 @@ Scope is the **dashboard detail bar header** (not the attached-view footer).
 
 `src/git/forge.rs`:
 
-- `pub fn open_pr_in_browser(worktree: &Path, branch: &str)` spawns
+- `pub(crate) fn open_pr_in_browser(worktree: &Path, branch: &str)` spawns
   `gh pr view <branch> --web` detached (fire-and-forget). Spawn failures are
   logged via `tracing::warn!`, consistent with the other click handlers.
 

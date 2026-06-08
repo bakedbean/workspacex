@@ -1,5 +1,6 @@
 pub mod attached;
 pub mod dashboard;
+pub mod footer;
 pub mod modal;
 pub mod pm_pane;
 pub mod split;

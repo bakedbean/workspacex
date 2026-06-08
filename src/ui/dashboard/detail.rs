@@ -472,6 +472,9 @@ pub(crate) fn build_header_strip(
             };
             let chip_width = chip_text.chars().count();
             pr_chip = Some(HeaderChip {
+                // `col` is the running char-offset at this point: the number
+                // of chars before the chip glyph. Any span added above must
+                // bump `col` or this offset drifts.
                 start: col,
                 width: chip_width,
             });
@@ -527,6 +530,8 @@ pub(crate) fn build_header_strip(
     col += ago_text.chars().count();
     spans.push(Span::styled(ago_text, theme.dim_style()));
 
+    // `width` is reserved for future right-truncation; `col` is the final
+    // running char-offset. Both are intentionally unused for now.
     let _ = (width, col);
     (Line::from(spans), pr_chip)
 }
@@ -935,6 +940,29 @@ mod tests {
         assert!(!lower.contains("pr open"), "no pr label: {text:?}");
         assert!(!lower.contains("merged"), "no pr label: {text:?}");
         assert!(chip.is_none(), "no chip rect when no lifecycle: {text:?}");
+    }
+
+    #[test]
+    fn header_strip_omits_chip_for_no_pr_even_with_number() {
+        // `NoPr` is what the store emits for a branch with no PR; its
+        // lifecycle_chip glyph is empty, so no chip is drawn even if a
+        // stale number is somehow present.
+        let theme = Theme::wsx();
+        let (line, chip) = build_header_strip(
+            "ws",
+            "br",
+            Some(BranchLifecycle::NoPr),
+            Some(99),
+            None,
+            0,
+            Status::Idle,
+            None,
+            &theme,
+            120,
+        );
+        let text = line_to_string(&line);
+        assert!(!text.contains("#99"), "no chip number for NoPr: {text:?}");
+        assert!(chip.is_none(), "no chip rect for NoPr: {text:?}");
     }
 
     #[test]

@@ -2,6 +2,7 @@ use crate::commands::pinned::{PinnedCommand, truncate_label};
 use crate::data::store::AgentInstanceId;
 use crate::pty::render::render_screen;
 use crate::pty::session::{AgentKind, Session};
+use crate::ui::footer::{FooterHintAction, FooterHintSpan, key_for_glyph};
 use crate::ui::split::{Divider, SplitDirection};
 use crate::ui::theme::Theme;
 use chronox::Side;
@@ -61,6 +62,10 @@ pub struct PanesDrawOutput {
     pub chronology_entry_rects: Vec<(usize, Rect)>,
     /// Entries drawn in the chronology bar this frame (for keyboard auto-scroll).
     pub chronology_visible_entries: usize,
+    /// `(clickable_rect, action)` for each footer keybind hint (including the
+    /// `^x` leader pill). Consumed by the input handler to fire the matching
+    /// key on click.
+    pub footer_hint_rects: Vec<(Rect, crate::ui::footer::FooterHintAction)>,
 }
 
 /// Split `area` into `(agent_area, Some(bar_rect))` per the chronology config,
@@ -166,9 +171,15 @@ pub fn render_panes(
     // Footer rect is 2 cells tall; the empty first line gives the keys
     // breathing room from the row above without doubling spacing
     // throughout the chrome stack.
+    let (footer_keys_line, footer_hints) =
+        footer_line(footer_label, footer_agent, multi_pane_footer, theme);
+    // Keys render on the footer's second row, so hint rects are anchored there.
+    let footer_keys_row = footer_area.y.saturating_add(1);
+    let footer_hint_rects =
+        crate::ui::dashboard::footer_hint_rects(footer_area, footer_keys_row, &footer_hints);
     let footer_text = ratatui::text::Text::from(vec![
         Line::from(Vec::<Span<'static>>::new()),
-        footer_line(footer_label, footer_agent, multi_pane_footer, theme),
+        footer_keys_line,
     ]);
     f.render_widget(Paragraph::new(footer_text), footer_area);
 
@@ -194,6 +205,7 @@ pub fn render_panes(
         agent_chip_rects,
         chronology_entry_rects: chronology_hits.entries,
         chronology_visible_entries: chronology_hits.visible_entries,
+        footer_hint_rects,
     }
 }
 
@@ -507,7 +519,7 @@ fn footer_line(
     agent: Option<AgentKind>,
     multi_pane: bool,
     theme: &Theme,
-) -> Line<'static> {
+) -> (Line<'static>, Vec<FooterHintSpan>) {
     let keys: &[(&str, &str)] = if multi_pane {
         &[
             ("d", "close-pane"),
@@ -542,24 +554,84 @@ fn footer_line(
     let pad_style = theme.chip_bg_style();
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 5 + 4);
+    // `col` tracks the running column so each pill (and the `^x` leader pill)
+    // can be recorded as a clickable hint with offsets relative to the line
+    // start. The caller turns these into absolute screen rects.
+    let mut hints: Vec<FooterHintSpan> = Vec::new();
+    let mut col: u16 = 0;
+    let push = |spans: &mut Vec<Span<'static>>, col: &mut u16, span: Span<'static>| {
+        *col += span.content.chars().count() as u16;
+        spans.push(span);
+    };
     if let Some(a) = agent {
-        spans.push(Span::styled("▎".to_string(), theme.agent_style(a)));
-        spans.push(Span::raw(" ".to_string()));
+        push(
+            &mut spans,
+            &mut col,
+            Span::styled("▎".to_string(), theme.agent_style(a)),
+        );
+        push(&mut spans, &mut col, Span::raw(" ".to_string()));
     }
-    spans.push(Span::styled(label.to_string(), theme.header_style()));
-    spans.push(Span::raw("   ".to_string()));
-    // ^x leader rendered as a standalone pill (no label tail).
-    spans.push(Span::styled(" ".to_string(), pad_style));
-    spans.push(Span::styled("^x".to_string(), key_style));
-    spans.push(Span::styled(" ".to_string(), pad_style));
+    push(
+        &mut spans,
+        &mut col,
+        Span::styled(label.to_string(), theme.header_style()),
+    );
+    push(&mut spans, &mut col, Span::raw("   ".to_string()));
+    // ^x leader rendered as a standalone pill (no label tail). Clicking it
+    // arms the leader, exactly like pressing Ctrl-x.
+    let leader_start = col;
+    push(
+        &mut spans,
+        &mut col,
+        Span::styled(" ".to_string(), pad_style),
+    );
+    push(
+        &mut spans,
+        &mut col,
+        Span::styled("^x".to_string(), key_style),
+    );
+    push(
+        &mut spans,
+        &mut col,
+        Span::styled(" ".to_string(), pad_style),
+    );
+    hints.push(FooterHintSpan {
+        start_col: leader_start,
+        width: col - leader_start,
+        action: FooterHintAction::ArmLeader,
+    });
     for (key, lbl) in keys {
-        spans.push(Span::raw("  ".to_string()));
-        spans.push(Span::styled(" ".to_string(), pad_style));
-        spans.push(Span::styled((*key).to_string(), key_style));
-        spans.push(Span::styled(" ".to_string(), pad_style));
-        spans.push(Span::styled(format!(" {lbl}"), label_style));
+        push(&mut spans, &mut col, Span::raw("  ".to_string()));
+        let start = col;
+        push(
+            &mut spans,
+            &mut col,
+            Span::styled(" ".to_string(), pad_style),
+        );
+        push(
+            &mut spans,
+            &mut col,
+            Span::styled((*key).to_string(), key_style),
+        );
+        push(
+            &mut spans,
+            &mut col,
+            Span::styled(" ".to_string(), pad_style),
+        );
+        push(
+            &mut spans,
+            &mut col,
+            Span::styled(format!(" {lbl}"), label_style),
+        );
+        if let Some(key_event) = key_for_glyph(key) {
+            hints.push(FooterHintSpan {
+                start_col: start,
+                width: col - start,
+                action: FooterHintAction::Key(key_event),
+            });
+        }
     }
-    Line::from(spans)
+    (Line::from(spans), hints)
 }
 
 /// Compute the clickable Rect for each chip that fits within `area`.
@@ -879,7 +951,7 @@ mod tests {
         // regression that re-extended bg_soft over the label would
         // visually merge key and label into one block.
         let theme = crate::ui::theme::Theme::wsx();
-        let line = footer_line("ws", None, false, &theme);
+        let (line, _) = footer_line("ws", None, false, &theme);
         let leader = line
             .spans
             .iter()
@@ -906,7 +978,7 @@ mod tests {
     #[test]
     fn footer_line_prepends_agent_bar_when_present() {
         let theme = Theme::wsx();
-        let line = footer_line("wsx/foo", Some(AgentKind::Codex), false, &theme);
+        let (line, _) = footer_line("wsx/foo", Some(AgentKind::Codex), false, &theme);
         assert_eq!(line.spans[0].content.as_ref(), "▎");
         assert_eq!(
             line.spans[0].style.fg,
@@ -922,12 +994,37 @@ mod tests {
     #[test]
     fn footer_line_omits_agent_bar_when_none() {
         let theme = Theme::wsx();
-        let line = footer_line("project-manager", None, false, &theme);
+        let (line, _) = footer_line("project-manager", None, false, &theme);
         assert_eq!(
             line.spans[0].content.as_ref(),
             "project-manager",
             "no leading bar for the PM pane"
         );
+    }
+
+    #[test]
+    fn footer_line_emits_leader_and_keybind_hints() {
+        // The ^x pill arms the leader; each chord key maps to its key press.
+        // Hint column runs must line up with the rendered glyphs so clicks
+        // land on the right pill.
+        let theme = Theme::wsx();
+        let (line, hints) = footer_line("ws", None, false, &theme);
+        let cells: Vec<char> = line.spans.iter().flat_map(|s| s.content.chars()).collect();
+        let slice = |h: &FooterHintSpan| -> String {
+            cells[h.start_col as usize..(h.start_col + h.width) as usize]
+                .iter()
+                .collect()
+        };
+        let leader = hints
+            .iter()
+            .find(|h| h.action == FooterHintAction::ArmLeader)
+            .expect("leader hint present");
+        assert_eq!(slice(leader), " ^x ", "leader hint covers the ^x pill");
+        let detach = hints
+            .iter()
+            .find(|h| h.action == FooterHintAction::Key(key_for_glyph("d").unwrap()))
+            .expect("detach hint present");
+        assert_eq!(slice(detach), " d  detach", "d hint covers pill + label");
     }
 
     #[test]

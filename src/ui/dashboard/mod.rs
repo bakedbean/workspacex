@@ -89,6 +89,36 @@ pub fn render(
     let _ = render_footer(f, chunks[1], inputs.activity, theme, "24h");
 }
 
+/// Convert a footer line's relative hint spans into absolute screen rects,
+/// clipped to `area`. Shared by the dashboard and attached footers so click
+/// hit-testing stays consistent. `row` is the absolute y of the keys line.
+pub(crate) fn footer_hint_rects(
+    area: Rect,
+    row: u16,
+    hints: &[crate::ui::footer::FooterHintSpan],
+) -> Vec<(Rect, crate::ui::footer::FooterHintAction)> {
+    let max_col = area.x.saturating_add(area.width);
+    hints
+        .iter()
+        .filter_map(|h| {
+            let x = area.x.saturating_add(h.start_col);
+            if x >= max_col {
+                return None; // hint scrolled entirely off the right edge
+            }
+            let width = h.width.min(max_col - x);
+            Some((
+                Rect {
+                    x,
+                    y: row,
+                    width,
+                    height: 1,
+                },
+                h.action,
+            ))
+        })
+        .collect()
+}
+
 /// Render chrome, status strip, and the workspace list into `area` without
 /// painting a footer row. The caller is responsible for rendering the footer
 /// (usually in a separately-carved row below the detail/PM regions so the
@@ -139,16 +169,17 @@ pub fn render_without_footer(
 
 /// Render only the footer line (key hints + sparkline) into `area`.
 /// `area` should be exactly 1 row tall. Returns the on-screen `Rect` of the
-/// clickable activity graph (the trailing "<label> <sparkline>" run), so the
-/// caller can hit-test clicks on it.
+/// clickable activity graph (the trailing "<label> <sparkline>" run) plus the
+/// clickable rect + action of each keybind hint, so the caller can hit-test
+/// clicks on them.
 pub fn render_footer(
     f: &mut Frame,
     area: Rect,
     activity: &[u32],
     theme: &Theme,
     window_label: &str,
-) -> Rect {
-    let (line, graph_w) = layout::footer(
+) -> (Rect, Vec<(Rect, crate::ui::footer::FooterHintAction)>) {
+    let (line, graph_w, hints) = layout::footer(
         activity,
         env!("CARGO_PKG_VERSION"),
         area.width as usize,
@@ -156,14 +187,16 @@ pub fn render_footer(
         window_label,
     );
     f.render_widget(Paragraph::new(line), area);
+    let hint_rects = footer_hint_rects(area, area.y, &hints);
     // The graph is right-aligned within the footer row.
     let x = area.x + area.width.saturating_sub(graph_w);
-    Rect {
+    let graph_rect = Rect {
         x,
         y: area.y,
         width: graph_w.min(area.width),
         height: 1,
-    }
+    };
+    (graph_rect, hint_rects)
 }
 
 /// Return the sequence of selectable targets in *visible order*, matching

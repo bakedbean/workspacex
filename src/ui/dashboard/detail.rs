@@ -923,8 +923,18 @@ mod tests {
     #[test]
     fn header_strip_omits_diff_when_none() {
         let theme = Theme::wsx();
-        let (line, _) =
-            build_header_strip("ws", "br", None, None, None, 0, Status::Idle, None, &theme, 80);
+        let (line, _) = build_header_strip(
+            "ws",
+            "br",
+            None,
+            None,
+            None,
+            0,
+            Status::Idle,
+            None,
+            &theme,
+            80,
+        );
         let text = line_to_string(&line);
         assert!(!text.contains("+"), "diff cell should be absent: {text:?}");
         assert!(!text.contains("−"), "diff cell should be absent: {text:?}");
@@ -933,8 +943,18 @@ mod tests {
     #[test]
     fn header_strip_omits_lifecycle_when_none() {
         let theme = Theme::wsx();
-        let (line, chip) =
-            build_header_strip("ws", "br", None, None, None, 0, Status::Idle, None, &theme, 80);
+        let (line, chip) = build_header_strip(
+            "ws",
+            "br",
+            None,
+            None,
+            None,
+            0,
+            Status::Idle,
+            None,
+            &theme,
+            80,
+        );
         let text = line_to_string(&line);
         let lower = text.to_lowercase();
         assert!(!lower.contains("pr open"), "no pr label: {text:?}");

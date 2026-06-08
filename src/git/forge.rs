@@ -126,7 +126,10 @@ mod tests {
 
     #[test]
     fn pr_web_argv_builds_expected() {
-        assert_eq!(pr_web_argv("feature/foo"), vec!["pr", "view", "feature/foo", "--web"]);
+        assert_eq!(
+            pr_web_argv("feature/foo"),
+            vec!["pr", "view", "feature/foo", "--web"]
+        );
     }
 
     #[test]

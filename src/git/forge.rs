@@ -20,25 +20,39 @@ struct GhPrView {
     is_draft: bool,
     #[serde(default)]
     mergeable: Option<String>,
+    #[serde(default)]
+    number: Option<u32>,
 }
 
-/// Parse the JSON returned by `gh pr view <branch> --json state,isDraft,mergeable`.
-/// Returns the lifecycle variant for a known PR, or `None` if the JSON is
-/// missing or unparseable (callers treat unknown as "no info").
+/// A branch's PR status: its lifecycle plus the PR number (when known).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrStatus {
+    pub lifecycle: BranchLifecycle,
+    pub number: Option<u32>,
+}
+
+/// Parse the JSON returned by
+/// `gh pr view <branch> --json state,isDraft,mergeable,number`.
+/// Returns the PR status for a known PR, or `None` if the JSON is missing
+/// or unparseable (callers treat unknown as "no info").
 ///
 /// Priority for open PRs: CONFLICTING wins over draft, because a conflict
 /// requires action regardless of whether the PR is marked ready.
-pub(crate) fn parse_gh_pr_view(stdout: &str) -> Option<BranchLifecycle> {
+pub(crate) fn parse_gh_pr_status(stdout: &str) -> Option<PrStatus> {
     let parsed: GhPrView = serde_json::from_str(stdout.trim()).ok()?;
     let conflicted = parsed.mergeable.as_deref() == Some("CONFLICTING");
-    match parsed.state.as_str() {
-        "OPEN" if conflicted => Some(BranchLifecycle::PrConflicted),
-        "OPEN" if parsed.is_draft => Some(BranchLifecycle::PrDraft),
-        "OPEN" => Some(BranchLifecycle::PrOpen),
-        "MERGED" => Some(BranchLifecycle::PrMerged),
-        "CLOSED" => Some(BranchLifecycle::PrClosed),
-        _ => None,
-    }
+    let lifecycle = match parsed.state.as_str() {
+        "OPEN" if conflicted => BranchLifecycle::PrConflicted,
+        "OPEN" if parsed.is_draft => BranchLifecycle::PrDraft,
+        "OPEN" => BranchLifecycle::PrOpen,
+        "MERGED" => BranchLifecycle::PrMerged,
+        "CLOSED" => BranchLifecycle::PrClosed,
+        _ => return None,
+    };
+    Some(PrStatus {
+        lifecycle,
+        number: parsed.number,
+    })
 }
 
 /// Heuristic: `gh pr view` exits 1 with a stderr line like
@@ -48,13 +62,16 @@ pub(crate) fn stderr_means_no_pr(stderr: &str) -> bool {
     stderr.contains("no pull requests found")
 }
 
-pub async fn fetch_branch_lifecycle(
-    worktree: &Path,
-    branch: &str,
-) -> Result<Option<BranchLifecycle>> {
+pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrStatus>> {
     let out = Command::new("gh")
         .current_dir(worktree)
-        .args(["pr", "view", branch, "--json", "state,isDraft,mergeable"])
+        .args([
+            "pr",
+            "view",
+            branch,
+            "--json",
+            "state,isDraft,mergeable,number",
+        ])
         .output()
         .await;
 
@@ -66,16 +83,41 @@ pub async fn fetch_branch_lifecycle(
 
     if out.status.success() {
         let stdout = String::from_utf8_lossy(&out.stdout);
-        return Ok(parse_gh_pr_view(&stdout));
+        return Ok(parse_gh_pr_status(&stdout));
     }
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     if stderr_means_no_pr(&stderr) {
-        return Ok(Some(BranchLifecycle::NoPr));
+        return Ok(Some(PrStatus {
+            lifecycle: BranchLifecycle::NoPr,
+            number: None,
+        }));
     }
 
     // Auth failure, non-GitHub remote, network blip — degrade.
     Ok(None)
+}
+
+/// The argv (after the `gh` program name) that opens `branch`'s PR in the
+/// browser. Split out as a pure function so it can be unit-tested. Borrows
+/// `branch` to match the `&[&str]` argv style used by `fetch_pr_status`.
+pub(crate) fn pr_web_argv(branch: &str) -> Vec<&str> {
+    vec!["pr", "view", branch, "--web"]
+}
+
+/// Open the PR for `branch` in the default browser via `gh pr view --web`.
+/// Fire-and-forget: spawns detached and only logs spawn failures (gh itself
+/// handles "no PR" / auth errors and we don't surface them on a click).
+pub(crate) fn open_pr_in_browser(worktree: &Path, branch: &str) {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(pr_web_argv(branch))
+        .current_dir(worktree)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Err(e) = cmd.spawn() {
+        tracing::warn!(error = %e, branch, "failed to open PR in browser");
+    }
 }
 
 #[cfg(test)]
@@ -83,55 +125,94 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pr_web_argv_builds_expected() {
+        assert_eq!(
+            pr_web_argv("feature/foo"),
+            vec!["pr", "view", "feature/foo", "--web"]
+        );
+    }
+
+    #[test]
     fn parses_open_pr() {
-        let json = r#"{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE"}"#;
-        assert_eq!(parse_gh_pr_view(json), Some(BranchLifecycle::PrOpen));
+        let json = r#"{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","number":7}"#;
+        let s = parse_gh_pr_status(json).unwrap();
+        assert_eq!(s.lifecycle, BranchLifecycle::PrOpen);
+        assert_eq!(s.number, Some(7));
     }
 
     #[test]
     fn parses_open_pr_when_mergeable_missing() {
-        // Older gh versions or non-PR responses may omit `mergeable`.
-        let json = r#"{"state":"OPEN","isDraft":false}"#;
-        assert_eq!(parse_gh_pr_view(json), Some(BranchLifecycle::PrOpen));
+        let json = r#"{"state":"OPEN","isDraft":false,"number":7}"#;
+        assert_eq!(
+            parse_gh_pr_status(json).map(|s| s.lifecycle),
+            Some(BranchLifecycle::PrOpen)
+        );
     }
 
     #[test]
     fn parses_draft_pr() {
-        let json = r#"{"state":"OPEN","isDraft":true,"mergeable":"MERGEABLE"}"#;
-        assert_eq!(parse_gh_pr_view(json), Some(BranchLifecycle::PrDraft));
+        let json = r#"{"state":"OPEN","isDraft":true,"mergeable":"MERGEABLE","number":7}"#;
+        assert_eq!(
+            parse_gh_pr_status(json).map(|s| s.lifecycle),
+            Some(BranchLifecycle::PrDraft)
+        );
     }
 
     #[test]
     fn parses_conflicted_pr() {
-        let json = r#"{"state":"OPEN","isDraft":false,"mergeable":"CONFLICTING"}"#;
-        assert_eq!(parse_gh_pr_view(json), Some(BranchLifecycle::PrConflicted));
+        let json = r#"{"state":"OPEN","isDraft":false,"mergeable":"CONFLICTING","number":7}"#;
+        assert_eq!(
+            parse_gh_pr_status(json).map(|s| s.lifecycle),
+            Some(BranchLifecycle::PrConflicted)
+        );
     }
 
     #[test]
     fn conflict_overrides_draft() {
-        // A draft PR that's also conflicted: surface the conflict (more
-        // actionable than the draft status).
-        let json = r#"{"state":"OPEN","isDraft":true,"mergeable":"CONFLICTING"}"#;
-        assert_eq!(parse_gh_pr_view(json), Some(BranchLifecycle::PrConflicted));
+        let json = r#"{"state":"OPEN","isDraft":true,"mergeable":"CONFLICTING","number":7}"#;
+        assert_eq!(
+            parse_gh_pr_status(json).map(|s| s.lifecycle),
+            Some(BranchLifecycle::PrConflicted)
+        );
     }
 
     #[test]
     fn parses_merged_pr() {
-        let json = r#"{"state":"MERGED","isDraft":false,"mergeable":"UNKNOWN"}"#;
-        assert_eq!(parse_gh_pr_view(json), Some(BranchLifecycle::PrMerged));
+        let json = r#"{"state":"MERGED","isDraft":false,"mergeable":"UNKNOWN","number":7}"#;
+        assert_eq!(
+            parse_gh_pr_status(json).map(|s| s.lifecycle),
+            Some(BranchLifecycle::PrMerged)
+        );
     }
 
     #[test]
     fn parses_closed_pr() {
-        let json = r#"{"state":"CLOSED","isDraft":false,"mergeable":"UNKNOWN"}"#;
-        assert_eq!(parse_gh_pr_view(json), Some(BranchLifecycle::PrClosed));
+        let json = r#"{"state":"CLOSED","isDraft":false,"mergeable":"UNKNOWN","number":7}"#;
+        assert_eq!(
+            parse_gh_pr_status(json).map(|s| s.lifecycle),
+            Some(BranchLifecycle::PrClosed)
+        );
     }
 
     #[test]
     fn parser_returns_none_for_garbage() {
-        assert_eq!(parse_gh_pr_view("not json"), None);
-        assert_eq!(parse_gh_pr_view(""), None);
-        assert_eq!(parse_gh_pr_view(r#"{"state":"WAT"}"#), None);
+        assert!(parse_gh_pr_status("not json").is_none());
+        assert!(parse_gh_pr_status("").is_none());
+        assert!(parse_gh_pr_status(r#"{"state":"WAT"}"#).is_none());
+    }
+
+    #[test]
+    fn parses_pr_number() {
+        let json = r#"{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","number":152}"#;
+        assert_eq!(parse_gh_pr_status(json).unwrap().number, Some(152));
+    }
+
+    #[test]
+    fn tolerates_missing_number() {
+        let json = r#"{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE"}"#;
+        let s = parse_gh_pr_status(json).unwrap();
+        assert_eq!(s.lifecycle, BranchLifecycle::PrOpen);
+        assert_eq!(s.number, None);
     }
 
     #[test]
@@ -148,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_returns_none_on_non_git_path() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let result = fetch_branch_lifecycle(tmp.path(), "main").await;
+        let result = fetch_pr_status(tmp.path(), "main").await;
         assert!(matches!(result, Ok(None)), "got {result:?}");
     }
 }

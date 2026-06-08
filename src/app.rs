@@ -148,6 +148,13 @@ pub struct App {
         crate::data::store::WorkspaceId,
         crate::git::forge::BranchLifecycle,
     >,
+    /// Cached PR number per workspace, populated alongside `pr_lifecycle`.
+    /// Absent key = unknown. Used to render `#<n>` in the detail-bar chip.
+    pub pr_number: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
+    /// Screen rect of the clickable PR chip in the detail-bar header, with
+    /// the workspace it belongs to. Set during draw, read by the mouse
+    /// handler. Mirrors the `chip_rects` draw-populates / input-reads pattern.
+    pub pr_link_rect: Option<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
     /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
     pub pr_last_poll_ms: std::collections::HashMap<crate::data::store::WorkspaceId, i64>,
     /// Last epoch-ms we attempted a `git diff --shortstat` per workspace
@@ -331,6 +338,8 @@ impl App {
             quit: false,
             workspace_status: std::collections::HashMap::new(),
             pr_lifecycle: std::collections::HashMap::new(),
+            pr_number: std::collections::HashMap::new(),
+            pr_link_rect: None,
             pr_last_poll_ms: std::collections::HashMap::new(),
             diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),

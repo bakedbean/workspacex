@@ -276,6 +276,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     // different (or no) PR. Clearing the throttle stamp
                     // makes the next tick poll immediately.
                     g.pr_lifecycle.remove(&id);
+                    g.pr_number.remove(&id);
                     g.pr_last_poll_ms.remove(&id);
                     // New branch → different ancestry from `base_branch`,
                     // so the cached diff and its throttle stamp are
@@ -345,11 +346,19 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     let mut g = app.lock().await;
                     g.pr_last_poll_ms.insert(id, now_ms);
                 }
-                if let Ok(Some(lifecycle)) =
-                    crate::git::forge::fetch_branch_lifecycle(&path, &db_branch).await
+                if let Ok(Some(status)) =
+                    crate::git::forge::fetch_pr_status(&path, &db_branch).await
                 {
                     let mut g = app.lock().await;
-                    g.pr_lifecycle.insert(id, lifecycle);
+                    g.pr_lifecycle.insert(id, status.lifecycle);
+                    match status.number {
+                        Some(n) => {
+                            g.pr_number.insert(id, n);
+                        }
+                        None => {
+                            g.pr_number.remove(&id);
+                        }
+                    }
                 }
                 // Ok(None) → leave any existing cached value alone; better
                 // than clobbering a previously-known state on a transient

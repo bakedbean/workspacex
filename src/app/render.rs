@@ -32,6 +32,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.detail_container_rects = [None; 4];
     app.attached_pane_rects.clear();
     app.agent_chip_rects.clear();
+    app.pr_link_rect = None;
     app.chronology_entry_rects.clear();
     app.chronology_bar_rect = None;
     app.usage_graph_rect = None;
@@ -370,7 +371,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             diff_per_file: app.workspace_diff_per_file.get(&ws.id),
                             lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                             pr_title: None,
-                            pr_number: None,
+                            pr_number: app.pr_number.get(&ws.id).copied(),
                             status,
                             ago_secs,
                             reply_draft: &app.dashboard.reply_draft,
@@ -391,6 +392,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             &app.theme,
                         );
                         app.detail_container_rects = out.container_rects;
+                        app.pr_link_rect = out.pr_link_rect.map(|r| (ws.id, r));
                         if !out.chip_rects.is_empty() {
                             app.chip_rects = out.chip_rects;
                             app.pinned_commands_cache = pinned;

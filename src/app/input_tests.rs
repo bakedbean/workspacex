@@ -1817,6 +1817,45 @@ mod pm_state_tests {
         );
     }
 
+    /// The `^x` pill routes a real `Ctrl-x` through the handlers rather than
+    /// poking `leader_pending` directly, so a second click behaves like a
+    /// second `Ctrl-x` keypress: it clears the leader (and sends a literal
+    /// `^X`) instead of leaving the leader stuck armed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn double_click_attached_leader_pill_does_not_stick_armed() {
+        use crate::ui::footer::FooterHintAction;
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let _ws_id = spawn_attached_workspace(&mut app);
+
+        app.footer_hint_rects = vec![(
+            ratatui::layout::Rect {
+                x: 10,
+                y: 40,
+                width: 4,
+                height: 1,
+            },
+            FooterHintAction::ArmLeader,
+        )];
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 11,
+            row: 40,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        handle_mouse(&mut app, click).await;
+        assert!(app.leader_pending, "first ^x click arms the leader");
+
+        handle_mouse(&mut app, click).await;
+        assert!(
+            !app.leader_pending,
+            "second ^x click must clear the leader, matching double Ctrl-x \
+             (not leave it stuck armed)"
+        );
+    }
+
     /// Clicking an attached footer keybind hint arms the leader and dispatches
     /// the command in one click. `^x a` opens the agents panel.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

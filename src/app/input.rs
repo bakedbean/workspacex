@@ -1950,45 +1950,55 @@ fn adjust_detail_scroll(app: &mut App, slot: usize, delta: u16, up: bool) {
     };
 }
 
-/// Fire a footer nav-hint click. Footer hints mirror the printed keybinds, so
-/// this routes a synthetic key press through the focused view's key handler —
-/// arming the attached-view leader first when the view's footer lists
-/// leader-prefixed commands (`^x …`). Clicking the `^x` pill arms the leader
-/// alone, exactly like pressing `Ctrl-x`.
-async fn dispatch_footer_hint(app: &mut App, action: crate::ui::footer::FooterHintAction) {
-    use crate::ui::footer::FooterHintAction;
-    match action {
-        // The `^x` pill arms the attached-view leader. On the dashboard footer
-        // this variant is never produced, so a stray one is a harmless no-op.
-        FooterHintAction::ArmLeader => {
-            if matches!(app.view, View::Attached(_) | View::AttachedPm) {
-                app.leader_pending = true;
+/// Route a single synthetic key press through the focused view's key handler,
+/// exactly as if it had arrived from the keyboard. Used by footer-hint clicks
+/// so they go through the same code paths (leader arming, chord consumption,
+/// PTY forwarding) as real keystrokes rather than mutating state directly.
+async fn route_footer_key(app: &mut App, k: crossterm::event::KeyEvent) {
+    match &app.view {
+        View::Dashboard => {
+            if let Err(e) = handle_key_dashboard(app, k).await {
+                tracing::warn!(error = %e, "footer-hint dashboard dispatch failed");
             }
         }
-        FooterHintAction::Key(k) => match &app.view {
-            View::Dashboard => {
-                // The dashboard footer lists direct (non-leader) keys.
-                if let Err(e) = handle_key_dashboard(app, k).await {
-                    tracing::warn!(error = %e, "footer-hint dashboard dispatch failed");
+        View::Attached(state) => {
+            if let Some(target) = state.focused_target() {
+                if let Err(e) = handle_key_attached(app, target, k).await {
+                    tracing::warn!(error = %e, "footer-hint attached dispatch failed");
                 }
             }
-            // Attached/PM footers list leader-prefixed commands; arm the
-            // leader, then dispatch the follow-up key.
-            View::Attached(state) => {
-                if let Some(target) = state.focused_target() {
-                    app.leader_pending = true;
-                    if let Err(e) = handle_key_attached(app, target, k).await {
-                        tracing::warn!(error = %e, "footer-hint attached dispatch failed");
-                    }
-                }
+        }
+        View::AttachedPm => {
+            if let Err(e) = handle_key_attached_pm(app, k).await {
+                tracing::warn!(error = %e, "footer-hint pm dispatch failed");
             }
-            View::AttachedPm => {
-                app.leader_pending = true;
-                if let Err(e) = handle_key_attached_pm(app, k).await {
-                    tracing::warn!(error = %e, "footer-hint pm dispatch failed");
-                }
+        }
+    }
+}
+
+/// Fire a footer nav-hint click by synthesizing the key press(es) the hint
+/// stands for and routing them through the normal key handlers — never by
+/// poking `leader_pending` directly, so behavior matches the keyboard exactly
+/// (including edge cases like an already-armed leader).
+///
+/// The dashboard footer lists direct keys. The attached/PM footers list
+/// leader-prefixed chords, so a labeled key becomes `Ctrl-x` then the key, and
+/// the `^x` pill becomes a lone `Ctrl-x` (which arms the leader, or — if it was
+/// already armed — clears it and sends a literal `^X`, exactly as pressing
+/// `Ctrl-x` twice does).
+async fn dispatch_footer_hint(app: &mut App, action: crate::ui::footer::FooterHintAction) {
+    use crate::ui::footer::FooterHintAction;
+    let leader = crossterm::event::KeyEvent::new(LEADER_KEY, KeyModifiers::CONTROL);
+    match action {
+        FooterHintAction::ArmLeader => route_footer_key(app, leader).await,
+        FooterHintAction::Key(k) => {
+            // Attached/PM hints are chords: send the leader first, then the key.
+            // The dashboard footer's keys are not leader-prefixed.
+            if matches!(app.view, View::Attached(_) | View::AttachedPm) {
+                route_footer_key(app, leader).await;
             }
-        },
+            route_footer_key(app, k).await;
+        }
     }
 }
 

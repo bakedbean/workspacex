@@ -50,10 +50,19 @@ pub struct DetailInputs<'a> {
     pub scroll_offsets: &'a mut [u16; 4],
 }
 
+/// Char-offset and char-width of the clickable PR chip within the header
+/// line. `render` converts this into a screen `Rect`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HeaderChip {
+    pub start: usize,
+    pub width: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct DetailDrawOutput {
     pub chip_rects: Vec<ratatui::layout::Rect>,
     pub container_rects: [Option<ratatui::layout::Rect>; 4],
+    pub pr_link_rect: Option<ratatui::layout::Rect>,
 }
 
 /// Render the detail bar into `area`. No-op when `area.height` is below
@@ -118,10 +127,11 @@ pub fn render(
         (None, chunks[2])
     };
 
-    let header = build_header_strip(
+    let (header, pr_chip) = build_header_strip(
         &inputs.workspace.name,
         &inputs.workspace.branch,
         inputs.lifecycle,
+        inputs.pr_number,
         inputs.diff,
         inputs.procs.len() as u32,
         inputs.status,
@@ -130,6 +140,24 @@ pub fn render(
         header_area.width as usize,
     );
     f.render_widget(Paragraph::new(header), header_area);
+
+    let pr_link_rect = pr_chip.and_then(|c| {
+        let x = header_area.x.saturating_add(c.start as u16);
+        let right = header_area.x.saturating_add(header_area.width);
+        if x >= right {
+            return None;
+        }
+        let w = (c.width as u16).min(right - x);
+        if w == 0 {
+            return None;
+        }
+        Some(ratatui::layout::Rect {
+            x,
+            y: header_area.y,
+            width: w,
+            height: 1,
+        })
+    });
 
     let container_rects = render_body_region(f, body_region, inputs, theme);
 
@@ -155,6 +183,7 @@ pub fn render(
     DetailDrawOutput {
         chip_rects,
         container_rects,
+        pr_link_rect,
     }
 }
 
@@ -392,76 +421,114 @@ use ratatui::text::{Line, Span};
 
 const GUTTER: &str = "▍";
 
-/// One-line header strip at the top of the bar.
+/// One-line header strip at the top of the bar. Returns the rendered line
+/// and, when a PR lifecycle chip was drawn, its char-offset + width so the
+/// caller can make it clickable.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_header_strip(
     name: &str,
     branch: &str,
     lifecycle: Option<BranchLifecycle>,
+    pr_number: Option<u32>,
     diff: Option<DiffStats>,
     procs: u32,
     status: Status,
     ago_secs: Option<u64>,
     theme: &Theme,
     width: usize,
-) -> Line<'static> {
+) -> (Line<'static>, Option<HeaderChip>) {
     let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::styled(GUTTER.to_string(), theme.status_style(status)));
+    let mut col: usize = 0;
+    let mut pr_chip: Option<HeaderChip> = None;
+
+    let gutter = GUTTER.to_string();
+    col += gutter.chars().count();
+    spans.push(Span::styled(gutter, theme.status_style(status)));
+
+    col += 1;
     spans.push(Span::raw(" ".to_string()));
+
+    col += name.chars().count();
     spans.push(Span::styled(
         name.to_string(),
         Style::default().add_modifier(Modifier::BOLD),
     ));
+
+    col += 2;
     spans.push(Span::raw("  ".to_string()));
-    spans.push(Span::styled(format!("⎇ {branch}"), theme.dim_style()));
+
+    let branch_text = format!("⎇ {branch}");
+    col += branch_text.chars().count();
+    spans.push(Span::styled(branch_text, theme.dim_style()));
 
     if let Some(lc) = lifecycle {
-        spans.push(Span::raw("  ".to_string()));
         let (glyph, label) = lifecycle_chip(lc);
-        spans.push(Span::styled(
-            format!("{glyph} {label}"),
-            theme
-                .lifecycle_style(Some(lc))
-                .unwrap_or_else(|| theme.dim_style()),
-        ));
+        if !glyph.is_empty() {
+            col += 2;
+            spans.push(Span::raw("  ".to_string()));
+            let chip_text = match pr_number {
+                Some(n) => format!("{glyph} #{n} {label}"),
+                None => format!("{glyph} {label}"),
+            };
+            let chip_width = chip_text.chars().count();
+            pr_chip = Some(HeaderChip {
+                start: col,
+                width: chip_width,
+            });
+            col += chip_width;
+            spans.push(Span::styled(
+                chip_text,
+                theme
+                    .lifecycle_style(Some(lc))
+                    .unwrap_or_else(|| theme.dim_style()),
+            ));
+        }
     }
 
     if let Some(d) = diff
         && (d.added > 0 || d.removed > 0)
     {
+        col += 2;
         spans.push(Span::raw("  ".to_string()));
-        spans.push(Span::styled(format!("+{}", d.added), theme.ok_style()));
+        let added = format!("+{}", d.added);
+        col += added.chars().count();
+        spans.push(Span::styled(added, theme.ok_style()));
+        col += 1;
         spans.push(Span::raw(" ".to_string()));
-        spans.push(Span::styled(format!("−{}", d.removed), theme.err_style()));
+        let removed = format!("−{}", d.removed);
+        col += removed.chars().count();
+        spans.push(Span::styled(removed, theme.err_style()));
     }
 
+    col += 2;
     spans.push(Span::raw("  ".to_string()));
     let procs_style = if procs > 0 {
         theme.status_style(Status::Thinking)
     } else {
         theme.dim_style()
     };
-    spans.push(Span::styled(format!("● {procs} procs"), procs_style));
+    let procs_text = format!("● {procs} procs");
+    col += procs_text.chars().count();
+    spans.push(Span::styled(procs_text, procs_style));
 
+    col += 2;
     spans.push(Span::raw("  ".to_string()));
-    spans.push(Span::styled(
-        status.glyph().to_string(),
-        theme.status_style(status),
-    ));
+    let glyph = status.glyph().to_string();
+    col += glyph.chars().count();
+    spans.push(Span::styled(glyph, theme.status_style(status)));
+    col += 1;
     spans.push(Span::raw(" ".to_string()));
-    spans.push(Span::styled(
-        status.label().to_string(),
-        theme.status_style(status),
-    ));
+    let label = status.label().to_string();
+    col += label.chars().count();
+    spans.push(Span::styled(label, theme.status_style(status)));
 
     let ago = format_ago_short(ago_secs);
-    spans.push(Span::styled(format!("  · {ago}"), theme.dim_style()));
+    let ago_text = format!("  · {ago}");
+    col += ago_text.chars().count();
+    spans.push(Span::styled(ago_text, theme.dim_style()));
 
-    // Right-truncate the full line to `width` cells by padding or
-    // dropping spans — for v1 we trust the caller to give us enough
-    // room (width >= 60); narrow-width handling is in Task 12.
-    let _ = width;
-    Line::from(spans)
+    let _ = (width, col);
+    (Line::from(spans), pr_chip)
 }
 
 fn lifecycle_chip(lc: BranchLifecycle) -> (&'static str, &'static str) {
@@ -815,10 +882,11 @@ mod tests {
     #[test]
     fn header_strip_contains_all_chips_in_order() {
         let theme = Theme::wsx();
-        let line = build_header_strip(
+        let (line, _) = build_header_strip(
             "repo-overview",
             "bakedbean/repo-overview",
             Some(BranchLifecycle::PrOpen),
+            None,
             Some(DiffStats {
                 added: 12,
                 removed: 3,
@@ -850,7 +918,8 @@ mod tests {
     #[test]
     fn header_strip_omits_diff_when_none() {
         let theme = Theme::wsx();
-        let line = build_header_strip("ws", "br", None, None, 0, Status::Idle, None, &theme, 80);
+        let (line, _) =
+            build_header_strip("ws", "br", None, None, None, 0, Status::Idle, None, &theme, 80);
         let text = line_to_string(&line);
         assert!(!text.contains("+"), "diff cell should be absent: {text:?}");
         assert!(!text.contains("−"), "diff cell should be absent: {text:?}");
@@ -859,14 +928,46 @@ mod tests {
     #[test]
     fn header_strip_omits_lifecycle_when_none() {
         let theme = Theme::wsx();
-        let line = build_header_strip("ws", "br", None, None, 0, Status::Idle, None, &theme, 80);
+        let (line, chip) =
+            build_header_strip("ws", "br", None, None, None, 0, Status::Idle, None, &theme, 80);
         let text = line_to_string(&line);
-        // The PR lifecycle glyph set is { ⏺, ⏵, ⏷, ⏸ } (any specific
-        // mapping in theme); none should appear when lifecycle is None.
-        // Use a simple proxy: there's no "PR" or "open"/"merged" label.
         let lower = text.to_lowercase();
         assert!(!lower.contains("pr open"), "no pr label: {text:?}");
         assert!(!lower.contains("merged"), "no pr label: {text:?}");
+        assert!(chip.is_none(), "no chip rect when no lifecycle: {text:?}");
+    }
+
+    #[test]
+    fn header_strip_shows_pr_number_and_reports_chip() {
+        let theme = Theme::wsx();
+        let (line, chip) = build_header_strip(
+            "ws",
+            "br",
+            Some(BranchLifecycle::PrOpen),
+            Some(152),
+            None,
+            0,
+            Status::Idle,
+            None,
+            &theme,
+            120,
+        );
+        let text = line_to_string(&line);
+        assert!(text.contains("#152"), "pr number missing: {text:?}");
+        let chip = chip.expect("chip rect should be present");
+        assert_eq!(chip.width, "⏺ #152 open".chars().count());
+        let prefix: String = text.chars().take(chip.start).collect();
+        assert!(
+            !prefix.contains("#152"),
+            "chip.start should point at the chip, prefix was {prefix:?}"
+        );
+        assert!(
+            text.chars()
+                .skip(chip.start)
+                .collect::<String>()
+                .starts_with("⏺ #152 open"),
+            "chip.start should land on the chip glyph: {text:?}"
+        );
     }
 
     #[test]

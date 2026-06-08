@@ -355,6 +355,14 @@ fn open_change_in_editor(
     }
 }
 
+/// Open the selected workspace's PR in the browser. No-op if the workspace
+/// id no longer resolves (e.g. removed between draw and click).
+fn open_pr_for_workspace(app: &App, ws_id: crate::data::store::WorkspaceId) {
+    if let Some((_, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
+        crate::git::forge::open_pr_in_browser(&ws.worktree_path, &ws.branch);
+    }
+}
+
 /// Resolve the configured chronology side for the focused attached workspace.
 fn focused_chronology_side(app: &App) -> Option<chronox::Side> {
     let crate::ui::View::Attached(state) = &app.view else {
@@ -2101,6 +2109,14 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 if let Err(e) = app.switch_focused_pane_to(inst) {
                     tracing::warn!(error = %e, "failed to switch pane from agent-pill click");
                 }
+            } else if let Some((ws_id, _)) = app.pr_link_rect.filter(|(_, r)| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                // Clicking the PR chip opens the PR in the browser.
+                open_pr_for_workspace(app, ws_id);
             } else if app.modal.is_none()
                 && app.usage_graph_rect.is_some_and(|r| {
                     m.column >= r.x

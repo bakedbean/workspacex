@@ -98,9 +98,48 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
     Ok(None)
 }
 
+/// The argv (after the `gh` program name) that opens `branch`'s PR in the
+/// browser. Split out as a pure function so it can be unit-tested.
+pub(crate) fn pr_web_argv(branch: &str) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "view".to_string(),
+        branch.to_string(),
+        "--web".to_string(),
+    ]
+}
+
+/// Open the PR for `branch` in the default browser via `gh pr view --web`.
+/// Fire-and-forget: spawns detached and only logs spawn failures (gh itself
+/// handles "no PR" / auth errors and we don't surface them on a click).
+pub fn open_pr_in_browser(worktree: &Path, branch: &str) {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(pr_web_argv(branch))
+        .current_dir(worktree)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Err(e) = cmd.spawn() {
+        tracing::warn!(error = %e, branch, "failed to open PR in browser");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pr_web_argv_builds_expected() {
+        assert_eq!(
+            pr_web_argv("feature/foo"),
+            vec![
+                "pr".to_string(),
+                "view".to_string(),
+                "feature/foo".to_string(),
+                "--web".to_string()
+            ]
+        );
+    }
 
     #[test]
     fn parses_open_pr() {

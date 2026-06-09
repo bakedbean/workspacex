@@ -14,7 +14,7 @@ use crate::app::{
 use crate::config::chronology_source::StoreConfigSource;
 use crate::error::Result;
 use crate::ui::View;
-use crate::ui::modal::Modal;
+use crate::ui::modal::{DiffViewMode, Modal};
 use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
 use chronox::Side;
 use crossterm::event::{
@@ -313,16 +313,28 @@ fn open_change_modal(app: &mut App, idx: usize) {
     let line = chronox::extract::resolve_line_in_file(&ev.file_path, &detail);
     let lang = chronox::lang_for_path(&ev.file_path);
     let lines = chronox::change_detail_lines_styled(&detail, line, lang);
+    let rows = chronox::change_detail_side_by_side(&detail, line, lang);
     let rel = chronox::relative_display(&ev.file_path, &worktree);
     let title = format!("{} {}", chronox::hhmm(ev.timestamp_ms), rel);
     app.modal = Some(crate::ui::modal::Modal::ChangeDetail {
         title,
         lines,
+        rows,
+        mode: app.change_detail_view,
         scroll: 0,
         worktree,
         file: ev.file_path.clone(),
         line,
     });
+}
+
+/// Set the change-detail modal's scroll offset in place, if that modal is open.
+/// Lets the key handlers nudge scroll without rebuilding the whole modal (which
+/// carries the diff lines/rows).
+fn set_change_detail_scroll(app: &mut App, scroll: usize) {
+    if let Some(Modal::ChangeDetail { scroll: s, .. }) = &mut app.modal {
+        *s = scroll;
+    }
 }
 
 /// Open `file` at `line` using the configured editor, surfacing a Modal::Error
@@ -1694,81 +1706,43 @@ async fn handle_key_modal(
         },
         Modal::ChangeDetail {
             lines,
-            mut scroll,
+            rows,
+            mode,
+            scroll,
             worktree,
             file,
             line,
-            title,
+            ..
         } => {
             const PAGE: usize = 10;
-            let len = lines.len();
+            // Scroll bounds follow the active view: the two models have
+            // different line counts (unified stacks old+new; side-by-side zips
+            // them), so `G`/PageDown must clamp against whichever is showing.
+            let len = match mode {
+                DiffViewMode::Unified => lines.len(),
+                DiffViewMode::SideBySide => rows.len(),
+            };
             match k.code {
                 KeyCode::Down | KeyCode::Char('j') => {
-                    scroll = scroll.saturating_add(1).min(len.saturating_sub(1));
-                    app.modal = Some(Modal::ChangeDetail {
-                        title,
-                        lines,
-                        scroll,
-                        worktree,
-                        file,
-                        line,
-                    });
+                    set_change_detail_scroll(
+                        app,
+                        scroll.saturating_add(1).min(len.saturating_sub(1)),
+                    );
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    scroll = scroll.saturating_sub(1);
-                    app.modal = Some(Modal::ChangeDetail {
-                        title,
-                        lines,
-                        scroll,
-                        worktree,
-                        file,
-                        line,
-                    });
+                    set_change_detail_scroll(app, scroll.saturating_sub(1));
                 }
                 KeyCode::PageDown => {
-                    scroll = scroll.saturating_add(PAGE).min(len.saturating_sub(1));
-                    app.modal = Some(Modal::ChangeDetail {
-                        title,
-                        lines,
-                        scroll,
-                        worktree,
-                        file,
-                        line,
-                    });
+                    set_change_detail_scroll(
+                        app,
+                        scroll.saturating_add(PAGE).min(len.saturating_sub(1)),
+                    );
                 }
                 KeyCode::PageUp => {
-                    scroll = scroll.saturating_sub(PAGE);
-                    app.modal = Some(Modal::ChangeDetail {
-                        title,
-                        lines,
-                        scroll,
-                        worktree,
-                        file,
-                        line,
-                    });
+                    set_change_detail_scroll(app, scroll.saturating_sub(PAGE));
                 }
-                KeyCode::Char('g') => {
-                    scroll = 0;
-                    app.modal = Some(Modal::ChangeDetail {
-                        title,
-                        lines,
-                        scroll,
-                        worktree,
-                        file,
-                        line,
-                    });
-                }
-                KeyCode::Char('G') => {
-                    scroll = len.saturating_sub(1);
-                    app.modal = Some(Modal::ChangeDetail {
-                        title,
-                        lines,
-                        scroll,
-                        worktree,
-                        file,
-                        line,
-                    });
-                }
+                KeyCode::Char('g') => set_change_detail_scroll(app, 0),
+                KeyCode::Char('G') => set_change_detail_scroll(app, len.saturating_sub(1)),
                 KeyCode::Esc => {
                     app.modal = None;
                 }

@@ -337,6 +337,22 @@ fn set_change_detail_scroll(app: &mut App, scroll: usize) {
     }
 }
 
+/// Toggle the change-detail modal between unified and side-by-side. The choice
+/// is mirrored onto `App` so it sticks across opens for the session, and scroll
+/// resets to 0 because the two views have different line counts (a preserved
+/// offset would point at an unrelated line).
+fn toggle_change_detail_view(app: &mut App) {
+    let next = if let Some(Modal::ChangeDetail { mode, scroll, .. }) = &mut app.modal {
+        let next = mode.toggled();
+        *mode = next;
+        *scroll = 0;
+        next
+    } else {
+        return;
+    };
+    app.change_detail_view = next;
+}
+
 /// Open `file` at `line` using the configured editor, surfacing a Modal::Error
 /// when unset or on failure. Shared by the detail modal's `e`.
 fn open_change_in_editor(
@@ -1749,6 +1765,7 @@ async fn handle_key_modal(
                 KeyCode::Char('e') => {
                     open_change_in_editor(app, &worktree, &file, line);
                 }
+                KeyCode::Char('d') => toggle_change_detail_view(app),
                 _ => {}
             }
         }
@@ -1996,8 +2013,19 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
     if matches!(app.modal, Some(Modal::ChangeDetail { .. })) {
         match m.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                if let Some(Modal::ChangeDetail { lines, scroll, .. }) = &mut app.modal {
-                    let len = lines.len();
+                if let Some(Modal::ChangeDetail {
+                    lines,
+                    rows,
+                    mode,
+                    scroll,
+                    ..
+                }) = &mut app.modal
+                {
+                    // Bound by the active view, which has its own line count.
+                    let len = match mode {
+                        DiffViewMode::Unified => lines.len(),
+                        DiffViewMode::SideBySide => rows.len(),
+                    };
                     if matches!(m.kind, MouseEventKind::ScrollDown) {
                         *scroll = scroll.saturating_add(1).min(len.saturating_sub(1));
                     } else {

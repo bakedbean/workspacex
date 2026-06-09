@@ -105,7 +105,7 @@ impl AgentKind {
 /// True if Claude Code has a persisted session JSONL for this worktree.
 /// Claude Code stores sessions at `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`,
 /// where the cwd encoding maps every non-alphanumeric character to `-`
-/// (see [`crate::activity::events::encode_cwd`], which delegates to chronox).
+/// (see [`crate::activity::events::encode_cwd`], which delegates to sessionx).
 pub fn has_prior_session(worktree: &Path) -> bool {
     let Some(home) = dirs::home_dir() else {
         return false;

@@ -5193,11 +5193,15 @@ mod change_detail_render_tests {
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
 
-    fn diff_cell(gutter: &str, kind: chronox::CellKind, code: &str) -> chronox::DiffCell {
-        chronox::DiffCell {
+    fn diff_cell(
+        gutter: &str,
+        kind: crate::chronology::CellKind,
+        code: &str,
+    ) -> crate::chronology::DiffCell {
+        crate::chronology::DiffCell {
             gutter: gutter.to_string(),
             kind,
-            code: vec![(code.to_string(), chronox::TokenKind::Default)],
+            code: vec![(code.to_string(), crate::chronology::TokenKind::Default)],
         }
     }
 
@@ -5217,13 +5221,21 @@ mod change_detail_render_tests {
     }
 
     fn modal_with(mode: DiffViewMode) -> Modal {
-        let rows = vec![chronox::SideRow {
-            left: Some(diff_cell("     ", chronox::CellKind::Removed, "OLDTOKEN")),
-            right: Some(diff_cell("  10 ", chronox::CellKind::Added, "NEWTOKEN")),
+        let rows = vec![crate::chronology::SideRow {
+            left: Some(diff_cell(
+                "     ",
+                crate::chronology::CellKind::Removed,
+                "OLDTOKEN",
+            )),
+            right: Some(diff_cell(
+                "  10 ",
+                crate::chronology::CellKind::Added,
+                "NEWTOKEN",
+            )),
         }];
         let lines = vec![
-            chronox::side_cell_to_line(rows[0].left.as_ref()),
-            chronox::side_cell_to_line(rows[0].right.as_ref()),
+            crate::chronology::side_cell_to_line(rows[0].left.as_ref()),
+            crate::chronology::side_cell_to_line(rows[0].right.as_ref()),
         ];
         Modal::ChangeDetail {
             title: "12:00 a.rs".into(),

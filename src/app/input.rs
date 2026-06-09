@@ -11,12 +11,12 @@ use crate::app::{
     reconcile_create_result, rescan_processes, restore_attached_state, save_layout_for,
     schedule_detach_refresh,
 };
+use crate::chronology::Side;
 use crate::config::chronology_source::StoreConfigSource;
 use crate::error::Result;
 use crate::ui::View;
 use crate::ui::modal::{DiffViewMode, Modal};
 use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
-use chronox::Side;
 use crossterm::event::{
     Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -252,7 +252,7 @@ fn toggle_chronology_visible(app: &mut App) {
         store: &app.store,
         repo: None,
     };
-    let mut cfg = chronox::resolve_global_only(&src);
+    let mut cfg = crate::chronology::resolve_global_only(&src);
     cfg.visible = !cfg.visible;
     if let Ok(json) = serde_json::to_string(&cfg) {
         if let Err(e) = app.store.set_setting("chronology_config", &json) {
@@ -267,7 +267,7 @@ fn swap_chronology_side(app: &mut App) {
         store: &app.store,
         repo: None,
     };
-    let mut cfg = chronox::resolve_global_only(&src);
+    let mut cfg = crate::chronology::resolve_global_only(&src);
     cfg.side = match cfg.side {
         Side::Left => Side::Right,
         Side::Right => Side::Left,
@@ -309,13 +309,14 @@ fn open_change_modal(app: &mut App, idx: usize) {
     else {
         return;
     };
-    let detail = chronox::extract::load_full_change(&ev).unwrap_or_else(|| ev.detail.clone());
-    let line = chronox::extract::resolve_line_in_file(&ev.file_path, &detail);
-    let lang = chronox::lang_for_path(&ev.file_path);
-    let lines = chronox::change_detail_lines_styled(&detail, line, lang);
-    let rows = chronox::change_detail_side_by_side(&detail, line, lang);
-    let rel = chronox::relative_display(&ev.file_path, &worktree);
-    let title = format!("{} {}", chronox::hhmm(ev.timestamp_ms), rel);
+    let detail =
+        crate::chronology::extract::load_full_change(&ev).unwrap_or_else(|| ev.detail.clone());
+    let line = crate::chronology::extract::resolve_line_in_file(&ev.file_path, &detail);
+    let lang = crate::chronology::lang_for_path(&ev.file_path);
+    let lines = crate::chronology::change_detail_lines_styled(&detail, line, lang);
+    let rows = crate::chronology::change_detail_side_by_side(&detail, line, lang);
+    let rel = crate::chronology::relative_display(&ev.file_path, &worktree);
+    let title = format!("{} {}", crate::chronology::hhmm(ev.timestamp_ms), rel);
     app.modal = Some(crate::ui::modal::Modal::ChangeDetail {
         title,
         lines,
@@ -392,7 +393,7 @@ fn open_pr_for_workspace(app: &App, ws_id: crate::data::store::WorkspaceId) {
 }
 
 /// Resolve the configured chronology side for the focused attached workspace.
-fn focused_chronology_side(app: &App) -> Option<chronox::Side> {
+fn focused_chronology_side(app: &App) -> Option<crate::chronology::Side> {
     let crate::ui::View::Attached(state) = &app.view else {
         return None;
     };
@@ -404,7 +405,7 @@ fn focused_chronology_side(app: &App) -> Option<chronox::Side> {
         store: &app.store,
         repo: Some(repo),
     };
-    Some(chronox::resolve(&src).side)
+    Some(crate::chronology::resolve(&src).side)
 }
 
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
@@ -1103,7 +1104,7 @@ async fn handle_key_attached(
         return Ok(());
     }
     if app.chronology_focused {
-        use chronox::nav::{NavAction, NavKey, nav};
+        use crate::chronology::nav::{NavAction, NavKey, nav};
         let navkey = match k.code {
             KeyCode::Down | KeyCode::Char('j') => Some(NavKey::Down),
             KeyCode::Up | KeyCode::Char('k') => Some(NavKey::Up),
@@ -2067,7 +2068,7 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 } else {
                     app.chronology_scroll.saturating_sub(3)
                 };
-                app.chronology_scroll = chronox::nav::clamp_scroll(target, len, visible);
+                app.chronology_scroll = crate::chronology::nav::clamp_scroll(target, len, visible);
                 return;
             }
         }

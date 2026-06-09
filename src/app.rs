@@ -167,7 +167,8 @@ pub struct App {
     >,
     /// Per-workspace change-chronology timelines, keyed by workspace id.
     /// Lazily built/refreshed while attached.
-    pub chronology: std::collections::HashMap<crate::data::store::WorkspaceId, chronox::Timeline>,
+    pub chronology:
+        std::collections::HashMap<crate::data::store::WorkspaceId, crate::chronology::Timeline>,
     /// Scroll offset (entries from the top) of the chronology bar in the
     /// focused attached pane.
     pub chronology_scroll: usize,
@@ -490,7 +491,7 @@ impl App {
         workspace_id: crate::data::store::WorkspaceId,
         worktree: &std::path::Path,
     ) {
-        let files = chronox::extract::claude_session_files(worktree);
+        let files = crate::chronology::extract::claude_session_files(worktree);
         self.chronology
             .entry(workspace_id)
             .or_default()
@@ -1025,7 +1026,7 @@ pub(crate) fn apply_repo_setting(
             } else {
                 // Validate. Use ChronologyOverride (not ChronologyConfig)
                 // because per-repo entries are partial overrides.
-                match serde_json::from_str::<chronox::ChronologyOverride>(trimmed) {
+                match serde_json::from_str::<crate::chronology::ChronologyOverride>(trimmed) {
                     Ok(_) => app.store.set_repo_chronology_config(repo_id, Some(trimmed)),
                     Err(e) => Err(crate::error::Error::UserInput(format!(
                         "chronology_config is not valid JSON: {e}"

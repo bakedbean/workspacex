@@ -1482,14 +1482,14 @@ fn detail_bar_config_validate_and_normalize(raw: &str) -> Result<String> {
 /// Seed text for the editor when the global `chronology_config`
 /// setting is empty — the pretty-printed default config.
 fn chronology_config_seed_for_empty() -> String {
-    serde_json::to_string_pretty(&chronox::ChronologyConfig::default())
+    serde_json::to_string_pretty(&crate::chronology::ChronologyConfig::default())
         .unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Parse, sanitize, and re-serialize a global `chronology_config`
 /// blob. Returns the pretty-printed normalized JSON.
 fn chronology_config_validate_and_normalize(raw: &str) -> Result<String> {
-    let mut cfg: chronox::ChronologyConfig = serde_json::from_str(raw)
+    let mut cfg: crate::chronology::ChronologyConfig = serde_json::from_str(raw)
         .map_err(|e| Error::UserInput(format!("chronology_config: invalid JSON: {e}")))?;
     cfg.sanitize();
     serde_json::to_string_pretty(&cfg)

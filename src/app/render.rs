@@ -548,7 +548,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .iter()
                 .find(|(_, w)| w.id == focused_id)
                 .map(|(_, w)| w.worktree_path.clone());
-            let chronology_cfg: Option<chronox::ChronologyConfig> = app
+            let chronology_cfg: Option<crate::chronology::ChronologyConfig> = app
                 .workspaces
                 .iter()
                 .find(|(_, w)| w.id == focused_id)
@@ -558,9 +558,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         store: &app.store,
                         repo: Some(repo),
                     };
-                    chronox::resolve(&src)
+                    crate::chronology::resolve(&src)
                 });
-            let chronology_events: Vec<chronox::ChangeEvent> = app
+            let chronology_events: Vec<crate::chronology::ChangeEvent> = app
                 .chronology
                 .get(&focused_id)
                 .map(|t| t.events().to_vec())
@@ -576,7 +576,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             );
             // Keep the keyboard selection in view (uses last frame's visible count).
             if app.chronology_focused {
-                app.chronology_scroll = chronox::nav::adjust_scroll(
+                app.chronology_scroll = crate::chronology::nav::adjust_scroll(
                     app.chronology_scroll,
                     app.chronology_sel,
                     app.chronology_visible_entries,
@@ -1051,11 +1051,11 @@ pub(crate) fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::Ac
 }
 
 /// Compose one side-by-side diff row into a single styled line:
-/// `left column │ right column`. Each side is rendered with chronox's
+/// `left column │ right column`. Each side is rendered with sessionx's
 /// `side_cell_to_line` (a `None` side is a blank column), clipped to its half of
 /// the width, and the left column is padded so the divider lines up. The width
 /// budget is `left | divider | right` with the divider taking one column.
-fn side_row_to_line(row: &chronox::SideRow, width: u16) -> ratatui::text::Line<'static> {
+fn side_row_to_line(row: &crate::chronology::SideRow, width: u16) -> ratatui::text::Line<'static> {
     use ratatui::style::{Modifier, Style};
     use ratatui::text::{Line, Span};
     let total = width as usize;
@@ -1064,14 +1064,18 @@ fn side_row_to_line(row: &chronox::SideRow, width: u16) -> ratatui::text::Line<'
     }
     let left_w = (total - 1) / 2;
     let right_w = total - 1 - left_w;
-    let mut left =
-        chronox::clip_line_to_width(&chronox::side_cell_to_line(row.left.as_ref()), left_w);
+    let mut left = crate::chronology::clip_line_to_width(
+        &crate::chronology::side_cell_to_line(row.left.as_ref()),
+        left_w,
+    );
     let pad = left_w.saturating_sub(left.width());
     if pad > 0 {
         left.spans.push(Span::raw(" ".repeat(pad)));
     }
-    let right =
-        chronox::clip_line_to_width(&chronox::side_cell_to_line(row.right.as_ref()), right_w);
+    let right = crate::chronology::clip_line_to_width(
+        &crate::chronology::side_cell_to_line(row.right.as_ref()),
+        right_w,
+    );
     let mut spans = left.spans;
     spans.push(Span::styled(
         "│",
@@ -1087,7 +1091,7 @@ fn render_change_detail_modal(
     area: ratatui::layout::Rect,
     title: &str,
     lines: &[ratatui::text::Line<'static>],
-    rows: &[chronox::SideRow],
+    rows: &[crate::chronology::SideRow],
     mode: crate::ui::modal::DiffViewMode,
     scroll: usize,
     theme: &crate::ui::theme::Theme,
@@ -1120,13 +1124,13 @@ fn render_change_detail_modal(
         DiffViewMode::Unified => lines.len(),
         DiffViewMode::SideBySide => rows.len(),
     };
-    let scroll = chronox::nav::clamp_scroll(scroll, total_len, body_h);
+    let scroll = crate::chronology::nav::clamp_scroll(scroll, total_len, body_h);
     let visible: Vec<Line> = match mode {
         DiffViewMode::Unified => lines
             .iter()
             .skip(scroll)
             .take(body_h)
-            .map(|l| chronox::clip_line_to_width(l, inner.width as usize))
+            .map(|l| crate::chronology::clip_line_to_width(l, inner.width as usize))
             .collect(),
         DiffViewMode::SideBySide => rows
             .iter()
@@ -1218,11 +1222,15 @@ mod layout_indicator_cache_tests {
 mod side_by_side_render_tests {
     use super::*;
 
-    fn cell(gutter: &str, kind: chronox::CellKind, code: &str) -> chronox::DiffCell {
-        chronox::DiffCell {
+    fn cell(
+        gutter: &str,
+        kind: crate::chronology::CellKind,
+        code: &str,
+    ) -> crate::chronology::DiffCell {
+        crate::chronology::DiffCell {
             gutter: gutter.to_string(),
             kind,
-            code: vec![(code.to_string(), chronox::TokenKind::Default)],
+            code: vec![(code.to_string(), crate::chronology::TokenKind::Default)],
         }
     }
 
@@ -1232,9 +1240,17 @@ mod side_by_side_render_tests {
 
     #[test]
     fn renders_two_columns_with_a_divider() {
-        let row = chronox::SideRow {
-            left: Some(cell("     ", chronox::CellKind::Removed, "old_value")),
-            right: Some(cell("  12 ", chronox::CellKind::Added, "new_value")),
+        let row = crate::chronology::SideRow {
+            left: Some(cell(
+                "     ",
+                crate::chronology::CellKind::Removed,
+                "old_value",
+            )),
+            right: Some(cell(
+                "  12 ",
+                crate::chronology::CellKind::Added,
+                "new_value",
+            )),
         };
         let line = side_row_to_line(&row, 40);
         let text = flatten(&line);
@@ -1253,9 +1269,9 @@ mod side_by_side_render_tests {
     #[test]
     fn blanks_a_missing_side() {
         // A pure addition (Write / added run) has no left cell: left stays blank.
-        let row = chronox::SideRow {
+        let row = crate::chronology::SideRow {
             left: None,
-            right: Some(cell("   1 ", chronox::CellKind::Added, "added")),
+            right: Some(cell("   1 ", crate::chronology::CellKind::Added, "added")),
         };
         let line = side_row_to_line(&row, 30);
         let text = flatten(&line);
@@ -1269,7 +1285,7 @@ mod side_by_side_render_tests {
 
     #[test]
     fn degenerate_width_is_empty() {
-        let row = chronox::SideRow {
+        let row = crate::chronology::SideRow {
             left: None,
             right: None,
         };

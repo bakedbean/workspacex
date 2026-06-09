@@ -28,7 +28,7 @@ name = "wsx"
 path = "src/main.rs"
 
 [dependencies]
-chronox = { git = "https://github.com/bakedbean/chronox", rev = "1b3b9f992e7bd53e4ff4118507e02579af0fe392", features = ["ratatui"] }
+sessionx = { git = "https://github.com/bakedbean/sessionx", rev = "3f83a3abbfe9e5a00521f9d91c7c08c815a9d151" }
 ratatui = "0.29"
 crossterm = { version = "0.29", features = ["event-stream", "bracketed-paste"] }
 portable-pty = "0.9"

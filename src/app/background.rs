@@ -70,16 +70,16 @@ pub async fn tail_workspace_events(
     };
     let tail_result = match ws_agent {
         crate::pty::session::AgentKind::Claude => {
-            crate::activity::events::tail_session(&file, tail_from)
+            crate::activity::events::tail_session(&file, tail_from).map_err(Into::into)
         }
         crate::pty::session::AgentKind::Pi => {
-            crate::activity::pi_events::tail_session(&file, tail_from)
+            crate::activity::pi_events::tail_session(&file, tail_from).map_err(Into::into)
         }
         crate::pty::session::AgentKind::Hermes => {
             crate::activity::hermes_events::tail_session(&file, tail_from)
         }
         crate::pty::session::AgentKind::Codex => {
-            crate::activity::codex_events::tail_session(&file, tail_from)
+            crate::activity::codex_events::tail_session(&file, tail_from).map_err(Into::into)
         }
     };
     let Ok(update) = tail_result else {

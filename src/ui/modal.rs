@@ -25,7 +25,7 @@ pub enum ArchiveStep {
 
 /// Which diff layout the change-detail modal is showing. `Unified` is the
 /// classic stacked diff (all removed lines, then all added); `SideBySide` is the
-/// LCS-aligned two-column view from chronox. The last-used mode is mirrored onto
+/// LCS-aligned two-column view from sessionx. The last-used mode is mirrored onto
 /// `App` so it is sticky across opens for the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DiffViewMode {
@@ -107,7 +107,7 @@ pub enum Modal {
     ChangeDetail {
         title: String,
         lines: Vec<ratatui::text::Line<'static>>,
-        rows: Vec<chronox::SideRow>,
+        rows: Vec<crate::chronology::SideRow>,
         mode: DiffViewMode,
         scroll: usize,
         worktree: std::path::PathBuf,

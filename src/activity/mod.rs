@@ -1,12 +1,12 @@
 //! Read-only introspection of live agent sessions and OS processes.
 //!
-//! `events` tails Claude Code JSONL session logs; `codex_events`,
-//! `hermes_events`, and `pi_events` are the Codex/Hermes/Pi variants built
-//! on top of it. `proc`
-//! detects per-workspace processes via `lsof` (wsx observes, never spawns).
+//! The Claude Code / Codex / Pi JSONL parsers now live in the `sessionx`
+//! crate and are re-exported here so existing `crate::activity::events` (and
+//! `codex_events`/`pi_events`) paths keep resolving. `hermes_events`
+//! (SQLite-backed, via `~/.hermes/state.db`) and `proc` (lsof) remain
+//! wsx-local — they depend on wsx infrastructure, not JSONL files.
 
-pub mod codex_events;
-pub mod events;
+pub use sessionx::activity::{codex_events, events, pi_events};
+
 pub mod hermes_events;
-pub mod pi_events;
 pub mod proc;

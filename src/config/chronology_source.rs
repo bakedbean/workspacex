@@ -1,6 +1,6 @@
 //! Adapter implementing the crate's `ConfigSource` over wsx's `Store`/`Repo`.
+use crate::chronology::ConfigSource;
 use crate::data::store::{Repo, Store};
-use chronox::ConfigSource;
 
 pub struct StoreConfigSource<'a> {
     pub(crate) store: &'a Store,
@@ -48,7 +48,7 @@ mod tests {
             store: &store,
             repo: Some(&repo),
         };
-        let cfg = chronox::resolve(&src);
-        assert_eq!(cfg.side, chronox::Side::Left);
+        let cfg = crate::chronology::resolve(&src);
+        assert_eq!(cfg.side, crate::chronology::Side::Left);
     }
 }

@@ -102,18 +102,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chronox"
-version = "0.1.0"
-source = "git+https://github.com/bakedbean/chronox?rev=1b3b9f992e7bd53e4ff4118507e02579af0fe392#1b3b9f992e7bd53e4ff4118507e02579af0fe392"
-dependencies = [
- "dirs",
- "log",
- "ratatui",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "compact_str"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1074,6 +1062,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sessionx"
+version = "0.1.0"
+source = "git+https://github.com/bakedbean/sessionx?rev=3f83a3abbfe9e5a00521f9d91c7c08c815a9d151#3f83a3abbfe9e5a00521f9d91c7c08c815a9d151"
+dependencies = [
+ "dirs",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1834,7 +1834,6 @@ dependencies = [
 name = "wsx"
 version = "0.1.0"
 dependencies = [
- "chronox",
  "crossterm 0.29.0",
  "dirs",
  "fnug-vt100",
@@ -1846,6 +1845,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sessionx",
  "shlex 2.0.1",
  "tempfile",
  "thiserror 2.0.18",

@@ -3,7 +3,7 @@
 //! This module owns the `Dirs` state/db/log path layout. The
 //! `detail_bar_config` submodule resolves the detail-bar display config from
 //! global + per-repo JSON; the `chronology_source` submodule adapts wsx's
-//! `Store`/`Repo` to `chronox::ConfigSource` so the `chronox` crate can resolve
+//! `Store`/`Repo` to `crate::chronology::ConfigSource` so the `sessionx` crate can resolve
 //! the chronology config.
 
 pub mod chronology_source;

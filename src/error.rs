@@ -29,6 +29,17 @@ pub enum Error {
     Cancelled,
 }
 
+/// Adapt the `sessionx` parsing crate's error into wsx's, preserving the
+/// underlying io/serde cause so `?` works across the boundary.
+impl From<sessionx::Error> for Error {
+    fn from(e: sessionx::Error) -> Self {
+        match e {
+            sessionx::Error::Io(io) => Error::Io(io),
+            sessionx::Error::Serde(s) => Error::Serde(s),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

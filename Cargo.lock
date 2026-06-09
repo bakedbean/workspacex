@@ -104,7 +104,7 @@ dependencies = [
 [[package]]
 name = "chronox"
 version = "0.1.0"
-source = "git+https://github.com/bakedbean/chronox?rev=3db068691a34ff80cdad846f41121389ef352ec8#3db068691a34ff80cdad846f41121389ef352ec8"
+source = "git+https://github.com/bakedbean/chronox?rev=1b3b9f992e7bd53e4ff4118507e02579af0fe392#1b3b9f992e7bd53e4ff4118507e02579af0fe392"
 dependencies = [
  "dirs",
  "log",

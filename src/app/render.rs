@@ -861,10 +861,12 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             crate::ui::modal::Modal::ChangeDetail {
                 title,
                 lines,
+                rows,
+                mode,
                 scroll,
                 ..
             } => {
-                render_change_detail_modal(f, area, title, lines, *scroll, &app.theme);
+                render_change_detail_modal(f, area, title, lines, rows, *mode, *scroll, &app.theme);
             }
             other => modal::render(f, area, other, app.tick, &app.theme),
         }
@@ -1048,14 +1050,49 @@ pub(crate) fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::Ac
     }
 }
 
+/// Compose one side-by-side diff row into a single styled line:
+/// `left column │ right column`. Each side is rendered with chronox's
+/// `side_cell_to_line` (a `None` side is a blank column), clipped to its half of
+/// the width, and the left column is padded so the divider lines up. The width
+/// budget is `left | divider | right` with the divider taking one column.
+fn side_row_to_line(row: &chronox::SideRow, width: u16) -> ratatui::text::Line<'static> {
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    let total = width as usize;
+    if total <= 1 {
+        return Line::default();
+    }
+    let left_w = (total - 1) / 2;
+    let right_w = total - 1 - left_w;
+    let mut left =
+        chronox::clip_line_to_width(&chronox::side_cell_to_line(row.left.as_ref()), left_w);
+    let pad = left_w.saturating_sub(left.width());
+    if pad > 0 {
+        left.spans.push(Span::raw(" ".repeat(pad)));
+    }
+    let right =
+        chronox::clip_line_to_width(&chronox::side_cell_to_line(row.right.as_ref()), right_w);
+    let mut spans = left.spans;
+    spans.push(Span::styled(
+        "│",
+        Style::default().add_modifier(Modifier::DIM),
+    ));
+    spans.extend(right.spans);
+    Line::from(spans)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_change_detail_modal(
     f: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     title: &str,
     lines: &[ratatui::text::Line<'static>],
+    rows: &[chronox::SideRow],
+    mode: crate::ui::modal::DiffViewMode,
     scroll: usize,
     theme: &crate::ui::theme::Theme,
 ) {
+    use crate::ui::modal::DiffViewMode;
     use ratatui::layout::Rect;
     use ratatui::text::{Line, Span};
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -1077,26 +1114,41 @@ fn render_change_detail_modal(
     let inner = block.inner(modal);
     f.render_widget(block, modal);
     let body_h = inner.height.saturating_sub(1) as usize;
-    let scroll = chronox::nav::clamp_scroll(scroll, lines.len(), body_h);
-    let visible: Vec<Line> = lines
-        .iter()
-        .skip(scroll)
-        .take(body_h)
-        .map(|l| chronox::clip_line_to_width(l, inner.width as usize))
-        .collect();
+    // The active view drives the scrollable length: unified stacks every old
+    // then every new line; side-by-side zips them, so the two differ.
+    let total_len = match mode {
+        DiffViewMode::Unified => lines.len(),
+        DiffViewMode::SideBySide => rows.len(),
+    };
+    let scroll = chronox::nav::clamp_scroll(scroll, total_len, body_h);
+    let visible: Vec<Line> = match mode {
+        DiffViewMode::Unified => lines
+            .iter()
+            .skip(scroll)
+            .take(body_h)
+            .map(|l| chronox::clip_line_to_width(l, inner.width as usize))
+            .collect(),
+        DiffViewMode::SideBySide => rows
+            .iter()
+            .skip(scroll)
+            .take(body_h)
+            .map(|r| side_row_to_line(r, inner.width))
+            .collect(),
+    };
     let body_area = Rect {
         height: inner.height.saturating_sub(1),
         ..inner
     };
     f.render_widget(Paragraph::new(visible), body_area);
-    let end = (scroll + body_h).min(lines.len());
+    let end = (scroll + body_h).min(total_len);
     // Show 0-based "0-0/0" for an empty change rather than a confusing "1-0/0".
-    let start = if lines.is_empty() { 0 } else { scroll + 1 };
+    let start = if total_len == 0 { 0 } else { scroll + 1 };
+    let view_hint = match mode {
+        DiffViewMode::Unified => "d split",
+        DiffViewMode::SideBySide => "d unified",
+    };
     let footer = format!(
-        "↑/↓ j/k  PgUp/PgDn  g/G  ·  e editor  ·  Esc close    {}-{}/{}",
-        start,
-        end,
-        lines.len()
+        "↑/↓ j/k  PgUp/PgDn  g/G  ·  {view_hint}  ·  e editor  ·  Esc close    {start}-{end}/{total_len}",
     );
     let footer_area = Rect {
         y: inner.y + inner.height.saturating_sub(1),
@@ -1159,5 +1211,68 @@ mod layout_indicator_cache_tests {
             !app.workspaces_with_multi_pane_layouts.contains(&a),
             "single-pane layouts should not appear in the cache"
         );
+    }
+}
+
+#[cfg(test)]
+mod side_by_side_render_tests {
+    use super::*;
+
+    fn cell(gutter: &str, kind: chronox::CellKind, code: &str) -> chronox::DiffCell {
+        chronox::DiffCell {
+            gutter: gutter.to_string(),
+            kind,
+            code: vec![(code.to_string(), chronox::TokenKind::Default)],
+        }
+    }
+
+    fn flatten(line: &ratatui::text::Line<'static>) -> String {
+        line.spans.iter().map(|s| s.content.clone()).collect()
+    }
+
+    #[test]
+    fn renders_two_columns_with_a_divider() {
+        let row = chronox::SideRow {
+            left: Some(cell("     ", chronox::CellKind::Removed, "old_value")),
+            right: Some(cell("  12 ", chronox::CellKind::Added, "new_value")),
+        };
+        let line = side_row_to_line(&row, 40);
+        let text = flatten(&line);
+        let bar = text.find('│').expect("expected a column divider");
+        assert!(
+            text[..bar].contains("old_value"),
+            "left column before divider"
+        );
+        assert!(
+            text[bar..].contains("new_value"),
+            "right column after divider"
+        );
+        assert!(line.width() <= 40, "stays within the width budget");
+    }
+
+    #[test]
+    fn blanks_a_missing_side() {
+        // A pure addition (Write / added run) has no left cell: left stays blank.
+        let row = chronox::SideRow {
+            left: None,
+            right: Some(cell("   1 ", chronox::CellKind::Added, "added")),
+        };
+        let line = side_row_to_line(&row, 30);
+        let text = flatten(&line);
+        let bar = text.find('│').expect("divider present");
+        assert!(text[..bar].trim().is_empty(), "left side is blank padding");
+        assert!(
+            text[bar..].contains("added"),
+            "right side carries the content"
+        );
+    }
+
+    #[test]
+    fn degenerate_width_is_empty() {
+        let row = chronox::SideRow {
+            left: None,
+            right: None,
+        };
+        assert!(side_row_to_line(&row, 1).spans.is_empty());
     }
 }

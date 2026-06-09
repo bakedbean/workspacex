@@ -5118,3 +5118,163 @@ mod attached_wheel_forwarding {
         );
     }
 }
+
+#[cfg(test)]
+mod change_detail_toggle_tests {
+    use super::*;
+    use crate::data::store::Store;
+    use std::path::PathBuf;
+
+    fn change_detail_modal(mode: DiffViewMode, scroll: usize) -> Modal {
+        Modal::ChangeDetail {
+            title: "t".into(),
+            lines: Vec::new(),
+            rows: Vec::new(),
+            mode,
+            scroll,
+            worktree: PathBuf::from("/tmp/w"),
+            file: PathBuf::from("/tmp/w/a.rs"),
+            line: 1,
+        }
+    }
+
+    #[test]
+    fn toggle_flips_mode_resets_scroll_and_sticks_on_app() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(change_detail_modal(DiffViewMode::Unified, 7));
+        assert_eq!(app.change_detail_view, DiffViewMode::Unified);
+
+        toggle_change_detail_view(&mut app);
+        match &app.modal {
+            Some(Modal::ChangeDetail { mode, scroll, .. }) => {
+                assert_eq!(*mode, DiffViewMode::SideBySide);
+                assert_eq!(*scroll, 0, "scroll resets on toggle");
+            }
+            _ => panic!("modal should still be ChangeDetail"),
+        }
+        assert_eq!(
+            app.change_detail_view,
+            DiffViewMode::SideBySide,
+            "choice is mirrored onto App (sticky)"
+        );
+
+        toggle_change_detail_view(&mut app);
+        assert!(matches!(
+            app.modal,
+            Some(Modal::ChangeDetail {
+                mode: DiffViewMode::Unified,
+                ..
+            })
+        ));
+        assert_eq!(app.change_detail_view, DiffViewMode::Unified);
+    }
+
+    #[test]
+    fn toggle_is_noop_without_change_detail_modal() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.change_detail_view = DiffViewMode::SideBySide;
+        app.modal = None;
+        toggle_change_detail_view(&mut app);
+        assert_eq!(
+            app.change_detail_view,
+            DiffViewMode::SideBySide,
+            "no modal means nothing to toggle"
+        );
+    }
+}
+
+#[cfg(test)]
+mod change_detail_render_tests {
+    use super::*;
+    use crate::data::store::Store;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::path::PathBuf;
+
+    fn diff_cell(gutter: &str, kind: chronox::CellKind, code: &str) -> chronox::DiffCell {
+        chronox::DiffCell {
+            gutter: gutter.to_string(),
+            kind,
+            code: vec![(code.to_string(), chronox::TokenKind::Default)],
+        }
+    }
+
+    fn render(app: &mut App) -> String {
+        let backend = TestBackend::new(100, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, app)).unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn modal_with(mode: DiffViewMode) -> Modal {
+        let rows = vec![chronox::SideRow {
+            left: Some(diff_cell("     ", chronox::CellKind::Removed, "OLDTOKEN")),
+            right: Some(diff_cell("  10 ", chronox::CellKind::Added, "NEWTOKEN")),
+        }];
+        let lines = vec![
+            chronox::side_cell_to_line(rows[0].left.as_ref()),
+            chronox::side_cell_to_line(rows[0].right.as_ref()),
+        ];
+        Modal::ChangeDetail {
+            title: "12:00 a.rs".into(),
+            lines,
+            rows,
+            mode,
+            scroll: 0,
+            worktree: PathBuf::from("/tmp/w"),
+            file: PathBuf::from("/tmp/w/a.rs"),
+            line: 10,
+        }
+    }
+
+    #[test]
+    fn side_by_side_mode_puts_columns_on_one_line() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(modal_with(DiffViewMode::SideBySide));
+        let out = render(&mut app);
+        // Old (left) and new (right) share the SAME line in side-by-side. (A bare
+        // '│' check is unreliable — the modal's own border draws vertical bars.)
+        assert!(
+            out.lines()
+                .any(|l| l.contains("OLDTOKEN") && l.contains("NEWTOKEN")),
+            "side-by-side puts both columns on one line:\n{out}"
+        );
+        // Footer offers the inverse view.
+        assert!(
+            out.contains("d unified"),
+            "footer hints back to unified:\n{out}"
+        );
+    }
+
+    #[test]
+    fn unified_mode_stacks_old_and_new_on_separate_lines() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(modal_with(DiffViewMode::Unified));
+        let out = render(&mut app);
+        assert!(
+            out.contains("OLDTOKEN") && out.contains("NEWTOKEN"),
+            "both lines present:\n{out}"
+        );
+        assert!(
+            !out.lines()
+                .any(|l| l.contains("OLDTOKEN") && l.contains("NEWTOKEN")),
+            "unified keeps old and new on separate lines:\n{out}"
+        );
+        assert!(
+            out.contains("d split"),
+            "footer hints toward side-by-side:\n{out}"
+        );
+    }
+}

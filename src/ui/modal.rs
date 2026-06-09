@@ -23,6 +23,27 @@ pub enum ArchiveStep {
     Cleanup,
 }
 
+/// Which diff layout the change-detail modal is showing. `Unified` is the
+/// classic stacked diff (all removed lines, then all added); `SideBySide` is the
+/// LCS-aligned two-column view from chronox. The last-used mode is mirrored onto
+/// `App` so it is sticky across opens for the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffViewMode {
+    #[default]
+    Unified,
+    SideBySide,
+}
+
+impl DiffViewMode {
+    /// The other mode — `d` cycles between exactly two.
+    pub fn toggled(self) -> Self {
+        match self {
+            DiffViewMode::Unified => DiffViewMode::SideBySide,
+            DiffViewMode::SideBySide => DiffViewMode::Unified,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Modal {
     NewWorkspace {
@@ -80,10 +101,14 @@ pub enum Modal {
         /// (applied) window is read separately from the store at render time.
         selected: usize,
     },
-    /// Full diff of a chronology change, scrollable.
+    /// Full diff of a chronology change, scrollable. Carries both the unified
+    /// `lines` and the side-by-side `rows` (each built once at open); `mode`
+    /// selects which is drawn and is toggled with `d`.
     ChangeDetail {
         title: String,
         lines: Vec<ratatui::text::Line<'static>>,
+        rows: Vec<chronox::SideRow>,
+        mode: DiffViewMode,
         scroll: usize,
         worktree: std::path::PathBuf,
         file: std::path::PathBuf,
@@ -898,6 +923,22 @@ fn preview_value(s: &str, max: usize) -> String {
         let mut out: String = trimmed.chars().take(max.saturating_sub(1)).collect();
         out.push('\u{2026}');
         out
+    }
+}
+
+#[cfg(test)]
+mod diff_view_mode_tests {
+    use super::*;
+
+    #[test]
+    fn toggled_cycles_between_the_two_modes() {
+        assert_eq!(DiffViewMode::Unified.toggled(), DiffViewMode::SideBySide);
+        assert_eq!(DiffViewMode::SideBySide.toggled(), DiffViewMode::Unified);
+    }
+
+    #[test]
+    fn default_is_unified() {
+        assert_eq!(DiffViewMode::default(), DiffViewMode::Unified);
     }
 }
 

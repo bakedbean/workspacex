@@ -171,6 +171,9 @@ pub struct App {
     /// Scroll offset (entries from the top) of the chronology bar in the
     /// focused attached pane.
     pub chronology_scroll: usize,
+    /// Last-used diff layout in the change-detail modal. Mirrored here (rather
+    /// than reset per open) so the choice is sticky across opens for the session.
+    pub change_detail_view: crate::ui::modal::DiffViewMode,
     /// Sentinel for the workspace the chronology scroll/selection state belongs
     /// to. When the focused attached pane switches to a different workspace, the
     /// scroll offset and selection index are reset so they can't point at an
@@ -349,6 +352,7 @@ impl App {
             workspace_events: std::collections::HashMap::new(),
             chronology: std::collections::HashMap::new(),
             chronology_scroll: 0,
+            change_detail_view: crate::ui::modal::DiffViewMode::default(),
             chronology_last_workspace: None,
             chronology_entry_rects: Vec::new(),
             chronology_bar_rect: None,

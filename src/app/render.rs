@@ -1051,8 +1051,9 @@ pub(crate) fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::Ac
 }
 
 /// Compose one side-by-side diff row into a single styled line:
-/// `left column │ right column`. Each side is rendered with sessionx's
-/// `side_cell_to_line` (a `None` side is a blank column), clipped to its half of
+/// `left column │ right column`. Each side is rendered with
+/// `crate::chronology::side_cell_to_line` (wsx-owned; `sessionx` stays
+/// UI-agnostic; a `None` side is a blank column), clipped to its half of
 /// the width, and the left column is padded so the divider lines up. The width
 /// budget is `left | divider | right` with the divider taking one column.
 fn side_row_to_line(row: &crate::chronology::SideRow, width: u16) -> ratatui::text::Line<'static> {

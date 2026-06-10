@@ -339,6 +339,26 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Swap the `sort_order` of two repos. Used by the dashboard to move a
+    /// repo up/down by one slot. Atomic so a crash can't leave a half-swap.
+    pub fn swap_repo_sort_order(&self, a: RepoId, b: RepoId) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let so_a: i64 =
+            tx.query_row("SELECT sort_order FROM repos WHERE id = ?1", [a.0], |r| r.get(0))?;
+        let so_b: i64 =
+            tx.query_row("SELECT sort_order FROM repos WHERE id = ?1", [b.0], |r| r.get(0))?;
+        tx.execute(
+            "UPDATE repos SET sort_order = ?1 WHERE id = ?2",
+            rusqlite::params![so_b, a.0],
+        )?;
+        tx.execute(
+            "UPDATE repos SET sort_order = ?1 WHERE id = ?2",
+            rusqlite::params![so_a, b.0],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn set_repo_branch_prefix(&self, id: RepoId, prefix: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE repos SET branch_prefix = ?1 WHERE id = ?2",
@@ -1946,5 +1966,23 @@ mod tests {
         let repos = store.repos().unwrap();
         assert_eq!(order("zeta", &repos), 0, "first registered → tail of empty list → 0");
         assert_eq!(order("alpha", &repos), 1, "second registered → appended after → 1");
+    }
+
+    #[test]
+    fn swap_repo_sort_order_swaps_two_repos() {
+        let store = Store::open_in_memory().unwrap();
+        let a = store.add_repo(std::path::Path::new("/tmp/wsx-a"), "aaa", "").unwrap(); // sort_order 0
+        let b = store.add_repo(std::path::Path::new("/tmp/wsx-b"), "bbb", "").unwrap(); // sort_order 1
+
+        store.swap_repo_sort_order(a, b).unwrap();
+
+        let repos = store.repos().unwrap();
+        // After swap, bbb (now 0) sorts before aaa (now 1).
+        let names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["bbb", "aaa"], "swap reorders the load order");
+
+        let so = |name: &str| repos.iter().find(|r| r.name == name).unwrap().sort_order;
+        assert_eq!(so("bbb"), 0);
+        assert_eq!(so("aaa"), 1);
     }
 }

@@ -140,10 +140,10 @@ mod tests {
                     added: w.diff_added,
                     removed: w.diff_removed,
                 }),
-                column: w
-                    .last_message
-                    .clone()
-                    .map(|t| RowColumn { text: t, emphasis: ColumnEmphasis::Dim }),
+                column: w.last_message.clone().map(|t| RowColumn {
+                    text: t,
+                    emphasis: ColumnEmphasis::Dim,
+                }),
                 ago_secs: w.ago_secs,
                 selected: i == 0,
                 yolo: false,

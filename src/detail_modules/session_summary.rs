@@ -2,7 +2,9 @@
 //! activity, and tool-use trace for the selected workspace.
 
 use crate::detail_modules::{DetailContext, DetailModule};
-use crate::ui::dashboard::column_content::{format_ago_short, format_state_line, format_tool_trace};
+use crate::ui::dashboard::column_content::{
+    format_ago_short, format_state_line, format_tool_trace,
+};
 
 pub struct SessionSummary;
 

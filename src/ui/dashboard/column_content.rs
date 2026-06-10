@@ -30,7 +30,11 @@ pub enum ColumnEmphasis {
 /// `now_ms` is the shared epoch-ms time base (same one `app.rs` uses), so
 /// stall durations match the detail bar. Returns `None` when there is no
 /// meaningful content (the caller renders the em-dash).
-pub fn row_column(status: Status, events: Option<&WorkspaceEvents>, now_ms: i64) -> Option<RowColumn> {
+pub fn row_column(
+    status: Status,
+    events: Option<&WorkspaceEvents>,
+    now_ms: i64,
+) -> Option<RowColumn> {
     let evt = events?;
     match status {
         Status::Question => {
@@ -42,7 +46,10 @@ pub fn row_column(status: Status, events: Option<&WorkspaceEvents>, now_ms: i64)
                 .map(|n| n.to_string())
                 .or_else(|| evt.pending_permission_tool(now_ms, 3_000).map(|(n, _)| n))
                 .unwrap_or_else(|| "question".to_string());
-            Some(RowColumn { text: body, emphasis: ColumnEmphasis::Status })
+            Some(RowColumn {
+                text: body,
+                emphasis: ColumnEmphasis::Status,
+            })
         }
         Status::Stalled => Some(RowColumn {
             text: format_state_line(status, evt, now_ms),
@@ -55,7 +62,10 @@ pub fn row_column(status: Status, events: Option<&WorkspaceEvents>, now_ms: i64)
             } else {
                 trace
             };
-            Some(RowColumn { text, emphasis: ColumnEmphasis::Dim })
+            Some(RowColumn {
+                text,
+                emphasis: ColumnEmphasis::Dim,
+            })
         }
         Status::Complete => {
             // Trim/empty-check each candidate independently so a
@@ -64,11 +74,17 @@ pub fn row_column(status: Status, events: Option<&WorkspaceEvents>, now_ms: i64)
             // blank recap and render the em-dash).
             let body = non_empty_trimmed(evt.last_completed_turn_text.as_deref())
                 .or_else(|| non_empty_trimmed(evt.first_user_text.as_deref()))?;
-            Some(RowColumn { text: collapse_ws(body), emphasis: ColumnEmphasis::Dim })
+            Some(RowColumn {
+                text: collapse_ws(body),
+                emphasis: ColumnEmphasis::Dim,
+            })
         }
         Status::Idle => {
             let body = non_empty_trimmed(evt.first_user_text.as_deref())?;
-            Some(RowColumn { text: collapse_ws(body), emphasis: ColumnEmphasis::Dim })
+            Some(RowColumn {
+                text: collapse_ws(body),
+                emphasis: ColumnEmphasis::Dim,
+            })
         }
     }
 }
@@ -115,16 +131,32 @@ pub(crate) fn format_ago_short(secs: Option<u64>) -> String {
 pub(crate) fn format_tool_trace(counts: &ToolUseCounts) -> String {
     let mut parts: Vec<String> = Vec::new();
     if counts.read > 0 {
-        parts.push(format!("read {} {}", counts.read, plural("file", counts.read)));
+        parts.push(format!(
+            "read {} {}",
+            counts.read,
+            plural("file", counts.read)
+        ));
     }
     if counts.edit > 0 {
-        parts.push(format!("edited {} {}", counts.edit, plural("file", counts.edit)));
+        parts.push(format!(
+            "edited {} {}",
+            counts.edit,
+            plural("file", counts.edit)
+        ));
     }
     if counts.write > 0 {
-        parts.push(format!("wrote {} {}", counts.write, plural("file", counts.write)));
+        parts.push(format!(
+            "wrote {} {}",
+            counts.write,
+            plural("file", counts.write)
+        ));
     }
     if counts.bash > 0 {
-        parts.push(format!("ran {} {}", counts.bash, plural("command", counts.bash)));
+        parts.push(format!(
+            "ran {} {}",
+            counts.bash,
+            plural("command", counts.bash)
+        ));
     }
     if counts.other > 0 {
         parts.push(format!("+{} other actions", counts.other));

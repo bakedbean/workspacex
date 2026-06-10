@@ -260,10 +260,10 @@ mod tests {
                             added: w.diff_added,
                             removed: w.diff_removed,
                         }),
-                        column: w
-                            .last_message
-                            .clone()
-                            .map(|t| RowColumn { text: t, emphasis: ColumnEmphasis::Dim }),
+                        column: w.last_message.clone().map(|t| RowColumn {
+                            text: t,
+                            emphasis: ColumnEmphasis::Dim,
+                        }),
                         ago_secs: w.ago_secs,
                         selected: false,
                         yolo: false,
@@ -420,7 +420,10 @@ mod tests {
                     added: 12,
                     removed: 3,
                 }),
-                column: Some(RowColumn { text: "hi".into(), emphasis: ColumnEmphasis::Dim }),
+                column: Some(RowColumn {
+                    text: "hi".into(),
+                    emphasis: ColumnEmphasis::Dim,
+                }),
                 ago_secs: Some(29),
                 selected: false,
                 yolo: false,

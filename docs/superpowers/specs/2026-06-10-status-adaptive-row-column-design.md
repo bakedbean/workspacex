@@ -32,14 +32,23 @@ fixed-width columns or the detail bar.
 The column content is chosen by the row's `Status` (the canonical 6-state
 enum in `src/ui/dashboard/status.rs`):
 
+> **Note (as-built):** the table below reflects the shipped implementation.
+> Per-status emoji glyphs (`❓ ⚠ ✓ ⌖`) were intentionally **dropped** — they
+> are double-width in many terminals and would misalign the right-aligned age
+> column against the row's `chars()`-based truncation. The existing `└ ` prefix
+> and per-status status glyph (column 3) carry that signal instead; color
+> emphasis distinguishes the attention states.
+
 | Status | Column content | Source signal | Emphasis |
 |--------|----------------|---------------|----------|
-| **Question** | `❓ AskUserQuestion` or `🔒 allow Bash?` | `pending_question_tool()`, falling back to `pending_permission_tool()` | status color |
-| **Stalled** | `⚠ stalled · 4m quiet` | stall branch of `format_state_line` (quiet duration from `last_log_activity_ms`) | warn/err color |
-| **Waiting** (>30s idle) | `ran 2 · edited 3 · …` | `format_tool_trace(tool_use_counts)` | dim |
-| **Thinking** (<30s idle) | `reading…` / `ran 2 · edited 3` | `format_tool_trace(tool_use_counts)` | dim |
-| **Complete** | `✓ split the quick-start into two…` | `last_completed_turn_text` (cleaned, pinned) | dim |
-| **Idle** | `⌖ backfill the 003 migration table` | `first_user_text` | dim |
+| **Question** | `AskUserQuestion` / `ExitPlanMode` / pending permission tool name (e.g. `Bash`) | `pending_question_tool()`, falling back to `pending_permission_tool()` | status color |
+| **Stalled** | `stalled · 4m quiet` | stall branch of `format_state_line` (quiet duration from `last_log_activity_ms`) | warn color |
+| **Waiting** (>30s idle) | `edited 3 files, ran 2 commands` | `format_tool_trace(tool_use_counts)` | dim |
+| **Thinking** (<30s idle) | `read 14 files` / `edited 3 files, ran 2 commands` | `format_tool_trace(tool_use_counts)` | dim |
+| **Complete** | `split the quick-start into two…` | `last_completed_turn_text` (cleaned, pinned) | dim |
+| **Idle** | `backfill the 003 migration table` | `first_user_text` | dim |
+
+The tool trace is comma-separated (`format_tool_trace`), not dot-separated.
 
 Decisions confirmed with the user:
 
@@ -58,30 +67,34 @@ has produced no tool_use yet, or events not yet tailed). The column degrades
 gracefully rather than rendering an empty or misleading cell:
 
 - **Question** with neither a question nor permission tool pending →
-  bare label `❓ question`.
+  bare label `question`.
 - **Thinking / Waiting** with empty `tool_use_counts` → `thinking…` /
   `waiting…` (the status label with an ellipsis), matching today's
   "just started" feel.
-- **Complete** with no `last_completed_turn_text` → fall back to
-  `first_user_text` (the intent), then to the em-dash if even that is
-  absent.
-- **Idle** with no `first_user_text` → em-dash (current behavior for an
-  empty message).
+- **Complete** with a blank/whitespace-only `last_completed_turn_text` →
+  fall back to `first_user_text` (the intent), then to the em-dash if even
+  that is empty after trimming. Each candidate is trimmed and emptiness-checked
+  independently so a blank recap never blocks the prompt fallback.
+- **Idle** with no (or blank) `first_user_text` → em-dash (current behavior
+  for an empty message).
 - Events not yet scanned (`events` is `None`) → em-dash, as today.
 
-The leading glyph (`❓`, `⚠`, `✓`, `⌖`) is gated on the same nerd-fonts /
-unicode availability the row already threads through `RowInputs.nerd_fonts`;
-when unavailable the column shows the text without the glyph prefix.
+No per-status glyph is rendered (see the as-built note above): the column
+shows only the synthesized text, prefixed by the unchanged `└ ` and colored
+by emphasis. Raw `first_user_text` / recap text is run through `collapse_ws`
+so interior newlines don't break the single-line row layout.
 
 ## Architecture
 
-The synthesized string is computed **at the call site** where `RowInputs`
-is built — `render_by_repo` / `by_attention` in `src/ui/dashboard/mod.rs`
-and the section builders in `by_attention.rs` / `by_repo.rs` — because that
-is where both `WorkspaceEvents` and a `now_ms` time base are available.
-`row.rs::render` stays pure: it receives a precomputed value and only lays
-it out and colors it. This preserves the existing property that `row.rs` has
-no dependency on classifier internals or wall-clock time.
+The synthesized string is computed **at the single production construction
+site** where `RowInputs` is built — the workspace loop in `src/app/render.rs`,
+which is the only place that builds production rows and where both
+`WorkspaceEvents` and a frame-level `now_ms` time base are available. (`now_ms`
+is hoisted once per frame there and reused for both the column's stall clock
+and the row's age clock so they can't diverge.) `row.rs::render` stays pure: it
+receives a precomputed value and only lays it out and colors it. This preserves
+the existing property that `row.rs` has no dependency on classifier internals
+or wall-clock time.
 
 ### Data shape
 
@@ -125,9 +138,11 @@ pub fn row_column(
     status: Status,
     events: Option<&WorkspaceEvents>,
     now_ms: i64,
-    nerd_fonts: bool,
 ) -> Option<RowColumn>;
 ```
+
+(There is no `nerd_fonts` parameter: since the as-built column renders no
+per-status glyph, the synthesizer needs no font-capability input.)
 
 This function owns the mapping table and the fallback ladder above. It is
 the single place to unit-test the state→content logic.
@@ -137,8 +152,8 @@ the single place to unit-test the state→content logic.
 ```
 app state (WorkspaceEvents per ws)
   │
-  ├─ mod.rs / by_attention.rs / by_repo.rs  (build RowInputs)
-  │     └─ column_content::row_column(status, events, now_ms, nerd_fonts)
+  ├─ app/render.rs  (workspace loop builds RowInputs, hoists frame now_ms)
+  │     └─ column_content::row_column(status, events, now_ms)
   │           → Option<RowColumn>
   │
   └─ row.rs::render(inputs, …)

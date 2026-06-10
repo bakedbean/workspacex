@@ -58,20 +58,16 @@ pub fn row_column(status: Status, events: Option<&WorkspaceEvents>, now_ms: i64)
             Some(RowColumn { text, emphasis: ColumnEmphasis::Dim })
         }
         Status::Complete => {
-            let body = evt
-                .last_completed_turn_text
-                .as_deref()
-                .or(evt.first_user_text.as_deref())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())?;
+            // Trim/empty-check each candidate independently so a
+            // whitespace-only recap still falls back to the prompt rather
+            // than blocking it (an `.or()` before trimming would keep the
+            // blank recap and render the em-dash).
+            let body = non_empty_trimmed(evt.last_completed_turn_text.as_deref())
+                .or_else(|| non_empty_trimmed(evt.first_user_text.as_deref()))?;
             Some(RowColumn { text: collapse_ws(body), emphasis: ColumnEmphasis::Dim })
         }
         Status::Idle => {
-            let body = evt
-                .first_user_text
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())?;
+            let body = non_empty_trimmed(evt.first_user_text.as_deref())?;
             Some(RowColumn { text: collapse_ws(body), emphasis: ColumnEmphasis::Dim })
         }
     }
@@ -136,14 +132,31 @@ pub(crate) fn format_tool_trace(counts: &ToolUseCounts) -> String {
     parts.join(", ")
 }
 
+/// Trim `s` and keep it only if it is non-empty after trimming. Lets the
+/// `Complete`/`Idle` arms chain candidate signals with `.or_else` so a
+/// blank value falls through to the next candidate.
+fn non_empty_trimmed(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|t| !t.is_empty())
+}
+
 /// Collapse every run of whitespace (spaces, tabs, newlines) into a single
 /// space and trim the ends. The dashboard row renders each workspace as a
 /// single-line `ListItem`; an interior newline would miscount against the
 /// char-based truncation and misalign the right-aligned age column. The old
 /// `EventSnapshot.display` path collapsed whitespace upstream — this keeps
 /// the same single-line guarantee for the raw `first_user_text` / recap text.
+///
+/// Builds the result incrementally rather than collecting into a `Vec` first,
+/// since the row column is synthesized every frame per workspace.
 fn collapse_ws(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut out = String::with_capacity(s.len());
+    for word in s.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
 }
 
 fn plural(noun: &str, n: u32) -> String {
@@ -269,6 +282,20 @@ mod tests {
     #[test]
     fn complete_with_nothing_is_none() {
         assert!(row_column(Status::Complete, Some(&evt()), 0).is_none());
+    }
+
+    #[test]
+    fn complete_whitespace_only_recap_falls_back_to_prompt() {
+        // A blank/whitespace-only recap must not block the fallback to the
+        // prompt (regression: an `.or()` before trimming kept the blank
+        // recap and rendered the em-dash).
+        let e = WorkspaceEvents {
+            last_completed_turn_text: Some("   \n  ".into()),
+            first_user_text: Some("migrate auth".into()),
+            ..WorkspaceEvents::default()
+        };
+        let c = row_column(Status::Complete, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "migrate auth");
     }
 
     #[test]

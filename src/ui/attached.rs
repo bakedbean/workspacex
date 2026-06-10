@@ -190,8 +190,9 @@ pub fn render_panes(
     ]);
     f.render_widget(Paragraph::new(footer_text), footer_area);
 
-    // Chips + inline rule filler + right-justified PR chip. Always renders so
-    // the rule shows even when there are no pinned commands.
+    // Chips + inline rule filler + right-justified info block (diff count and,
+    // when present, the PR chip). Always renders so the rule shows even when
+    // there are no pinned commands.
     let (chip_rects, pr_link_rect) = render_chip_row(f, chip_area, pinned, diff, pr, theme);
 
     // Agents row: only rendered when the workspace has more than its primary
@@ -729,11 +730,16 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
 
 /// Render the pinned-command chip row, returning each chip's clickable rect.
 ///
-/// When `pr` is present, a clickable PR chip (`{glyph} #{n} {label}`, mirroring
-/// the dashboard detail header) is painted flush to the row's right edge with
-/// the inline rule stopping short of it; its screen rect is returned as the
-/// second tuple element for mouse hit-testing. The chip is dropped when the
-/// pinned chips leave no room for it.
+/// A right-justified info block — the `diff` count (`+A −R`) followed by the
+/// PR chip (`{glyph} #{n} {label}`, mirroring the dashboard detail header) —
+/// is painted flush to the row's right edge with the inline rule stopping
+/// short of it. Either element is optional: the diff renders even without a
+/// PR (flush-right on its own), and a clean/absent diff renders nothing. On
+/// rows too narrow for both, the diff is dropped before the PR, and the whole
+/// block is dropped when the pinned chips leave no room for it.
+///
+/// The returned `Rect` is the PR chip's screen rect (for mouse hit-testing),
+/// or `None` when no PR chip was painted — the diff count is not clickable.
 pub(crate) fn render_chip_row(
     f: &mut Frame,
     area: Rect,

@@ -47,6 +47,7 @@ pub struct Repo {
     pub detail_bar_config: Option<String>,
     pub chronology_config: Option<String>,
     pub created_at: i64,
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +307,7 @@ impl Store {
                 detail_bar_config: r.get(10)?,
                 chronology_config: r.get(11)?,
                 created_at: r.get(12)?,
+                sort_order: 0,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)

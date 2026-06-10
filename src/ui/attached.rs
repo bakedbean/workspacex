@@ -1,6 +1,7 @@
 use crate::chronology::Side;
 use crate::commands::pinned::{PinnedCommand, truncate_label};
 use crate::data::store::AgentInstanceId;
+use crate::git::forge::BranchLifecycle;
 use crate::pty::render::render_screen;
 use crate::pty::session::{AgentKind, Session};
 use crate::ui::footer::{FooterHintAction, FooterHintSpan, key_for_glyph};
@@ -51,6 +52,10 @@ pub struct ChronologyHits {
 pub struct PanesDrawOutput {
     /// Clickable rects of the pinned-command chips (same as before).
     pub chip_rects: Vec<Rect>,
+    /// Clickable rect of the right-justified PR chip on the chip row, or `None`
+    /// when the focused workspace has no PR (or the chip didn't fit). Consumed
+    /// by the input handler to open the PR in the browser on click.
+    pub pr_link_rect: Option<Rect>,
     /// `(session, terminal content rect)` for each rendered pane.
     pub pane_rects: Vec<(Arc<Session>, Rect)>,
     /// `(instance id, clickable rect)` for each agent pill in the footer
@@ -141,6 +146,7 @@ pub fn render_panes(
     multi_pane_footer: bool,
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
+    pr: Option<(BranchLifecycle, u32)>,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active_agent: Option<AgentInstanceId>,
     chronology_bar: Option<(Rect, ChronologyDraw<'_>)>,
@@ -183,9 +189,9 @@ pub fn render_panes(
     ]);
     f.render_widget(Paragraph::new(footer_text), footer_area);
 
-    // Chips + inline rule filler. Always renders so the rule shows even
-    // when there are no pinned commands.
-    let chip_rects = render_chip_row(f, chip_area, pinned, theme);
+    // Chips + inline rule filler + right-justified PR chip. Always renders so
+    // the rule shows even when there are no pinned commands.
+    let (chip_rects, pr_link_rect) = render_chip_row(f, chip_area, pinned, pr, theme);
 
     // Agents row: only rendered when the workspace has more than its primary
     // agent. Each pill's clickable rect is computed alongside the spans so the
@@ -201,6 +207,7 @@ pub fn render_panes(
 
     PanesDrawOutput {
         chip_rects,
+        pr_link_rect,
         pane_rects,
         agent_chip_rects,
         chronology_entry_rects: chronology_hits.entries,
@@ -634,6 +641,37 @@ fn footer_line(
     (Line::from(spans), hints)
 }
 
+/// Build the right-justified PR chip's display text and style for the chip
+/// row, mirroring the dashboard detail header (`{glyph} #{n} {label}`).
+/// `None` when there's no PR or the lifecycle has no glyph (e.g. `NoPr`).
+fn pr_chip_parts(pr: Option<(BranchLifecycle, u32)>, theme: &Theme) -> Option<(String, Style)> {
+    let (lc, number) = pr?;
+    let (glyph, label) = crate::ui::dashboard::detail::lifecycle_chip(lc);
+    if glyph.is_empty() {
+        return None;
+    }
+    let style = theme
+        .lifecycle_style(Some(lc))
+        .unwrap_or_else(|| theme.dim_style());
+    Some((format!("{glyph} #{number} {label}"), style))
+}
+
+/// Screen rect where the right-justified PR chip lands within `area`: flush to
+/// the row's right edge. `None` when there's no chip or it can't fit the row at
+/// all. The caller additionally drops the chip when the pinned chips would
+/// leave no gap before it.
+fn pr_chip_rect(area: Rect, pr_width: u16) -> Option<Rect> {
+    if pr_width == 0 || pr_width > area.width {
+        return None;
+    }
+    Some(Rect {
+        x: area.x + area.width - pr_width,
+        y: area.y,
+        width: pr_width,
+        height: 1,
+    })
+}
+
 /// Compute the clickable Rect for each chip that fits within `area`.
 /// Returns one Rect per chip rendered left-to-right; chips that don't fit
 /// are dropped from the end. The chip text is ` <N> <label> ` (V5 button
@@ -665,12 +703,20 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     rects
 }
 
+/// Render the pinned-command chip row, returning each chip's clickable rect.
+///
+/// When `pr` is present, a clickable PR chip (`{glyph} #{n} {label}`, mirroring
+/// the dashboard detail header) is painted flush to the row's right edge with
+/// the inline rule stopping short of it; its screen rect is returned as the
+/// second tuple element for mouse hit-testing. The chip is dropped when the
+/// pinned chips leave no room for it.
 pub(crate) fn render_chip_row(
     f: &mut Frame,
     area: Rect,
     pinned: &[PinnedCommand],
+    pr: Option<(BranchLifecycle, u32)>,
     theme: &Theme,
-) -> Vec<Rect> {
+) -> (Vec<Rect>, Option<Rect>) {
     let rects = layout_chip_row(area, pinned);
     let key_style = Style::default()
         .fg(theme.dim)
@@ -697,22 +743,50 @@ pub(crate) fn render_chip_row(
         used += label_with_lead.chars().count();
         spans.push(Span::styled(label_with_lead, label_style));
     }
-    // Inline rule filler matching the V5 dashboard repo-header style:
-    // 2 spaces (or 0 when there are no chips), then `─` runs to the
-    // right edge of the row.
+    // Right-justified PR chip (when there's a PR). It claims the row's right
+    // edge; the inline rule below stops a 2-cell gap short of it. Dropped when
+    // the pinned chips leave less than that gap, so it never overlaps them.
     let width = area.width as usize;
-    if width > used {
+    let pr_parts = pr_chip_parts(pr, theme);
+    let pr_width = pr_parts
+        .as_ref()
+        .map(|(text, _)| text.chars().count())
+        .unwrap_or(0);
+    let pr_fits = pr_width > 0 && used + 2 + pr_width <= width;
+    let pr_rect = if pr_fits {
+        pr_chip_rect(area, pr_width as u16)
+    } else {
+        None
+    };
+
+    // Inline rule filler matching the V5 dashboard repo-header style:
+    // 2 spaces (or 0 when there are no chips), then `─` runs to the right edge
+    // of the row — or to the gap before the PR chip when one is present.
+    let rule_end = if pr_fits { width - pr_width - 2 } else { width };
+    if rule_end > used {
         let gap = if used == 0 { 0 } else { 2 };
-        let rule_len = width.saturating_sub(used + gap);
+        let rule_len = rule_end.saturating_sub(used + gap);
         if gap > 0 && rule_len > 0 {
             spans.push(Span::raw(" ".repeat(gap)));
+            used += gap;
         }
         if rule_len > 0 {
             spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
+            used += rule_len;
         }
     }
+
+    // Pad out to the chip's flush-right start (matching `pr_rect`) and paint it.
+    if pr_fits && let Some((text, style)) = pr_parts {
+        let pad = width.saturating_sub(used + pr_width);
+        if pad > 0 {
+            spans.push(Span::raw(" ".repeat(pad)));
+        }
+        spans.push(Span::styled(text, style));
+    }
+
     f.render_widget(Paragraph::new(Line::from(spans)), area);
-    rects
+    (rects, pr_rect)
 }
 
 /// Switch keys for the footer agents row, drawn from a reserved-safe pool so
@@ -1188,5 +1262,25 @@ mod tests {
         assert_eq!(rects[1].width, 12);
         // 2-cell gap between chips
         assert_eq!(rects[1].x, rects[0].x + rects[0].width + 2);
+    }
+
+    #[test]
+    fn pr_chip_rect_is_flush_right() {
+        // The PR chip's clickable rect hugs the right edge of the row so the
+        // chip painted by `render_chip_row` (right-padded to the same column)
+        // lines up with the mouse hit target.
+        let area = ratatui::layout::Rect::new(4, 7, 80, 1);
+        let rect = pr_chip_rect(area, 12).expect("chip fits in an 80-wide row");
+        assert_eq!(rect.x, 4 + 80 - 12);
+        assert_eq!(rect.y, 7);
+        assert_eq!(rect.width, 12);
+        assert_eq!(rect.height, 1);
+    }
+
+    #[test]
+    fn pr_chip_rect_dropped_when_wider_than_row() {
+        let area = ratatui::layout::Rect::new(0, 0, 10, 1);
+        assert!(pr_chip_rect(area, 12).is_none());
+        assert!(pr_chip_rect(area, 0).is_none());
     }
 }

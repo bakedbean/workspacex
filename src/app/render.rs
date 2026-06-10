@@ -73,6 +73,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let nerd_fonts = nerd_fonts_enabled(&app.store);
 
             // Build per-workspace inputs in V5 shape.
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
             let mut workspaces: Vec<dashboard::WorkspaceItem<'_>> = Vec::new();
             for repo in &app.repos {
                 for (rid, ws) in &app.workspaces {
@@ -88,16 +92,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         if last == 0 {
                             return 0;
                         }
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as u64)
-                            .unwrap_or(0);
+                        let now = now_ms.max(0) as u64;
                         now.saturating_sub(last) / 1000
                     });
-                    let latest = app
-                        .workspace_events
-                        .get(&ws.id)
-                        .and_then(|e| e.latest.clone());
                     let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
                     let row = crate::ui::dashboard::row::RowInputs {
                         agent: ws.agent,
@@ -110,7 +107,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .map(|v| v.len() as u32)
                             .unwrap_or(0),
                         diff: app.workspace_diff.get(&ws.id).copied(),
-                        last_message: latest.map(|ev| ev.display),
+                        column: crate::ui::dashboard::column_content::row_column(
+                            status,
+                            app.workspace_events.get(&ws.id),
+                            now_ms,
+                        ),
                         ago_secs: secs,
                         selected: matches!(app.selected_target(),
                             Some(SelectionTarget::Workspace(id)) if id == ws.id),

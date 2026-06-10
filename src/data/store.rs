@@ -354,10 +354,12 @@ impl Store {
     /// repo up/down by one slot. Atomic so a crash can't leave a half-swap.
     pub fn swap_repo_sort_order(&self, a: RepoId, b: RepoId) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        let so_a: i64 =
-            tx.query_row("SELECT sort_order FROM repos WHERE id = ?1", [a.0], |r| r.get(0))?;
-        let so_b: i64 =
-            tx.query_row("SELECT sort_order FROM repos WHERE id = ?1", [b.0], |r| r.get(0))?;
+        let so_a: i64 = tx.query_row("SELECT sort_order FROM repos WHERE id = ?1", [a.0], |r| {
+            r.get(0)
+        })?;
+        let so_b: i64 = tx.query_row("SELECT sort_order FROM repos WHERE id = ?1", [b.0], |r| {
+            r.get(0)
+        })?;
         tx.execute(
             "UPDATE repos SET sort_order = ?1 WHERE id = ?2",
             rusqlite::params![so_b, a.0],
@@ -1933,9 +1935,12 @@ mod tests {
                 [],
             )
             .unwrap();
-        let names: Vec<String> =
-            store.repos().unwrap().into_iter().map(|r| r.name).collect();
-        assert_eq!(names, vec!["a", "c", "b"], "ordered by sort_order, not name or id");
+        let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(
+            names,
+            vec!["a", "c", "b"],
+            "ordered by sort_order, not name or id"
+        );
     }
 
     #[test]
@@ -2014,8 +2019,7 @@ mod tests {
                 .unwrap(); // sort_order 2
             // Move charlie to the top (custom, non-alphabetical order).
             store.swap_repo_sort_order(charlie, alpha).unwrap();
-            let names: Vec<String> =
-                store.repos().unwrap().into_iter().map(|r| r.name).collect();
+            let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
             assert_eq!(
                 names,
                 vec!["charlie", "bravo", "alpha"],
@@ -2039,22 +2043,37 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         // "zeta" then "alpha": even though alpha sorts first by name, the
         // tail-append rule must give zeta=0, alpha=1 (registration order).
-        store.add_repo(std::path::Path::new("/tmp/wsx-zeta"), "zeta", "").unwrap();
-        store.add_repo(std::path::Path::new("/tmp/wsx-alpha2"), "alpha", "").unwrap();
+        store
+            .add_repo(std::path::Path::new("/tmp/wsx-zeta"), "zeta", "")
+            .unwrap();
+        store
+            .add_repo(std::path::Path::new("/tmp/wsx-alpha2"), "alpha", "")
+            .unwrap();
 
-        let order = |name: &str, repos: &[Repo]| {
-            repos.iter().find(|r| r.name == name).unwrap().sort_order
-        };
+        let order =
+            |name: &str, repos: &[Repo]| repos.iter().find(|r| r.name == name).unwrap().sort_order;
         let repos = store.repos().unwrap();
-        assert_eq!(order("zeta", &repos), 0, "first registered → tail of empty list → 0");
-        assert_eq!(order("alpha", &repos), 1, "second registered → appended after → 1");
+        assert_eq!(
+            order("zeta", &repos),
+            0,
+            "first registered → tail of empty list → 0"
+        );
+        assert_eq!(
+            order("alpha", &repos),
+            1,
+            "second registered → appended after → 1"
+        );
     }
 
     #[test]
     fn swap_repo_sort_order_swaps_two_repos() {
         let store = Store::open_in_memory().unwrap();
-        let a = store.add_repo(std::path::Path::new("/tmp/wsx-a"), "aaa", "").unwrap(); // sort_order 0
-        let b = store.add_repo(std::path::Path::new("/tmp/wsx-b"), "bbb", "").unwrap(); // sort_order 1
+        let a = store
+            .add_repo(std::path::Path::new("/tmp/wsx-a"), "aaa", "")
+            .unwrap(); // sort_order 0
+        let b = store
+            .add_repo(std::path::Path::new("/tmp/wsx-b"), "bbb", "")
+            .unwrap(); // sort_order 1
 
         store.swap_repo_sort_order(a, b).unwrap();
 

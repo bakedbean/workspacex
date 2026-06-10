@@ -355,8 +355,7 @@ fn visible_targets_by_repo_matches_render_order() {
     );
     // Sanity: the chosen sort_order really does reorder repos (so the
     // assertions above are not trivially satisfied by input order).
-    let input_order: Vec<crate::data::store::RepoId> =
-        inputs.repos.iter().map(|r| r.id).collect();
+    let input_order: Vec<crate::data::store::RepoId> = inputs.repos.iter().map(|r| r.id).collect();
     assert_ne!(
         nav_repo_order, input_order,
         "fixture must exercise a non-trivial reordering"
@@ -443,6 +442,9 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
     let render: Vec<RepoId> = views.iter().map(|v| RepoId(v.id as i64)).collect();
 
     assert_eq!(nav, expected, "nav breaks sort_order ties by ascending id");
-    assert_eq!(render, expected, "render breaks sort_order ties by ascending id");
+    assert_eq!(
+        render, expected,
+        "render breaks sort_order ties by ascending id"
+    );
     assert_eq!(nav, render, "nav and render agree under a sort_order tie");
 }

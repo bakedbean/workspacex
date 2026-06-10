@@ -2999,7 +2999,11 @@ mod pm_state_tests {
         press(&mut app, 'K', KeyModifiers::SHIFT).await;
 
         let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
-        assert_eq!(order, vec![ids[1], ids[0], ids[2]], "repo-1 moved above repo-0");
+        assert_eq!(
+            order,
+            vec![ids[1], ids[0], ids[2]],
+            "repo-1 moved above repo-0"
+        );
         assert_eq!(
             app.selected_target(),
             Some(SelectionTarget::Repo(ids[1])),
@@ -3014,7 +3018,11 @@ mod pm_state_tests {
         press(&mut app, 'J', KeyModifiers::SHIFT).await;
 
         let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
-        assert_eq!(order, vec![ids[0], ids[2], ids[1]], "repo-1 moved below repo-2");
+        assert_eq!(
+            order,
+            vec![ids[0], ids[2], ids[1]],
+            "repo-1 moved below repo-2"
+        );
         assert_eq!(app.selected_target(), Some(SelectionTarget::Repo(ids[1])));
     }
 
@@ -3024,7 +3032,11 @@ mod pm_state_tests {
         app.dashboard.selected = 0; // top repo
         press(&mut app, 'K', KeyModifiers::SHIFT).await;
         let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
-        assert_eq!(order, vec![ids[0], ids[1], ids[2]], "no movement at the top");
+        assert_eq!(
+            order,
+            vec![ids[0], ids[1], ids[2]],
+            "no movement at the top"
+        );
     }
 
     #[tokio::test]
@@ -3033,7 +3045,11 @@ mod pm_state_tests {
         app.dashboard.selected = 2; // bottom repo
         press(&mut app, 'J', KeyModifiers::SHIFT).await;
         let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
-        assert_eq!(order, vec![ids[0], ids[1], ids[2]], "no movement at the bottom");
+        assert_eq!(
+            order,
+            vec![ids[0], ids[1], ids[2]],
+            "no movement at the bottom"
+        );
     }
 
     #[tokio::test]

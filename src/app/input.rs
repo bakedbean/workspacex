@@ -245,6 +245,42 @@ fn toggle_focused_fold(app: &mut App) {
         app.dashboard.folded.insert(id, new_folded);
     }
 }
+/// Move the currently selected repo one slot up (`up = true`) or down on the
+/// dashboard, persisting the new order. No-op unless a repo *header* is
+/// selected, and no-op at the ends of the list. Keeps the selection anchored
+/// to the moved repo so repeated presses walk it into place.
+fn move_selected_repo(app: &mut App, up: bool) -> Result<()> {
+    let Some(SelectionTarget::Repo(rid)) = app.selected_target() else {
+        return Ok(());
+    };
+    let Some(pos) = app.repos.iter().position(|r| r.id == rid) else {
+        return Ok(());
+    };
+    let neighbor = if up {
+        pos.checked_sub(1)
+    } else if pos + 1 < app.repos.len() {
+        Some(pos + 1)
+    } else {
+        None
+    };
+    let Some(nb) = neighbor else { return Ok(()) };
+    let nb_id = app.repos[nb].id;
+
+    app.store.swap_repo_sort_order(rid, nb_id)?;
+    app.refresh()?;
+
+    // Anchor the cursor to the repo we just moved.
+    if let Some(idx) = app
+        .selectable
+        .iter()
+        .position(|t| *t == SelectionTarget::Repo(rid))
+    {
+        app.dashboard.selected = idx;
+    }
+    app.dashboard.selection = Some(SelectionTarget::Repo(rid));
+    Ok(())
+}
+
 /// Toggle the global change-chronology bar visibility and persist it to
 /// settings. Read live by the renderer via `resolve_global_only`.
 fn toggle_chronology_visible(app: &mut App) {
@@ -731,14 +767,23 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             // 'g' on a Repo header is intentionally a no-op.
         }
-        (KeyCode::Char('K'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+        (KeyCode::Char('K'), _) => match app.selected_target() {
+            Some(SelectionTarget::Workspace(id)) => {
                 app.modal = Some(Modal::ProcessList {
                     workspace_id: id,
                     selected: 0,
                 });
             }
-            // 'K' on a Repo header is intentionally a no-op.
+            // Shift+K on a repo header moves it up one slot.
+            Some(SelectionTarget::Repo(_)) => move_selected_repo(app, true)?,
+            None => {}
+        },
+        (KeyCode::Char('J'), _) => {
+            // Shift+J on a repo header moves it down one slot. On a workspace
+            // it's a no-op (J is otherwise unbound on the dashboard).
+            if let Some(SelectionTarget::Repo(_)) = app.selected_target() {
+                move_selected_repo(app, false)?;
+            }
         }
         (KeyCode::Char('s'), _) => {
             let repo_id = match app.selected_target() {

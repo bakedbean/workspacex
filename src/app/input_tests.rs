@@ -2993,6 +2993,50 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
+    async fn shift_k_moves_selected_repo_up() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.selected = 1; // select repo-1 (Repo header)
+        press(&mut app, 'K', KeyModifiers::SHIFT).await;
+
+        let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
+        assert_eq!(order, vec![ids[1], ids[0], ids[2]], "repo-1 moved above repo-0");
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Repo(ids[1])),
+            "selection follows the moved repo"
+        );
+    }
+
+    #[tokio::test]
+    async fn shift_j_moves_selected_repo_down() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.selected = 1; // select repo-1
+        press(&mut app, 'J', KeyModifiers::SHIFT).await;
+
+        let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
+        assert_eq!(order, vec![ids[0], ids[2], ids[1]], "repo-1 moved below repo-2");
+        assert_eq!(app.selected_target(), Some(SelectionTarget::Repo(ids[1])));
+    }
+
+    #[tokio::test]
+    async fn shift_k_at_top_is_noop() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.selected = 0; // top repo
+        press(&mut app, 'K', KeyModifiers::SHIFT).await;
+        let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
+        assert_eq!(order, vec![ids[0], ids[1], ids[2]], "no movement at the top");
+    }
+
+    #[tokio::test]
+    async fn shift_j_at_bottom_is_noop() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.selected = 2; // bottom repo
+        press(&mut app, 'J', KeyModifiers::SHIFT).await;
+        let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
+        assert_eq!(order, vec![ids[0], ids[1], ids[2]], "no movement at the bottom");
+    }
+
+    #[tokio::test]
     async fn i_alias_opens_new_workspace_modal_like_enter_on_repo() {
         // On a repo header, Enter opens the New Workspace modal. `i` (vim
         // insert) should do the same — it's the "enter this thing" verb.

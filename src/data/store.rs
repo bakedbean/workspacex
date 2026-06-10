@@ -256,16 +256,24 @@ impl Store {
                 |r| r.get(0),
             )?;
             if has_col == 0 {
-                self.conn.execute(
+                // Add the column and seed initial ranks atomically. Done in one
+                // transaction so a crash between the two can't leave every repo
+                // stuck at the default sort_order=0: `migrate()` re-runs every
+                // startup (SCHEMA_V1 resets user_version to 1), but the column
+                // would already exist, so the seed would never run again and
+                // swaps (which preserve the value set) would all be no-ops. The
+                // transaction makes it all-or-nothing — a failed migration rolls
+                // back and retries cleanly on the next open.
+                let tx = self.conn.unchecked_transaction()?;
+                tx.execute(
                     "ALTER TABLE repos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
                     [],
                 )?;
                 // Seed a unique, deterministic alphabetical rank (case-insensitive,
-                // id as tiebreak) for repos that predate this column. This MUST stay
-                // inside the column-creation guard: `migrate()` re-runs every startup
-                // (SCHEMA_V1 resets user_version to 1), so seeding unconditionally
-                // would overwrite the user's manual ordering on every launch.
-                self.conn.execute(
+                // id as tiebreak) for repos that predate this column. Stays inside
+                // the column-creation guard so re-runs never clobber the user's
+                // manual ordering.
+                tx.execute(
                     "UPDATE repos SET sort_order = (\
                          SELECT COUNT(*) FROM repos r2 \
                          WHERE LOWER(r2.name) < LOWER(repos.name) \
@@ -273,6 +281,7 @@ impl Store {
                      )",
                     [],
                 )?;
+                tx.commit()?;
             }
             self.conn.execute("PRAGMA user_version = 14", [])?;
         }
@@ -318,7 +327,7 @@ impl Store {
                     setup_script, archive_script, pinned_commands, \
                     related_repos, base_branch, detail_bar_config, \
                     chronology_config, created_at, sort_order \
-             FROM repos ORDER BY sort_order, name",
+             FROM repos ORDER BY sort_order, id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(Repo {

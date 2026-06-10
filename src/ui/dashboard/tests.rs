@@ -383,3 +383,66 @@ fn visible_targets_by_repo_matches_render_order() {
         "question second"
     );
 }
+
+#[test]
+fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
+    use crate::app::SelectionTarget;
+    // Two repos deliberately share a sort_order (a tie that could only arise
+    // from a manual DB edit). The immutable id tiebreaker must produce a total,
+    // deterministic order — ascending id within the tie — and the nav builder
+    // (`visible_targets`) must agree with the renderer (`order_repos`) exactly.
+    // Ids/input order are arranged so the correct output is NOT the input
+    // order, so the assertions can't pass by accident.
+    let mut repos = [
+        fake_repo(3, "gamma", "/tmp/g"),
+        fake_repo(1, "alpha", "/tmp/a"),
+        fake_repo(2, "beta", "/tmp/b"),
+    ];
+    repos[0].sort_order = 5; // gamma (id 3)
+    repos[1].sort_order = 5; // alpha (id 1) — ties gamma
+    repos[2].sort_order = 1; // beta  (id 2)
+
+    let activity: Vec<u32> = vec![0; 24];
+    let inputs = DashboardInputs {
+        repos: repos.iter().collect(),
+        workspaces: Vec::new(),
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+    };
+    let state = DashboardState {
+        group_mode: GroupMode::Repo,
+        ..Default::default()
+    };
+
+    // Total order ascending by (sort_order, id): beta(1,2), alpha(5,1), gamma(5,3).
+    let expected = vec![RepoId(2), RepoId(1), RepoId(3)];
+
+    let targets = visible_targets(&inputs, &state);
+    let nav: Vec<RepoId> = targets
+        .iter()
+        .filter_map(|t| match t {
+            SelectionTarget::Repo(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+
+    let mut views: Vec<crate::ui::dashboard::by_repo::RepoView<'_>> = inputs
+        .repos
+        .iter()
+        .map(|r| crate::ui::dashboard::by_repo::RepoView {
+            id: r.id.0 as u64,
+            name: &r.name,
+            path: r.path.to_string_lossy().into_owned(),
+            counts: Default::default(),
+            expanded: true,
+            sort_order: r.sort_order,
+            workspaces: Vec::new(),
+        })
+        .collect();
+    crate::ui::dashboard::by_repo::order_repos(&mut views);
+    let render: Vec<RepoId> = views.iter().map(|v| RepoId(v.id as i64)).collect();
+
+    assert_eq!(nav, expected, "nav breaks sort_order ties by ascending id");
+    assert_eq!(render, expected, "render breaks sort_order ties by ascending id");
+    assert_eq!(nav, render, "nav and render agree under a sort_order tie");
+}

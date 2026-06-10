@@ -251,8 +251,9 @@ pub fn visible_targets(
                     }
                 })
                 .collect();
-            // Mirror by_repo::order_repos: stable manual order, ascending.
-            pending.sort_by_key(|p| p.sort_order);
+            // Mirror by_repo::order_repos exactly — same (sort_order, id) key —
+            // so nav and render stay in lockstep even if sort_order values collide.
+            pending.sort_by_key(|p| (p.sort_order, p.repo_id.0));
             for p in &pending {
                 out.push(SelectionTarget::Repo(p.repo_id));
                 let expanded = match state.folded.get(&(p.repo_id.0 as u64)).copied() {

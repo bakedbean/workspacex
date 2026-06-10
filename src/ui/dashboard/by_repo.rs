@@ -27,10 +27,13 @@ pub struct RepoView<'a> {
     pub workspaces: Vec<RowInputs>,
 }
 
-/// Order repos by their persisted manual `sort_order`, ascending. This is
+/// Order repos by their persisted manual `sort_order`, ascending, with the
+/// immutable repo `id` as a tiebreaker so the order is total and deterministic
+/// even if two repos ever share a `sort_order`. `visible_targets` (the nav
+/// index builder) must use the identical key to stay in lockstep. This is
 /// stable: workspace activity never changes a repo's position.
 pub fn order_repos(repos: &mut [RepoView<'_>]) {
-    repos.sort_by_key(|r| r.sort_order);
+    repos.sort_by_key(|r| (r.sort_order, r.id));
 }
 
 pub fn header_line(view: &RepoView<'_>, width: usize, theme: &Theme) -> Line<'static> {

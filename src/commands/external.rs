@@ -22,6 +22,14 @@ pub fn open_in_lazygit(worktree: &Path, configured: Option<&str>) -> Result<()> 
     spawn_with_cwd(&cmd, worktree)
 }
 
+/// Resolve and launch chronox (or configured equivalent) with cwd=`worktree`.
+/// The worktree path is supplied as chronox's positional argument: either via a
+/// `{path}` placeholder in the command, or appended when no placeholder is used.
+pub fn open_in_chronox(worktree: &Path, configured: Option<&str>) -> Result<()> {
+    let cmd = resolve_chronox_cmd(configured)?;
+    spawn_with_path_arg(&cmd, worktree)
+}
+
 /// Resolve and launch the user's difftool on `worktree`, diffing against `base`.
 /// The command template can reference `{path}` and `{base}`. If neither
 /// appears, `{path}` is appended (same convention as the editor).
@@ -130,6 +138,20 @@ fn resolve_lazygit_cmd(configured: Option<&str>) -> Result<String> {
         "no lazygit command configured; set `wsx config set lazygit_cmd <cmd>` \
          (e.g. `wezterm start -- lazygit`) — wsx's own TUI owns the terminal, \
          so lazygit needs a wrapper that opens its own window"
+            .into(),
+    ))
+}
+
+fn resolve_chronox_cmd(configured: Option<&str>) -> Result<String> {
+    if let Some(c) = configured {
+        if !c.trim().is_empty() {
+            return Ok(c.to_string());
+        }
+    }
+    Err(Error::UserInput(
+        "no chronox command configured; set `wsx config set chronox_cmd <cmd>` \
+         (e.g. `wezterm start -- chronox`) — wsx's own TUI owns the terminal, \
+         so chronox needs a wrapper that opens its own window"
             .into(),
     ))
 }
@@ -384,6 +406,37 @@ mod tests {
         let dir = std::env::temp_dir();
         let r = open_in_lazygit(&dir, Some(true_path()));
         assert!(r.is_ok(), "open_in_lazygit failed: {r:?}");
+    }
+
+    #[test]
+    fn chronox_uses_configured_command() {
+        assert_eq!(
+            resolve_chronox_cmd(Some("wezterm start -- chronox")).unwrap(),
+            "wezterm start -- chronox"
+        );
+    }
+
+    #[test]
+    fn chronox_errors_when_unconfigured() {
+        assert!(resolve_chronox_cmd(None).is_err());
+        assert!(resolve_chronox_cmd(Some("   ")).is_err());
+    }
+
+    #[test]
+    fn chronox_appends_path_when_no_placeholder() {
+        let argv = resolve_argv(true_path(), &[("path", "/tmp/wt")], Some("/tmp/wt")).unwrap();
+        assert_eq!(argv.last().unwrap(), "/tmp/wt");
+    }
+
+    #[test]
+    fn chronox_substitutes_path_placeholder() {
+        let argv = resolve_argv(
+            "wezterm start -- chronox {path}",
+            &[("path", "/tmp/wt")],
+            Some("/tmp/wt"),
+        )
+        .unwrap();
+        assert_eq!(argv, vec!["wezterm", "start", "--", "chronox", "/tmp/wt"]);
     }
 
     #[test]

@@ -146,6 +146,7 @@ pub fn render_panes(
     multi_pane_footer: bool,
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
+    diff: Option<crate::git::DiffStats>,
     pr: Option<(BranchLifecycle, u32)>,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active_agent: Option<AgentInstanceId>,
@@ -191,7 +192,7 @@ pub fn render_panes(
 
     // Chips + inline rule filler + right-justified PR chip. Always renders so
     // the rule shows even when there are no pinned commands.
-    let (chip_rects, pr_link_rect) = render_chip_row(f, chip_area, pinned, pr, theme);
+    let (chip_rects, pr_link_rect) = render_chip_row(f, chip_area, pinned, diff, pr, theme);
 
     // Agents row: only rendered when the workspace has more than its primary
     // agent. Each pill's clickable rect is computed alongside the spans so the
@@ -656,6 +657,29 @@ fn pr_chip_parts(pr: Option<(BranchLifecycle, u32)>, theme: &Theme) -> Option<(S
     Some((format!("{glyph} #{number} {label}"), style))
 }
 
+/// Build the `+A −R` diff-count spans (dashboard colours: green adds, red
+/// removes) plus their column width, or `None` when there's nothing to show —
+/// no stats, or a clean worktree with zero added/removed lines. Mirrors the
+/// dashboard row's diff cell so the two stay in lockstep.
+fn diff_chip_parts(
+    diff: Option<crate::git::DiffStats>,
+    theme: &Theme,
+) -> Option<(Vec<Span<'static>>, usize)> {
+    let d = diff?;
+    if d.added == 0 && d.removed == 0 {
+        return None;
+    }
+    let added_text = format!("+{}", d.added);
+    let removed_text = format!("−{}", d.removed);
+    let width = added_text.chars().count() + 1 + removed_text.chars().count();
+    let spans = vec![
+        Span::styled(added_text, theme.ok_style()),
+        Span::styled(" ".to_string(), theme.dim_style()),
+        Span::styled(removed_text, theme.err_style()),
+    ];
+    Some((spans, width))
+}
+
 /// Screen rect where the right-justified PR chip lands within `area`: flush to
 /// the row's right edge. `None` when there's no chip or it can't fit the row at
 /// all. The caller additionally drops the chip when the pinned chips would
@@ -714,6 +738,7 @@ pub(crate) fn render_chip_row(
     f: &mut Frame,
     area: Rect,
     pinned: &[PinnedCommand],
+    diff: Option<crate::git::DiffStats>,
     pr: Option<(BranchLifecycle, u32)>,
     theme: &Theme,
 ) -> (Vec<Rect>, Option<Rect>) {
@@ -743,17 +768,36 @@ pub(crate) fn render_chip_row(
         used += label_with_lead.chars().count();
         spans.push(Span::styled(label_with_lead, label_style));
     }
-    // Right-justified PR chip (when there's a PR). It claims the row's right
-    // edge; the inline rule below stops a 2-cell gap short of it. Dropped when
-    // the pinned chips leave less than that gap, so it never overlaps them.
+    // Right-justified info block: the diff count (`+A −R`) then the PR chip,
+    // in that left-to-right order, flush to the row's right edge. The PR chip
+    // is the rightmost element; the diff sits one space to its left. The
+    // inline rule below stops a 2-cell gap short of the whole block. When the
+    // row is too narrow for both, the diff is dropped before the PR — the PR
+    // is the more important signal — and the block is dropped entirely when
+    // the pinned chips leave less than the 2-cell gap, so it never overlaps.
     let width = area.width as usize;
     let pr_parts = pr_chip_parts(pr, theme);
     let pr_width = pr_parts
         .as_ref()
         .map(|(text, _)| text.chars().count())
         .unwrap_or(0);
-    let pr_fits = pr_width > 0 && used + 2 + pr_width <= width;
-    let pr_rect = if pr_fits {
+    let diff_parts = diff_chip_parts(diff, theme);
+    let diff_width = diff_parts.as_ref().map(|(_, w)| *w).unwrap_or(0);
+    // One space separates the diff from the PR chip when both are present.
+    let inner_gap = if diff_width > 0 && pr_width > 0 { 1 } else { 0 };
+    let full_width = diff_width + inner_gap + pr_width;
+
+    // Pick the widest block that still leaves the 2-cell rule gap. Preferring
+    // the PR-only fallback keeps the PR visible on narrow rows.
+    let (block_width, show_diff) = if full_width > 0 && used + 2 + full_width <= width {
+        (full_width, diff_width > 0)
+    } else if pr_width > 0 && used + 2 + pr_width <= width {
+        (pr_width, false)
+    } else {
+        (0, false)
+    };
+    // The PR chip is rightmost, so its click rect is flush-right at `pr_width`.
+    let pr_rect = if pr_width > 0 && block_width > 0 {
         pr_chip_rect(area, pr_width as u16)
     } else {
         None
@@ -761,8 +805,12 @@ pub(crate) fn render_chip_row(
 
     // Inline rule filler matching the V5 dashboard repo-header style:
     // 2 spaces (or 0 when there are no chips), then `─` runs to the right edge
-    // of the row — or to the gap before the PR chip when one is present.
-    let rule_end = if pr_fits { width - pr_width - 2 } else { width };
+    // of the row — or to the gap before the info block when one is present.
+    let rule_end = if block_width > 0 {
+        width - block_width - 2
+    } else {
+        width
+    };
     if rule_end > used {
         let gap = if used == 0 { 0 } else { 2 };
         let rule_len = rule_end.saturating_sub(used + gap);
@@ -776,13 +824,22 @@ pub(crate) fn render_chip_row(
         }
     }
 
-    // Pad out to the chip's flush-right start (matching `pr_rect`) and paint it.
-    if pr_fits && let Some((text, style)) = pr_parts {
-        let pad = width.saturating_sub(used + pr_width);
+    // Pad out to the block's flush-right start, then paint diff (if kept) and
+    // the PR chip in order.
+    if block_width > 0 {
+        let pad = width.saturating_sub(used + block_width);
         if pad > 0 {
             spans.push(Span::raw(" ".repeat(pad)));
         }
-        spans.push(Span::styled(text, style));
+        if show_diff && let Some((diff_spans, _)) = diff_parts {
+            spans.extend(diff_spans);
+            if pr_width > 0 {
+                spans.push(Span::raw(" ".to_string()));
+            }
+        }
+        if let Some((text, style)) = pr_parts {
+            spans.push(Span::styled(text, style));
+        }
     }
 
     f.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -1301,6 +1358,7 @@ mod tests {
                     f,
                     area,
                     &pinned,
+                    None,
                     Some((BranchLifecycle::PrOpen, 152)),
                     &theme,
                 );
@@ -1333,6 +1391,7 @@ mod tests {
                     f,
                     area,
                     &pinned,
+                    None,
                     Some((BranchLifecycle::PrOpen, 152)),
                     &theme,
                 );
@@ -1340,5 +1399,116 @@ mod tests {
             })
             .unwrap();
         assert!(pr_rect.is_none());
+    }
+
+    #[test]
+    fn render_chip_row_paints_diff_just_left_of_pr_chip() {
+        // The diff count (`+A −R`, dashboard colours) sits flush-right, one
+        // space to the left of the PR chip, mirroring the dashboard's cell.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut pr_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                let (_chips, r) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    Some(crate::git::DiffStats {
+                        added: 12,
+                        removed: 3,
+                    }),
+                    Some((BranchLifecycle::PrOpen, 152)),
+                    &theme,
+                );
+                pr_rect = r;
+            })
+            .unwrap();
+        let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
+        let buf = terminal.backend().buffer();
+        // PR chip stays flush-right, unchanged by the new diff count.
+        let mut pr_painted = String::new();
+        for x in rect.x..rect.x + rect.width {
+            pr_painted.push_str(buf[(x, rect.y)].symbol());
+        }
+        assert_eq!(pr_painted, "⏺ #152 open");
+        // The diff count sits one space left of the PR chip.
+        let diff_text = "+12 −3";
+        let diff_w = diff_text.chars().count() as u16;
+        let diff_start = rect.x - 1 - diff_w;
+        let mut diff_painted = String::new();
+        for x in diff_start..diff_start + diff_w {
+            diff_painted.push_str(buf[(x, rect.y)].symbol());
+        }
+        assert_eq!(diff_painted, diff_text);
+    }
+
+    #[test]
+    fn render_chip_row_paints_diff_flush_right_without_pr() {
+        // Before a PR exists, the diff count still shows — flush to the right
+        // edge, where the PR chip would otherwise sit. This is what makes it
+        // update as the agent commits, ahead of any PR.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    Some(crate::git::DiffStats {
+                        added: 5,
+                        removed: 0,
+                    }),
+                    None,
+                    &theme,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let diff_text = "+5 −0";
+        let diff_w = diff_text.chars().count() as u16;
+        let start = 80 - diff_w;
+        let mut painted = String::new();
+        for x in start..start + diff_w {
+            painted.push_str(buf[(x, 0)].symbol());
+        }
+        assert_eq!(painted, diff_text);
+    }
+
+    #[test]
+    fn render_chip_row_omits_zero_diff() {
+        // A clean worktree (no added/removed lines) shows nothing — the right
+        // edge stays blank, matching the dashboard which hides a zero diff.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    Some(crate::git::DiffStats {
+                        added: 0,
+                        removed: 0,
+                    }),
+                    None,
+                    &theme,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        // The far-right cell holds a rule dash or blank, never a digit/sign.
+        let sym = buf[(79, 0)].symbol().to_string();
+        assert!(sym == "─" || sym == " ", "got {sym:?}");
     }
 }

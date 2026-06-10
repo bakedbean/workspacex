@@ -161,10 +161,11 @@ pub fn render(
 
     let container_rects = render_body_region(f, body_region, inputs, theme);
 
-    // The detail bar's PR chip lives in the header strip (above), so the chip
-    // row here carries pinned commands only — no right-justified PR chip.
+    // The detail bar's PR chip and diff count live in the header strip and
+    // row (above/elsewhere), so the chip row here carries pinned commands
+    // only — no right-justified diff or PR chip.
     let chip_rects = if let Some(area) = chip_area {
-        crate::ui::attached::render_chip_row(f, area, inputs.pinned, None, theme).0
+        crate::ui::attached::render_chip_row(f, area, inputs.pinned, None, None, theme).0
     } else {
         Vec::new()
     };

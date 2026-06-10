@@ -492,6 +492,12 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .copied()
                 .and_then(|n| app.pr_lifecycle.get(&focused_id).copied().map(|lc| (lc, n)));
 
+            // Diff stats for the focused pane, drawn just left of the PR chip.
+            // Same `app.workspace_diff` cache the dashboard `+N −N` cell reads,
+            // so the chip-row count matches the dashboard and refreshes on the
+            // same 10s diff poll as the agent makes commits.
+            let diff = app.workspace_diff.get(&focused_id).copied();
+
             // Build agents list for the footer agents row. Only shown when
             // the focused workspace has more than its primary agent.
             let focused_agents_list: Vec<(
@@ -687,6 +693,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 multi_pane,
                 attention_line,
                 &pinned,
+                diff,
                 pr,
                 &focused_agents_list,
                 active_agent,
@@ -761,6 +768,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     false,
                     attention_line,
                     pinned,
+                    None,
                     None,
                     &[],
                     None,

@@ -383,6 +383,7 @@ fn known_setting_key(k: &str) -> bool {
             | "terminal_cmd"
             | "diff_cmd"
             | "lazygit_cmd"
+            | "chronox_cmd"
             | "notifications"
             | "theme"
             | "pm_enabled"
@@ -1734,6 +1735,11 @@ mod tests {
     #[test]
     fn accepts_lazygit_cmd() {
         assert!(known_setting_key("lazygit_cmd"));
+    }
+
+    #[test]
+    fn accepts_chronox_cmd() {
+        assert!(known_setting_key("chronox_cmd"));
     }
 
     #[test]

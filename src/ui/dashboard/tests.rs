@@ -288,10 +288,10 @@ fn visible_targets_by_repo_matches_render_order() {
         ..Default::default()
     };
     let targets = visible_targets(&inputs, &state);
-    // Repos with question + stalled + waiting are expanded by default;
-    // 'wsx' has the highest noise score and should come first. Its
-    // workspaces should appear in status-priority order
-    // (theme-tokens=Stalled first, then repo-overview=Question,
+    // All fixtures have sort_order: 0, so repo position is stable input
+    // order. This test checks intra-repo workspace priority ordering:
+    // within the 'wsx' repo, workspaces should appear in status-priority
+    // order (theme-tokens=Stalled first, then repo-overview=Question,
     // list-virtualization=Waiting, tech-stack-question=Complete).
     let wsx_repo_id = inputs.repos.iter().find(|r| r.name == "wsx").unwrap().id;
     let wsx_header_pos = targets

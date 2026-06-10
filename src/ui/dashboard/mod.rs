@@ -203,7 +203,7 @@ pub fn render_footer(
 /// what `render()` produces. The caller (`app.rs::draw`) writes this
 /// into `App::selectable` so arrow-key navigation walks the same order
 /// the user sees on screen instead of the raw `app.workspaces` order
-/// (which the V5 renderer reshuffles by noise score / status priority /
+/// (which the V5 renderer reshuffles by sort_order / status priority /
 /// fold state / filter).
 ///
 /// By-repo: emits `Repo(id)` for each visible header followed by

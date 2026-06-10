@@ -161,8 +161,10 @@ pub fn render(
 
     let container_rects = render_body_region(f, body_region, inputs, theme);
 
+    // The detail bar's PR chip lives in the header strip (above), so the chip
+    // row here carries pinned commands only — no right-justified PR chip.
     let chip_rects = if let Some(area) = chip_area {
-        crate::ui::attached::render_chip_row(f, area, inputs.pinned, theme)
+        crate::ui::attached::render_chip_row(f, area, inputs.pinned, None, theme).0
     } else {
         Vec::new()
     };
@@ -536,7 +538,7 @@ pub(crate) fn build_header_strip(
     (Line::from(spans), pr_chip)
 }
 
-fn lifecycle_chip(lc: BranchLifecycle) -> (&'static str, &'static str) {
+pub(crate) fn lifecycle_chip(lc: BranchLifecycle) -> (&'static str, &'static str) {
     match lc {
         BranchLifecycle::PrOpen => ("⏺", "open"),
         BranchLifecycle::PrDraft => ("⏷", "draft"),

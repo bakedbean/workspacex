@@ -483,6 +483,15 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let pinned =
                 crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
 
+            // PR chip for the focused pane's workspace, drawn right-justified on
+            // the chip row. Same `(lifecycle, number)` source the dashboard
+            // detail header uses, so the chip text and click behaviour match.
+            let pr = app
+                .pr_number
+                .get(&focused_id)
+                .copied()
+                .and_then(|n| app.pr_lifecycle.get(&focused_id).copied().map(|lc| (lc, n)));
+
             // Build agents list for the footer agents row. Only shown when
             // the focused workspace has more than its primary agent.
             let focused_agents_list: Vec<(
@@ -678,12 +687,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 multi_pane,
                 attention_line,
                 &pinned,
+                pr,
                 &focused_agents_list,
                 active_agent,
                 bar_rect.zip(chronology_draw),
                 &app.theme,
             );
             app.chip_rects = out.chip_rects;
+            app.pr_link_rect = out.pr_link_rect.map(|r| (focused_id, r));
             app.attention_rects = attention_rects;
             app.attached_pane_rects = out.pane_rects;
             app.agent_chip_rects = out.agent_chip_rects;
@@ -750,6 +761,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     false,
                     attention_line,
                     pinned,
+                    None,
                     &[],
                     None,
                     None,

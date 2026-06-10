@@ -64,7 +64,7 @@ pub fn row_column(status: Status, events: Option<&WorkspaceEvents>, now_ms: i64)
                 .or(evt.first_user_text.as_deref())
                 .map(str::trim)
                 .filter(|s| !s.is_empty())?;
-            Some(RowColumn { text: body.to_string(), emphasis: ColumnEmphasis::Dim })
+            Some(RowColumn { text: collapse_ws(body), emphasis: ColumnEmphasis::Dim })
         }
         Status::Idle => {
             let body = evt
@@ -72,7 +72,7 @@ pub fn row_column(status: Status, events: Option<&WorkspaceEvents>, now_ms: i64)
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())?;
-            Some(RowColumn { text: body.to_string(), emphasis: ColumnEmphasis::Dim })
+            Some(RowColumn { text: collapse_ws(body), emphasis: ColumnEmphasis::Dim })
         }
     }
 }
@@ -134,6 +134,16 @@ pub(crate) fn format_tool_trace(counts: &ToolUseCounts) -> String {
         parts.push(format!("+{} other actions", counts.other));
     }
     parts.join(", ")
+}
+
+/// Collapse every run of whitespace (spaces, tabs, newlines) into a single
+/// space and trim the ends. The dashboard row renders each workspace as a
+/// single-line `ListItem`; an interior newline would miscount against the
+/// char-based truncation and misalign the right-aligned age column. The old
+/// `EventSnapshot.display` path collapsed whitespace upstream — this keeps
+/// the same single-line guarantee for the raw `first_user_text` / recap text.
+fn collapse_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn plural(noun: &str, n: u32) -> String {
@@ -275,5 +285,27 @@ mod tests {
     #[test]
     fn idle_with_no_prompt_is_none() {
         assert!(row_column(Status::Idle, Some(&evt()), 0).is_none());
+    }
+
+    #[test]
+    fn idle_collapses_interior_newlines_to_single_line() {
+        let e = WorkspaceEvents {
+            first_user_text: Some("migrate auth\n\nto the new token flow".into()),
+            ..WorkspaceEvents::default()
+        };
+        let c = row_column(Status::Idle, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "migrate auth to the new token flow");
+        assert!(!c.text.contains('\n'));
+    }
+
+    #[test]
+    fn complete_collapses_interior_whitespace_to_single_line() {
+        let e = WorkspaceEvents {
+            last_completed_turn_text: Some("split the quick-start\n  into two   sections".into()),
+            ..WorkspaceEvents::default()
+        };
+        let c = row_column(Status::Complete, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "split the quick-start into two sections");
+        assert!(!c.text.contains('\n'));
     }
 }

@@ -80,37 +80,48 @@ controls the order directly and it persists across sessions.
 
 ### 3. Reorder action — `src/app/input.rs`
 
-- New arms in `handle_key_dashboard`:
-  - `(KeyCode::Char('K'), _)` → `move_selected_repo(app, Direction::Up)`
-  - `(KeyCode::Char('J'), _)` → `move_selected_repo(app, Direction::Down)`
+**Keybinding-conflict note (discovered during planning):** `Shift+K`
+(`KeyCode::Char('K')`) is *already* bound on the dashboard — it opens the
+process list for the selected **workspace**, and is "intentionally a no-op" when
+a **repo header** is selected (`src/app/input.rs:734`). `Shift+J`
+(`KeyCode::Char('J')`) is unbound. To honor the chosen Shift+K/Shift+J keys
+without breaking the process-list feature, reordering is scoped to **when a repo
+header is selected**:
 
-  (Uppercase `K`/`J` are currently unbound; lowercase `j`/`k` remain
-  navigation. This follows the existing pattern of matching uppercase chars
-  directly, as `fold_all_repos` does for `M`/`m`.)
+- `(KeyCode::Char('K'), _)` arm: keep the existing `Workspace` → process-list
+  behavior; change the `Repo` branch from no-op to `move_selected_repo(app, Up)`.
+- New `(KeyCode::Char('J'), _)` arm: `Repo` selected → `move_selected_repo(app,
+  Down)`; `Workspace` selected → no-op.
 
-- `move_selected_repo` logic:
-  1. Resolve the current selection to a repo: a `Repo` selection → itself; a
-     `Workspace` selection → its parent `repo_id`.
-  2. Find that repo's index in the `sort_order`-ordered repo list and its
+This is also cleaner UX: you "grab" the repo header and walk it up/down. (The
+lowercase `j`/`k` nav arms match `Char('j')`/`Char('k')` and never receive the
+shifted uppercase chars, so there is no collision.)
+
+- `move_selected_repo(app, up: bool)` logic:
+  1. Act only when `app.selected_target()` is `SelectionTarget::Repo(rid)`;
+     otherwise return (a `Workspace` or no selection → no-op).
+  2. Find `rid`'s index in `app.repos` (already in `sort_order` order) and its
      neighbor in the requested direction.
-  3. `swap_repo_sort_order(repo, neighbor)`; reload `app.repos`.
-  4. **Keep the selection on the moved repo** so repeated `K`/`J` presses walk
-     it into place (re-resolve the selectable index by `SelectionTarget`).
+  3. `swap_repo_sort_order(rid, neighbor)`; `app.refresh()` to reload repos.
+  4. **Keep the selection on the moved repo** — set `app.dashboard.selected` to
+     the index of `SelectionTarget::Repo(rid)` in the rebuilt `app.selectable`,
+     and `app.dashboard.selection = Some(SelectionTarget::Repo(rid))` — so
+     repeated presses walk it into place.
 
-- **Guards:**
-  - Only active in by-repo group mode (`GroupMode`). In by-workspace mode there
-    are no repo groupings to reorder → no-op.
-  - No-op at the top (Up) or bottom (Down) of the list, and when fewer than two
-    repos exist.
+- **Guards:** no-op at the top (Up) or bottom (Down) of the list, and when fewer
+  than two repos exist. In `GroupMode::Attention` the selectable contains only
+  `Workspace` targets, so the `Repo`-only guard naturally makes reordering a
+  no-op there — no explicit mode check needed.
 
 ### 4. Data flow
 
 1. Startup / refresh: `store.repos()` returns repos ordered by `sort_order`.
 2. Render: `RepoView`s carry `sort_order`; `order_repos()` sorts ascending by
    it. `visible_targets()` rebuilds the selectable vector in that order.
-3. User presses `Shift+K`/`Shift+J`: `swap_repo_sort_order` persists the swap,
-   `app.repos` reloads, selection stays on the moved repo. Next draw reflects
-   the new order.
+3. With a repo header selected, the user presses `Shift+K`/`Shift+J`:
+   `swap_repo_sort_order` persists the swap, `app.refresh()` reloads
+   `app.repos`, selection stays on the moved repo. Next draw reflects the new
+   order.
 4. Workspace add/remove/status change: only affects fold/expansion, never
    `sort_order` → repo positions are unchanged.
 

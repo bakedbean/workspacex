@@ -36,11 +36,6 @@ impl StatusCounts {
     }
 }
 
-/// Noise score per V5 spec: higher repos rise to the top.
-pub fn noise_score(c: StatusCounts) -> u32 {
-    c.question * 100 + c.stalled * 80 + c.waiting * 40 + c.thinking * 20 + c.complete
-}
-
 /// Default fold state for a repo. `true` = folded by default.
 /// Empty repos and all-quiet repos (no live + no attention) start folded.
 pub fn default_fold(c: StatusCounts) -> bool {
@@ -63,26 +58,6 @@ mod tests {
             complete: c,
             idle: i,
         }
-    }
-
-    #[test]
-    fn noise_score_question_outweighs_stalled() {
-        assert!(noise_score(counts(1, 0, 0, 0, 0, 0)) > noise_score(counts(0, 1, 0, 0, 0, 0)));
-    }
-
-    #[test]
-    fn noise_score_matches_design_example_ordering() {
-        let wsx = noise_score(counts(1, 1, 1, 0, 1, 0));
-        let ui = noise_score(counts(1, 0, 0, 0, 0, 0));
-        let scp = noise_score(counts(0, 0, 1, 0, 0, 0));
-        let ssk = noise_score(counts(0, 0, 0, 1, 1, 3));
-        let backend = noise_score(counts(0, 0, 0, 1, 0, 0));
-        let api = noise_score(counts(0, 0, 0, 0, 1, 1));
-        assert!(wsx > ui);
-        assert!(ui > scp);
-        assert!(scp > ssk);
-        assert!(ssk > backend);
-        assert!(backend > api);
     }
 
     #[test]

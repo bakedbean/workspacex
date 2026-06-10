@@ -1,4 +1,3 @@
-use crate::chronology::Side;
 use crate::commands::pinned::{PinnedCommand, truncate_label};
 use crate::data::store::AgentInstanceId;
 use crate::git::forge::BranchLifecycle;
@@ -27,27 +26,6 @@ pub struct PaneSpec<'a> {
     pub agent: Option<AgentKind>,
 }
 
-/// Everything `render_panes` needs to draw the chronology bar for the focused
-/// pane. `None` at the call site means the bar is disabled/hidden.
-pub struct ChronologyDraw<'a> {
-    pub config: &'a crate::chronology::ChronologyConfig,
-    pub events: &'a [crate::chronology::ChangeEvent],
-    pub worktree: &'a std::path::Path,
-    pub scroll: usize,
-    /// Keyboard focus is in the bar (drives the active header + selection highlight).
-    pub focused: bool,
-    /// In-pane cursor while focused.
-    pub sel: usize,
-}
-
-/// Mouse/scroll hit targets produced by painting the chronology bar.
-pub struct ChronologyHits {
-    /// `(entry_index, header_rect)` per drawn entry.
-    pub entries: Vec<(usize, Rect)>,
-    /// Number of entries drawn this frame (for auto-scroll).
-    pub visible_entries: usize,
-}
-
 /// What `render_panes` reports back to the caller for input hit-testing.
 pub struct PanesDrawOutput {
     /// Clickable rects of the pinned-command chips (same as before).
@@ -62,58 +40,10 @@ pub struct PanesDrawOutput {
     /// agents row. Empty when the row isn't shown. Consumed by the input
     /// handler to retarget the focused pane on click.
     pub agent_chip_rects: Vec<(AgentInstanceId, Rect)>,
-    /// `(entry_index, clickable_rect)` for each rendered chronology entry in the
-    /// focused pane's bar. Empty when the bar isn't shown.
-    pub chronology_entry_rects: Vec<(usize, Rect)>,
-    /// Entries drawn in the chronology bar this frame (for keyboard auto-scroll).
-    pub chronology_visible_entries: usize,
     /// `(clickable_rect, action)` for each footer keybind hint (including the
     /// `^x` leader pill). Consumed by the input handler to fire the matching
     /// key on click.
     pub footer_hint_rects: Vec<(Rect, crate::ui::footer::FooterHintAction)>,
-}
-
-/// Split `area` into `(agent_area, Some(bar_rect))` per the chronology config,
-/// or `(area, None)` when disabled/auto-hidden. Pure rect math — shared by the
-/// caller (which carves `pane_area` before `SplitTree::layout`) and the
-/// unit tests.
-pub fn split_for_chronology(area: Rect, draw: &Option<ChronologyDraw<'_>>) -> (Rect, Option<Rect>) {
-    let Some(draw) = draw else {
-        return (area, None);
-    };
-    if !draw.config.visible {
-        return (area, None);
-    }
-    let bar_cols = draw.config.resolved_width(area.width);
-    if crate::chronology::should_auto_hide(area.width, bar_cols) {
-        return (area, None);
-    }
-    match draw.config.side {
-        Side::Right => {
-            let agent = Rect {
-                width: area.width.saturating_sub(bar_cols),
-                ..area
-            };
-            let bar = Rect {
-                x: area.x.saturating_add(area.width).saturating_sub(bar_cols),
-                width: bar_cols,
-                ..area
-            };
-            (agent, Some(bar))
-        }
-        Side::Left => {
-            let bar = Rect {
-                width: bar_cols,
-                ..area
-            };
-            let agent = Rect {
-                x: area.x.saturating_add(bar_cols),
-                width: area.width.saturating_sub(bar_cols),
-                ..area
-            };
-            (agent, Some(bar))
-        }
-    }
 }
 
 /// Render one or more attached panes plus the shared chrome (optional
@@ -149,7 +79,6 @@ pub fn render_panes(
     pr: Option<(BranchLifecycle, u32)>,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active_agent: Option<AgentInstanceId>,
-    chronology_bar: Option<(Rect, ChronologyDraw<'_>)>,
     theme: &Theme,
 ) -> PanesDrawOutput {
     let show_titles = panes.len() > 1;
@@ -161,14 +90,6 @@ pub fn render_panes(
     }
 
     render_dividers(f, dividers, theme);
-
-    let chronology_hits = match chronology_bar {
-        Some((bar_rect, draw)) => render_chronology_bar(f, bar_rect, &draw, theme),
-        None => ChronologyHits {
-            entries: Vec::new(),
-            visible_entries: 0,
-        },
-    };
 
     if let Some(line) = attention_line {
         f.render_widget(Paragraph::new(line), status_area);
@@ -210,159 +131,7 @@ pub fn render_panes(
         pr_link_rect,
         pane_rects,
         agent_chip_rects,
-        chronology_entry_rects: chronology_hits.entries,
-        chronology_visible_entries: chronology_hits.visible_entries,
         footer_hint_rects,
-    }
-}
-
-/// Paint the change-chronology bar into `bar_rect` (absolute screen coords):
-/// a 1-col divider on the bar's inner edge, a `CHANGE CHRONOLOGY` header with a
-/// side indicator, then the timeline entries from `draw.scroll` down. Returns
-/// [`ChronologyHits`] with per-entry header rects and visible entry count —
-/// both for click hit-testing and keyboard auto-scroll.
-/// Entries that don't fit vertically are dropped from the end.
-fn render_chronology_bar(
-    f: &mut Frame,
-    bar_rect: Rect,
-    draw: &ChronologyDraw<'_>,
-    theme: &Theme,
-) -> ChronologyHits {
-    if bar_rect.width == 0 || bar_rect.height == 0 {
-        return ChronologyHits {
-            entries: Vec::new(),
-            visible_entries: 0,
-        };
-    }
-
-    // The divider occupies the column on the bar's inner edge (next to the
-    // agent pane): the bar's left edge when it sits on the right, the bar's
-    // right edge when it sits on the left.
-    let on_right = matches!(draw.config.side, Side::Right);
-    let divider_x = if on_right {
-        bar_rect.x
-    } else {
-        bar_rect.x + bar_rect.width.saturating_sub(1)
-    };
-    let divider_style = Style::default().fg(theme.path);
-    {
-        let buf = f.buffer_mut();
-        for y in bar_rect.y..bar_rect.y.saturating_add(bar_rect.height) {
-            if buf.area().contains((divider_x, y).into()) {
-                buf[(divider_x, y)].set_symbol("│").set_style(divider_style);
-            }
-        }
-    }
-
-    // Content area: the bar minus its inner-edge divider column.
-    let content = if on_right {
-        Rect {
-            x: bar_rect.x.saturating_add(1),
-            width: bar_rect.width.saturating_sub(1),
-            ..bar_rect
-        }
-    } else {
-        Rect {
-            width: bar_rect.width.saturating_sub(1),
-            ..bar_rect
-        }
-    };
-    if content.width == 0 || content.height == 0 {
-        return ChronologyHits {
-            entries: Vec::new(),
-            visible_entries: 0,
-        };
-    }
-    let inner_width = content.width;
-
-    // Header line: `CHANGE CHRONOLOGY ◀/▶`, truncated to the content width.
-    let side_glyph = if on_right { "◀" } else { "▶" };
-    let header_full = format!("CHANGE CHRONOLOGY {side_glyph}");
-    let header_text: String = header_full.chars().take(inner_width as usize).collect();
-    let header_area = Rect {
-        height: 1,
-        ..content
-    };
-    let header_style = if draw.focused {
-        theme
-            .header_style()
-            .add_modifier(ratatui::style::Modifier::BOLD)
-    } else {
-        theme.header_style()
-    };
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(header_text, header_style))),
-        header_area,
-    );
-
-    // Body starts one row below the header.
-    let body_y = content.y.saturating_add(1);
-    let body_bottom = content.y.saturating_add(content.height);
-    if body_y >= body_bottom {
-        return ChronologyHits {
-            entries: Vec::new(),
-            visible_entries: 0,
-        };
-    }
-
-    if draw.events.is_empty() {
-        let placeholder = Rect {
-            x: content.x,
-            y: body_y,
-            width: inner_width,
-            height: 1,
-        };
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "—".to_string(),
-                Style::default().add_modifier(Modifier::DIM),
-            ))),
-            placeholder,
-        );
-        return ChronologyHits {
-            entries: Vec::new(),
-            visible_entries: 0,
-        };
-    }
-
-    let mut entry_rects: Vec<(usize, Rect)> = Vec::new();
-    let mut visible_entries = 0usize;
-    let mut cursor_y = body_y;
-    for (i, ev) in draw.events.iter().enumerate().skip(draw.scroll) {
-        if cursor_y >= body_bottom {
-            break;
-        }
-        let selected = draw.focused && i == draw.sel;
-        let lines = crate::chronology::entry_lines(ev, draw.worktree, inner_width, selected);
-        let available = body_bottom.saturating_sub(cursor_y);
-        let drawn = (lines.len() as u16).min(available);
-        if drawn == 0 {
-            break;
-        }
-        let entry_area = Rect {
-            x: content.x,
-            y: cursor_y,
-            width: inner_width,
-            height: drawn,
-        };
-        f.render_widget(Paragraph::new(lines), entry_area);
-        // The first (header) line is the clickable hit target for this entry.
-        entry_rects.push((
-            i,
-            Rect {
-                x: content.x,
-                y: cursor_y,
-                width: inner_width,
-                height: 1,
-            },
-        ));
-        visible_entries += 1;
-        cursor_y = cursor_y.saturating_add(drawn);
-    }
-
-    ChronologyHits {
-        entries: entry_rects,
-        visible_entries,
     }
 }
 
@@ -936,55 +705,6 @@ mod tests {
                 command: (*c).into(),
             })
             .collect()
-    }
-
-    #[test]
-    fn split_right_carves_bar_on_right() {
-        let cfg = crate::chronology::ChronologyConfig::default();
-        let events: Vec<crate::chronology::ChangeEvent> = Vec::new();
-        let draw = ChronologyDraw {
-            config: &cfg,
-            events: &events,
-            worktree: std::path::Path::new("/wt"),
-            scroll: 0,
-            focused: false,
-            sel: 0,
-        };
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 200,
-            height: 50,
-        };
-        let (agent, bar) = split_for_chronology(area, &Some(draw));
-        let bar = bar.expect("bar shown at 200 cols");
-        assert_eq!(agent.width + bar.width, 200);
-        assert!(bar.x > agent.x, "right side");
-    }
-
-    #[test]
-    fn split_hidden_when_too_narrow() {
-        let cfg = crate::chronology::ChronologyConfig::default();
-        let events: Vec<crate::chronology::ChangeEvent> = Vec::new();
-        let draw = ChronologyDraw {
-            config: &cfg,
-            events: &events,
-            worktree: std::path::Path::new("/wt"),
-            scroll: 0,
-            focused: false,
-            sel: 0,
-        };
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 50,
-            height: 50,
-        };
-        let (_agent, bar) = split_for_chronology(area, &Some(draw));
-        assert!(
-            bar.is_none(),
-            "auto-hidden when agent would be < MIN_AGENT_COLS"
-        );
     }
 
     #[test]

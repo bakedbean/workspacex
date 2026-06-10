@@ -1,7 +1,6 @@
 pub mod activity;
 pub mod agent;
 pub mod app;
-pub mod chronology;
 pub mod cli;
 pub mod commands;
 pub mod config;

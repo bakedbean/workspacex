@@ -59,11 +59,10 @@ pub enum RepoSettingField {
     PinnedCommands,
     RelatedRepos,
     DetailBarConfig,
-    ChronologyConfig,
 }
 
 impl RepoSettingField {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 9] = [
         Self::RepoName,
         Self::BranchPrefix,
         Self::BaseBranch,
@@ -73,7 +72,6 @@ impl RepoSettingField {
         Self::PinnedCommands,
         Self::RelatedRepos,
         Self::DetailBarConfig,
-        Self::ChronologyConfig,
     ];
 
     pub fn label(self) -> &'static str {
@@ -87,7 +85,6 @@ impl RepoSettingField {
             Self::PinnedCommands => "pinned_commands",
             Self::RelatedRepos => "related_repos",
             Self::DetailBarConfig => "detail_bar_config",
-            Self::ChronologyConfig => "chronology_config",
         }
     }
 }
@@ -165,37 +162,6 @@ pub struct App {
         crate::data::store::WorkspaceId,
         crate::activity::events::WorkspaceEvents,
     >,
-    /// Per-workspace change-chronology timelines, keyed by workspace id.
-    /// Lazily built/refreshed while attached.
-    pub chronology:
-        std::collections::HashMap<crate::data::store::WorkspaceId, crate::chronology::Timeline>,
-    /// Scroll offset (entries from the top) of the chronology bar in the
-    /// focused attached pane.
-    pub chronology_scroll: usize,
-    /// Last-used diff layout in the change-detail modal. Mirrored here (rather
-    /// than reset per open) so the choice is sticky across opens for the session.
-    pub change_detail_view: crate::ui::modal::DiffViewMode,
-    /// Sentinel for the workspace the chronology scroll/selection state belongs
-    /// to. When the focused attached pane switches to a different workspace, the
-    /// scroll offset and selection index are reset so they can't point at an
-    /// unrelated entry. Mirrors `detail_scroll_last_workspace`.
-    pub chronology_last_workspace: Option<crate::data::store::WorkspaceId>,
-    /// Transient per-draw hit-test rects for chronology entries in the focused
-    /// pane: `(entry_index, rect)`. Rebuilt each frame by the attached renderer
-    /// and consumed by the input handler. Empty when the bar isn't shown.
-    pub chronology_entry_rects: Vec<(usize, ratatui::layout::Rect)>,
-    /// Transient per-frame screen rect of the chronology bar (focused pane),
-    /// used for wheel-scroll hit-testing. `None` when the bar isn't shown.
-    pub chronology_bar_rect: Option<ratatui::layout::Rect>,
-    /// Keyboard focus is in the chronology bar (intercept nav keys).
-    pub chronology_focused: bool,
-    /// In-pane cursor (entry index) while focused.
-    pub chronology_sel: usize,
-    /// Entries drawn in the bar last frame (for keyboard auto-scroll).
-    pub chronology_visible_entries: usize,
-    /// Epoch-ms of the last chronology timeline refresh (throttles the
-    /// per-frame session-log re-scan; see `draw`).
-    pub chronology_last_refresh_ms: i64,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity:
         std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
@@ -351,16 +317,6 @@ impl App {
             pr_last_poll_ms: std::collections::HashMap::new(),
             diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
-            chronology: std::collections::HashMap::new(),
-            chronology_scroll: 0,
-            change_detail_view: crate::ui::modal::DiffViewMode::default(),
-            chronology_last_workspace: None,
-            chronology_entry_rects: Vec::new(),
-            chronology_bar_rect: None,
-            chronology_focused: false,
-            chronology_sel: 0,
-            chronology_visible_entries: 0,
-            chronology_last_refresh_ms: 0,
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
@@ -482,20 +438,6 @@ impl App {
         self.next_archive_gen = self.next_archive_gen.wrapping_add(1);
         self.pending_archive_gen = Some(g);
         g
-    }
-
-    /// Refresh the chronology timeline for `worktree`/`workspace_id` from the
-    /// on-disk session logs. Cheap when nothing changed (per-file cache).
-    pub fn refresh_chronology(
-        &mut self,
-        workspace_id: crate::data::store::WorkspaceId,
-        worktree: &std::path::Path,
-    ) {
-        let files = crate::chronology::extract::claude_session_files(worktree);
-        self.chronology
-            .entry(workspace_id)
-            .or_default()
-            .refresh(&files);
     }
 
     pub fn selected_target(&self) -> Option<SelectionTarget> {
@@ -666,26 +608,6 @@ pub(crate) fn reset_detail_scroll_on_workspace_change(
     }
 }
 
-/// Reset the chronology bar's scroll offset, selection, and focus when the
-/// focused attached pane switches to a different workspace, so neither scroll
-/// nor selection can point at an entry that belongs to an unrelated workspace.
-/// Mirrors `reset_detail_scroll_on_workspace_change`; takes the fields by `&mut`
-/// so the borrow checker can split disjoint borrows of `App` at the call site.
-pub(crate) fn reset_chronology_state_on_workspace_change(
-    scroll: &mut usize,
-    chronology_sel: &mut usize,
-    chronology_focused: &mut bool,
-    last_workspace: &mut Option<crate::data::store::WorkspaceId>,
-    current: Option<crate::data::store::WorkspaceId>,
-) {
-    if *last_workspace != current {
-        *scroll = 0;
-        *chronology_sel = 0;
-        *chronology_focused = false;
-        *last_workspace = current;
-    }
-}
-
 /// Derive the StoppedKind for a workspace based on its WorkspaceEvents.
 /// Returns Some when the agent is paused waiting on the user (either
 /// mid-turn with a pending question tool, or end-of-turn with a
@@ -759,13 +681,6 @@ where
             RepoSettingField::DetailBarConfig => {
                 let raw = repo
                     .detail_bar_config
-                    .clone()
-                    .unwrap_or_else(|| "{}\n".to_string());
-                (raw, "json")
-            }
-            RepoSettingField::ChronologyConfig => {
-                let raw = repo
-                    .chronology_config
                     .clone()
                     .unwrap_or_else(|| "{}\n".to_string());
                 (raw, "json")
@@ -1016,20 +931,6 @@ pub(crate) fn apply_repo_setting(
                     Ok(_) => app.store.set_repo_detail_bar_config(repo_id, Some(trimmed)),
                     Err(e) => Err(crate::error::Error::UserInput(format!(
                         "detail_bar_config is not valid JSON: {e}"
-                    ))),
-                }
-            }
-        }
-        RepoSettingField::ChronologyConfig => {
-            if trimmed.is_empty() {
-                app.store.set_repo_chronology_config(repo_id, None)
-            } else {
-                // Validate. Use ChronologyOverride (not ChronologyConfig)
-                // because per-repo entries are partial overrides.
-                match serde_json::from_str::<crate::chronology::ChronologyOverride>(trimmed) {
-                    Ok(_) => app.store.set_repo_chronology_config(repo_id, Some(trimmed)),
-                    Err(e) => Err(crate::error::Error::UserInput(format!(
-                        "chronology_config is not valid JSON: {e}"
                     ))),
                 }
             }

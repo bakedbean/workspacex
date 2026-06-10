@@ -1283,4 +1283,62 @@ mod tests {
         assert!(pr_chip_rect(area, 12).is_none());
         assert!(pr_chip_rect(area, 0).is_none());
     }
+
+    #[test]
+    fn render_chip_row_paints_pr_chip_at_its_click_rect() {
+        // The painted PR chip must occupy exactly the rect returned for mouse
+        // hit-testing — otherwise clicks land next to it. Render into a backend
+        // and assert the chip text fills `pr_rect`, flush to the right edge.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut pr_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                let (_chips, r) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    Some((BranchLifecycle::PrOpen, 152)),
+                    &theme,
+                );
+                pr_rect = r;
+            })
+            .unwrap();
+        let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
+        let buf = terminal.backend().buffer();
+        let mut painted = String::new();
+        for x in rect.x..rect.x + rect.width {
+            painted.push_str(buf[(x, rect.y)].symbol());
+        }
+        assert_eq!(painted, "⏺ #152 open");
+        assert_eq!(rect.x + rect.width, 80, "chip is flush to the right edge");
+    }
+
+    #[test]
+    fn render_chip_row_drops_pr_chip_when_pinned_fill_the_row() {
+        // A narrow row whose pinned chips leave no gap must not paint a PR chip
+        // (which would overlap them) — `pr_rect` comes back `None`.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(16, 1)).unwrap();
+        let pinned = cmds(&[("first", "/a"), ("second", "/b")]);
+        let mut pr_rect = Some(Rect::new(0, 0, 0, 0));
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 16, 1);
+                let (_chips, r) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    Some((BranchLifecycle::PrOpen, 152)),
+                    &theme,
+                );
+                pr_rect = r;
+            })
+            .unwrap();
+        assert!(pr_rect.is_none());
+    }
 }

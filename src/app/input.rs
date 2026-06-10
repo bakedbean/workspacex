@@ -610,6 +610,26 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             // 'g' on a Repo header is intentionally a no-op.
         }
+        (KeyCode::Char('c'), _) => {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let info = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = info {
+                    let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
+                    if let Err(e) =
+                        crate::commands::external::open_in_chronox(&path, cmd.as_deref())
+                    {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            // 'c' on a Repo header is intentionally a no-op.
+        }
         (KeyCode::Char('K'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
                 app.modal = Some(Modal::ProcessList {
@@ -904,6 +924,24 @@ async fn handle_key_attached(
                     let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
                     if let Err(e) =
                         crate::commands::external::open_in_lazygit(&path, cmd.as_deref())
+                    {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+                return Ok(());
+            }
+            KeyCode::Char('c') => {
+                let path = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = path {
+                    let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
+                    if let Err(e) =
+                        crate::commands::external::open_in_chronox(&path, cmd.as_deref())
                     {
                         app.modal = Some(Modal::Error {
                             message: e.to_string(),

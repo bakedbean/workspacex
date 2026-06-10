@@ -280,7 +280,8 @@ impl Store {
     pub fn add_repo(&self, path: &Path, name: &str, branch_prefix: &str) -> Result<RepoId> {
         let now = now_ms();
         self.conn.execute(
-            "INSERT INTO repos (name, path, branch_prefix, created_at) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO repos (name, path, branch_prefix, created_at, sort_order) \
+             VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM repos))",
             rusqlite::params![name, path.to_string_lossy(), branch_prefix, now],
         )?;
         Ok(RepoId(self.conn.last_insert_rowid()))
@@ -1929,5 +1930,21 @@ mod tests {
         assert_eq!(names, vec!["alpha", "bravo", "charlie"]);
         let orders: Vec<i64> = repos.iter().map(|r| r.sort_order).collect();
         assert_eq!(orders, vec![0, 1, 2], "unique 0-based alphabetical ranks");
+    }
+
+    #[test]
+    fn add_repo_appends_to_tail_sort_order() {
+        let store = Store::open_in_memory().unwrap();
+        // "zeta" then "alpha": even though alpha sorts first by name, the
+        // tail-append rule must give zeta=0, alpha=1 (registration order).
+        store.add_repo(std::path::Path::new("/tmp/wsx-zeta"), "zeta", "").unwrap();
+        store.add_repo(std::path::Path::new("/tmp/wsx-alpha2"), "alpha", "").unwrap();
+
+        let order = |name: &str, repos: &[Repo]| {
+            repos.iter().find(|r| r.name == name).unwrap().sort_order
+        };
+        let repos = store.repos().unwrap();
+        assert_eq!(order("zeta", &repos), 0, "first registered → tail of empty list → 0");
+        assert_eq!(order("alpha", &repos), 1, "second registered → appended after → 1");
     }
 }

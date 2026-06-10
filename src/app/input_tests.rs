@@ -3037,6 +3037,79 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
+    async fn shift_j_repeated_walks_repo_and_selection_follows() {
+        let (mut app, ids) = make_app_with_n_repos(3);
+        app.dashboard.selected = 0; // select repo-0 (top)
+        // Walk it down twice: [0,1,2] -> [1,0,2] -> [1,2,0].
+        press(&mut app, 'J', KeyModifiers::SHIFT).await;
+        assert_eq!(
+            app.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![ids[1], ids[0], ids[2]],
+            "after first J: repo-0 moved to middle"
+        );
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Repo(ids[0])),
+            "selection still on the moved repo after first J"
+        );
+        press(&mut app, 'J', KeyModifiers::SHIFT).await;
+        assert_eq!(
+            app.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![ids[1], ids[2], ids[0]],
+            "after second J: repo-0 walked to the bottom"
+        );
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Repo(ids[0])),
+            "selection tracked the repo across both moves"
+        );
+        // A third J at the bottom is a no-op.
+        press(&mut app, 'J', KeyModifiers::SHIFT).await;
+        assert_eq!(
+            app.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![ids[1], ids[2], ids[0]],
+            "third J at bottom does nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn shift_j_on_workspace_is_noop_for_order() {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+        let (mut app, ids) = make_app_with_n_repos(2);
+        // Add a workspace to repo-0 so there is a Workspace entry in selectable.
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id: ids[0],
+                name: "ws-alpha",
+                branch: "repo-0/ws-alpha",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/ws-alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        app.store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        app.refresh().unwrap();
+        // Find the workspace row in selectable and select it.
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(id) if *id == ws_id))
+            .expect("workspace should appear in selectable list");
+        app.dashboard.selected = idx;
+        // Capture repo order before pressing Shift+J.
+        let order_before: Vec<_> = app.repos.iter().map(|r| r.id).collect();
+        press(&mut app, 'J', KeyModifiers::SHIFT).await;
+        let order_after: Vec<_> = app.repos.iter().map(|r| r.id).collect();
+        assert_eq!(
+            order_before, order_after,
+            "Shift+J on a workspace row must not reorder repos"
+        );
+    }
+
+    #[tokio::test]
     async fn i_alias_opens_new_workspace_modal_like_enter_on_repo() {
         // On a repo header, Enter opens the New Workspace modal. `i` (vim
         // insert) should do the same — it's the "enter this thing" verb.

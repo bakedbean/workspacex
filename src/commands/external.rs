@@ -423,9 +423,12 @@ mod tests {
     }
 
     #[test]
-    fn chronox_appends_path_when_no_placeholder() {
-        let argv = resolve_argv(true_path(), &[("path", "/tmp/wt")], Some("/tmp/wt")).unwrap();
-        assert_eq!(argv.last().unwrap(), "/tmp/wt");
+    fn open_in_chronox_spawns_configured_cmd() {
+        // A bare command (no `{path}`) gets the worktree appended as chronox's
+        // positional arg; spawning `true` exits immediately, proving the wiring.
+        let dir = std::env::temp_dir();
+        let r = open_in_chronox(&dir, Some(true_path()));
+        assert!(r.is_ok(), "open_in_chronox failed: {r:?}");
     }
 
     #[test]

@@ -16,6 +16,7 @@
 use crate::git::DiffStats;
 use crate::git::forge::BranchLifecycle;
 use crate::pty::session::AgentKind;
+use crate::ui::dashboard::column_content::{ColumnEmphasis, RowColumn};
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
@@ -73,7 +74,7 @@ pub struct RowInputs {
     pub branch: String,
     pub procs: u32,
     pub diff: Option<DiffStats>,
-    pub last_message: Option<String>,
+    pub column: Option<RowColumn>,
     pub ago_secs: Option<u64>,
     pub selected: bool,
     pub yolo: bool,
@@ -236,15 +237,21 @@ pub fn render(
     let message_width = total_width
         .saturating_sub(left_consumed + right_consumed)
         .max(1);
-    if let Some(msg) = inputs.last_message.as_deref() {
+    if let Some(col) = inputs.column.as_ref() {
         let prefix = "└ ";
-        let body = truncate(msg, message_width.saturating_sub(prefix.chars().count()));
+        let body_width = message_width.saturating_sub(prefix.chars().count());
+        let body = truncate(&col.text, body_width);
         spans.push(Span::styled(
             prefix.to_string(),
             theme.status_style(inputs.status),
         ));
-        let body_padded = right_pad(&body, message_width.saturating_sub(prefix.chars().count()));
-        spans.push(Span::styled(body_padded, theme.dim_style()));
+        let body_padded = right_pad(&body, body_width);
+        let body_style = match col.emphasis {
+            ColumnEmphasis::Dim => theme.dim_style(),
+            ColumnEmphasis::Status => theme.status_style(inputs.status),
+            ColumnEmphasis::Warn => theme.warn_style(),
+        };
+        spans.push(Span::styled(body_padded, body_style));
     } else {
         let body = truncate_pad("—", message_width);
         spans.push(Span::styled(body, theme.dim_style()));
@@ -331,7 +338,10 @@ mod tests {
                 added: 12,
                 removed: 3,
             }),
-            last_message: Some("I have enough to give you a grounded tour.".into()),
+            column: Some(RowColumn {
+                text: "I have enough to give you a grounded tour.".into(),
+                emphasis: ColumnEmphasis::Dim,
+            }),
             ago_secs: Some(29),
             selected: false,
             yolo: false,
@@ -408,10 +418,54 @@ mod tests {
     fn missing_message_renders_em_dash() {
         let theme = Theme::wsx();
         let mut inputs = base();
-        inputs.last_message = None;
+        inputs.column = None;
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("—"), "em-dash for missing message: {text:?}");
+    }
+
+    #[test]
+    fn column_emphasis_maps_to_body_style() {
+        let theme = Theme::wsx();
+        let body_after_prefix = |line: &Line<'_>| -> Style {
+            let i = line
+                .spans
+                .iter()
+                .position(|s| s.content.as_ref() == "└ ")
+                .expect("prefix span present");
+            line.spans[i + 1].style
+        };
+
+        // Warn emphasis → warn color.
+        let mut inputs = base();
+        inputs.status = Status::Stalled;
+        inputs.column = Some(RowColumn {
+            text: "stalled · 4m quiet".into(),
+            emphasis: ColumnEmphasis::Warn,
+        });
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        assert_eq!(body_after_prefix(&line).fg, theme.warn_style().fg);
+
+        // Status emphasis → the row's status color.
+        inputs.status = Status::Question;
+        inputs.column = Some(RowColumn {
+            text: "AskUserQuestion".into(),
+            emphasis: ColumnEmphasis::Status,
+        });
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        assert_eq!(
+            body_after_prefix(&line).fg,
+            theme.status_style(Status::Question).fg
+        );
+
+        // Dim emphasis → dim color.
+        inputs.status = Status::Idle;
+        inputs.column = Some(RowColumn {
+            text: "backfill the migration".into(),
+            emphasis: ColumnEmphasis::Dim,
+        });
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        assert_eq!(body_after_prefix(&line).fg, theme.dim_style().fg);
     }
 
     #[test]

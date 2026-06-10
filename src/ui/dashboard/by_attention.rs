@@ -240,6 +240,7 @@ pub fn render_list(
 mod tests {
     use super::*;
     use crate::git::DiffStats;
+    use crate::ui::dashboard::column_content::{ColumnEmphasis, RowColumn};
     use crate::ui::dashboard::fixture;
 
     fn make_rows() -> Vec<FlatRow> {
@@ -259,7 +260,10 @@ mod tests {
                             added: w.diff_added,
                             removed: w.diff_removed,
                         }),
-                        last_message: w.last_message.clone(),
+                        column: w
+                            .last_message
+                            .clone()
+                            .map(|t| RowColumn { text: t, emphasis: ColumnEmphasis::Dim }),
                         ago_secs: w.ago_secs,
                         selected: false,
                         yolo: false,
@@ -416,7 +420,7 @@ mod tests {
                     added: 12,
                     removed: 3,
                 }),
-                last_message: Some("hi".into()),
+                column: Some(RowColumn { text: "hi".into(), emphasis: ColumnEmphasis::Dim }),
                 ago_secs: Some(29),
                 selected: false,
                 yolo: false,

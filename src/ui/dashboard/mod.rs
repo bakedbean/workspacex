@@ -327,16 +327,16 @@ pub fn visible_targets(
 }
 
 /// Case-insensitive substring match against the workspace name, branch,
-/// owning repo name, and the last assistant message (when present).
+/// owning repo name, and the row's status-adaptive column text (when present).
 fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
     let needle = filter.to_lowercase();
     w.row.name.to_lowercase().contains(&needle)
         || w.row.branch.to_lowercase().contains(&needle)
         || w.repo.name.to_lowercase().contains(&needle)
         || w.row
-            .last_message
-            .as_deref()
-            .map(|m| m.to_lowercase().contains(&needle))
+            .column
+            .as_ref()
+            .map(|c| c.text.to_lowercase().contains(&needle))
             .unwrap_or(false)
 }
 

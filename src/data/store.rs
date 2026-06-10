@@ -249,6 +249,31 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 13", [])?;
         }
+        if v < 14 {
+            let has_col: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'sort_order'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_col == 0 {
+                self.conn.execute(
+                    "ALTER TABLE repos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            // Seed a unique, deterministic alphabetical rank (case-insensitive,
+            // id as tiebreak) for all existing repos. Idempotent: recomputes the
+            // same ranks if re-run after a partial migration.
+            self.conn.execute(
+                "UPDATE repos SET sort_order = (\
+                     SELECT COUNT(*) FROM repos r2 \
+                     WHERE LOWER(r2.name) < LOWER(repos.name) \
+                        OR (LOWER(r2.name) = LOWER(repos.name) AND r2.id < repos.id)\
+                 )",
+                [],
+            )?;
+            self.conn.execute("PRAGMA user_version = 14", [])?;
+        }
         Ok(())
     }
 
@@ -289,8 +314,8 @@ impl Store {
             "SELECT id, name, path, branch_prefix, custom_instructions, \
                     setup_script, archive_script, pinned_commands, \
                     related_repos, base_branch, detail_bar_config, \
-                    chronology_config, created_at \
-             FROM repos ORDER BY id",
+                    chronology_config, created_at, sort_order \
+             FROM repos ORDER BY sort_order, name",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(Repo {
@@ -307,7 +332,7 @@ impl Store {
                 detail_bar_config: r.get(10)?,
                 chronology_config: r.get(11)?,
                 created_at: r.get(12)?,
-                sort_order: 0,
+                sort_order: r.get(13)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -1861,6 +1886,48 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 13);
+        assert_eq!(v, 14);
+    }
+
+    #[test]
+    fn repos_load_in_sort_order() {
+        let store = Store::open_in_memory().unwrap();
+        // Raw insert with explicit, out-of-order sort_order values.
+        store
+            .conn()
+            .execute(
+                "INSERT INTO repos (name, path, branch_prefix, created_at, sort_order) \
+                 VALUES ('b','/tmp/wsx-b','',0,2),('a','/tmp/wsx-a','',0,0),('c','/tmp/wsx-c','',0,1)",
+                [],
+            )
+            .unwrap();
+        let names: Vec<String> =
+            store.repos().unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(names, vec!["a", "c", "b"], "ordered by sort_order, not name or id");
+    }
+
+    #[test]
+    fn migration_seeds_existing_repos_alphabetically() {
+        let store = Store::open_in_memory().unwrap();
+        // Simulate legacy pre-v14 rows: all sort_order = 0, non-alphabetical id order.
+        store
+            .conn()
+            .execute(
+                "INSERT INTO repos (name, path, branch_prefix, created_at, sort_order) \
+                 VALUES ('charlie','/tmp/wsx-c','',0,0),\
+                        ('alpha','/tmp/wsx-a','',0,0),\
+                        ('bravo','/tmp/wsx-b','',0,0)",
+                [],
+            )
+            .unwrap();
+        // Rewind to v13 and re-run migrate so the v14 seed UPDATE runs over them.
+        store.conn().execute("PRAGMA user_version = 13", []).unwrap();
+        store.migrate_for_test().unwrap();
+
+        let repos = store.repos().unwrap();
+        let names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "bravo", "charlie"]);
+        let orders: Vec<i64> = repos.iter().map(|r| r.sort_order).collect();
+        assert_eq!(orders, vec![0, 1, 2], "unique 0-based alphabetical ranks");
     }
 }

@@ -37,6 +37,7 @@ mod tests {
             detail_bar_config: None,
             chronology_config: chronology_config.map(|s| s.to_string()),
             created_at: 0,
+            sort_order: 0,
         }
     }
 

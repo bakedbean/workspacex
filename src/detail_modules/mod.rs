@@ -125,6 +125,7 @@ pub(crate) mod tests_helpers {
             detail_bar_config: None,
             chronology_config: None,
             created_at: 0,
+            sort_order: 0,
         }));
         let workspace: &'static Workspace = Box::leak(Box::new(Workspace {
             id: WorkspaceId(1),

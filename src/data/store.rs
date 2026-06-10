@@ -47,6 +47,7 @@ pub struct Repo {
     pub detail_bar_config: Option<String>,
     pub chronology_config: Option<String>,
     pub created_at: i64,
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -248,13 +249,50 @@ impl Store {
             }
             self.conn.execute("PRAGMA user_version = 13", [])?;
         }
+        if v < 14 {
+            let has_col: i64 = self.conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'sort_order'",
+                [],
+                |r| r.get(0),
+            )?;
+            if has_col == 0 {
+                // Add the column and seed initial ranks atomically. Done in one
+                // transaction so a crash between the two can't leave every repo
+                // stuck at the default sort_order=0: `migrate()` re-runs every
+                // startup (SCHEMA_V1 resets user_version to 1), but the column
+                // would already exist, so the seed would never run again and
+                // swaps (which preserve the value set) would all be no-ops. The
+                // transaction makes it all-or-nothing — a failed migration rolls
+                // back and retries cleanly on the next open.
+                let tx = self.conn.unchecked_transaction()?;
+                tx.execute(
+                    "ALTER TABLE repos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+                // Seed a unique, deterministic alphabetical rank (case-insensitive,
+                // id as tiebreak) for repos that predate this column. Stays inside
+                // the column-creation guard so re-runs never clobber the user's
+                // manual ordering.
+                tx.execute(
+                    "UPDATE repos SET sort_order = (\
+                         SELECT COUNT(*) FROM repos r2 \
+                         WHERE LOWER(r2.name) < LOWER(repos.name) \
+                            OR (LOWER(r2.name) = LOWER(repos.name) AND r2.id < repos.id)\
+                     )",
+                    [],
+                )?;
+                tx.commit()?;
+            }
+            self.conn.execute("PRAGMA user_version = 14", [])?;
+        }
         Ok(())
     }
 
     pub fn add_repo(&self, path: &Path, name: &str, branch_prefix: &str) -> Result<RepoId> {
         let now = now_ms();
         self.conn.execute(
-            "INSERT INTO repos (name, path, branch_prefix, created_at) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO repos (name, path, branch_prefix, created_at, sort_order) \
+             VALUES (?1, ?2, ?3, ?4, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM repos))",
             rusqlite::params![name, path.to_string_lossy(), branch_prefix, now],
         )?;
         Ok(RepoId(self.conn.last_insert_rowid()))
@@ -288,8 +326,8 @@ impl Store {
             "SELECT id, name, path, branch_prefix, custom_instructions, \
                     setup_script, archive_script, pinned_commands, \
                     related_repos, base_branch, detail_bar_config, \
-                    chronology_config, created_at \
-             FROM repos ORDER BY id",
+                    chronology_config, created_at, sort_order \
+             FROM repos ORDER BY sort_order, id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(Repo {
@@ -306,9 +344,32 @@ impl Store {
                 detail_bar_config: r.get(10)?,
                 chronology_config: r.get(11)?,
                 created_at: r.get(12)?,
+                sort_order: r.get(13)?,
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Swap the `sort_order` of two repos. Used by the dashboard to move a
+    /// repo up/down by one slot. Atomic so a crash can't leave a half-swap.
+    pub fn swap_repo_sort_order(&self, a: RepoId, b: RepoId) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let so_a: i64 = tx.query_row("SELECT sort_order FROM repos WHERE id = ?1", [a.0], |r| {
+            r.get(0)
+        })?;
+        let so_b: i64 = tx.query_row("SELECT sort_order FROM repos WHERE id = ?1", [b.0], |r| {
+            r.get(0)
+        })?;
+        tx.execute(
+            "UPDATE repos SET sort_order = ?1 WHERE id = ?2",
+            rusqlite::params![so_b, a.0],
+        )?;
+        tx.execute(
+            "UPDATE repos SET sort_order = ?1 WHERE id = ?2",
+            rusqlite::params![so_a, b.0],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn set_repo_branch_prefix(&self, id: RepoId, prefix: &str) -> Result<()> {
@@ -1859,6 +1920,170 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 13);
+        assert_eq!(v, 14);
+    }
+
+    #[test]
+    fn repos_load_in_sort_order() {
+        let store = Store::open_in_memory().unwrap();
+        // Raw insert with explicit, out-of-order sort_order values.
+        store
+            .conn()
+            .execute(
+                "INSERT INTO repos (name, path, branch_prefix, created_at, sort_order) \
+                 VALUES ('b','/tmp/wsx-b','',0,2),('a','/tmp/wsx-a','',0,0),('c','/tmp/wsx-c','',0,1)",
+                [],
+            )
+            .unwrap();
+        let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(
+            names,
+            vec!["a", "c", "b"],
+            "ordered by sort_order, not name or id"
+        );
+    }
+
+    #[test]
+    fn migration_seeds_on_upgrade_then_preserves_custom_order() {
+        let store = Store::open_in_memory().unwrap();
+        // Simulate a genuine pre-v14 database where the column does not exist.
+        // (`migrate()` resets user_version to 1 via SCHEMA_V1 on every call, so
+        // all blocks re-run regardless of version — dropping the column is what
+        // forces the v14 ALTER + one-time seed path.)
+        store
+            .conn()
+            .execute("ALTER TABLE repos DROP COLUMN sort_order", [])
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "INSERT INTO repos (name, path, branch_prefix, created_at) \
+                 VALUES ('charlie','/tmp/wsx-c','',0),\
+                        ('alpha','/tmp/wsx-a','',0),\
+                        ('bravo','/tmp/wsx-b','',0)",
+                [],
+            )
+            .unwrap();
+
+        // Upgrade migration: adds the column and seeds alphabetical ranks once.
+        store.migrate_for_test().unwrap();
+        let repos = store.repos().unwrap();
+        assert_eq!(
+            repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "bravo", "charlie"]
+        );
+        assert_eq!(
+            repos.iter().map(|r| r.sort_order).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "pre-existing repos seeded with unique 0-based alphabetical ranks"
+        );
+
+        // The user reorders, then the app restarts (migrate runs again). The
+        // seed must NOT re-run and clobber the manual order.
+        let id = |n: &str| repos.iter().find(|r| r.name == n).unwrap().id;
+        store
+            .swap_repo_sort_order(id("charlie"), id("alpha"))
+            .unwrap();
+        store.migrate_for_test().unwrap();
+        let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(
+            names,
+            vec!["charlie", "bravo", "alpha"],
+            "manual order must survive a re-run of migrate (restart)"
+        );
+    }
+
+    #[test]
+    fn sort_order_persists_across_reopen() {
+        // Reproduces the real quit/restart scenario: a manual reorder must
+        // survive closing and reopening the on-disk database. `migrate()` runs
+        // on every `Store::open`, so the v14 seed must not re-run and clobber
+        // the user's order.
+        let dir = std::env::temp_dir().join(format!("wsx-persist-reopen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("wsx.db");
+
+        let charlie;
+        let alpha;
+        {
+            let store = Store::open(&db).unwrap();
+            alpha = store
+                .add_repo(std::path::Path::new("/tmp/wsx-alpha"), "alpha", "")
+                .unwrap(); // sort_order 0
+            store
+                .add_repo(std::path::Path::new("/tmp/wsx-bravo"), "bravo", "")
+                .unwrap(); // sort_order 1
+            charlie = store
+                .add_repo(std::path::Path::new("/tmp/wsx-charlie"), "charlie", "")
+                .unwrap(); // sort_order 2
+            // Move charlie to the top (custom, non-alphabetical order).
+            store.swap_repo_sort_order(charlie, alpha).unwrap();
+            let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
+            assert_eq!(
+                names,
+                vec!["charlie", "bravo", "alpha"],
+                "custom order applied in-session"
+            );
+        } // store dropped → connection closed (simulates quit)
+
+        // Reopen the same file (simulates restart).
+        let store = Store::open(&db).unwrap();
+        let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            names,
+            vec!["charlie", "bravo", "alpha"],
+            "manual repo order must persist across restart"
+        );
+    }
+
+    #[test]
+    fn add_repo_appends_to_tail_sort_order() {
+        let store = Store::open_in_memory().unwrap();
+        // "zeta" then "alpha": even though alpha sorts first by name, the
+        // tail-append rule must give zeta=0, alpha=1 (registration order).
+        store
+            .add_repo(std::path::Path::new("/tmp/wsx-zeta"), "zeta", "")
+            .unwrap();
+        store
+            .add_repo(std::path::Path::new("/tmp/wsx-alpha2"), "alpha", "")
+            .unwrap();
+
+        let order =
+            |name: &str, repos: &[Repo]| repos.iter().find(|r| r.name == name).unwrap().sort_order;
+        let repos = store.repos().unwrap();
+        assert_eq!(
+            order("zeta", &repos),
+            0,
+            "first registered → tail of empty list → 0"
+        );
+        assert_eq!(
+            order("alpha", &repos),
+            1,
+            "second registered → appended after → 1"
+        );
+    }
+
+    #[test]
+    fn swap_repo_sort_order_swaps_two_repos() {
+        let store = Store::open_in_memory().unwrap();
+        let a = store
+            .add_repo(std::path::Path::new("/tmp/wsx-a"), "aaa", "")
+            .unwrap(); // sort_order 0
+        let b = store
+            .add_repo(std::path::Path::new("/tmp/wsx-b"), "bbb", "")
+            .unwrap(); // sort_order 1
+
+        store.swap_repo_sort_order(a, b).unwrap();
+
+        let repos = store.repos().unwrap();
+        // After swap, bbb (now 0) sorts before aaa (now 1).
+        let names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["bbb", "aaa"], "swap reorders the load order");
+
+        let so = |name: &str| repos.iter().find(|r| r.name == name).unwrap().sort_order;
+        assert_eq!(so("bbb"), 0);
+        assert_eq!(so("aaa"), 1);
     }
 }

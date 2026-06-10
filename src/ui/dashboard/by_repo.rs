@@ -3,7 +3,7 @@
 //! workspace rows underneath when expanded.
 
 use crate::ui::dashboard::row::{self, RowInputs};
-use crate::ui::dashboard::sort::{StatusCounts, noise_score};
+use crate::ui::dashboard::sort::StatusCounts;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::style::Modifier;
@@ -20,21 +20,20 @@ pub struct RepoView<'a> {
     pub path: String,
     pub counts: StatusCounts,
     pub expanded: bool,
+    /// Persisted manual order; repos render ascending by this. Stable across
+    /// workspace add/remove/status changes.
+    pub sort_order: i64,
     /// Already sorted by Status priority (Stalled first).
     pub workspaces: Vec<RowInputs>,
 }
 
-/// Order repos by descending noise score; empty repos to the end.
+/// Order repos by their persisted manual `sort_order`, ascending, with the
+/// immutable repo `id` as a tiebreaker so the order is total and deterministic
+/// even if two repos ever share a `sort_order`. `visible_targets` (the nav
+/// index builder) must use the identical key to stay in lockstep. This is
+/// stable: workspace activity never changes a repo's position.
 pub fn order_repos(repos: &mut [RepoView<'_>]) {
-    repos.sort_by(|a, b| {
-        let a_empty = a.counts.total() == 0;
-        let b_empty = b.counts.total() == 0;
-        match (a_empty, b_empty) {
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            _ => noise_score(b.counts).cmp(&noise_score(a.counts)),
-        }
-    });
+    repos.sort_by_key(|r| (r.sort_order, r.id));
 }
 
 pub fn header_line(view: &RepoView<'_>, width: usize, theme: &Theme) -> Line<'static> {
@@ -159,6 +158,7 @@ mod tests {
             path: r.path.clone(),
             counts,
             expanded,
+            sort_order: id as i64,
             workspaces,
         }
     }
@@ -221,24 +221,27 @@ mod tests {
     }
 
     #[test]
-    fn order_repos_puts_noisy_first_and_empty_last() {
-        let theme = Theme::wsx();
-        let _ = theme;
+    fn order_repos_sorts_by_sort_order_ascending() {
         let repos = fixture::repos();
+        // Build views, then assign sort_order in REVERSE of fixture order so a
+        // correct ascending sort visibly reorders them (id stays the identity).
         let mut views: Vec<RepoView<'_>> = repos
             .iter()
             .enumerate()
             .map(|(i, r)| make_view(r, i as u64, true))
             .collect();
+        let n = views.len() as i64;
+        for (i, v) in views.iter_mut().enumerate() {
+            v.sort_order = n - 1 - i as i64;
+        }
         order_repos(&mut views);
-        let names: Vec<&str> = views.iter().map(|v| v.name).collect();
-        let wsx_pos = names.iter().position(|n| *n == "wsx").unwrap();
-        let ssk_pos = names.iter().position(|n| *n == "ssk").unwrap();
-        assert!(wsx_pos < ssk_pos, "wsx before ssk: {names:?}");
-        let frontend_pos = names.iter().position(|n| *n == "frontend").unwrap();
-        let scp_api_pos = names.iter().position(|n| *n == "scp-api").unwrap();
-        assert!(frontend_pos >= names.len() - 2);
-        assert!(scp_api_pos >= names.len() - 2);
+        let orders: Vec<i64> = views.iter().map(|v| v.sort_order).collect();
+        let mut sorted = orders.clone();
+        sorted.sort();
+        assert_eq!(orders, sorted, "repos must be in ascending sort_order");
+        // Activity/emptiness must NOT affect order anymore.
+        assert_eq!(views.first().unwrap().sort_order, 0);
+        assert_eq!(views.last().unwrap().sort_order, n - 1);
     }
 
     #[test]

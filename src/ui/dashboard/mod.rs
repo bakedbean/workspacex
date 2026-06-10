@@ -203,7 +203,7 @@ pub fn render_footer(
 /// what `render()` produces. The caller (`app.rs::draw`) writes this
 /// into `App::selectable` so arrow-key navigation walks the same order
 /// the user sees on screen instead of the raw `app.workspaces` order
-/// (which the V5 renderer reshuffles by noise score / status priority /
+/// (which the V5 renderer reshuffles by sort_order / status priority /
 /// fold state / filter).
 ///
 /// By-repo: emits `Repo(id)` for each visible header followed by
@@ -222,11 +222,12 @@ pub fn visible_targets(
     match state.group_mode {
         GroupMode::Repo => {
             // Mirror render_by_repo's ordering: per-repo filter + sort,
-            // then noise-score ordering across repos.
+            // then persisted sort_order ordering across repos.
             #[derive(Clone)]
             struct Pending {
                 repo_id: crate::data::store::RepoId,
                 counts: StatusCounts,
+                sort_order: i64,
                 workspace_ids: Vec<crate::data::store::WorkspaceId>,
             }
             let mut pending: Vec<Pending> = inputs
@@ -245,21 +246,14 @@ pub fn visible_targets(
                     Pending {
                         repo_id: r.id,
                         counts,
+                        sort_order: r.sort_order,
                         workspace_ids: rows.into_iter().map(|(_, id)| id).collect(),
                     }
                 })
                 .collect();
-            // Same empty-tail + noise-desc ordering as `by_repo::order_repos`.
-            pending.sort_by(|a, b| {
-                let a_empty = a.counts.total() == 0;
-                let b_empty = b.counts.total() == 0;
-                match (a_empty, b_empty) {
-                    (true, false) => std::cmp::Ordering::Greater,
-                    (false, true) => std::cmp::Ordering::Less,
-                    _ => crate::ui::dashboard::sort::noise_score(b.counts)
-                        .cmp(&crate::ui::dashboard::sort::noise_score(a.counts)),
-                }
-            });
+            // Mirror by_repo::order_repos exactly — same (sort_order, id) key —
+            // so nav and render stay in lockstep even if sort_order values collide.
+            pending.sort_by_key(|p| (p.sort_order, p.repo_id.0));
             for p in &pending {
                 out.push(SelectionTarget::Repo(p.repo_id));
                 let expanded = match state.folded.get(&(p.repo_id.0 as u64)).copied() {
@@ -377,6 +371,7 @@ fn render_by_repo<'a>(
                 path: r.path.to_string_lossy().into_owned(),
                 counts,
                 expanded,
+                sort_order: r.sort_order,
                 workspaces,
             }
         })

@@ -267,9 +267,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 activity: &activity,
                 column_widths,
             };
-            // Rebuild `selectable` in the V5 visible order (noise-sort
-            // across repos, priority-sort within repo, hide folded
-            // workspaces, apply filter). Nav keys index into this Vec,
+            // Rebuild `selectable` in the V5 visible order (repos ordered
+            // by persisted `sort_order`, priority-sort within repo, hide
+            // folded workspaces, apply filter). Nav keys index into this Vec,
             // so it must match what the renderer emits below or the
             // selection will appear to skip rows / jump back.
             let new_selectable = dashboard::visible_targets(&inputs, &app.dashboard);

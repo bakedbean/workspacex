@@ -91,6 +91,7 @@ mod tests {
             detail_bar_config: None,
             chronology_config: None,
             created_at: 0,
+            sort_order: 0,
         }
     }
 

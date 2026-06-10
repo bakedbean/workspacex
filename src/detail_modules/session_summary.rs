@@ -2,6 +2,7 @@
 //! activity, and tool-use trace for the selected workspace.
 
 use crate::detail_modules::{DetailContext, DetailModule};
+use crate::ui::dashboard::column_content::{format_ago_short, format_state_line, format_tool_trace};
 
 pub struct SessionSummary;
 
@@ -131,42 +132,6 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
     out
 }
 
-/// Canonical status label, optionally enriched with a why-detail. The
-/// suffix is drawn from evt fields that explain the current state —
-/// pending question/permission tool for `Question`, quiet duration for
-/// `Stalled`. Other states use the bare label.
-fn format_state_line(
-    status: crate::ui::dashboard::status::Status,
-    evt: &crate::activity::events::WorkspaceEvents,
-    now_ms: i64,
-) -> String {
-    use crate::ui::dashboard::status::Status;
-    let base = status.label();
-    let detail: Option<String> = match status {
-        Status::Question => evt
-            .pending_question_tool()
-            .map(|n| n.to_string())
-            .or_else(|| {
-                evt.pending_permission_tool(now_ms, 3_000)
-                    .map(|(name, _)| name)
-            }),
-        Status::Stalled => {
-            if evt.last_log_activity_ms > 0 {
-                let quiet_secs =
-                    now_ms.saturating_sub(evt.last_log_activity_ms).max(0) as u64 / 1000;
-                Some(format!("{} quiet", format_ago_short(Some(quiet_secs))))
-            } else {
-                None
-            }
-        }
-        Status::Waiting | Status::Thinking | Status::Complete | Status::Idle => None,
-    };
-    match detail {
-        Some(d) => format!("{base} · {d}"),
-        None => base.to_string(),
-    }
-}
-
 /// Render the most-recently-edited files as up to 3 basenames, joined
 /// with commas under a "files:" label. Returns None when the ring is
 /// empty so the caller can skip the line entirely.
@@ -191,59 +156,6 @@ fn format_recent_files(
         &format!("files: {}", basenames.join(", ")),
         max_width,
     ))
-}
-
-fn format_ago_short(secs: Option<u64>) -> String {
-    match secs {
-        None => "—".to_string(),
-        Some(s) if s < 60 => format!("{s}s"),
-        Some(s) if s < 3600 => format!("{}m", s / 60),
-        Some(s) => format!("{}h", s / 3600),
-    }
-}
-
-fn format_tool_trace(counts: &crate::activity::events::ToolUseCounts) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if counts.read > 0 {
-        parts.push(format!(
-            "read {} {}",
-            counts.read,
-            plural("file", counts.read)
-        ));
-    }
-    if counts.edit > 0 {
-        parts.push(format!(
-            "edited {} {}",
-            counts.edit,
-            plural("file", counts.edit)
-        ));
-    }
-    if counts.write > 0 {
-        parts.push(format!(
-            "wrote {} {}",
-            counts.write,
-            plural("file", counts.write)
-        ));
-    }
-    if counts.bash > 0 {
-        parts.push(format!(
-            "ran {} {}",
-            counts.bash,
-            plural("command", counts.bash)
-        ));
-    }
-    if counts.other > 0 {
-        parts.push(format!("+{} other actions", counts.other));
-    }
-    parts.join(", ")
-}
-
-fn plural(noun: &str, n: u32) -> String {
-    if n == 1 {
-        noun.to_string()
-    } else {
-        format!("{noun}s")
-    }
 }
 
 fn truncate_to_chars(s: &str, max: usize) -> String {

@@ -98,9 +98,8 @@ Press `n` to create your first workspace, then `enter` to attach. Claude Code sp
 | `e`                               | Open the selected workspace in your editor (no-op on repo header)                                            |
 | `t`                               | Open the selected workspace in a terminal (no-op on repo header)                                             |
 | `v`                               | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |
-| `K`                               | Show processes running under the selected workspace's worktree (no-op on repo header)                        |
-| `Shift + K`                       | Move the selected repo header up one slot (no-op on workspace; order is persisted)                           |
-| `Shift + J`                       | Move the selected repo header down one slot (no-op on workspace; order is persisted)                         |
+| `Shift + K`                       | On a workspace: show processes under its worktree. On a repo header: move the repo up one slot (persisted)   |
+| `Shift + J`                       | On a repo header: move the repo down one slot (persisted). No-op on a workspace                              |
 | `s`                               | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected)             |
 | `d`                               | Archive the selected workspace (no-op on repo header)                                                        |
 | `q`                               | Quit (kills all running sessions)                                                                            |

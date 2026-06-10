@@ -260,18 +260,20 @@ impl Store {
                     "ALTER TABLE repos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
                     [],
                 )?;
+                // Seed a unique, deterministic alphabetical rank (case-insensitive,
+                // id as tiebreak) for repos that predate this column. This MUST stay
+                // inside the column-creation guard: `migrate()` re-runs every startup
+                // (SCHEMA_V1 resets user_version to 1), so seeding unconditionally
+                // would overwrite the user's manual ordering on every launch.
+                self.conn.execute(
+                    "UPDATE repos SET sort_order = (\
+                         SELECT COUNT(*) FROM repos r2 \
+                         WHERE LOWER(r2.name) < LOWER(repos.name) \
+                            OR (LOWER(r2.name) = LOWER(repos.name) AND r2.id < repos.id)\
+                     )",
+                    [],
+                )?;
             }
-            // Seed a unique, deterministic alphabetical rank (case-insensitive,
-            // id as tiebreak) for all existing repos. Idempotent: recomputes the
-            // same ranks if re-run after a partial migration.
-            self.conn.execute(
-                "UPDATE repos SET sort_order = (\
-                     SELECT COUNT(*) FROM repos r2 \
-                     WHERE LOWER(r2.name) < LOWER(repos.name) \
-                        OR (LOWER(r2.name) = LOWER(repos.name) AND r2.id < repos.id)\
-                 )",
-                [],
-            )?;
             self.conn.execute("PRAGMA user_version = 14", [])?;
         }
         Ok(())
@@ -1928,28 +1930,99 @@ mod tests {
     }
 
     #[test]
-    fn migration_seeds_existing_repos_alphabetically() {
+    fn migration_seeds_on_upgrade_then_preserves_custom_order() {
         let store = Store::open_in_memory().unwrap();
-        // Simulate legacy pre-v14 rows: all sort_order = 0, non-alphabetical id order.
+        // Simulate a genuine pre-v14 database where the column does not exist.
+        // (`migrate()` resets user_version to 1 via SCHEMA_V1 on every call, so
+        // all blocks re-run regardless of version — dropping the column is what
+        // forces the v14 ALTER + one-time seed path.)
+        store
+            .conn()
+            .execute("ALTER TABLE repos DROP COLUMN sort_order", [])
+            .unwrap();
         store
             .conn()
             .execute(
-                "INSERT INTO repos (name, path, branch_prefix, created_at, sort_order) \
-                 VALUES ('charlie','/tmp/wsx-c','',0,0),\
-                        ('alpha','/tmp/wsx-a','',0,0),\
-                        ('bravo','/tmp/wsx-b','',0,0)",
+                "INSERT INTO repos (name, path, branch_prefix, created_at) \
+                 VALUES ('charlie','/tmp/wsx-c','',0),\
+                        ('alpha','/tmp/wsx-a','',0),\
+                        ('bravo','/tmp/wsx-b','',0)",
                 [],
             )
             .unwrap();
-        // Rewind to v13 and re-run migrate so the v14 seed UPDATE runs over them.
-        store.conn().execute("PRAGMA user_version = 13", []).unwrap();
-        store.migrate_for_test().unwrap();
 
+        // Upgrade migration: adds the column and seeds alphabetical ranks once.
+        store.migrate_for_test().unwrap();
         let repos = store.repos().unwrap();
-        let names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, vec!["alpha", "bravo", "charlie"]);
-        let orders: Vec<i64> = repos.iter().map(|r| r.sort_order).collect();
-        assert_eq!(orders, vec![0, 1, 2], "unique 0-based alphabetical ranks");
+        assert_eq!(
+            repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "bravo", "charlie"]
+        );
+        assert_eq!(
+            repos.iter().map(|r| r.sort_order).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "pre-existing repos seeded with unique 0-based alphabetical ranks"
+        );
+
+        // The user reorders, then the app restarts (migrate runs again). The
+        // seed must NOT re-run and clobber the manual order.
+        let id = |n: &str| repos.iter().find(|r| r.name == n).unwrap().id;
+        store
+            .swap_repo_sort_order(id("charlie"), id("alpha"))
+            .unwrap();
+        store.migrate_for_test().unwrap();
+        let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(
+            names,
+            vec!["charlie", "bravo", "alpha"],
+            "manual order must survive a re-run of migrate (restart)"
+        );
+    }
+
+    #[test]
+    fn sort_order_persists_across_reopen() {
+        // Reproduces the real quit/restart scenario: a manual reorder must
+        // survive closing and reopening the on-disk database. `migrate()` runs
+        // on every `Store::open`, so the v14 seed must not re-run and clobber
+        // the user's order.
+        let dir = std::env::temp_dir().join(format!("wsx-persist-reopen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("wsx.db");
+
+        let charlie;
+        let alpha;
+        {
+            let store = Store::open(&db).unwrap();
+            alpha = store
+                .add_repo(std::path::Path::new("/tmp/wsx-alpha"), "alpha", "")
+                .unwrap(); // sort_order 0
+            store
+                .add_repo(std::path::Path::new("/tmp/wsx-bravo"), "bravo", "")
+                .unwrap(); // sort_order 1
+            charlie = store
+                .add_repo(std::path::Path::new("/tmp/wsx-charlie"), "charlie", "")
+                .unwrap(); // sort_order 2
+            // Move charlie to the top (custom, non-alphabetical order).
+            store.swap_repo_sort_order(charlie, alpha).unwrap();
+            let names: Vec<String> =
+                store.repos().unwrap().into_iter().map(|r| r.name).collect();
+            assert_eq!(
+                names,
+                vec!["charlie", "bravo", "alpha"],
+                "custom order applied in-session"
+            );
+        } // store dropped → connection closed (simulates quit)
+
+        // Reopen the same file (simulates restart).
+        let store = Store::open(&db).unwrap();
+        let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            names,
+            vec!["charlie", "bravo", "alpha"],
+            "manual repo order must persist across restart"
+        );
     }
 
     #[test]

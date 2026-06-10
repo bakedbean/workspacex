@@ -265,11 +265,21 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
 fn visible_targets_by_repo_matches_render_order() {
     use crate::app::SelectionTarget;
     let fixtures = fixture::repos();
-    let repos: Vec<Repo> = fixtures
+    let mut repos: Vec<Repo> = fixtures
         .iter()
         .enumerate()
         .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
         .collect();
+    // Give every repo a DISTINCT, deliberately out-of-input-order
+    // `sort_order` so the expected render/nav order differs from the
+    // fixture input order. Without this, all fixtures share sort_order==0
+    // and a cross-repo ordering regression would slip through unnoticed.
+    // Reversing the input index yields a unique key per repo whose
+    // ascending sort is the *reverse* of the fixture/input order.
+    let n = repos.len() as i64;
+    for (i, repo) in repos.iter_mut().enumerate() {
+        repo.sort_order = (n - 1 - i as i64) * 10;
+    }
     let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
     // Map workspace name → workspace_id so we can assert on names.
     let id_for: std::collections::HashMap<String, crate::data::store::WorkspaceId> = workspaces
@@ -288,9 +298,72 @@ fn visible_targets_by_repo_matches_render_order() {
         ..Default::default()
     };
     let targets = visible_targets(&inputs, &state);
-    // All fixtures have sort_order: 0, so repo position is stable input
-    // order. This test checks intra-repo workspace priority ordering:
-    // within the 'wsx' repo, workspaces should appear in status-priority
+
+    // ---- Cross-repo ordering (the lockstep this test guards) ----
+    // The nav builder (`visible_targets`) and the renderer
+    // (`render_by_repo` -> `by_repo::order_repos`) must emit repo headers
+    // in the SAME order, namely ascending by persisted `sort_order`.
+    // Repos were assigned distinct, reversed sort_order above, so the
+    // expected order is the reverse of the fixture/input order — proving
+    // both paths actually sort and don't just echo input order.
+    let nav_repo_order: Vec<crate::data::store::RepoId> = targets
+        .iter()
+        .filter_map(|t| match t {
+            SelectionTarget::Repo(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    // Reproduce the renderer's repo ordering via the exact function it
+    // uses (`by_repo::order_repos`), built from the same `inputs.repos`.
+    let mut render_views: Vec<crate::ui::dashboard::by_repo::RepoView<'_>> = inputs
+        .repos
+        .iter()
+        .map(|r| crate::ui::dashboard::by_repo::RepoView {
+            id: r.id.0 as u64,
+            name: &r.name,
+            path: r.path.to_string_lossy().into_owned(),
+            counts: Default::default(),
+            expanded: true,
+            sort_order: r.sort_order,
+            workspaces: Vec::new(),
+        })
+        .collect();
+    crate::ui::dashboard::by_repo::order_repos(&mut render_views);
+    let render_repo_order: Vec<crate::data::store::RepoId> = render_views
+        .iter()
+        .map(|v| crate::data::store::RepoId(v.id as i64))
+        .collect();
+    // Expected: repos sorted ascending by the sort_order we injected,
+    // which is the reverse of input order.
+    let mut expected_order: Vec<crate::data::store::RepoId> =
+        inputs.repos.iter().map(|r| r.id).collect();
+    expected_order.sort_by_key(|id| {
+        inputs
+            .repos
+            .iter()
+            .find(|r| r.id == *id)
+            .unwrap()
+            .sort_order
+    });
+    assert_eq!(
+        nav_repo_order, render_repo_order,
+        "nav and render must agree on cross-repo ordering"
+    );
+    assert_eq!(
+        nav_repo_order, expected_order,
+        "both paths must order repos ascending by sort_order"
+    );
+    // Sanity: the chosen sort_order really does reorder repos (so the
+    // assertions above are not trivially satisfied by input order).
+    let input_order: Vec<crate::data::store::RepoId> =
+        inputs.repos.iter().map(|r| r.id).collect();
+    assert_ne!(
+        nav_repo_order, input_order,
+        "fixture must exercise a non-trivial reordering"
+    );
+
+    // ---- Intra-repo workspace ordering (unchanged) ----
+    // Within the 'wsx' repo, workspaces should appear in status-priority
     // order (theme-tokens=Stalled first, then repo-overview=Question,
     // list-virtualization=Waiting, tech-stack-question=Complete).
     let wsx_repo_id = inputs.repos.iter().find(|r| r.name == "wsx").unwrap().id;

@@ -16,8 +16,8 @@ pub enum Status {
 }
 
 impl Status {
-    /// Sort key. Higher = more urgent; used by both repo noise scoring
-    /// and within-section ordering.
+    /// Sort key. Higher = more urgent; used for within-repo /
+    /// within-section workspace ordering.
     pub fn priority(self) -> u8 {
         match self {
             Status::Stalled => 5,

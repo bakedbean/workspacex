@@ -33,46 +33,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.attached_pane_rects.clear();
     app.agent_chip_rects.clear();
     app.pr_link_rect = None;
-    app.chronology_entry_rects.clear();
-    app.chronology_bar_rect = None;
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();
     app.usage_window_option_rects.clear();
-
-    // Refresh the focused workspace's change-chronology timeline before the
-    // render borrow of `app.view` is taken below. `refresh_chronology` is the
-    // only `&mut app` the attached chronology bar needs; doing it here (in a
-    // short scope that drops the `&app.view` borrow first) keeps the render
-    // arm's immutable borrows of `app` conflict-free.
-    {
-        let focused: Option<(crate::data::store::WorkspaceId, std::path::PathBuf)> =
-            if let crate::ui::View::Attached(state) = &app.view {
-                state.focused_target().and_then(|t| {
-                    app.workspaces
-                        .iter()
-                        .find(|(_, w)| w.id == t.workspace_id)
-                        .map(|(_, w)| (t.workspace_id, w.worktree_path.clone()))
-                })
-            } else {
-                None
-            };
-        if let Some((ws_id, worktree)) = focused {
-            // Throttle the session-log re-scan: `refresh_chronology` does a
-            // `read_dir` + per-file `stat` (the parse itself is (size,mtime)-
-            // cached), so running it on every frame is wasteful. Refresh at most
-            // ~3×/sec, but immediately the first time a workspace is focused so
-            // its bar isn't briefly empty.
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            let stale = now.saturating_sub(app.chronology_last_refresh_ms) >= 300;
-            if stale || !app.chronology.contains_key(&ws_id) {
-                app.chronology_last_refresh_ms = now;
-                app.refresh_chronology(ws_id, &worktree);
-            }
-        }
-    }
 
     match &app.view {
         crate::ui::View::Dashboard => {
@@ -552,80 +515,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .unwrap_or_default();
             let attention_line = attention.map(|a| a.line);
 
-            // Change-chronology bar for the focused workspace. The timeline was
-            // already refreshed before this match (the only `&mut app` the bar
-            // needs). Resolve the focused workspace's worktree + repo config,
-            // then clone events + worktree into locals so the `ChronologyDraw`
-            // borrows nothing from `app` — leaving the final `&mut app` write of
-            // the entry rects unobstructed.
-            let chronology_worktree: Option<std::path::PathBuf> = app
-                .workspaces
-                .iter()
-                .find(|(_, w)| w.id == focused_id)
-                .map(|(_, w)| w.worktree_path.clone());
-            let chronology_cfg: Option<crate::chronology::ChronologyConfig> = app
-                .workspaces
-                .iter()
-                .find(|(_, w)| w.id == focused_id)
-                .and_then(|(rid, _)| app.repos.iter().find(|r| r.id == *rid))
-                .map(|repo| {
-                    let src = crate::config::chronology_source::StoreConfigSource {
-                        store: &app.store,
-                        repo: Some(repo),
-                    };
-                    crate::chronology::resolve(&src)
-                });
-            let chronology_events: Vec<crate::chronology::ChangeEvent> = app
-                .chronology
-                .get(&focused_id)
-                .map(|t| t.events().to_vec())
-                .unwrap_or_default();
-            // If the focused pane switched to a different workspace, drop any
-            // stale scroll offset / selection before reading them.
-            crate::app::reset_chronology_state_on_workspace_change(
-                &mut app.chronology_scroll,
-                &mut app.chronology_sel,
-                &mut app.chronology_focused,
-                &mut app.chronology_last_workspace,
-                Some(focused_id),
-            );
-            // Keep the keyboard selection in view (uses last frame's visible count).
-            if app.chronology_focused {
-                app.chronology_scroll = crate::chronology::nav::adjust_scroll(
-                    app.chronology_scroll,
-                    app.chronology_sel,
-                    app.chronology_visible_entries,
-                    chronology_events.len(),
-                );
-            }
-            let chronology_scroll = app.chronology_scroll;
-
-            // Build the draw data (borrows only the locals above) and carve the
-            // bar's side column out of `pane_area` BEFORE laying out the panes,
-            // so the agent PTYs get the narrowed area and never draw under the
-            // bar. `split_for_chronology` returns `None` for the bar when the
-            // config is absent/hidden or the area is too narrow.
-            let chronology_draw = match (chronology_cfg.as_ref(), chronology_worktree.as_deref()) {
-                (Some(config), Some(worktree)) => Some(crate::ui::attached::ChronologyDraw {
-                    config,
-                    events: &chronology_events,
-                    worktree,
-                    scroll: chronology_scroll,
-                    focused: app.chronology_focused,
-                    sel: app.chronology_sel,
-                }),
-                _ => None,
-            };
-            let (agent_pane_area, bar_rect) =
-                attached::split_for_chronology(pane_area, &chronology_draw);
-            // If the bar isn't shown this frame (auto-hidden when the terminal
-            // is too narrow, or toggled off), drop keyboard focus so keystrokes
-            // flow back to the agent instead of being swallowed by an invisible bar.
-            if bar_rect.is_none() {
-                app.chronology_focused = false;
-            }
-
-            let crate::ui::split::LayoutResult { panes, dividers } = state.layout(agent_pane_area);
+            let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
             let multi_pane = panes.len() > 1;
 
             // The agent instance in the focused pane is the "active" one; the
@@ -697,7 +587,6 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 pr,
                 &focused_agents_list,
                 active_agent,
-                bar_rect.zip(chronology_draw),
                 &app.theme,
             );
             app.chip_rects = out.chip_rects;
@@ -705,9 +594,6 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             app.attention_rects = attention_rects;
             app.attached_pane_rects = out.pane_rects;
             app.agent_chip_rects = out.agent_chip_rects;
-            app.chronology_entry_rects = out.chronology_entry_rects;
-            app.chronology_visible_entries = out.chronology_visible_entries;
-            app.chronology_bar_rect = bar_rect;
             app.footer_hint_rects = out.footer_hint_rects;
             app.pinned_commands_cache = pinned;
         }
@@ -771,7 +657,6 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     None,
                     None,
                     &[],
-                    None,
                     None,
                     &app.theme,
                 );
@@ -877,16 +762,6 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
             crate::ui::modal::Modal::UsageWindowPicker { .. } => {
                 // Rendered separately below, anchored to the footer graph.
-            }
-            crate::ui::modal::Modal::ChangeDetail {
-                title,
-                lines,
-                rows,
-                mode,
-                scroll,
-                ..
-            } => {
-                render_change_detail_modal(f, area, title, lines, rows, *mode, *scroll, &app.theme);
             }
             other => modal::render(f, area, other, app.tick, &app.theme),
         }
@@ -1070,128 +945,6 @@ pub(crate) fn translate_activity(a: ActivityState) -> crate::ui::updates_bar::Ac
     }
 }
 
-/// Compose one side-by-side diff row into a single styled line:
-/// `left column │ right column`. Each side is rendered with
-/// `crate::chronology::side_cell_to_line` (wsx-owned; `sessionx` stays
-/// UI-agnostic; a `None` side is a blank column), clipped to its half of
-/// the width, and the left column is padded so the divider lines up. The width
-/// budget is `left | divider | right` with the divider taking one column.
-fn side_row_to_line(row: &crate::chronology::SideRow, width: u16) -> ratatui::text::Line<'static> {
-    use ratatui::style::{Modifier, Style};
-    use ratatui::text::{Line, Span};
-    let total = width as usize;
-    if total <= 1 {
-        return Line::default();
-    }
-    let left_w = (total - 1) / 2;
-    let right_w = total - 1 - left_w;
-    let mut left = crate::chronology::clip_line_to_width(
-        &crate::chronology::side_cell_to_line(row.left.as_ref()),
-        left_w,
-    );
-    let pad = left_w.saturating_sub(left.width());
-    if pad > 0 {
-        left.spans.push(Span::raw(" ".repeat(pad)));
-    }
-    let right = crate::chronology::clip_line_to_width(
-        &crate::chronology::side_cell_to_line(row.right.as_ref()),
-        right_w,
-    );
-    let mut spans = left.spans;
-    spans.push(Span::styled(
-        "│",
-        Style::default().add_modifier(Modifier::DIM),
-    ));
-    spans.extend(right.spans);
-    Line::from(spans)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_change_detail_modal(
-    f: &mut ratatui::Frame,
-    area: ratatui::layout::Rect,
-    title: &str,
-    lines: &[ratatui::text::Line<'static>],
-    rows: &[crate::chronology::SideRow],
-    mode: crate::ui::modal::DiffViewMode,
-    scroll: usize,
-    theme: &crate::ui::theme::Theme,
-) {
-    use crate::ui::modal::DiffViewMode;
-    use ratatui::layout::Rect;
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-    let w = area.width.saturating_mul(9) / 10;
-    let h = area.height.saturating_mul(9) / 10;
-    let x = area.x + area.width.saturating_sub(w) / 2;
-    let y = area.y + area.height.saturating_sub(h) / 2;
-    let modal = Rect {
-        x,
-        y,
-        width: w,
-        height: h,
-    };
-    f.render_widget(Clear, modal);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" {title} "))
-        .border_style(ratatui::style::Style::default().fg(theme.path));
-    let inner = block.inner(modal);
-    f.render_widget(block, modal);
-    let body_h = inner.height.saturating_sub(1) as usize;
-    // The active view drives the scrollable length: unified stacks every old
-    // then every new line; side-by-side zips them, so the two differ.
-    let total_len = match mode {
-        DiffViewMode::Unified => lines.len(),
-        DiffViewMode::SideBySide => rows.len(),
-    };
-    let scroll = crate::chronology::nav::clamp_scroll(scroll, total_len, body_h);
-    let visible: Vec<Line> = match mode {
-        DiffViewMode::Unified => lines
-            .iter()
-            .skip(scroll)
-            .take(body_h)
-            .map(|l| crate::chronology::clip_line_to_width(l, inner.width as usize))
-            .collect(),
-        DiffViewMode::SideBySide => rows
-            .iter()
-            .skip(scroll)
-            .take(body_h)
-            .map(|r| side_row_to_line(r, inner.width))
-            .collect(),
-    };
-    let body_area = Rect {
-        height: inner.height.saturating_sub(1),
-        ..inner
-    };
-    f.render_widget(Paragraph::new(visible), body_area);
-    let end = (scroll + body_h).min(total_len);
-    // Show 0-based "0-0/0" for an empty change rather than a confusing "1-0/0".
-    let start = if total_len == 0 { 0 } else { scroll + 1 };
-    let view_hint = match mode {
-        DiffViewMode::Unified => "d split",
-        DiffViewMode::SideBySide => "d unified",
-    };
-    let footer = format!(
-        "↑/↓ j/k  PgUp/PgDn  g/G  ·  {view_hint}  ·  e editor  ·  Esc close    {start}-{end}/{total_len}",
-    );
-    let footer_area = Rect {
-        y: inner.y + inner.height.saturating_sub(1),
-        height: 1,
-        ..inner
-    };
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            footer
-                .chars()
-                .take(inner.width as usize)
-                .collect::<String>(),
-            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
-        ))),
-        footer_area,
-    );
-}
-
 #[cfg(test)]
 mod layout_indicator_cache_tests {
     use super::*;
@@ -1236,80 +989,5 @@ mod layout_indicator_cache_tests {
             !app.workspaces_with_multi_pane_layouts.contains(&a),
             "single-pane layouts should not appear in the cache"
         );
-    }
-}
-
-#[cfg(test)]
-mod side_by_side_render_tests {
-    use super::*;
-
-    fn cell(
-        gutter: &str,
-        kind: crate::chronology::CellKind,
-        code: &str,
-    ) -> crate::chronology::DiffCell {
-        crate::chronology::DiffCell {
-            gutter: gutter.to_string(),
-            kind,
-            code: vec![(code.to_string(), crate::chronology::TokenKind::Default)],
-        }
-    }
-
-    fn flatten(line: &ratatui::text::Line<'static>) -> String {
-        line.spans.iter().map(|s| s.content.clone()).collect()
-    }
-
-    #[test]
-    fn renders_two_columns_with_a_divider() {
-        let row = crate::chronology::SideRow {
-            left: Some(cell(
-                "     ",
-                crate::chronology::CellKind::Removed,
-                "old_value",
-            )),
-            right: Some(cell(
-                "  12 ",
-                crate::chronology::CellKind::Added,
-                "new_value",
-            )),
-        };
-        let line = side_row_to_line(&row, 40);
-        let text = flatten(&line);
-        let bar = text.find('│').expect("expected a column divider");
-        assert!(
-            text[..bar].contains("old_value"),
-            "left column before divider"
-        );
-        assert!(
-            text[bar..].contains("new_value"),
-            "right column after divider"
-        );
-        assert!(line.width() <= 40, "stays within the width budget");
-    }
-
-    #[test]
-    fn blanks_a_missing_side() {
-        // A pure addition (Write / added run) has no left cell: left stays blank.
-        let row = crate::chronology::SideRow {
-            left: None,
-            right: Some(cell("   1 ", crate::chronology::CellKind::Added, "added")),
-        };
-        let line = side_row_to_line(&row, 30);
-        let text = flatten(&line);
-        let bar = text.find('│').expect("divider present");
-        assert!(text[..bar].trim().is_empty(), "left side is blank padding");
-        assert!(
-            text[bar..].contains("added"),
-            "right side carries the content"
-        );
-    }
-
-    #[test]
-    fn degenerate_width_is_empty() {
-        let row = crate::chronology::SideRow {
-            left: None,
-            right: None,
-        };
-        assert!(side_row_to_line(&row, 1).spans.is_empty());
     }
 }

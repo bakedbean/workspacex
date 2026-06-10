@@ -11,11 +11,9 @@ use crate::app::{
     reconcile_create_result, rescan_processes, restore_attached_state, save_layout_for,
     schedule_detach_refresh,
 };
-use crate::chronology::Side;
-use crate::config::chronology_source::StoreConfigSource;
 use crate::error::Result;
 use crate::ui::View;
-use crate::ui::modal::{DiffViewMode, Modal};
+use crate::ui::modal::Modal;
 use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
 use crossterm::event::{
     Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -281,167 +279,12 @@ fn move_selected_repo(app: &mut App, up: bool) -> Result<()> {
     Ok(())
 }
 
-/// Toggle the global change-chronology bar visibility and persist it to
-/// settings. Read live by the renderer via `resolve_global_only`.
-fn toggle_chronology_visible(app: &mut App) {
-    let src = StoreConfigSource {
-        store: &app.store,
-        repo: None,
-    };
-    let mut cfg = crate::chronology::resolve_global_only(&src);
-    cfg.visible = !cfg.visible;
-    if let Ok(json) = serde_json::to_string(&cfg) {
-        if let Err(e) = app.store.set_setting("chronology_config", &json) {
-            tracing::warn!(error = %e, "failed to persist chronology_config (toggle)");
-        }
-    }
-}
-
-/// Swap the change-chronology bar to the opposite side and persist it.
-fn swap_chronology_side(app: &mut App) {
-    let src = StoreConfigSource {
-        store: &app.store,
-        repo: None,
-    };
-    let mut cfg = crate::chronology::resolve_global_only(&src);
-    cfg.side = match cfg.side {
-        Side::Left => Side::Right,
-        Side::Right => Side::Left,
-    };
-    if let Ok(json) = serde_json::to_string(&cfg) {
-        if let Err(e) = app.store.set_setting("chronology_config", &json) {
-            tracing::warn!(error = %e, "failed to persist chronology_config (swap side)");
-        }
-    }
-}
-
-/// Focused attached workspace's id and worktree path, if the current view is
-/// Attached. Used by chronology mouse handling.
-fn focused_attached_workspace(
-    app: &App,
-) -> Option<(crate::data::store::WorkspaceId, std::path::PathBuf)> {
-    let crate::ui::View::Attached(state) = &app.view else {
-        return None;
-    };
-    let target = state.focused_target()?;
-    let ws_id = target.workspace_id;
-    let worktree = app
-        .workspaces
-        .iter()
-        .find(|(_, w)| w.id == ws_id)
-        .map(|(_, w)| w.worktree_path.clone())?;
-    Some((ws_id, worktree))
-}
-
-/// Open the chronology entry at `idx` in the full-change detail modal.
-fn open_change_modal(app: &mut App, idx: usize) {
-    let Some((ws_id, worktree)) = focused_attached_workspace(app) else {
-        return;
-    };
-    let Some(ev) = app
-        .chronology
-        .get(&ws_id)
-        .and_then(|t| t.events().get(idx).cloned())
-    else {
-        return;
-    };
-    let detail =
-        crate::chronology::extract::load_full_change(&ev).unwrap_or_else(|| ev.detail.clone());
-    let line = crate::chronology::extract::resolve_line_in_file(&ev.file_path, &detail);
-    let lang = crate::chronology::lang_for_path(&ev.file_path);
-    let lines = crate::chronology::change_detail_lines_styled(&detail, line, lang);
-    let rows = crate::chronology::change_detail_side_by_side(&detail, line, lang);
-    let rel = crate::chronology::relative_display(&ev.file_path, &worktree);
-    let title = format!("{} {}", crate::chronology::hhmm(ev.timestamp_ms), rel);
-    app.modal = Some(crate::ui::modal::Modal::ChangeDetail {
-        title,
-        lines,
-        rows,
-        mode: app.change_detail_view,
-        scroll: 0,
-        worktree,
-        file: ev.file_path.clone(),
-        line,
-    });
-}
-
-/// Set the change-detail modal's scroll offset in place, if that modal is open.
-/// Lets the key handlers nudge scroll without rebuilding the whole modal (which
-/// carries the diff lines/rows).
-fn set_change_detail_scroll(app: &mut App, scroll: usize) {
-    if let Some(Modal::ChangeDetail { scroll: s, .. }) = &mut app.modal {
-        *s = scroll;
-    }
-}
-
-/// Toggle the change-detail modal between unified and side-by-side. The choice
-/// is mirrored onto `App` so it sticks across opens for the session, and scroll
-/// resets to 0 because the two views have different line counts (a preserved
-/// offset would point at an unrelated line).
-fn toggle_change_detail_view(app: &mut App) {
-    let next = if let Some(Modal::ChangeDetail { mode, scroll, .. }) = &mut app.modal {
-        let next = mode.toggled();
-        *mode = next;
-        *scroll = 0;
-        next
-    } else {
-        return;
-    };
-    app.change_detail_view = next;
-}
-
-/// Open `file` at `line` using the configured editor, surfacing a Modal::Error
-/// when unset or on failure. Shared by the detail modal's `e`.
-fn open_change_in_editor(
-    app: &mut App,
-    worktree: &std::path::Path,
-    file: &std::path::Path,
-    line: u32,
-) {
-    use crate::commands::external::{EditorOpenDecision, editor_open_decision};
-    let editor_cmd = app.store.get_setting("editor_cmd").ok().flatten();
-    match editor_open_decision(editor_cmd.as_deref()) {
-        EditorOpenDecision::NeedsConfig => {
-            app.modal = Some(crate::ui::modal::Modal::Error {
-                message: "No editor_cmd configured. Set one to open changes in your \
-                          editor, e.g.\n  wsx config set editor_cmd 'alacritty -e nvim'"
-                    .to_string(),
-            });
-        }
-        EditorOpenDecision::Launch(cmd) => {
-            if let Err(e) =
-                crate::commands::external::open_in_editor_at(worktree, file, line, Some(&cmd))
-            {
-                app.modal = Some(crate::ui::modal::Modal::Error {
-                    message: format!("Failed to open editor: {e}"),
-                });
-            }
-        }
-    }
-}
-
 /// Open the selected workspace's PR in the browser. No-op if the workspace
 /// id no longer resolves (e.g. removed between draw and click).
 fn open_pr_for_workspace(app: &App, ws_id: crate::data::store::WorkspaceId) {
     if let Some((_, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
         crate::git::forge::open_pr_in_browser(&ws.worktree_path, &ws.branch);
     }
-}
-
-/// Resolve the configured chronology side for the focused attached workspace.
-fn focused_chronology_side(app: &App) -> Option<crate::chronology::Side> {
-    let crate::ui::View::Attached(state) = &app.view else {
-        return None;
-    };
-    let target = state.focused_target()?;
-    let ws_id = target.workspace_id;
-    let (rid, _w) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
-    let repo = app.repos.iter().find(|r| r.id == *rid)?;
-    let src = StoreConfigSource {
-        store: &app.store,
-        repo: Some(repo),
-    };
-    Some(crate::chronology::resolve(&src).side)
 }
 
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
@@ -767,6 +610,26 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             // 'g' on a Repo header is intentionally a no-op.
         }
+        (KeyCode::Char('c'), _) => {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+                let info = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = info {
+                    let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
+                    if let Err(e) =
+                        crate::commands::external::open_in_chronox(&path, cmd.as_deref())
+                    {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+            }
+            // 'c' on a Repo header is intentionally a no-op.
+        }
         (KeyCode::Char('K'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
                 app.modal = Some(Modal::ProcessList {
@@ -975,38 +838,6 @@ async fn handle_key_attached(
                     KeyCode::Down => Arrow::Down,
                     _ => unreachable!(),
                 };
-                let side = focused_chronology_side(app);
-                let toward_bar = matches!(
-                    (side, arrow),
-                    (Some(Side::Right), Arrow::Right) | (Some(Side::Left), Arrow::Left)
-                );
-                let away_from_bar = matches!(
-                    (side, arrow),
-                    (Some(Side::Right), Arrow::Left) | (Some(Side::Left), Arrow::Right)
-                );
-                if app.chronology_focused {
-                    if away_from_bar {
-                        app.chronology_focused = false; // focus returns to the agent pane
-                    }
-                    // toward/parallel arrows while focused: ignored
-                    return Ok(());
-                }
-                if toward_bar && app.chronology_bar_rect.is_some() {
-                    // Enter the bar only if there's no agent pane further toward it
-                    // (we're at the edge). focus_direction returns false when it
-                    // could not move.
-                    let moved = if let View::Attached(state) = &mut app.view {
-                        state.focus_direction(arrow)
-                    } else {
-                        false
-                    };
-                    if !moved {
-                        app.chronology_focused = true;
-                        app.chronology_sel = 0;
-                        app.chronology_scroll = 0;
-                    }
-                    return Ok(());
-                }
                 if let View::Attached(state) = &mut app.view {
                     state.focus_direction(arrow);
                 }
@@ -1044,14 +875,6 @@ async fn handle_key_attached(
                         });
                     }
                 }
-                return Ok(());
-            }
-            KeyCode::Char('c') => {
-                toggle_chronology_visible(app);
-                return Ok(());
-            }
-            KeyCode::Char('C') => {
-                swap_chronology_side(app);
                 return Ok(());
             }
             KeyCode::Char('t') => {
@@ -1109,6 +932,24 @@ async fn handle_key_attached(
                 }
                 return Ok(());
             }
+            KeyCode::Char('c') => {
+                let path = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == id)
+                    .map(|(_, w)| w.worktree_path.clone());
+                if let Some(path) = path {
+                    let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
+                    if let Err(e) =
+                        crate::commands::external::open_in_chronox(&path, cmd.as_deref())
+                    {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+                return Ok(());
+            }
             KeyCode::Char('k') => {
                 app.modal = Some(Modal::ProcessList {
                     workspace_id: id,
@@ -1146,34 +987,6 @@ async fn handle_key_attached(
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
-        return Ok(());
-    }
-    if app.chronology_focused {
-        use crate::chronology::nav::{NavAction, NavKey, nav};
-        let navkey = match k.code {
-            KeyCode::Down | KeyCode::Char('j') => Some(NavKey::Down),
-            KeyCode::Up | KeyCode::Char('k') => Some(NavKey::Up),
-            KeyCode::Char('g') => Some(NavKey::Top),
-            KeyCode::Char('G') => Some(NavKey::Bottom),
-            KeyCode::Enter => Some(NavKey::Enter),
-            KeyCode::Esc => Some(NavKey::Esc),
-            _ => None,
-        };
-        if let Some(navkey) = navkey {
-            // Compute the entry count first (immutable borrow), then mutate.
-            let len = focused_attached_workspace(app)
-                .and_then(|(id, _)| app.chronology.get(&id))
-                .map(|t| t.events().len())
-                .unwrap_or(0);
-            let (new_sel, action) = nav(app.chronology_sel, navkey, len);
-            app.chronology_sel = new_sel;
-            match action {
-                NavAction::None => {}
-                NavAction::Exit => app.chronology_focused = false,
-                NavAction::Open(i) => open_change_modal(app, i),
-            }
-        }
-        // While focused, swallow ALL keys — the agent PTY must not receive them.
         return Ok(());
     }
     let bytes = encode_key(k);
@@ -1766,55 +1579,6 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        Modal::ChangeDetail {
-            lines,
-            rows,
-            mode,
-            scroll,
-            worktree,
-            file,
-            line,
-            ..
-        } => {
-            const PAGE: usize = 10;
-            // Scroll bounds follow the active view: the two models have
-            // different line counts (unified stacks old+new; side-by-side zips
-            // them), so `G`/PageDown must clamp against whichever is showing.
-            let len = match mode {
-                DiffViewMode::Unified => lines.len(),
-                DiffViewMode::SideBySide => rows.len(),
-            };
-            match k.code {
-                KeyCode::Down | KeyCode::Char('j') => {
-                    set_change_detail_scroll(
-                        app,
-                        scroll.saturating_add(1).min(len.saturating_sub(1)),
-                    );
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    set_change_detail_scroll(app, scroll.saturating_sub(1));
-                }
-                KeyCode::PageDown => {
-                    set_change_detail_scroll(
-                        app,
-                        scroll.saturating_add(PAGE).min(len.saturating_sub(1)),
-                    );
-                }
-                KeyCode::PageUp => {
-                    set_change_detail_scroll(app, scroll.saturating_sub(PAGE));
-                }
-                KeyCode::Char('g') => set_change_detail_scroll(app, 0),
-                KeyCode::Char('G') => set_change_detail_scroll(app, len.saturating_sub(1)),
-                KeyCode::Esc => {
-                    app.modal = None;
-                }
-                KeyCode::Char('e') => {
-                    open_change_in_editor(app, &worktree, &file, line);
-                }
-                KeyCode::Char('d') => toggle_change_detail_view(app),
-                _ => {}
-            }
-        }
     }
     Ok(())
 }
@@ -2055,70 +1819,6 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
         }
     }
 
-    // ChangeDetail modal: wheel scrolls the overlay; left-click closes it.
-    if matches!(app.modal, Some(Modal::ChangeDetail { .. })) {
-        match m.kind {
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                if let Some(Modal::ChangeDetail {
-                    lines,
-                    rows,
-                    mode,
-                    scroll,
-                    ..
-                }) = &mut app.modal
-                {
-                    // Bound by the active view, which has its own line count.
-                    let len = match mode {
-                        DiffViewMode::Unified => lines.len(),
-                        DiffViewMode::SideBySide => rows.len(),
-                    };
-                    if matches!(m.kind, MouseEventKind::ScrollDown) {
-                        *scroll = scroll.saturating_add(1).min(len.saturating_sub(1));
-                    } else {
-                        *scroll = scroll.saturating_sub(1);
-                    }
-                }
-                return;
-            }
-            MouseEventKind::Down(MouseButton::Left) => {
-                app.modal = None;
-                return;
-            }
-            _ => {}
-        }
-    }
-
-    // Change-chronology bar: a wheel over the bar scrolls the chronology
-    // entries rather than the PTY/scrollback. Checked before the pane-scroll
-    // block below so a wheel inside the bar returns early.
-    if matches!(
-        m.kind,
-        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-    ) {
-        if let Some(rect) = app.chronology_bar_rect {
-            let inside = m.column >= rect.x
-                && m.column < rect.x.saturating_add(rect.width)
-                && m.row >= rect.y
-                && m.row < rect.y.saturating_add(rect.height);
-            if inside {
-                let len = focused_attached_workspace(app)
-                    .and_then(|(id, _)| app.chronology.get(&id))
-                    .map(|t| t.events().len())
-                    .unwrap_or(0);
-                // Clamp to the last *page* (len - visible_rows), not len-1, so the
-                // wheel can't scroll into empty space past the last entry.
-                let visible = app.chronology_visible_entries;
-                let target = if matches!(m.kind, MouseEventKind::ScrollDown) {
-                    app.chronology_scroll.saturating_add(3)
-                } else {
-                    app.chronology_scroll.saturating_sub(3)
-                };
-                app.chronology_scroll = crate::chronology::nav::clamp_scroll(target, len, visible);
-                return;
-            }
-        }
-    }
-
     // Attached view: a plain wheel over a pane whose agent has mouse
     // reporting on is forwarded to that agent's PTY so it scrolls its own
     // view (notably its full-screen UI, where wsx has no scrollback).
@@ -2186,19 +1886,7 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 }
             }
 
-            // Chronology entry click → focus the bar, select it, and open the
-            // full-change detail modal.
-            if let Some(idx) = app.chronology_entry_rects.iter().find_map(|(i, r)| {
-                let hit = m.column >= r.x
-                    && m.column < r.x.saturating_add(r.width)
-                    && m.row >= r.y
-                    && m.row < r.y.saturating_add(r.height);
-                hit.then_some(*i)
-            }) {
-                app.chronology_focused = true;
-                app.chronology_sel = idx;
-                open_change_modal(app, idx);
-            } else if let Some(idx) = app.chip_rects.iter().position(|r| {
+            if let Some(idx) = app.chip_rects.iter().position(|r| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)
                     && m.row >= r.y

@@ -22,6 +22,14 @@ pub fn open_in_lazygit(worktree: &Path, configured: Option<&str>) -> Result<()> 
     spawn_with_cwd(&cmd, worktree)
 }
 
+/// Resolve and launch chronox (or configured equivalent) with cwd=`worktree`.
+/// The worktree path is supplied as chronox's positional argument: either via a
+/// `{path}` placeholder in the command, or appended when no placeholder is used.
+pub fn open_in_chronox(worktree: &Path, configured: Option<&str>) -> Result<()> {
+    let cmd = resolve_chronox_cmd(configured)?;
+    spawn_with_path_arg(&cmd, worktree)
+}
+
 /// Resolve and launch the user's difftool on `worktree`, diffing against `base`.
 /// The command template can reference `{path}` and `{base}`. If neither
 /// appears, `{path}` is appended (same convention as the editor).
@@ -134,6 +142,20 @@ fn resolve_lazygit_cmd(configured: Option<&str>) -> Result<String> {
     ))
 }
 
+fn resolve_chronox_cmd(configured: Option<&str>) -> Result<String> {
+    if let Some(c) = configured {
+        if !c.trim().is_empty() {
+            return Ok(c.to_string());
+        }
+    }
+    Err(Error::UserInput(
+        "no chronox command configured; set `wsx config set chronox_cmd <cmd>` \
+         (e.g. `wezterm start -- chronox`) — wsx's own TUI owns the terminal, \
+         so chronox needs a wrapper that opens its own window"
+            .into(),
+    ))
+}
+
 fn spawn_with_path_arg(cmd: &str, path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy();
     spawn_resolved(
@@ -204,110 +226,6 @@ fn resolve_argv(
         }
     }
     Ok(parts)
-}
-
-/// How an editor wants a file+line on its command line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GotoStyle {
-    /// VS Code family: `--goto file:line`.
-    Goto,
-    /// vi/emacs family: `+line file`.
-    PlusLine,
-}
-
-/// Map an editor program basename to its goto style, if known.
-fn known_editor_goto(basename: &str) -> Option<GotoStyle> {
-    match basename {
-        "code" | "codium" | "cursor" | "zed" => Some(GotoStyle::Goto),
-        "vim" | "nvim" | "vi" | "nano" | "emacs" | "emacsclient" => Some(GotoStyle::PlusLine),
-        _ => None,
-    }
-}
-
-/// Resolve the editor command into argv that opens `file` at `line`.
-///
-/// Resolution order:
-/// 1. If the command contains `{file}`/`{line}` placeholders, substitute them.
-/// 2. Else scan ALL tokens for the first one whose basename is a known editor
-///    and append that editor's goto syntax (so window-wrapper commands like
-///    `alacritty -e nvim` detect the inner editor and keep the line).
-/// 3. Else append the file (line dropped); the user can add `{file}`/`{line}`
-///    placeholders for an unrecognized editor.
-fn resolve_editor_at_argv(cmd: &str, path: &str, file: &str, line: u32) -> Result<Vec<String>> {
-    let line_s = line.to_string();
-    let mut parts = shlex::split(cmd)
-        .ok_or_else(|| Error::UserInput(format!("could not parse command: {cmd}")))?;
-    if parts.is_empty() {
-        return Err(Error::UserInput("command is empty".into()));
-    }
-    // Substitute {path} (the worktree / working dir) first, so an editor_cmd
-    // shared with the dir-open action — which also uses {path} — works here too.
-    for part in &mut parts {
-        *part = part.replace("{path}", path);
-    }
-    let used_placeholder = parts
-        .iter()
-        .any(|p| p.contains("{file}") || p.contains("{line}"));
-    if used_placeholder {
-        for part in &mut parts {
-            *part = part.replace("{file}", file).replace("{line}", &line_s);
-        }
-        return Ok(parts);
-    }
-    let style = parts.iter().find_map(|p| {
-        let base = std::path::Path::new(p)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(p);
-        known_editor_goto(base)
-    });
-    match style {
-        Some(GotoStyle::Goto) => {
-            parts.push("--goto".to_string());
-            parts.push(format!("{file}:{line_s}"));
-        }
-        Some(GotoStyle::PlusLine) => {
-            parts.push(format!("+{line_s}"));
-            parts.push(file.to_string());
-        }
-        None => parts.push(file.to_string()),
-    }
-    Ok(parts)
-}
-
-/// Resolve and launch the user's editor on `file`, positioned at `line`.
-/// Spawns with cwd = `worktree`. Used by the chronology bar's entry clicks.
-pub fn open_in_editor_at(
-    worktree: &Path,
-    file: &Path,
-    line: u32,
-    configured: Option<&str>,
-) -> Result<()> {
-    let cmd = resolve_editor_cmd(configured)?;
-    let worktree_str = worktree.to_string_lossy();
-    let file_str = file.to_string_lossy();
-    let parts = resolve_editor_at_argv(&cmd, worktree_str.as_ref(), file_str.as_ref(), line)?;
-    spawn_parts(parts, worktree)
-}
-
-/// Outcome of deciding whether the chronology open-at-line can launch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EditorOpenDecision {
-    /// Launch the trimmed command.
-    Launch(String),
-    /// No usable `editor_cmd`; the caller should prompt the user to configure one.
-    NeedsConfig,
-}
-
-/// Decide whether the chronology open-at-line can launch. A non-empty,
-/// non-whitespace `editor_cmd` yields `Launch`; anything else `NeedsConfig`.
-/// Unlike `open_in_editor`, this path does NOT fall back to `$VISUAL`/`$EDITOR`
-/// — opening a file at a line needs an editor the user has chosen to wire up.
-pub fn editor_open_decision(editor_cmd: Option<&str>) -> EditorOpenDecision {
-    match editor_cmd {
-        Some(c) if !c.trim().is_empty() => EditorOpenDecision::Launch(c.trim().to_string()),
-        _ => EditorOpenDecision::NeedsConfig,
-    }
 }
 
 fn detach_io(cmd: &mut std::process::Command) {
@@ -491,6 +409,40 @@ mod tests {
     }
 
     #[test]
+    fn chronox_uses_configured_command() {
+        assert_eq!(
+            resolve_chronox_cmd(Some("wezterm start -- chronox")).unwrap(),
+            "wezterm start -- chronox"
+        );
+    }
+
+    #[test]
+    fn chronox_errors_when_unconfigured() {
+        assert!(resolve_chronox_cmd(None).is_err());
+        assert!(resolve_chronox_cmd(Some("   ")).is_err());
+    }
+
+    #[test]
+    fn open_in_chronox_spawns_configured_cmd() {
+        // A bare command (no `{path}`) gets the worktree appended as chronox's
+        // positional arg; spawning `true` exits immediately, proving the wiring.
+        let dir = std::env::temp_dir();
+        let r = open_in_chronox(&dir, Some(true_path()));
+        assert!(r.is_ok(), "open_in_chronox failed: {r:?}");
+    }
+
+    #[test]
+    fn chronox_substitutes_path_placeholder() {
+        let argv = resolve_argv(
+            "wezterm start -- chronox {path}",
+            &[("path", "/tmp/wt")],
+            Some("/tmp/wt"),
+        )
+        .unwrap();
+        assert_eq!(argv, vec!["wezterm", "start", "--", "chronox", "/tmp/wt"]);
+    }
+
+    #[test]
     fn resolve_argv_leaves_unknown_placeholders_literal_and_skips_fallback() {
         // Design note: `any_placeholder_used` only considers placeholders the
         // caller actually passed in `substitutions`. An unknown placeholder like
@@ -504,139 +456,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(argv, vec!["tool", "--base={base}", "/tmp/wt"]);
-    }
-
-    #[test]
-    fn editor_at_substitutes_file_and_line_placeholders() {
-        let argv = resolve_editor_at_argv(
-            "code --goto {file}:{line}",
-            "/tmp/wt",
-            "/tmp/wt/src/main.rs",
-            42,
-        )
-        .unwrap();
-        assert_eq!(argv, vec!["code", "--goto", "/tmp/wt/src/main.rs:42"]);
-    }
-
-    #[test]
-    fn editor_at_vim_fallback_uses_plus_line() {
-        let argv = resolve_editor_at_argv("nvim", "/tmp/wt", "/tmp/wt/src/main.rs", 42).unwrap();
-        assert_eq!(argv, vec!["nvim", "+42", "/tmp/wt/src/main.rs"]);
-    }
-
-    #[test]
-    fn editor_at_code_fallback_uses_goto() {
-        let argv = resolve_editor_at_argv("code", "/tmp/wt", "/tmp/wt/src/main.rs", 7).unwrap();
-        assert_eq!(argv, vec!["code", "--goto", "/tmp/wt/src/main.rs:7"]);
-    }
-
-    #[test]
-    fn editor_at_emacs_fallback_uses_plus_line() {
-        let argv = resolve_editor_at_argv("emacsclient", "/tmp/wt", "/tmp/wt/a.rs", 3).unwrap();
-        assert_eq!(argv, vec!["emacsclient", "+3", "/tmp/wt/a.rs"]);
-    }
-
-    #[test]
-    fn editor_at_unknown_editor_appends_file_only() {
-        let argv = resolve_editor_at_argv("myeditor", "/tmp/wt", "/tmp/wt/a.rs", 3).unwrap();
-        assert_eq!(argv, vec!["myeditor", "/tmp/wt/a.rs"]);
-    }
-
-    #[test]
-    fn editor_at_substitutes_placeholders_in_separate_tokens() {
-        let argv =
-            resolve_editor_at_argv("nvim +{line} {file}", "/tmp/wt", "/tmp/wt/a.rs", 9).unwrap();
-        assert_eq!(argv, vec!["nvim", "+9", "/tmp/wt/a.rs"]);
-    }
-
-    #[test]
-    fn editor_at_wrapper_terminal_editor_keeps_line() {
-        let argv = resolve_editor_at_argv("alacritty -e nvim", "/wt", "/wt/a.rs", 42).unwrap();
-        assert_eq!(argv, vec!["alacritty", "-e", "nvim", "+42", "/wt/a.rs"]);
-    }
-
-    #[test]
-    fn editor_at_wrapper_gui_editor_uses_goto() {
-        let argv = resolve_editor_at_argv("wezterm start -- code", "/wt", "/wt/a.rs", 7).unwrap();
-        assert_eq!(
-            argv,
-            vec!["wezterm", "start", "--", "code", "--goto", "/wt/a.rs:7"]
-        );
-    }
-
-    #[test]
-    fn editor_at_zed_uses_goto() {
-        let argv = resolve_editor_at_argv("zed", "/wt", "/wt/a.rs", 5).unwrap();
-        assert_eq!(argv, vec!["zed", "--goto", "/wt/a.rs:5"]);
-    }
-
-    #[test]
-    fn editor_at_nano_uses_plus_line() {
-        let argv = resolve_editor_at_argv("nano", "/wt", "/wt/a.rs", 5).unwrap();
-        assert_eq!(argv, vec!["nano", "+5", "/wt/a.rs"]);
-    }
-
-    #[test]
-    fn editor_at_unknown_wrapped_editor_appends_file_only() {
-        // No known editor token and no placeholders → append the file, line dropped.
-        let argv = resolve_editor_at_argv("myterm -e myed", "/wt", "/wt/a.rs", 9).unwrap();
-        assert_eq!(argv, vec!["myterm", "-e", "myed", "/wt/a.rs"]);
-    }
-
-    #[test]
-    fn editor_at_first_known_editor_token_wins() {
-        // When more than one known editor appears, the first match decides the
-        // goto style (here `code` → --goto, even though `vim` follows).
-        let argv = resolve_editor_at_argv("code --diff vim", "/wt", "/wt/a.rs", 3).unwrap();
-        assert_eq!(argv, vec!["code", "--diff", "vim", "--goto", "/wt/a.rs:3"]);
-    }
-
-    #[test]
-    fn editor_at_substitutes_path_placeholder() {
-        // {path} is the worktree (shared with the dir-open action); the inner
-        // editor is still detected and the line appended.
-        let argv =
-            resolve_editor_at_argv("xdg-terminal-exec --dir={path} nvim", "/wt", "/wt/a.rs", 42)
-                .unwrap();
-        assert_eq!(
-            argv,
-            vec!["xdg-terminal-exec", "--dir=/wt", "nvim", "+42", "/wt/a.rs"]
-        );
-    }
-
-    #[test]
-    fn editor_at_substitutes_path_with_file_and_line_placeholders() {
-        let argv = resolve_editor_at_argv(
-            "term --dir={path} -- nvim +{line} {file}",
-            "/wt",
-            "/wt/a.rs",
-            9,
-        )
-        .unwrap();
-        assert_eq!(
-            argv,
-            vec!["term", "--dir=/wt", "--", "nvim", "+9", "/wt/a.rs"]
-        );
-    }
-
-    #[test]
-    fn editor_decision_needs_config_when_unset_or_blank() {
-        assert_eq!(editor_open_decision(None), EditorOpenDecision::NeedsConfig);
-        assert_eq!(
-            editor_open_decision(Some("")),
-            EditorOpenDecision::NeedsConfig
-        );
-        assert_eq!(
-            editor_open_decision(Some("   ")),
-            EditorOpenDecision::NeedsConfig
-        );
-    }
-
-    #[test]
-    fn editor_decision_launches_trimmed_command() {
-        assert_eq!(
-            editor_open_decision(Some("  alacritty -e nvim  ")),
-            EditorOpenDecision::Launch("alacritty -e nvim".to_string())
-        );
     }
 }

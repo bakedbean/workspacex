@@ -23,27 +23,6 @@ pub enum ArchiveStep {
     Cleanup,
 }
 
-/// Which diff layout the change-detail modal is showing. `Unified` is the
-/// classic stacked diff (all removed lines, then all added); `SideBySide` is the
-/// LCS-aligned two-column view from sessionx. The last-used mode is mirrored onto
-/// `App` so it is sticky across opens for the session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DiffViewMode {
-    #[default]
-    Unified,
-    SideBySide,
-}
-
-impl DiffViewMode {
-    /// The other mode — `d` cycles between exactly two.
-    pub fn toggled(self) -> Self {
-        match self {
-            DiffViewMode::Unified => DiffViewMode::SideBySide,
-            DiffViewMode::SideBySide => DiffViewMode::Unified,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Modal {
     NewWorkspace {
@@ -101,19 +80,6 @@ pub enum Modal {
         /// (applied) window is read separately from the store at render time.
         selected: usize,
     },
-    /// Full diff of a chronology change, scrollable. Carries both the unified
-    /// `lines` and the side-by-side `rows` (each built once at open); `mode`
-    /// selects which is drawn and is toggled with `d`.
-    ChangeDetail {
-        title: String,
-        lines: Vec<ratatui::text::Line<'static>>,
-        rows: Vec<crate::chronology::SideRow>,
-        mode: DiffViewMode,
-        scroll: usize,
-        worktree: std::path::PathBuf,
-        file: std::path::PathBuf,
-        line: u32,
-    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -147,7 +113,6 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             | Modal::RepoSettings { .. }
             | Modal::AgentsPanel { .. }
             | Modal::UsageWindowPicker { .. }
-            | Modal::ChangeDetail { .. }
     ) {
         return;
     }
@@ -198,7 +163,6 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         Modal::UsageWindowPicker { .. } => {
             unreachable!("UsageWindowPicker must not reach render()")
         }
-        Modal::ChangeDetail { .. } => unreachable!("ChangeDetail must not reach render()"),
         Modal::AgentMissing { agent, binary, .. } => (
             "agent not installed",
             format!(
@@ -708,7 +672,7 @@ pub fn render_repo_settings(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let rows: [(crate::app::RepoSettingField, Option<&str>); 10] = [
+    let rows: [(crate::app::RepoSettingField, Option<&str>); 9] = [
         (
             crate::app::RepoSettingField::RepoName,
             Some(repo.name.as_str()),
@@ -748,10 +712,6 @@ pub fn render_repo_settings(
         (
             crate::app::RepoSettingField::DetailBarConfig,
             repo.detail_bar_config.as_deref(),
-        ),
-        (
-            crate::app::RepoSettingField::ChronologyConfig,
-            repo.chronology_config.as_deref(),
         ),
     ];
 
@@ -923,22 +883,6 @@ fn preview_value(s: &str, max: usize) -> String {
         let mut out: String = trimmed.chars().take(max.saturating_sub(1)).collect();
         out.push('\u{2026}');
         out
-    }
-}
-
-#[cfg(test)]
-mod diff_view_mode_tests {
-    use super::*;
-
-    #[test]
-    fn toggled_cycles_between_the_two_modes() {
-        assert_eq!(DiffViewMode::Unified.toggled(), DiffViewMode::SideBySide);
-        assert_eq!(DiffViewMode::SideBySide.toggled(), DiffViewMode::Unified);
-    }
-
-    #[test]
-    fn default_is_unified() {
-        assert_eq!(DiffViewMode::default(), DiffViewMode::Unified);
     }
 }
 

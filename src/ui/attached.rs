@@ -306,6 +306,7 @@ fn footer_line(
             ("t", "term"),
             ("v", "diff"),
             ("g", "lazygit"),
+            ("c", "chronox"),
             ("k", "procs"),
             ("x", "send-^x"),
         ]
@@ -318,6 +319,7 @@ fn footer_line(
             ("t", "term"),
             ("v", "diff"),
             ("g", "lazygit"),
+            ("c", "chronox"),
             ("k", "procs"),
             ("x", "send-^x"),
         ]
@@ -569,6 +571,7 @@ pub(crate) fn render_chip_row(
 ///   - `t` → open terminal
 ///   - `v` → open diff
 ///   - `g` → open lazygit
+///   - `c` → open chronox
 ///   - `k` → process list
 ///   - `1-9` (digits) → pinned commands
 ///
@@ -583,7 +586,7 @@ pub(crate) fn render_chip_row(
 /// without a keyboard switch key; they remain clickable).
 pub fn agent_switch_keys(count: usize) -> Vec<char> {
     // Pool excludes every letter the attached `^x` leader already binds
-    // (d, x, u, a, e, t, v, g, k) plus all digits (pinned chips 1-9).
+    // (d, x, u, a, e, t, v, g, c, k) plus all digits (pinned chips 1-9).
     const POOL: &[char] = &['q', 'w', 'r', 'y', 'i', 'o', 'p', 's', 'h', 'j'];
     POOL.iter().copied().take(count).collect()
 }
@@ -890,7 +893,7 @@ mod tests {
         // Request the whole pool so the exclusion check covers every key.
         let keys = agent_switch_keys(64);
         // No reserved `^x`-leader letter may appear anywhere in the pool.
-        for reserved in ['d', 'x', 'u', 'a', 'e', 't', 'v', 'g', 'k'] {
+        for reserved in ['d', 'x', 'u', 'a', 'e', 't', 'v', 'g', 'c', 'k'] {
             assert!(
                 !keys.contains(&reserved),
                 "pool must not contain reserved '{reserved}'"

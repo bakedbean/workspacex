@@ -7,7 +7,7 @@
 use crate::ui::theme::Theme;
 use pulldown_cmark::{Event, Options, Parser, Tag};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 
 #[derive(Clone, Debug)]
 enum Tok {
@@ -314,6 +314,84 @@ fn parse_blocks(text: &str, theme: &Theme) -> Vec<Block> {
     blocks
 }
 
+/// Wrap inline tokens to `width`, prefixing the first line with `lead`
+/// and continuation lines with `cont` (used for list hanging indents and
+/// blockquote bars). `lead` and `cont` are assumed to be the same width.
+fn flow_lines(
+    tokens: &[Tok],
+    width: usize,
+    lead: Span<'static>,
+    cont: Span<'static>,
+) -> Vec<Line<'static>> {
+    let indent = lead.content.chars().count();
+    let avail = width.saturating_sub(indent);
+    let logical = wrap_words(tokens, avail);
+    let mut out = Vec::new();
+    for (i, words) in logical.iter().enumerate() {
+        let mut spans = vec![if i == 0 { lead.clone() } else { cont.clone() }];
+        spans.extend(coalesce(words));
+        out.push(Line::from(spans));
+    }
+    out
+}
+
+/// Render one block to its display lines (no inter-block spacing).
+fn block_to_lines(block: &Block, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    match block {
+        Block::Paragraph(toks) | Block::Heading(toks) => {
+            flow_lines(toks, width, Span::raw(""), Span::raw(""))
+        }
+        Block::Quote(toks) => {
+            let bar = Span::styled("│ ".to_string(), theme.path_style());
+            flow_lines(toks, width, bar.clone(), bar)
+        }
+        Block::ListItem { marker, body } => {
+            let lead_text = match marker {
+                Marker::Bullet => "• ".to_string(),
+                Marker::Number(n) => format!("{n}. "),
+            };
+            let cont = Span::raw(" ".repeat(lead_text.chars().count()));
+            let lead = Span::styled(lead_text, theme.md_bullet_style());
+            flow_lines(body, width, lead, cont)
+        }
+        Block::Code(lines) => lines
+            .iter()
+            .map(|l| {
+                let truncated: String = l.chars().take(width.saturating_sub(2)).collect();
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(truncated, theme.md_code_style()),
+                ])
+            })
+            .collect(),
+    }
+}
+
+/// Render markdown `text` into styled, width-wrapped lines for the
+/// detail bar. Blocks are separated by a single blank line; there are no
+/// leading or trailing blanks (the host owns inter-module spacing).
+pub fn render(text: &str, width: u16, theme: &Theme) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![Line::from(Span::styled(
+            text.to_string(),
+            theme.dim_style(),
+        ))];
+    }
+    let width = width as usize;
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for block in &parse_blocks(text, theme) {
+        let lines = block_to_lines(block, width, theme);
+        if lines.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(Line::from(""));
+        }
+        out.extend(lines);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,5 +556,92 @@ mod tests {
             Block::Quote(toks) => assert_eq!(run_text(toks).trim(), "quoted"),
             _ => panic!("expected a quote"),
         }
+    }
+
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn render_separates_blocks_with_blank_line_no_edge_blanks() {
+        let t = Theme::wsx();
+        let out = render("para one\n\n## Heading", 40, &t);
+        assert!(!line_text(&out[0]).is_empty());
+        assert!(out.iter().any(|l| line_text(l).is_empty()));
+        assert!(!line_text(out.last().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn render_bullet_has_marker_and_hanging_indent() {
+        let t = Theme::wsx();
+        let out = render("- alpha beta gamma delta epsilon", 14, &t);
+        assert!(line_text(&out[0]).starts_with("• "));
+        assert!(out.len() > 1);
+        assert!(line_text(&out[1]).starts_with("  "));
+        assert!(!line_text(&out[1]).starts_with("• "));
+    }
+
+    #[test]
+    fn render_bullet_lines_stay_within_width() {
+        let t = Theme::wsx();
+        // A long bullet item at a realistic narrow width: every rendered
+        // line (marker + text, or hanging indent + text) must fit `width`,
+        // proving the prefix width is accounted for during wrapping.
+        let width = 14;
+        let out = render("- alpha beta gamma delta epsilon zeta eta", width, &t);
+        assert!(
+            out.len() > 1,
+            "expected the item to wrap onto multiple lines"
+        );
+        for line in &out {
+            assert!(
+                line_text(line).chars().count() <= width as usize,
+                "line exceeded width {width}: {:?}",
+                line_text(line)
+            );
+        }
+    }
+
+    #[test]
+    fn render_code_block_is_indented_and_colored() {
+        let t = Theme::wsx();
+        let out = render("```\nfn main() {}\n```", 40, &t);
+        assert_eq!(out.len(), 1);
+        assert!(line_text(&out[0]).starts_with("  fn main() {}"));
+        let colored = out[0].spans.iter().any(|s| s.style.fg == Some(t.code));
+        assert!(colored);
+    }
+
+    #[test]
+    fn render_inline_code_uses_code_color() {
+        let t = Theme::wsx();
+        let out = render("call `validate_token` now", 40, &t);
+        let has_code = out
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.content.contains("validate_token") && s.style.fg == Some(t.code));
+        assert!(has_code);
+    }
+
+    #[test]
+    fn render_plain_prose_wraps_like_before() {
+        let t = Theme::wsx();
+        let out = render("the quick brown fox jumps", 9, &t);
+        assert!(out.iter().all(|l| line_text(l).chars().count() <= 9));
+        assert!(out.len() >= 3);
+    }
+
+    #[test]
+    fn render_width_zero_does_not_panic() {
+        let t = Theme::wsx();
+        let out = render("anything **here**", 0, &t);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn render_empty_input_is_empty() {
+        let t = Theme::wsx();
+        assert!(render("", 40, &t).is_empty());
+        assert!(render("   \n  ", 40, &t).is_empty());
     }
 }

@@ -22,81 +22,19 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
 
     let events = if ctx.events_scanned { ctx.events } else { None };
     let theme = ctx.theme;
-    let column_width = width as usize;
-
-    let mut out: Vec<Line<'static>> = Vec::new();
 
     let Some(evt) = events else {
-        out.push(Line::from(Span::styled(
+        return vec![Line::from(Span::styled(
             "  loading…".to_string(),
             theme.dim_style(),
-        )));
-        return out;
+        ))];
     };
 
     let Some(text) = evt.last_assistant_text.as_deref() else {
-        out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
-        return out;
+        return vec![Line::from(Span::styled("—".to_string(), theme.dim_style()))];
     };
 
-    // Word-wrap to column_width. For display purposes, take all wrapped lines
-    // (the container will slice by scroll offset).
-    let wrapped = wrap_lines(text, column_width);
-    for line in wrapped {
-        out.push(Line::from(Span::styled(line, theme.dim_style())));
-    }
-
-    out
-}
-
-/// Greedy word-wrap. Splits long words at the column boundary.
-fn wrap_lines(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![text.to_string()];
-    }
-    let mut out: Vec<String> = Vec::new();
-    for paragraph in text.split('\n') {
-        let mut current = String::new();
-        for word in paragraph.split_whitespace() {
-            if word.chars().count() > width {
-                if !current.is_empty() {
-                    out.push(std::mem::take(&mut current));
-                }
-                let mut buf: String = String::new();
-                for ch in word.chars() {
-                    if buf.chars().count() == width {
-                        out.push(std::mem::take(&mut buf));
-                    }
-                    buf.push(ch);
-                }
-                if !buf.is_empty() {
-                    current = buf;
-                }
-                continue;
-            }
-            let projected = if current.is_empty() {
-                word.chars().count()
-            } else {
-                current.chars().count() + 1 + word.chars().count()
-            };
-            if projected > width {
-                out.push(std::mem::take(&mut current));
-                current.push_str(word);
-            } else {
-                if !current.is_empty() {
-                    current.push(' ');
-                }
-                current.push_str(word);
-            }
-        }
-        if !current.is_empty() {
-            out.push(current);
-        }
-    }
-    if out.is_empty() {
-        out.push(String::new());
-    }
-    out
+    crate::detail_modules::markdown::render(text, width, theme)
 }
 
 #[cfg(test)]

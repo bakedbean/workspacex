@@ -46,6 +46,7 @@ dirs = "6"
 rand = "0.10"
 futures = "0.3"
 shlex = "2"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

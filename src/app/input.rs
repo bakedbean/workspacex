@@ -1428,6 +1428,10 @@ async fn handle_key_modal(
                                 input: None,
                                 notice: Some(new_notice),
                             });
+                            // Best-effort: the just-spawned process may not have
+                            // surfaced in `lsof` yet, so it usually appears on the
+                            // next periodic scan rather than this one. The notice
+                            // confirms the launch in the meantime.
                             rescan_processes(app).await;
                         }
                     }
@@ -1491,11 +1495,13 @@ async fn handle_key_modal(
                     });
                 }
                 KeyCode::Char('r') => {
+                    // Clear any prior launch notice when starting a fresh
+                    // command so a stale "started" line doesn't linger.
                     app.modal = Some(Modal::ProcessList {
                         workspace_id,
                         selected,
                         input: Some(String::new()),
-                        notice,
+                        notice: None,
                     });
                 }
                 KeyCode::Char('k') => {

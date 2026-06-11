@@ -99,6 +99,10 @@ pub async fn tail_workspace_events(
         first_user_text,
         tool_use_counts,
         edited_file_paths,
+        context_tokens,
+        model_id,
+        current_action,
+        pending_question_text,
     } = update;
     let mut g = app.lock().await;
     // Concurrent-tail guard. If another `tail_workspace_events` call
@@ -166,6 +170,10 @@ pub async fn tail_workspace_events(
             // Snapshot the just-completed turn's recap through
             // clean_recap; the SESSION SUMMARY column reads this field.
             evt.snapshot_recap_at_turn_end();
+            // The live action label is turn-scoped: once the agent finishes a
+            // turn (awaiting user), drop it so the next turn's Thinking phase
+            // doesn't surface the previous turn's "now …"/command as if live.
+            evt.current_action = None;
         }
     }
     if human_replied_after_last_stop {
@@ -201,6 +209,25 @@ pub async fn tail_workspace_events(
         .saturating_add(tool_use_counts.other);
     for path in edited_file_paths {
         evt.push_recent_edited_file(path);
+    }
+    if let Some(t) = context_tokens {
+        evt.context_tokens = Some(t);
+    }
+    if let Some(m) = model_id {
+        evt.model_id = Some(m);
+    }
+    if let Some(a) = current_action {
+        evt.current_action = Some(a);
+    }
+    // Question topic: adopt a freshly-seen one, then clear it once the
+    // question is no longer pending. `pending_tool_uses` was already
+    // maintained above (tool_use_starts/resolves), so
+    // `pending_question_tool()` reflects this batch.
+    if let Some(q) = pending_question_text {
+        evt.pending_question_text = Some(q);
+    }
+    if evt.pending_question_tool().is_none() {
+        evt.pending_question_text = None;
     }
     // Sticky between batches: only overwrite when the batch
     // had a definitive signal. Some(true) = batch ended on

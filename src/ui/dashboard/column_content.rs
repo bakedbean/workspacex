@@ -38,14 +38,17 @@ pub fn row_column(
     let evt = events?;
     match status {
         Status::Question => {
-            // Unlike `format_state_line` (which renders "question · <tool>"
-            // as a status detail), the row column shows just the tool name as
-            // the whole body — so the lookup is duplicated here on purpose.
-            let body = evt
-                .pending_question_tool()
-                .map(|n| n.to_string())
-                .or_else(|| evt.pending_permission_tool(now_ms, 3_000).map(|(n, _)| n))
-                .unwrap_or_else(|| "question".to_string());
+            let body = match evt.pending_question_tool() {
+                Some("ExitPlanMode") => "asking: review plan".to_string(),
+                Some(_) => match evt.pending_question_text.as_deref() {
+                    Some(t) if !t.trim().is_empty() => format!("asking: {}", collapse_ws(t)),
+                    _ => "asking…".to_string(),
+                },
+                None => evt
+                    .pending_permission_tool(now_ms, 3_000)
+                    .map(|(n, _)| format!("awaiting: {n}"))
+                    .unwrap_or_else(|| "question".to_string()),
+            };
             Some(RowColumn {
                 text: body,
                 emphasis: ColumnEmphasis::Status,
@@ -57,10 +60,16 @@ pub fn row_column(
         }),
         Status::Thinking | Status::Waiting => {
             let trace = format_tool_trace(&evt.tool_use_counts);
-            let text = if trace.is_empty() {
-                format!("{}…", status.label())
-            } else {
-                trace
+            let live = evt
+                .current_action
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let text = match (trace.is_empty(), live) {
+                (false, Some(l)) => format!("{trace} · {l}"),
+                (false, None) => trace,
+                (true, Some(l)) => l.to_string(),
+                (true, None) => format!("{}…", status.label()),
             };
             Some(RowColumn {
                 text,
@@ -215,27 +224,50 @@ mod tests {
     }
 
     #[test]
-    fn question_surfaces_pending_question_tool_with_status_emphasis() {
+    fn question_with_topic_renders_asking_topic() {
+        let mut e = evt();
+        e.pending_tool_uses
+            .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
+        e.pending_question_text = Some("Auth method".into());
+        let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
+        assert_eq!(c.text, "asking: Auth method");
+        assert_eq!(c.emphasis, ColumnEmphasis::Status);
+    }
+
+    #[test]
+    fn question_without_topic_renders_asking_ellipsis() {
         let mut e = evt();
         e.pending_tool_uses
             .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
         let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
-        assert_eq!(c.text, "AskUserQuestion");
+        assert_eq!(c.text, "asking…");
         assert_eq!(c.emphasis, ColumnEmphasis::Status);
     }
 
     #[test]
-    fn question_surfaces_exit_plan_mode_tool() {
+    fn question_blank_topic_falls_back_to_ellipsis() {
+        // A whitespace-only topic must not render as "asking:  "; it falls
+        // through to the ellipsis like an absent topic.
+        let mut e = evt();
+        e.pending_tool_uses
+            .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
+        e.pending_question_text = Some("   ".into());
+        let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
+        assert_eq!(c.text, "asking…");
+    }
+
+    #[test]
+    fn question_exit_plan_mode_renders_review_plan() {
         let mut e = evt();
         e.pending_tool_uses
             .insert("tu_p".into(), ("ExitPlanMode".into(), 0));
         let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
-        assert_eq!(c.text, "ExitPlanMode");
+        assert_eq!(c.text, "asking: review plan");
         assert_eq!(c.emphasis, ColumnEmphasis::Status);
     }
 
     #[test]
-    fn question_falls_back_to_permission_tool() {
+    fn question_permission_tool_renders_awaiting_tool() {
         let mut pending = HashMap::new();
         // epoch-0 timestamp guarantees age > the 3s stale threshold.
         pending.insert("tu_b".to_string(), ("Bash".to_string(), 0_i64));
@@ -244,7 +276,7 @@ mod tests {
             ..WorkspaceEvents::default()
         };
         let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
-        assert_eq!(c.text, "Bash");
+        assert_eq!(c.text, "awaiting: Bash");
         assert_eq!(c.emphasis, ColumnEmphasis::Status);
     }
 
@@ -287,6 +319,45 @@ mod tests {
     fn waiting_with_no_tools_yet_shows_ellipsis_label() {
         let c = row_column(Status::Waiting, Some(&evt()), 0).unwrap();
         assert_eq!(c.text, "waiting…");
+    }
+
+    #[test]
+    fn thinking_appends_current_action_to_trace() {
+        let mut e = evt();
+        e.tool_use_counts.edit = 3;
+        e.current_action = Some("now column_content.rs".into());
+        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "edited 3 files · now column_content.rs");
+        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+    }
+
+    #[test]
+    fn thinking_appends_bash_command_to_trace() {
+        let mut e = evt();
+        e.tool_use_counts.bash = 5;
+        e.current_action = Some("cargo test --lib".into());
+        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "ran 5 commands · cargo test --lib");
+    }
+
+    #[test]
+    fn thinking_shows_action_alone_when_no_counts_yet() {
+        let mut e = evt();
+        e.current_action = Some("now column_content.rs".into());
+        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "now column_content.rs");
+    }
+
+    #[test]
+    fn waiting_appends_current_action_to_trace() {
+        // Waiting shares the arm with Thinking; pin the live-item behavior
+        // under Waiting too so a future refactor can't split it silently.
+        let mut e = evt();
+        e.tool_use_counts.bash = 5;
+        e.current_action = Some("cargo test --lib".into());
+        let c = row_column(Status::Waiting, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "ran 5 commands · cargo test --lib");
+        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
     }
 
     #[test]

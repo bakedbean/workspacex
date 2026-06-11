@@ -239,6 +239,18 @@ mod tests {
     }
 
     #[test]
+    fn question_blank_topic_falls_back_to_ellipsis() {
+        // A whitespace-only topic must not render as "asking:  "; it falls
+        // through to the ellipsis like an absent topic.
+        let mut e = evt();
+        e.pending_tool_uses
+            .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
+        e.pending_question_text = Some("   ".into());
+        let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
+        assert_eq!(c.text, "asking…");
+    }
+
+    #[test]
     fn question_exit_plan_mode_renders_review_plan() {
         let mut e = evt();
         e.pending_tool_uses

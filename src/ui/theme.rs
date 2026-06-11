@@ -23,6 +23,9 @@ pub struct Theme {
     /// Repo header's path/count tail — distinct muted tone so the path
     /// doesn't blur into the workspace sub-lines (which use `dim`).
     pub path: Color,
+    /// Inline-code and code-block foreground for rendered markdown.
+    /// A distinct, legible hue — never darker than `dim`.
+    pub code: Color,
     /// Footer bar background — the chrome strip that holds key-chip rows
     /// in both the dashboard and attached views. One step elevated from
     /// the main pane background.
@@ -61,6 +64,7 @@ impl Theme {
             selected_bg: Color::DarkGray,
             dim: Color::DarkGray,
             path: Color::Indexed(67),
+            code: Color::Cyan,
             bg_alt: Color::Indexed(235),
             bg_soft: Color::Indexed(237),
             ok: Color::Green,
@@ -89,6 +93,7 @@ impl Theme {
             selected_bg: Color::Rgb(0x35, 0x49, 0x66),
             dim: Color::Rgb(0xb5, 0xb5, 0xb5),
             path: Color::Rgb(0x6b, 0x6e, 0x75),
+            code: Color::Rgb(0x7e, 0xb6, 0xb0), // teal
             bg_alt: Color::Rgb(0x13, 0x18, 0x20),
             bg_soft: Color::Rgb(0x18, 0x1f, 0x29),
             ok: Color::Rgb(0x67, 0xc0, 0x89),
@@ -128,6 +133,7 @@ impl Theme {
             selected_bg: selection_bg,
             dim: comment,
             path: Color::Rgb(0x82, 0x90, 0xb4), // softer blue-grey
+            code: cyan,
             bg_alt: Color::Rgb(0x21, 0x22, 0x2e),
             bg_soft: Color::Rgb(0x35, 0x37, 0x47),
             ok: green,
@@ -168,6 +174,7 @@ impl Theme {
             selected_bg: selection_bg,
             dim: gray,
             path: Color::Rgb(0xb8, 0xa0, 0x78), // warmer tan, clearer separation from gray
+            code: green,
             bg_alt: Color::Rgb(0x1c, 0x1c, 0x1c),
             bg_soft: Color::Rgb(0x26, 0x26, 0x26),
             ok: green,
@@ -209,6 +216,7 @@ impl Theme {
             selected_bg: polar2,
             dim: polar3,
             path: Color::Rgb(0x81, 0xa1, 0xc1), // Nord frost3
+            code: Color::Rgb(0x8f, 0xbc, 0xbb), // nord frost0 (nord7)
             bg_alt: Color::Rgb(0x29, 0x2e, 0x39),
             bg_soft: Color::Rgb(0x34, 0x3a, 0x47),
             ok: aurora_green,
@@ -266,6 +274,24 @@ impl Theme {
     }
     pub fn path_style(&self) -> Style {
         Style::default().fg(self.path)
+    }
+    /// Heading line in rendered markdown — brighter than body, bold.
+    pub fn md_heading_style(&self) -> Style {
+        Style::default()
+            .fg(self.header_fg)
+            .add_modifier(Modifier::BOLD)
+    }
+    /// Inline code and fenced code blocks in rendered markdown.
+    pub fn md_code_style(&self) -> Style {
+        Style::default().fg(self.code)
+    }
+    /// List-item bullet/number marker in rendered markdown.
+    pub fn md_bullet_style(&self) -> Style {
+        Style::default().fg(self.attention)
+    }
+    /// Blockquote body in rendered markdown — dim and italic.
+    pub fn md_quote_style(&self) -> Style {
+        Style::default().fg(self.dim).add_modifier(Modifier::ITALIC)
     }
     pub fn ok_style(&self) -> Style {
         Style::default().fg(self.ok)
@@ -424,6 +450,28 @@ mod tests {
             t.agent_style(AgentKind::Codex).fg,
             Some(Color::Rgb(0x5b, 0x9d, 0xe0))
         );
+    }
+
+    #[test]
+    fn markdown_styles_are_distinct_and_weighted() {
+        let t = Theme::wsx();
+
+        // Heading is brighter than body and bold.
+        let h = t.md_heading_style();
+        assert_eq!(h.fg, Some(t.header_fg));
+        assert!(h.add_modifier.contains(Modifier::BOLD));
+
+        // Code has its own color, distinct from the body grey.
+        assert_ne!(t.code, t.dim);
+        assert_eq!(t.md_code_style().fg, Some(t.code));
+
+        // Bullet marker uses the accent color.
+        assert_eq!(t.md_bullet_style().fg, Some(t.attention));
+
+        // Blockquote body is dim + italic.
+        let q = t.md_quote_style();
+        assert_eq!(q.fg, Some(t.dim));
+        assert!(q.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[test]

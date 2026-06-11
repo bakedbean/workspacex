@@ -87,6 +87,7 @@ impl Default for Registry {
     }
 }
 
+pub mod markdown;
 pub mod processes;
 pub mod recent_chat;
 pub mod recent_files;

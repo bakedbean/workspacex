@@ -191,7 +191,9 @@ fn resolve_window(context_tokens: u64, model_id: Option<&str>) -> Option<u64> {
 /// Build the detail bar's context-fill line and whether it should render in
 /// the warn color. None when there's no token data yet (omit the line).
 fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
-    let n = evt.context_tokens?;
+    // Treat a 0 sum (no usage yet, or a malformed all-zero usage block) the
+    // same as "no data" — a `context: 0` line is noise, not signal.
+    let n = evt.context_tokens.filter(|&n| n > 0)?;
     match resolve_window(n, evt.model_id.as_deref()) {
         Some(w) => {
             let pct = (n.saturating_mul(100) / w).min(999);
@@ -581,6 +583,17 @@ mod tests {
     #[test]
     fn format_context_line_none_when_no_tokens() {
         let evt = WorkspaceEvents::default();
+        assert!(format_context_line(&evt).is_none());
+    }
+
+    #[test]
+    fn format_context_line_none_when_zero_tokens() {
+        // A present-but-zero usage sum is noise, not a real fill — omit it.
+        let evt = WorkspaceEvents {
+            context_tokens: Some(0),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
         assert!(format_context_line(&evt).is_none());
     }
 

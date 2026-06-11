@@ -613,6 +613,16 @@ mod tests {
     }
 
     #[test]
+    fn render_blockquote_shows_bar_through_render() {
+        let t = Theme::wsx();
+        let out = render("> heads up", 40, &t);
+        // Every quote line is prefixed with the "│ " bar in path color.
+        assert!(out.iter().all(|l| line_text(l).starts_with("│ ")));
+        let barred = out[0].spans.iter().any(|s| s.style.fg == Some(t.path));
+        assert!(barred, "blockquote bar should use the path color");
+    }
+
+    #[test]
     fn render_inline_code_uses_code_color() {
         let t = Theme::wsx();
         let out = render("call `validate_token` now", 40, &t);

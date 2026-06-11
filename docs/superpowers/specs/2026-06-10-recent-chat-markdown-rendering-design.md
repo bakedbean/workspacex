@@ -151,7 +151,7 @@ five constructors (`ansi`, `wsx`, `dracula`, `jellybeans`, `nord`).
 | Body text | `dim` (unchanged) |
 | Bold | body fg + `BOLD` |
 | Italic | body fg + `ITALIC` |
-| Heading | `header_fg` + `BOLD`; one blank line above |
+| Heading | `header_fg` + `BOLD` (the uniform single blank line between blocks separates it from the preceding block; no special leading blank, and none when the heading is the first block) |
 | Inline code / code block | new `code` color; code blocks indented 2 cols |
 | Bullet marker `•` | `attention` |
 | Blockquote `│ ` prefix | `path`; body italic |

@@ -1099,8 +1099,7 @@ fn launch_workspace_command(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let log_dir = crate::config::Dirs::discover().log_dir();
-    let log_path =
-        crate::commands::external::background_log_path(&log_dir, workspace_id.0, now_ms);
+    let log_path = crate::commands::external::background_log_path(&log_dir, workspace_id.0, now_ms);
     match crate::commands::external::spawn_background_command(&worktree, command, &log_path) {
         Ok(()) => format!("\u{25B6} started \u{2192} {}", log_path.display()),
         Err(e) => format!("error: {e}"),
@@ -1420,8 +1419,7 @@ async fn handle_key_modal(
                                 notice,
                             });
                         } else {
-                            let new_notice =
-                                launch_workspace_command(app, workspace_id, &command);
+                            let new_notice = launch_workspace_command(app, workspace_id, &command);
                             app.modal = Some(Modal::ProcessList {
                                 workspace_id,
                                 selected,

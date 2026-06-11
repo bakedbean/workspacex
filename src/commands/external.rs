@@ -189,11 +189,7 @@ fn shell_argv(command: &str) -> Vec<String> {
 
 /// Path for a background command's captured output:
 /// `<log_dir>/ws<workspace_id>-<epoch_ms>.log`.
-pub fn background_log_path(
-    log_dir: &Path,
-    workspace_id: i64,
-    epoch_ms: u64,
-) -> std::path::PathBuf {
+pub fn background_log_path(log_dir: &Path, workspace_id: i64, epoch_ms: u64) -> std::path::PathBuf {
     log_dir.join(format!("ws{workspace_id}-{epoch_ms}.log"))
 }
 

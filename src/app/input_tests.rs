@@ -5262,7 +5262,11 @@ mod process_command_tests {
 
     fn shared() -> SharedApp {
         Arc::new(Mutex::new(
-            App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap(),
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
         ))
     }
 
@@ -5277,8 +5281,11 @@ mod process_command_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn r_enters_input_mode() {
-        let mut app =
-            App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
         app.modal = Some(process_list(None));
         let shared = shared();
         handle_key_modal(
@@ -5296,8 +5303,11 @@ mod process_command_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn typing_appends_and_backspace_pops() {
-        let mut app =
-            App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
         app.modal = Some(process_list(Some(String::new())));
         let shared = shared();
         for c in ['l', 's'] {
@@ -5328,8 +5338,11 @@ mod process_command_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn esc_in_input_mode_returns_to_list_mode() {
-        let mut app =
-            App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
         app.modal = Some(process_list(Some("npm".to_string())));
         let shared = shared();
         handle_key_modal(
@@ -5347,8 +5360,11 @@ mod process_command_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn enter_with_empty_command_is_a_noop() {
-        let mut app =
-            App::new(Store::open_in_memory().unwrap(), PathBuf::from("/tmp/wsx-test")).unwrap();
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
         app.modal = Some(process_list(Some("   ".to_string())));
         let shared = shared();
         handle_key_modal(
@@ -5373,16 +5389,7 @@ mod process_command_tests {
         let backend = TestBackend::new(80, 24);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| {
-            crate::ui::modal::render_process_list(
-                f,
-                f.area(),
-                "demo",
-                &[],
-                0,
-                None,
-                None,
-                &theme,
-            );
+            crate::ui::modal::render_process_list(f, f.area(), "demo", &[], 0, None, None, &theme);
         })
         .unwrap();
         let buf = term.backend().buffer();

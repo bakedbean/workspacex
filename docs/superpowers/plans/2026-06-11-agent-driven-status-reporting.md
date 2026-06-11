@@ -8,9 +8,23 @@
 
 **Tech Stack:** Rust (edition 2024), rusqlite (SQLite, WAL), serde_json, ratatui TUI. Tests are `cargo test`; lint is `cargo clippy`.
 
-**Design refinements vs. the spec** (`docs/superpowers/specs/2026-06-11-agent-driven-status-design.md`), both reducing blast radius:
+**Design refinements vs. the spec** (`docs/superpowers/specs/2026-06-11-agent-driven-status-design.md`), all reducing blast radius or improving extensibility:
 - Storage is a **dedicated `workspace_status` table** keyed by `workspace_id`, not new columns on `workspaces`. This leaves the `Workspace` struct and its three SELECT sites untouched and matches the frequently-rewritten-from-a-separate-process access pattern.
-- Hooks all call **`wsx status from-hook`** which reads the hook JSON on stdin and decides the state in Rust (`state_from_hook`), instead of many matcher-specific `set <fixed-state>` entries. The decision logic becomes a pure, unit-tested function rather than fragile matcher strings.
+- Hooks all call **`wsx status from-hook`** which reads the hook JSON on stdin and decides the state in Rust, instead of many matcher-specific `set <fixed-state>` entries. The decision logic becomes a pure, unit-tested function rather than fragile matcher strings.
+- **The Claude-specific deterministic-event layer (tier 2) sits behind a `StatusIntegration` trait** so Codex / Pi / Hermes can plug in their own mechanisms later without touching shared infrastructure. See "Cross-harness extensibility" below and the spec section of the same name.
+
+**Harness-agnostic vs. harness-specific (read before implementing).** Only the *deterministic event* layer is Claude-specific. Everything else is shared by every agent kind:
+
+| Layer | Harness-specific? | Where |
+|-------|-------------------|-------|
+| `workspace_status` table, `ReportedState` vocabulary | No — shared | Task 1 |
+| `wsx status set / clear` (model-push tier 1) | No — any agent runs a shell command | Task 6 |
+| `Status::classify()` reported input + freshness gate | No — shared | Tasks 4, 5 |
+| Doctrine / SKILL nudge to call `wsx status set` | No — all agents | Task 8 |
+| `StatusIntegration::parse_event` (event → state) | **Yes — per harness** | Task 3 (`ClaudeStatus`) |
+| `StatusIntegration::spawn_wiring` (spawn-time config) | **Yes — per harness** | Task 3 + Task 7 |
+
+A new harness implements `StatusIntegration` and calls its `spawn_wiring()` from that agent's spawn builder; nothing else changes. `wsx status from-hook --agent <kind>` already dispatches `parse_event` by agent kind.
 
 **Known v1 limitation (tracked, not fixed here):** writes are last-write-wins by `workspace_id`. A model `blocked` push immediately followed by a `Stop` hook could clobber `blocked`→`done`. Spec spike-validation item #5 (PreToolUse-vs-Stop ordering) must be confirmed interactively; if it bites, make `blocked` sticky in a follow-up. Documented in Task 5.
 
@@ -21,12 +35,13 @@
 | File | Responsibility | Change |
 |------|----------------|--------|
 | `src/data/store.rs` | `ReportedState`/`ReportedStatus` types, V15 migration, status read/write, `busy_timeout` | Modify |
-| `src/agent/hooks.rs` | Build the Claude `--settings` hooks JSON; `state_from_hook()` decision fn | **Create** |
-| `src/agent/mod.rs` | Register the new `hooks` module | Modify |
-| `src/cli.rs` | `status` command group: parse + dispatch `set`/`clear`/`from-hook` | Modify |
+| `src/agent/status/mod.rs` | `StatusIntegration` trait, `SpawnWiring`, `NoopStatus`, `for_agent()` dispatch | **Create** |
+| `src/agent/status/claude.rs` | `ClaudeStatus`: hooks `--settings` JSON + Claude event parsing | **Create** |
+| `src/agent/mod.rs` | Register the new `status` module | Modify |
+| `src/cli.rs` | `status` command group: parse + dispatch `set`/`clear`/`from-hook --agent` | Modify |
 | `src/ui/dashboard/status.rs` | Thread `Option<ReportedState>` into `Status::classify()` | Modify |
 | `src/app.rs` | `pushed_status` map, load in `refresh()`, freshness gate in `classify_status()` | Modify |
-| `src/pty/session.rs` | Inject hooks settings JSON in `build_claude_command` | Modify |
+| `src/pty/session.rs` | Inject status `spawn_wiring()` in `build_claude_command` | Modify |
 | `src/agent/doctrine.rs` | Add a status-reporting doctrine clause | Modify |
 | `skills/wsx/SKILL.md` | Add "Reporting your status" section | Modify |
 
@@ -353,91 +368,193 @@ git commit -m "feat(store): set busy_timeout so concurrent CLI writes don't fail
 
 ---
 
-## Task 3: Hooks module — `state_from_hook()` + settings JSON builder
+## Task 3: Status integration — `StatusIntegration` trait + `ClaudeStatus`
+
+This is the per-harness extension point. The trait defines the two
+harness-specific responsibilities (spawn-time wiring and event parsing);
+`ClaudeStatus` is the first implementation; every other agent maps to
+`NoopStatus` until its mechanism is built. Storage, CLI, classifier, and
+freshness (Tasks 1, 4, 5, 6) are all harness-agnostic and never need a per-agent
+branch.
 
 **Files:**
-- Create: `src/agent/hooks.rs`
-- Modify: `src/agent/mod.rs` (add `pub mod hooks;`)
-- Test: `src/agent/hooks.rs` `#[cfg(test)] mod tests`
+- Create: `src/agent/status/mod.rs` (trait, `SpawnWiring`, `NoopStatus`, `for_agent`)
+- Create: `src/agent/status/claude.rs` (`ClaudeStatus`)
+- Modify: `src/agent/mod.rs` (add `pub mod status;`)
+- Test: `#[cfg(test)] mod tests` in `claude.rs` and `mod.rs`
 
-- [ ] **Step 1: Create the module with failing tests**
-
-Create `src/agent/hooks.rs`:
+- [ ] **Step 1: Create `src/agent/status/mod.rs` with the trait and dispatch**
 
 ```rust
-//! Claude Code hook wiring for agent status reporting.
+//! Per-harness status integration: the only Claude-specific part of agent
+//! status reporting. Tier 1 (model push via `wsx status set`) and all storage
+//! / classifier infrastructure are harness-agnostic; this module is where a
+//! harness's *deterministic* event mechanism plugs in.
 //!
-//! wsx injects a `hooks` block into the Claude `--settings` JSON. Every hook
-//! calls `wsx status from-hook`, which reads the hook payload on stdin and
-//! maps it to a `ReportedState` here (`state_from_hook`) — so the mapping is
-//! pure Rust we can unit-test, not matcher strings spread across config.
+//! To add Codex / Pi / Hermes deterministic reporting: add a module here, impl
+//! `StatusIntegration`, and route it in `for_agent`. Call its `spawn_wiring`
+//! from that agent's spawn builder. Nothing else changes.
 
+pub mod claude;
+
+use crate::data::store::ReportedState;
+use crate::pty::session::AgentKind;
+use std::path::Path;
+
+/// Spawn-time configuration a harness needs so its lifecycle events call back
+/// into `wsx status`. Currently just extra CLI args appended to the spawn
+/// command (Claude: `--settings <json>`); widen this struct if a future
+/// harness needs a config file or env var instead.
+#[derive(Debug, Clone, Default)]
+pub struct SpawnWiring {
+    pub args: Vec<String>,
+}
+
+/// The harness-specific half of status reporting.
+pub trait StatusIntegration: Sync {
+    /// Interpret a deterministic event payload (delivered to `wsx status
+    /// from-hook` on stdin) into a reported state, or `None` when the event is
+    /// not status-relevant.
+    fn parse_event(&self, json: &serde_json::Value) -> Option<ReportedState>;
+
+    /// Spawn-time wiring this harness needs to report deterministically, or
+    /// `None` if it has no such mechanism (tier 1 + tier 3 only). `wsx_bin` is
+    /// the absolute path to the running wsx binary so callbacks invoke the same
+    /// build regardless of PATH.
+    fn spawn_wiring(&self, _wsx_bin: &Path, _fast_mode: bool) -> Option<SpawnWiring> {
+        None
+    }
+}
+
+/// A harness with no deterministic mechanism yet. Relies entirely on tier 1
+/// (model push) and tier 3 (JSONL heuristic).
+pub struct NoopStatus;
+impl StatusIntegration for NoopStatus {
+    fn parse_event(&self, _json: &serde_json::Value) -> Option<ReportedState> {
+        None
+    }
+}
+
+static CLAUDE: claude::ClaudeStatus = claude::ClaudeStatus;
+static NOOP: NoopStatus = NoopStatus;
+
+/// The status integration for an agent kind. Claude has a hook-based
+/// implementation; everything else is a no-op for now.
+pub fn for_agent(agent: AgentKind) -> &'static dyn StatusIntegration {
+    match agent {
+        AgentKind::Claude => &CLAUDE,
+        _ => &NOOP,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_resolves_to_claude_integration() {
+        // Claude parses a known event; Noop never does.
+        let ev = serde_json::json!({"hook_event_name": "UserPromptSubmit"});
+        assert_eq!(
+            for_agent(AgentKind::Claude).parse_event(&ev),
+            Some(ReportedState::Working)
+        );
+    }
+
+    #[test]
+    fn other_agents_resolve_to_noop() {
+        let ev = serde_json::json!({"hook_event_name": "UserPromptSubmit"});
+        for agent in [AgentKind::Codex, AgentKind::Pi, AgentKind::Hermes] {
+            assert_eq!(for_agent(agent).parse_event(&ev), None);
+            assert!(for_agent(agent)
+                .spawn_wiring(Path::new("/usr/bin/wsx"), false)
+                .is_none());
+        }
+    }
+}
+```
+
+> Confirm the `AgentKind` variant names with `grep -n "enum AgentKind" -A8 src/pty/session.rs` and use the real ones (`Codex`/`Pi`/`Hermes` per the codebase). The `Sync` supertrait lets the `static` instances be shared across threads.
+
+- [ ] **Step 2: Create `src/agent/status/claude.rs` with failing tests**
+
+```rust
+//! Claude Code status integration: hooks wired via `--settings`, and parsing of
+//! Claude hook event payloads into `ReportedState`.
+
+use super::{SpawnWiring, StatusIntegration};
 use crate::data::store::ReportedState;
 use std::path::Path;
 
-/// Decide the status a hook payload implies, or `None` when the event is not
-/// status-relevant (the CLI then writes nothing and exits 0).
-///
-/// Mapping (see the design spec's Fidelity findings):
-/// - `UserPromptSubmit`                       -> Working
-/// - `PreToolUse` for AskUserQuestion/ExitPlanMode -> Blocked
-/// - `Notification` permission_prompt          -> Blocked
-/// - `Notification` idle_prompt                -> Waiting
-/// - `Stop` with a `?`-terminated last message -> Blocked (best-effort)
-/// - `Stop` otherwise                          -> Done
-pub fn state_from_hook(json: &serde_json::Value) -> Option<ReportedState> {
-    let event = json.get("hook_event_name")?.as_str()?;
-    match event {
-        "UserPromptSubmit" => Some(ReportedState::Working),
-        "PreToolUse" => {
-            let tool = json.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
-            if matches!(tool, "AskUserQuestion" | "ExitPlanMode") {
-                Some(ReportedState::Blocked)
-            } else {
-                None
+pub struct ClaudeStatus;
+
+impl StatusIntegration for ClaudeStatus {
+    /// Mapping (see the design spec's Fidelity findings):
+    /// - `UserPromptSubmit`                            -> Working
+    /// - `PreToolUse` for AskUserQuestion/ExitPlanMode -> Blocked
+    /// - `Notification` permission_prompt              -> Blocked
+    /// - `Notification` idle_prompt                    -> Waiting
+    /// - `Stop` with a `?`-terminated last message     -> Blocked (best-effort)
+    /// - `Stop` otherwise                              -> Done
+    fn parse_event(&self, json: &serde_json::Value) -> Option<ReportedState> {
+        let event = json.get("hook_event_name")?.as_str()?;
+        match event {
+            "UserPromptSubmit" => Some(ReportedState::Working),
+            "PreToolUse" => {
+                let tool = json.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+                if matches!(tool, "AskUserQuestion" | "ExitPlanMode") {
+                    Some(ReportedState::Blocked)
+                } else {
+                    None
+                }
             }
-        }
-        "Notification" => match json.get("notification_type").and_then(|v| v.as_str()) {
-            Some("permission_prompt") => Some(ReportedState::Blocked),
-            Some("idle_prompt") => Some(ReportedState::Waiting),
+            "Notification" => match json.get("notification_type").and_then(|v| v.as_str()) {
+                Some("permission_prompt") => Some(ReportedState::Blocked),
+                Some("idle_prompt") => Some(ReportedState::Waiting),
+                _ => None,
+            },
+            "Stop" => {
+                // `last_assistant_message` is observed but undocumented; degrade
+                // to Done when absent. A trailing `?` is the best-effort
+                // prose-question signal, otherwise the turn read as a completion.
+                let ends_with_q = json
+                    .get("last_assistant_message")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim_end().ends_with('?'))
+                    .unwrap_or(false);
+                Some(if ends_with_q {
+                    ReportedState::Blocked
+                } else {
+                    ReportedState::Done
+                })
+            }
             _ => None,
-        },
-        "Stop" => {
-            // `last_assistant_message` is observed but undocumented; degrade to
-            // Done when absent. A trailing `?` is the best-effort prose-question
-            // signal, otherwise the turn read as a completion.
-            let ends_with_q = json
-                .get("last_assistant_message")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim_end().ends_with('?'))
-                .unwrap_or(false);
-            Some(if ends_with_q {
-                ReportedState::Blocked
-            } else {
-                ReportedState::Done
-            })
         }
-        _ => None,
+    }
+
+    fn spawn_wiring(&self, wsx_bin: &Path, fast_mode: bool) -> Option<SpawnWiring> {
+        Some(SpawnWiring {
+            args: vec!["--settings".to_string(), settings_json(fast_mode, wsx_bin)],
+        })
     }
 }
 
 /// Build the `--settings` JSON string for a Claude spawn. Always includes the
-/// status hooks; includes `"fastMode": true` only when `fast_mode` is set.
-/// `wsx_bin` is the absolute path to the running wsx binary so hooks invoke the
-/// same build regardless of PATH.
-pub fn claude_settings_json(fast_mode: bool, wsx_bin: &Path) -> String {
-    let cmd = format!("{} status from-hook", shell_quote(wsx_bin));
-    let one = |ev: &str| {
-        serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }])
-            .as_array()
-            .cloned()
-            .map(|a| (ev.to_string(), serde_json::Value::Array(a)))
-            .unwrap()
+/// status hooks (each calling `wsx status from-hook --agent claude`); includes
+/// `"fastMode": true` only when `fast_mode` is set.
+fn settings_json(fast_mode: bool, wsx_bin: &Path) -> String {
+    let cmd = format!("{} status from-hook --agent claude", shell_quote(wsx_bin));
+    let entry = |ev: &str| {
+        (
+            ev.to_string(),
+            serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }]),
+        )
     };
-    let hooks: serde_json::Map<String, serde_json::Value> = ["UserPromptSubmit", "PreToolUse", "Notification", "Stop"]
-        .into_iter()
-        .map(one)
-        .collect();
+    let hooks: serde_json::Map<String, serde_json::Value> =
+        ["UserPromptSubmit", "PreToolUse", "Notification", "Stop"]
+            .into_iter()
+            .map(entry)
+            .collect();
 
     let mut root = serde_json::Map::new();
     if fast_mode {
@@ -449,8 +566,7 @@ pub fn claude_settings_json(fast_mode: bool, wsx_bin: &Path) -> String {
 
 /// Minimal POSIX single-quote escaping for a path embedded in a hook command.
 fn shell_quote(p: &Path) -> String {
-    let s = p.to_string_lossy();
-    format!("'{}'", s.replace('\'', r"'\''"))
+    format!("'{}'", p.to_string_lossy().replace('\'', r"'\''"))
 }
 
 #[cfg(test)]
@@ -458,7 +574,7 @@ mod tests {
     use super::*;
 
     fn ev(json: serde_json::Value) -> Option<ReportedState> {
-        state_from_hook(&json)
+        ClaudeStatus.parse_event(&json)
     }
 
     #[test]
@@ -509,7 +625,6 @@ mod tests {
             ev(serde_json::json!({"hook_event_name": "Stop", "last_assistant_message": "Which option do you prefer?"})),
             Some(ReportedState::Blocked)
         );
-        // Undocumented field absent -> degrade to Done, never panic.
         assert_eq!(
             ev(serde_json::json!({"hook_event_name": "Stop"})),
             Some(ReportedState::Done)
@@ -523,45 +638,49 @@ mod tests {
     }
 
     #[test]
-    fn settings_json_is_valid_and_contains_hooks_and_bin() {
-        let json = claude_settings_json(true, Path::new("/usr/local/bin/wsx"));
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    fn spawn_wiring_emits_settings_with_hooks_and_bin() {
+        let w = ClaudeStatus
+            .spawn_wiring(Path::new("/usr/local/bin/wsx"), true)
+            .unwrap();
+        assert_eq!(w.args[0], "--settings");
+        let v: serde_json::Value = serde_json::from_str(&w.args[1]).unwrap();
         assert_eq!(v["fastMode"], serde_json::json!(true));
         assert!(v["hooks"]["Stop"].is_array());
-        assert!(v["hooks"]["UserPromptSubmit"].is_array());
         let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
         assert!(cmd.contains("/usr/local/bin/wsx"));
-        assert!(cmd.ends_with("status from-hook"));
+        assert!(cmd.ends_with("status from-hook --agent claude"));
     }
 
     #[test]
-    fn settings_json_omits_fastmode_when_false() {
-        let json = claude_settings_json(false, Path::new("/usr/local/bin/wsx"));
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    fn spawn_wiring_omits_fastmode_when_false() {
+        let w = ClaudeStatus
+            .spawn_wiring(Path::new("/usr/local/bin/wsx"), false)
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&w.args[1]).unwrap();
         assert!(v.get("fastMode").is_none());
         assert!(v["hooks"]["Notification"].is_array());
     }
 }
 ```
 
-- [ ] **Step 2: Register the module**
+- [ ] **Step 3: Register the module**
 
 In `src/agent/mod.rs`, add alongside the other `pub mod` declarations:
 
 ```rust
-pub mod hooks;
+pub mod status;
 ```
 
-- [ ] **Step 3: Run tests to verify they pass**
+- [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test --lib agent::hooks::tests`
-Expected: PASS (all seven tests).
+Run: `cargo test --lib agent::status`
+Expected: PASS (claude.rs tests + mod.rs dispatch tests).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent/hooks.rs src/agent/mod.rs
-git commit -m "feat(agent): hooks module — state_from_hook + settings JSON builder"
+git add src/agent/status/ src/agent/mod.rs
+git commit -m "feat(agent): StatusIntegration trait + ClaudeStatus (pluggable per harness)"
 ```
 
 ---
@@ -945,10 +1064,23 @@ fn parses_status_clear_and_from_hook() {
         parse_args(["wsx", "status", "clear"].iter().map(|s| s.to_string()).collect()).unwrap(),
         CliAction::StatusClear
     ));
+    // from-hook without --agent: agent is None (resolved from the workspace).
     assert!(matches!(
         parse_args(["wsx", "status", "from-hook"].iter().map(|s| s.to_string()).collect()).unwrap(),
-        CliAction::StatusFromHook
+        CliAction::StatusFromHook { agent: None }
     ));
+    // from-hook --agent claude: the harness names itself explicitly.
+    match parse_args(
+        ["wsx", "status", "from-hook", "--agent", "claude"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    )
+    .unwrap()
+    {
+        CliAction::StatusFromHook { agent } => assert_eq!(agent.as_deref(), Some("claude")),
+        other => panic!("expected StatusFromHook, got {other:?}"),
+    }
 }
 ```
 
@@ -967,7 +1099,11 @@ In the `CliAction` enum (around line 244-349), add:
         message: Option<String>,
     },
     StatusClear,
-    StatusFromHook,
+    StatusFromHook {
+        /// The harness whose event payload is on stdin. `None` falls back to
+        /// the resolved workspace's agent kind.
+        agent: Option<String>,
+    },
 ```
 
 - [ ] **Step 4: Add the parser**
@@ -996,7 +1132,20 @@ fn parse_status(it: &mut impl Iterator<Item = String>) -> Result<CliAction> {
             Ok(CliAction::StatusSet { state, message })
         }
         Some("clear") => Ok(CliAction::StatusClear),
-        Some("from-hook") => Ok(CliAction::StatusFromHook),
+        Some("from-hook") => {
+            let mut agent = None;
+            while let Some(arg) = it.next() {
+                if arg == "--agent" {
+                    agent = it.next();
+                } else {
+                    return Err(Error::Usage {
+                        group: None,
+                        msg: format!("unexpected argument: {arg}"),
+                    });
+                }
+            }
+            Ok(CliAction::StatusFromHook { agent })
+        }
         other => Err(Error::Usage {
             group: None,
             msg: format!(
@@ -1038,15 +1187,22 @@ In `run_cli` (after the existing `CliAction::AgentSend` arm, around line 1356), 
             store.clear_workspace_status(ws.id)?;
             println!("status cleared");
         }
-        CliAction::StatusFromHook => {
+        CliAction::StatusFromHook { agent } => {
             use std::io::Read;
             let mut buf = String::new();
             // Hooks pipe JSON on stdin; tolerate empty/garbage by no-op exit 0
             // so a hook never fails the agent's turn.
             let _ = std::io::stdin().read_to_string(&mut buf);
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&buf) {
-                if let Some(state) = crate::agent::hooks::state_from_hook(&json) {
-                    if let Ok(ws) = resolve_current_workspace(&store) {
+                if let Ok(ws) = resolve_current_workspace(&store) {
+                    // Dispatch to the right harness's event parser: the explicit
+                    // --agent flag (the harness names itself in its own hook
+                    // wiring), else the workspace's recorded agent kind.
+                    let kind = match &agent {
+                        Some(a) => crate::pty::session::AgentKind::from_str_or_default(Some(a)),
+                        None => ws.agent,
+                    };
+                    if let Some(state) = crate::agent::status::for_agent(kind).parse_event(&json) {
                         let _ = store.set_workspace_status(ws.id, state, None, "hook");
                     }
                 }
@@ -1068,7 +1224,7 @@ Run:
 ```bash
 cargo build
 WSX_WORKSPACE_ID=$WSX_WORKSPACE_ID ./target/debug/wsx status set working --message "smoke test"
-echo '{"hook_event_name":"Stop","last_assistant_message":"Which one?"}' | WSX_WORKSPACE_ID=$WSX_WORKSPACE_ID ./target/debug/wsx status from-hook
+echo '{"hook_event_name":"Stop","last_assistant_message":"Which one?"}' | WSX_WORKSPACE_ID=$WSX_WORKSPACE_ID ./target/debug/wsx status from-hook --agent claude
 WSX_WORKSPACE_ID=$WSX_WORKSPACE_ID ./target/debug/wsx status clear
 ```
 Expected: prints `status: working`, then the piped `from-hook` exits 0 silently, then `status cleared`. (Uses the real dev DB; `clear` removes the row again.)
@@ -1082,7 +1238,11 @@ git commit -m "feat(cli): wsx status set | clear | from-hook"
 
 ---
 
-## Task 7: Spawn — inject the hooks settings JSON for Claude workspaces
+## Task 7: Spawn — inject status wiring for Claude workspaces
+
+Uses the harness-agnostic `spawn_wiring()` entry point so this call site does
+not hardcode Claude's settings format — when Codex/Pi gain a `StatusIntegration`
+with their own `spawn_wiring`, their spawn builders apply the same shape.
 
 **Files:**
 - Modify: `src/pty/session.rs` (`build_claude_command`, the `--settings` block at line 856-862)
@@ -1131,26 +1291,33 @@ In `build_claude_command`, replace the PM-only settings block (line 856-862):
     }
 ```
 
-with a general one that injects status hooks for the real workspace agents (Fresh/Continue) and preserves `fastMode` for PM:
+with one that asks the Claude `StatusIntegration` for its spawn wiring for the
+real workspace agents (Fresh/Continue) and preserves `fastMode` for PM:
 
 ```rust
-    // Status-reporting hooks go to the developer agents (Fresh/Continue);
-    // the PM pane keeps just its fastMode flag. The hook command points at the
-    // running wsx binary by absolute path so PATH differences can't break it.
+    // Status-reporting wiring goes to the developer agents (Fresh/Continue) via
+    // the harness-agnostic spawn_wiring() entry point; the PM pane keeps just
+    // its fastMode flag. The wiring points at the running wsx binary by
+    // absolute path so PATH differences can't break the callback.
     let pm_fast = matches!(mode, SpawnMode::ProjectManager { fast_mode: true, .. });
-    let inject_hooks = matches!(mode, SpawnMode::Fresh { .. } | SpawnMode::Continue { .. });
-    if inject_hooks {
-        let wsx_bin = std::env::current_exe()
-            .unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
-        cmd.arg("--settings");
-        cmd.arg(crate::agent::hooks::claude_settings_json(false, &wsx_bin));
+    let inject_status = matches!(mode, SpawnMode::Fresh { .. } | SpawnMode::Continue { .. });
+    if inject_status {
+        let wsx_bin =
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
+        if let Some(wiring) = crate::agent::status::for_agent(AgentKind::Claude)
+            .spawn_wiring(&wsx_bin, false)
+        {
+            for arg in wiring.args {
+                cmd.arg(arg);
+            }
+        }
     } else if pm_fast {
         cmd.arg("--settings");
         cmd.arg(r#"{"fastMode":true}"#);
     }
 ```
 
-> `fast_mode` is `false` for the developer-agent settings because fast mode is a PM-pane concern; if a future requirement wants fast mode on dev agents, pass the real flag here.
+> `fast_mode` is `false` for the developer-agent wiring because fast mode is a PM-pane concern; if a future requirement wants fast mode on dev agents, pass the real flag here. `AgentKind` is already in scope in `session.rs`; this call site is inside `build_claude_command`, hence `AgentKind::Claude` literal — when Codex/Pi gain integrations, their own `build_*_command` functions make the analogous call with their own `AgentKind`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1281,8 +1448,31 @@ In a real wsx TUI session, start a workspace agent and confirm: (a) the dashboar
 
 ---
 
+## Extending to other harnesses (Codex / Pi / Hermes)
+
+This plan ships Claude as the first deterministic integration; the structure is
+built so a later harness is a small, self-contained addition. When a harness's
+deterministic mechanism is known:
+
+1. Add `src/agent/status/<harness>.rs` with a unit struct implementing
+   `StatusIntegration` — `parse_event()` for that harness's event payload, and
+   `spawn_wiring()` returning whatever spawn-time config it needs (extra args
+   today; widen `SpawnWiring` if it needs a config file or env var instead).
+2. Route it in `for_agent()` (`src/agent/status/mod.rs`).
+3. Call `spawn_wiring()` from that harness's spawn builder (its own
+   `build_<harness>_command`), mirroring Task 7's Claude call site.
+4. Have that harness's wiring invoke `wsx status from-hook --agent <harness>`;
+   the CLI already dispatches `parse_event` by `--agent`.
+
+No changes are needed to the `workspace_status` table, the `wsx status set` /
+`clear` verbs, `Status::classify()`, the freshness gate, or the doctrine/skill
+guidance — those are all harness-agnostic by construction. Until a harness has
+an integration, it maps to `NoopStatus` and relies on tier 1 (model push, which
+already works for it via the doctrine) plus tier 3 (the JSONL heuristic).
+
 ## Out of scope (future work)
 
 - Per-agent-instance status (multi-agent workspaces): write to a `workspace_agents`-keyed row instead of/in addition to the workspace row. The `WSX_AGENT_INSTANCE_ID` env var is already available for this.
 - Rendering `reported_message` in the dashboard detail pane (this plan stores it; surfacing it in the UI is a separate change to the detail modules).
 - Making `blocked` sticky against a trailing `Stop`→`done` clobber, pending the interactive ordering check.
+- Concrete `StatusIntegration` implementations for Codex / Pi / Hermes (the trait and dispatch land now; the per-harness impls come when each mechanism is known).

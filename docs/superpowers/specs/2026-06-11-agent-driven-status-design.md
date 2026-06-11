@@ -248,6 +248,40 @@ Notes:
   (`src/agent/doctrine.rs`) so non-Claude agents (no hooks) still get the
   nudge in their system prompt.
 
+## Cross-harness extensibility (tier 2 is pluggable)
+
+The three tiers split cleanly by how harness-specific they are, and the design
+is deliberately structured so other coding harnesses (Codex, Pi, Hermes, …) can
+adopt the deterministic path when their mechanism is known.
+
+- **Tier 1 (model push) and ALL storage/classifier infrastructure are
+  harness-agnostic.** `wsx status set` is a plain CLI call any agent that can
+  run a shell command makes; the `workspace_status` table, the `ReportedState`
+  vocabulary, the `classify()` reported input, and the freshness gate are
+  shared by every agent kind. The doctrine clause nudges every agent
+  (claude/pi/hermes/codex) to use it. So the moment this ships, *every* harness
+  already has a working push path — no per-harness work required for tier 1.
+
+- **Tier 2 (deterministic events) is the only harness-specific layer, and it is
+  pluggable.** Claude's mechanism is hooks wired via `--settings`; another
+  harness might surface lifecycle events differently (a config file, a callback
+  flag, an emitted event stream). This is captured behind a `StatusIntegration`
+  trait with two responsibilities:
+  1. `spawn_wiring()` — emit whatever spawn-time configuration that harness
+     needs in order to call back into `wsx status` on its lifecycle events.
+  2. `parse_event()` — interpret that harness's event payload into a
+     `ReportedState`.
+  Claude is the first implementation (`ClaudeStatus`); every other agent maps to
+  a `NoopStatus` (tier 1 + tier 3 only) until its mechanism is built.
+
+**To add Codex/Pi/Hermes deterministic reporting later:** implement
+`StatusIntegration` for that agent and call its `spawn_wiring()` from that
+agent's spawn builder. Nothing in storage, the CLI surface, the classifier, or
+the freshness gate changes — that shared infrastructure was built for exactly
+this. `wsx status from-hook --agent <kind>` already dispatches to the right
+`parse_event` by agent kind, so the event-ingestion entry point is also
+harness-neutral.
+
 ## Fork A — vocabulary: state + optional message (recommended)
 
 Two options were on the table:

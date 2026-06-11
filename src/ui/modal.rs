@@ -653,7 +653,7 @@ pub fn render_process_list(
         } else {
             theme.ok_style()
         };
-        f.render_widget(Paragraph::new(text.to_string()).style(style), area);
+        f.render_widget(Paragraph::new(text).style(style), area);
     }
 
     if let Some(buf) = input {

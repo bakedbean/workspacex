@@ -607,6 +607,31 @@ mod tests {
             .collect()
     }
 
+    /// Pids whose `ps` command line is *exactly* `cmd`. Unlike [`pids_matching`],
+    /// this excludes the transient `sh -c "( … ) &"` wrapper — whose command line
+    /// merely contains the command — so the test can target the detached leaf
+    /// without racing the short-lived wrapper.
+    #[cfg(unix)]
+    fn pids_with_exact_command(cmd: &str) -> Vec<i32> {
+        let Ok(out) = std::process::Command::new("ps")
+            .args(["-axo", "pid=,command="])
+            .output()
+        else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| {
+                let (pid, command) = l.trim_start().split_once(char::is_whitespace)?;
+                if command.trim() == cmd {
+                    pid.parse::<i32>().ok()
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Regression test for the reported bug: a command launched from the
     /// processes modal was spawned as a child of the wsx process, so the
     /// per-workspace scan (which hides wsx's own descendants) filtered it
@@ -630,11 +655,12 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut found: Option<i32> = None;
         while Instant::now() < deadline {
-            // Skip any lingering `sh -c` wrapper; assert on the `sleep` leaf.
-            if let Some(pid) = pids_matching(&needle)
-                .into_iter()
-                .find(|&pid| ancestor_chain(pid).len() <= 64)
-            {
+            // Target the `sleep` leaf by an exact command match. The `sh -c
+            // "( … ) &"` wrapper's command line only *contains* the needle, so
+            // an exact match skips it — otherwise the test could race the
+            // short-lived wrapper (which still descends from this process) and
+            // fail spuriously.
+            if let Some(pid) = pids_with_exact_command(&needle).into_iter().next() {
                 found = Some(pid);
                 break;
             }

@@ -104,12 +104,30 @@ git commit -m "feat(processes): add shell-argv and background log-path helpers"
 
 Add to `src/commands/external.rs` (e.g. just below `background_log_path`). Note: actual process spawning is intentionally not unit-tested here, matching how the rest of `external.rs` avoids spawning real processes in tests. The pure parts (`shell_argv`, `background_log_path`) are covered by Task 1.
 
+> **Revised during implementation.** This plan originally spawned the command as a plain
+> child of the wsx process. Manual testing showed it never appeared in the modal: wsx's
+> process scan hides its own descendants, so a child of wsx is filtered out. The shipped
+> version (below) **detaches** the command — it wraps it in a backgrounded subshell
+> (`( <command> ) &`) so the parent `sh` exits immediately and the real command reparents to
+> init, and calls `setsid` (unix) so it runs in its own session with no controlling
+> terminal. wsx reaps the short-lived wrapper `sh` so no zombie accumulates.
+
 ```rust
-/// Launch `command` as a detached background process whose working directory is
-/// `worktree`. The command runs through `sh -c` so shell features behave as the
-/// user expects. stdout and stderr are redirected to `log_path` (created /
-/// truncated); stdin is null. The process is a child of the wsx session: it runs
-/// until it exits or wsx exits.
+/// Wrap a user command so it runs detached from the wsx process. The backgrounded
+/// subshell `( … ) &` lets the parent `sh` exit immediately, reparenting the command
+/// to init so it no longer descends from wsx — required because wsx's process scan
+/// hides its own descendants. Wrapping (rather than appending `&`) backgrounds compound
+/// commands like `a && b` as a unit.
+fn detached_command_script(command: &str) -> String {
+    format!("( {command} ) &")
+}
+
+/// Launch `command` as a background process whose working directory is `worktree`,
+/// detached from wsx so it surfaces in the per-workspace process scan and outlives the
+/// dashboard — like running it from a fresh terminal in the worktree. The command runs
+/// through `sh -c` (so shell features behave as expected), wrapped by
+/// `detached_command_script`, and on unix the spawned shell calls `setsid`. stdout and
+/// stderr are redirected to `log_path` (created / truncated); stdin is null.
 pub fn spawn_background_command(worktree: &Path, command: &str, log_path: &Path) -> Result<()> {
     if command.trim().is_empty() {
         return Err(Error::UserInput("command is empty".into()));
@@ -124,15 +142,31 @@ pub fn spawn_background_command(worktree: &Path, command: &str, log_path: &Path)
         .try_clone()
         .map_err(|e| Error::UserInput(format!("clone log handle: {e}")))?;
 
-    let parts = shell_argv(command);
+    let parts = shell_argv(&detached_command_script(command));
     let mut cmd = std::process::Command::new(&parts[0]);
     cmd.args(&parts[1..])
         .current_dir(worktree)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(log_err));
-    cmd.spawn()
+
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = cmd
+        .spawn()
         .map_err(|e| Error::UserInput(format!("spawn background command: {e}")))?;
+    // The shell backgrounds the command and exits right away; reap it so wsx
+    // doesn't accumulate a zombie per launch. The detached command keeps running.
+    let _ = child.wait();
     Ok(())
 }
 ```

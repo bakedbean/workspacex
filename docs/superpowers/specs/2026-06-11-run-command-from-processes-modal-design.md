@@ -100,9 +100,15 @@ swapping `Stdio::null()` for the opened log file on stdout/stderr:
   `stdout` and `stderr`.
 - `spawn()`; map I/O errors to `Error::UserInput` consistent with the surrounding helpers.
 
-Process lifecycle: the spawned process is a child of the wsx session. It lives as long as
-wsx runs and is cleaned up when wsx exits (no orphaned dev servers). This is a deliberate
-v1 choice — not a new-session/`setsid` detach.
+Process lifecycle: the command is **detached** from wsx so it surfaces in the per-workspace
+process scan. The scan hides wsx's own descendants (to suppress auto-spawned helpers), so a
+command left as a child of wsx would never appear in the modal. To detach, the command is
+wrapped in a backgrounded subshell — `sh -c "( <command> ) &"` — so the parent `sh` exits
+immediately and the subshell reparents to init; the spawned `sh` also calls `setsid` (unix)
+so the command runs in its own session with no controlling terminal. The result behaves like
+running the command from a fresh terminal in the worktree: it outlives the dashboard and is
+the user's to stop (via `[K]` in the modal, or however they like). wsx reaps the short-lived
+wrapper `sh` so no zombie accumulates per launch.
 
 ### 4. Logging
 

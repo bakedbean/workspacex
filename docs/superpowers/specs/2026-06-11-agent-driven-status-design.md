@@ -2,7 +2,7 @@
 
 **Issue:** [#166](https://github.com/bakedbean/workspacex/issues/166) — *rely on running agent to update wsx with skill and CLI*
 
-**Status:** Design spike. Deliverable is this document and a recommendation. No production code in this branch.
+**Status:** Originated as a design spike (this document captures the design and recommendation). The design was subsequently implemented in this branch / PR #167 — see `docs/superpowers/plans/2026-06-11-agent-driven-status-reporting.md` for the implementation plan.
 
 ## Problem
 

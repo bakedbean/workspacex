@@ -1587,9 +1587,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_echo() {
-        // Substitute claude with `cat` via the env-var seam.
+        // Substitute the agent binary with `cat` via the env-var seam. Use
+        // Codex, whose Fresh spawn injects no extra flags, so `cat` runs clean —
+        // a Claude Fresh spawn now injects `--settings` for status hooks, which
+        // `cat` would reject.
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -1603,7 +1606,7 @@ mod tests {
                 yolo: false,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+            AgentKind::Codex,
             None,
         )
         .unwrap();
@@ -1691,8 +1694,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn empty_enter_does_not_latch_prompt_capture() {
+        // Codex stub: its Fresh spawn injects no extra flags so `cat` starts
+        // clean (Claude now injects `--settings` for status hooks).
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = std::path::PathBuf::from(".");
         let session = spawn_session(
             &cwd,
@@ -1706,7 +1711,7 @@ mod tests {
                 yolo: false,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+            AgentKind::Codex,
             None,
         )
         .unwrap();
@@ -2491,13 +2496,15 @@ mod tests {
     }
 
     /// Construct a real PTY-backed Session for scrollback unit tests. Uses
-    /// `cat` as the child so spawn succeeds without claude on the path.
+    /// `cat` as the child so spawn succeeds without the agent on the path.
+    /// Uses Codex, whose Fresh spawn injects no extra flags, so `cat` starts
+    /// clean (a Claude Fresh spawn now injects `--settings` for status hooks).
     /// The `EnvGuard` is only needed for the spawn syscall itself —
-    /// `WSX_CLAUDE_BIN` is read by the parent at command-build time, not by
+    /// `WSX_CODEX_BIN` is read by the parent at command-build time, not by
     /// the spawned cat — so dropping it before the test body returns is safe.
     fn spawn_for_test() -> Session {
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = PathBuf::from(".");
         spawn_session(
             &cwd,
@@ -2511,7 +2518,7 @@ mod tests {
                 yolo: false,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+            AgentKind::Codex,
             None,
         )
         .expect("spawn_session for scrollback test")

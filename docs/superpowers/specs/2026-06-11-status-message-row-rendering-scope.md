@@ -1,7 +1,7 @@
 # Follow-up scope: render the agent status message in the dashboard row
 
 **Parent feature:** agent-driven status reporting (issue #166, PR #167).
-**Status:** Scoped, not yet implemented. Decision: **row column only** (the always-visible glance value); detail-pane rendering deferred.
+**Status:** Implemented in this branch / PR #167. Decision: **row column only** (the always-visible glance value); detail-pane rendering deferred (see Out of scope).
 
 ## Why
 

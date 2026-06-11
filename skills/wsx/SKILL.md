@@ -54,10 +54,11 @@ wsx status set blocked --message "need your call on the auth approach"
 wsx status set done    --message "implemented and tests green"
 ```
 
-**When to call it:**
+**When to call it** (the states are `working | waiting | blocked | done`):
 
 - `working` — when you begin substantive work on a request.
 - `blocked` — when you stop to ask the user a question or need a decision.
+- `waiting` — when parked on something external (a build, CI, a long-running command).
 - `done` — when the task is complete.
 
 The `--message` is a short one-liner shown on the dashboard. Claude Code hooks also report coarse state automatically, but an explicit `set` with a message is always clearer — prefer it at the transitions above.

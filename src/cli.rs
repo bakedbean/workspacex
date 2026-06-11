@@ -949,7 +949,10 @@ fn parse_status(it: &mut Args) -> Result<CliAction> {
             let mut message = None;
             while let Some(arg) = it.next() {
                 if arg == "--message" || arg == "-m" {
-                    message = it.next();
+                    message = Some(it.next().ok_or_else(|| Error::Usage {
+                        group: None,
+                        msg: "--message requires a value".into(),
+                    })?);
                 } else {
                     return Err(Error::Usage {
                         group: None,
@@ -964,7 +967,10 @@ fn parse_status(it: &mut Args) -> Result<CliAction> {
             let mut agent = None;
             while let Some(arg) = it.next() {
                 if arg == "--agent" {
-                    agent = it.next();
+                    agent = Some(it.next().ok_or_else(|| Error::Usage {
+                        group: None,
+                        msg: "--agent requires a value".into(),
+                    })?);
                 } else {
                     return Err(Error::Usage {
                         group: None,
@@ -2450,5 +2456,29 @@ mod tests {
             CliAction::StatusFromHook { agent } => assert_eq!(agent.as_deref(), Some("claude")),
             other => panic!("expected StatusFromHook, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn status_set_message_without_value_is_usage_error() {
+        let err = parse_args(
+            ["wsx", "status", "set", "working", "--message"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Usage { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn status_from_hook_agent_without_value_is_usage_error() {
+        let err = parse_args(
+            ["wsx", "status", "from-hook", "--agent"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Usage { .. }), "got {err:?}");
     }
 }

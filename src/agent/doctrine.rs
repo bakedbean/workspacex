@@ -30,9 +30,10 @@ const CLAUSE_WSX_SKILL: &str = "- Load and follow the wsx skill. It is authorita
     running wsx commands.";
 
 const CLAUSE_STATUS: &str = "- Report your status as you go with `wsx status set \
-    <working|blocked|done> --message \"<one line>\"`: `working` when you start \
+    <working|waiting|blocked|done> --message \"<one line>\"`: `working` when you start \
     substantive work, `blocked` when you need a decision or answer from the user, \
-    and `done` when the task is finished. This keeps the wsx dashboard accurate.";
+    `waiting` when parked on something external (a build, CI, a long command), and \
+    `done` when the task is finished. This keeps the wsx dashboard accurate.";
 
 /// Values for the `process_doctrine` setting that disable doctrine injection
 /// entirely (matched case-insensitively against the trimmed value).

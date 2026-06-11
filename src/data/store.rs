@@ -134,6 +134,10 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // Writers (the TUI and a sibling `wsx status` CLI process) contend for
+        // the single WAL writer slot; wait up to 3s rather than erroring out
+        // immediately with SQLITE_BUSY.
+        conn.pragma_update(None, "busy_timeout", 3000)?;
         let store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -2251,5 +2255,16 @@ mod tests {
         let so = |name: &str| repos.iter().find(|r| r.name == name).unwrap().sort_order;
         assert_eq!(so("bbb"), 0);
         assert_eq!(so("aaa"), 1);
+    }
+
+    #[test]
+    fn open_sets_busy_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("state.db")).unwrap();
+        let ms: i64 = store
+            .conn()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ms, 3000, "Store::open must set busy_timeout to exactly 3000ms");
     }
 }

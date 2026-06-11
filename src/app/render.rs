@@ -111,7 +111,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             status,
                             app.workspace_events.get(&ws.id),
                             now_ms,
-                            app.fresh_reported_status(ws.id).and_then(|r| r.message.as_deref()),
+                            app.fresh_reported_status(ws.id)
+                                .and_then(|r| r.message.as_deref()),
                         ),
                         ago_secs: secs,
                         selected: matches!(app.selected_target(),

@@ -349,6 +349,18 @@ mod tests {
     }
 
     #[test]
+    fn waiting_appends_current_action_to_trace() {
+        // Waiting shares the arm with Thinking; pin the live-item behavior
+        // under Waiting too so a future refactor can't split it silently.
+        let mut e = evt();
+        e.tool_use_counts.bash = 5;
+        e.current_action = Some("cargo test --lib".into());
+        let c = row_column(Status::Waiting, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "ran 5 commands · cargo test --lib");
+        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+    }
+
+    #[test]
     fn complete_prefers_turn_recap() {
         let e = WorkspaceEvents {
             last_completed_turn_text: Some("split the quick-start into two".into()),

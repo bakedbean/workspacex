@@ -60,10 +60,16 @@ pub fn row_column(
         }),
         Status::Thinking | Status::Waiting => {
             let trace = format_tool_trace(&evt.tool_use_counts);
-            let text = if trace.is_empty() {
-                format!("{}…", status.label())
-            } else {
-                trace
+            let live = evt
+                .current_action
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let text = match (trace.is_empty(), live) {
+                (false, Some(l)) => format!("{trace} · {l}"),
+                (false, None) => trace,
+                (true, Some(l)) => l.to_string(),
+                (true, None) => format!("{}…", status.label()),
             };
             Some(RowColumn {
                 text,
@@ -313,6 +319,33 @@ mod tests {
     fn waiting_with_no_tools_yet_shows_ellipsis_label() {
         let c = row_column(Status::Waiting, Some(&evt()), 0).unwrap();
         assert_eq!(c.text, "waiting…");
+    }
+
+    #[test]
+    fn thinking_appends_current_action_to_trace() {
+        let mut e = evt();
+        e.tool_use_counts.edit = 3;
+        e.current_action = Some("now column_content.rs".into());
+        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "edited 3 files · now column_content.rs");
+        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+    }
+
+    #[test]
+    fn thinking_appends_bash_command_to_trace() {
+        let mut e = evt();
+        e.tool_use_counts.bash = 5;
+        e.current_action = Some("cargo test --lib".into());
+        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "ran 5 commands · cargo test --lib");
+    }
+
+    #[test]
+    fn thinking_shows_action_alone_when_no_counts_yet() {
+        let mut e = evt();
+        e.current_action = Some("now column_content.rs".into());
+        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        assert_eq!(c.text, "now column_content.rs");
     }
 
     #[test]

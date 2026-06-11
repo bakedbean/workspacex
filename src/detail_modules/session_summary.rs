@@ -148,7 +148,8 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
     out
 }
 
-/// Abbreviate a token count as `950` / `77k` / `1M` / `1.2M`.
+/// Abbreviate a token count as `950` / `77k` / `1M` / `1.2M`. The `k` form
+/// floors (77_999 → "77k"); exact precision is meaningless for a fill gauge.
 fn abbreviate_tokens(n: u64) -> String {
     if n < 1_000 {
         n.to_string()
@@ -168,6 +169,10 @@ fn abbreviate_tokens(n: u64) -> String {
 /// to 200k; if the current fill already exceeds that, treat the session as
 /// the 1M variant (the model id doesn't encode the variant). Unknown or
 /// absent model → None (render raw tokens without a percentage).
+///
+/// The `>` is strict: exactly 200k stays on the 200k window (100%, warn), and
+/// 200_001 flips to the 1M window (20%). That discontinuity is intended — a
+/// session past 200k provably isn't on a 200k-window model.
 fn resolve_window(context_tokens: u64, model_id: Option<&str>) -> Option<u64> {
     let base = model_id.and_then(|m| {
         if m.contains("opus") || m.contains("sonnet") || m.contains("haiku") {

@@ -56,6 +56,10 @@ pub enum Modal {
     ProcessList {
         workspace_id: crate::data::store::WorkspaceId,
         selected: usize,
+        /// `None` = list mode; `Some(buffer)` = the user is typing a command to run.
+        input: Option<String>,
+        /// Last launch result (success path or error), shown below the list.
+        notice: Option<String>,
     },
     RepoSettings {
         repo_id: crate::data::store::RepoId,

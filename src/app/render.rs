@@ -722,6 +722,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             crate::ui::modal::Modal::ProcessList {
                 workspace_id,
                 selected,
+                ..
             } => {
                 let workspace_name = app
                     .workspaces

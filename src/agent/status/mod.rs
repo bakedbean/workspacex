@@ -77,9 +77,11 @@ mod tests {
         let ev = serde_json::json!({"hook_event_name": "UserPromptSubmit"});
         for agent in [AgentKind::Codex, AgentKind::Pi, AgentKind::Hermes] {
             assert_eq!(for_agent(agent).parse_event(&ev), None);
-            assert!(for_agent(agent)
-                .spawn_wiring(Path::new("/usr/bin/wsx"), false)
-                .is_none());
+            assert!(
+                for_agent(agent)
+                    .spawn_wiring(Path::new("/usr/bin/wsx"), false)
+                    .is_none()
+            );
         }
     }
 }

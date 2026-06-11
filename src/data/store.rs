@@ -728,8 +728,10 @@ impl Store {
     }
 
     pub fn clear_workspace_status(&self, id: WorkspaceId) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM workspace_status WHERE workspace_id = ?1", [id.0])?;
+        self.conn.execute(
+            "DELETE FROM workspace_status WHERE workspace_id = ?1",
+            [id.0],
+        )?;
         Ok(())
     }
 
@@ -1048,8 +1050,7 @@ fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {
 
 fn row_to_reported_status(r: &rusqlite::Row) -> rusqlite::Result<ReportedStatus> {
     Ok(ReportedStatus {
-        state: ReportedState::parse(&r.get::<_, String>(0)?)
-            .unwrap_or(ReportedState::Working),
+        state: ReportedState::parse(&r.get::<_, String>(0)?).unwrap_or(ReportedState::Working),
         message: r.get(1)?,
         source: r.get(2)?,
         reported_at: r.get(3)?,
@@ -1060,8 +1061,7 @@ fn row_to_reported_status(r: &rusqlite::Row) -> rusqlite::Result<ReportedStatus>
 // workspace_id in column 0, shifting the status columns to 1..=4.
 fn row_to_reported_status_offset1(r: &rusqlite::Row) -> rusqlite::Result<ReportedStatus> {
     Ok(ReportedStatus {
-        state: ReportedState::parse(&r.get::<_, String>(1)?)
-            .unwrap_or(ReportedState::Working),
+        state: ReportedState::parse(&r.get::<_, String>(1)?).unwrap_or(ReportedState::Working),
         message: r.get(2)?,
         source: r.get(3)?,
         reported_at: r.get(4)?,
@@ -2165,7 +2165,9 @@ mod tests {
     #[test]
     fn workspace_status_round_trips() {
         let store = Store::open_in_memory().unwrap();
-        let repo = store.add_repo(std::path::Path::new("/tmp/r"), "r", "r/").unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "r/")
+            .unwrap();
         let ws = store
             .insert_workspace(&NewWorkspace {
                 repo_id: repo,
@@ -2204,7 +2206,9 @@ mod tests {
     #[test]
     fn all_workspace_status_returns_map() {
         let store = Store::open_in_memory().unwrap();
-        let repo = store.add_repo(std::path::Path::new("/tmp/r"), "r", "r/").unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "r/")
+            .unwrap();
         let ws = store
             .insert_workspace(&NewWorkspace {
                 repo_id: repo,
@@ -2265,6 +2269,9 @@ mod tests {
             .conn()
             .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(ms, 3000, "Store::open must set busy_timeout to exactly 3000ms");
+        assert_eq!(
+            ms, 3000,
+            "Store::open must set busy_timeout to exactly 3000ms"
+        );
     }
 }

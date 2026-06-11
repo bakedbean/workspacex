@@ -1785,8 +1785,14 @@ mod reported_freshness_tests {
 
     #[test]
     fn push_newer_than_last_log_activity_is_fresh() {
-        assert_eq!(fresh_reported_state(Some(&status(1000)), 900), Some(ReportedState::Done));
-        assert_eq!(fresh_reported_state(Some(&status(1000)), 1000), Some(ReportedState::Done));
+        assert_eq!(
+            fresh_reported_state(Some(&status(1000)), 900),
+            Some(ReportedState::Done)
+        );
+        assert_eq!(
+            fresh_reported_state(Some(&status(1000)), 1000),
+            Some(ReportedState::Done)
+        );
     }
 
     #[test]

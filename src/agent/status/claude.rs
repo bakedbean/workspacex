@@ -121,15 +121,21 @@ mod tests {
     #[test]
     fn notification_types_map_or_ignore() {
         assert_eq!(
-            ev(serde_json::json!({"hook_event_name": "Notification", "notification_type": "permission_prompt"})),
+            ev(
+                serde_json::json!({"hook_event_name": "Notification", "notification_type": "permission_prompt"})
+            ),
             Some(ReportedState::Blocked)
         );
         assert_eq!(
-            ev(serde_json::json!({"hook_event_name": "Notification", "notification_type": "idle_prompt"})),
+            ev(
+                serde_json::json!({"hook_event_name": "Notification", "notification_type": "idle_prompt"})
+            ),
             Some(ReportedState::Waiting)
         );
         assert_eq!(
-            ev(serde_json::json!({"hook_event_name": "Notification", "notification_type": "auth_success"})),
+            ev(
+                serde_json::json!({"hook_event_name": "Notification", "notification_type": "auth_success"})
+            ),
             None
         );
     }
@@ -137,11 +143,15 @@ mod tests {
     #[test]
     fn stop_distinguishes_question_from_completion() {
         assert_eq!(
-            ev(serde_json::json!({"hook_event_name": "Stop", "last_assistant_message": "All done."})),
+            ev(
+                serde_json::json!({"hook_event_name": "Stop", "last_assistant_message": "All done."})
+            ),
             Some(ReportedState::Done)
         );
         assert_eq!(
-            ev(serde_json::json!({"hook_event_name": "Stop", "last_assistant_message": "Which option do you prefer?"})),
+            ev(
+                serde_json::json!({"hook_event_name": "Stop", "last_assistant_message": "Which option do you prefer?"})
+            ),
             Some(ReportedState::Blocked)
         );
         assert_eq!(
@@ -152,7 +162,10 @@ mod tests {
 
     #[test]
     fn unknown_event_is_ignored() {
-        assert_eq!(ev(serde_json::json!({"hook_event_name": "SubagentStop"})), None);
+        assert_eq!(
+            ev(serde_json::json!({"hook_event_name": "SubagentStop"})),
+            None
+        );
         assert_eq!(ev(serde_json::json!({})), None);
     }
 
@@ -165,7 +178,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&w.args[1]).unwrap();
         assert_eq!(v["fastMode"], serde_json::json!(true));
         assert!(v["hooks"]["Stop"].is_array());
-        let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+        let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
         assert!(cmd.contains("/usr/local/bin/wsx"));
         assert!(cmd.ends_with("status from-hook --agent claude"));
     }

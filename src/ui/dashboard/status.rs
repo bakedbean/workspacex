@@ -159,13 +159,13 @@ mod tests {
     // defaults so each test only sets what it exercises.
     fn classify_reported(reported: Option<ReportedState>, stalled: bool) -> Status {
         Status::classify(
-            false,   // awaiting_tool
-            None,    // stopped_kind
-            stalled, // stalled
-            s(5),    // seconds_since_activity (live)
-            true,    // session_running
-            true,    // user_has_prompted
-            false,   // has_prior_session
+            false,    // awaiting_tool
+            None,     // stopped_kind
+            stalled,  // stalled
+            s(5),     // seconds_since_activity (live)
+            true,     // session_running
+            true,     // user_has_prompted
+            false,    // has_prior_session
             reported, // reported state
         )
     }

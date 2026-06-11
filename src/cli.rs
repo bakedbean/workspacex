@@ -976,10 +976,7 @@ fn parse_status(it: &mut Args) -> Result<CliAction> {
         }
         other => Err(Error::Usage {
             group: None,
-            msg: format!(
-                "unknown status subcommand: {}",
-                other.unwrap_or("(none)")
-            ),
+            msg: format!("unknown status subcommand: {}", other.unwrap_or("(none)")),
         }),
     }
 }
@@ -1476,9 +1473,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         Some(a) => crate::pty::session::AgentKind::from_str_or_default(Some(a)),
                         None => ws.agent,
                     };
-                    if let Some(state) =
-                        crate::agent::status::for_agent(kind).parse_event(&json)
-                    {
+                    if let Some(state) = crate::agent::status::for_agent(kind).parse_event(&json) {
                         let _ = store.set_workspace_status(ws.id, state, None, "hook");
                     }
                 }
@@ -2355,7 +2350,15 @@ mod tests {
     fn registry_matches_dispatched_groups() {
         // Every group the dispatcher accepts must have a help entry, and every
         // help entry must be a real group. Update BOTH when adding a command group.
-        let dispatched = ["workspace", "agent", "repo", "config", "remote", "setup", "status"];
+        let dispatched = [
+            "workspace",
+            "agent",
+            "repo",
+            "config",
+            "remote",
+            "setup",
+            "status",
+        ];
         let registry: Vec<&str> = GROUPS.iter().map(|g| g.name).collect();
         for d in dispatched {
             assert!(
@@ -2374,10 +2377,17 @@ mod tests {
     #[test]
     fn parses_status_set_with_message() {
         let a = parse_args(
-            ["wsx", "status", "set", "blocked", "--message", "need a decision"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            [
+                "wsx",
+                "status",
+                "set",
+                "blocked",
+                "--message",
+                "need a decision",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         )
         .unwrap();
         match a {

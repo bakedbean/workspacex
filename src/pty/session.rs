@@ -857,13 +857,18 @@ pub fn build_claude_command(
     // the harness-agnostic spawn_wiring() entry point; the PM pane keeps just
     // its fastMode flag. The wiring points at the running wsx binary by
     // absolute path so PATH differences can't break the callback.
-    let pm_fast = matches!(mode, SpawnMode::ProjectManager { fast_mode: true, .. });
+    let pm_fast = matches!(
+        mode,
+        SpawnMode::ProjectManager {
+            fast_mode: true,
+            ..
+        }
+    );
     let inject_status = matches!(mode, SpawnMode::Fresh { .. } | SpawnMode::Continue { .. });
     if inject_status {
-        let wsx_bin =
-            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
-        if let Some(wiring) = crate::agent::status::for_agent(AgentKind::Claude)
-            .spawn_wiring(&wsx_bin, false)
+        let wsx_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
+        if let Some(wiring) =
+            crate::agent::status::for_agent(AgentKind::Claude).spawn_wiring(&wsx_bin, false)
         {
             for arg in wiring.args {
                 cmd.arg(arg);

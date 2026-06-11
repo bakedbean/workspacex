@@ -181,6 +181,23 @@ fn spawn_resolved(
     spawn_parts(parts, cwd)
 }
 
+/// Build the argv for running `command` through a POSIX shell. The whole command
+/// is passed as a single `-c` argument so pipes, `&&`, and env vars work as typed.
+#[allow(dead_code)]
+fn shell_argv(command: &str) -> Vec<String> {
+    vec!["sh".to_string(), "-c".to_string(), command.to_string()]
+}
+
+/// Path for a background command's captured output:
+/// `<log_dir>/ws<workspace_id>-<epoch_ms>.log`.
+pub fn background_log_path(
+    log_dir: &Path,
+    workspace_id: i64,
+    epoch_ms: u64,
+) -> std::path::PathBuf {
+    log_dir.join(format!("ws{workspace_id}-{epoch_ms}.log"))
+}
+
 /// Spawn `parts` (program + argv) detached, with cwd = `cwd`.
 fn spawn_parts(mut parts: Vec<String>, cwd: &Path) -> Result<()> {
     if parts.is_empty() {
@@ -456,5 +473,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(argv, vec!["tool", "--base={base}", "/tmp/wt"]);
+    }
+
+    #[test]
+    fn shell_argv_wraps_command_as_single_arg() {
+        assert_eq!(
+            shell_argv("npm run dev && echo done"),
+            vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "npm run dev && echo done".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn background_log_path_uses_workspace_id_and_timestamp() {
+        let p = background_log_path(std::path::Path::new("/logs"), 7, 1234);
+        assert_eq!(p, std::path::PathBuf::from("/logs/ws7-1234.log"));
     }
 }

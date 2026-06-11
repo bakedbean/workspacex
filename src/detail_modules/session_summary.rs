@@ -114,6 +114,19 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
                     Span::styled(files_text, theme.dim_style()),
                 ]));
             }
+
+            // Context-window fill: a live signal the row never shows.
+            if let Some((ctx_text, warn)) = format_context_line(evt) {
+                let style = if warn {
+                    theme.warn_style()
+                } else {
+                    theme.dim_style()
+                };
+                out.push(Line::from(vec![
+                    prefix.clone(),
+                    Span::styled(truncate_to_chars(&ctx_text, inner_width), style),
+                ]));
+            }
         }
     }
 
@@ -564,5 +577,36 @@ mod tests {
     fn format_context_line_none_when_no_tokens() {
         let evt = WorkspaceEvents::default();
         assert!(format_context_line(&evt).is_none());
+    }
+
+    #[test]
+    fn render_shows_context_fill_line() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            context_tokens: Some(100_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        ctx.status = Status::Thinking;
+
+        let text = render_to_text(&ctx, 60, 12);
+        assert!(text.contains("context:"), "missing context line:\n{text}");
+        assert!(text.contains("100k"), "missing token count:\n{text}");
+    }
+
+    #[test]
+    fn render_omits_context_line_when_no_tokens() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents::default()));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 12);
+        assert!(
+            !text.contains("context:"),
+            "expected no context line without token data:\n{text}"
+        );
     }
 }

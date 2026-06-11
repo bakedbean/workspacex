@@ -1,6 +1,7 @@
 //! Session summary module. Shows the agent's current status, last
 //! activity, and tool-use trace for the selected workspace.
 
+use crate::activity::events::WorkspaceEvents;
 use crate::detail_modules::{DetailContext, DetailModule};
 use crate::ui::dashboard::column_content::{
     format_ago_short, format_state_line, format_tool_trace,
@@ -132,6 +133,63 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
     ]));
 
     out
+}
+
+/// Abbreviate a token count as `950` / `77k` / `1M` / `1.2M`.
+fn abbreviate_tokens(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        let m = n as f64 / 1_000_000.0;
+        if (m - m.round()).abs() < 0.05 {
+            format!("{}M", m.round() as u64)
+        } else {
+            format!("{m:.1}M")
+        }
+    }
+}
+
+/// Resolve the context-window size for a model id. Known families default
+/// to 200k; if the current fill already exceeds that, treat the session as
+/// the 1M variant (the model id doesn't encode the variant). Unknown or
+/// absent model → None (render raw tokens without a percentage).
+fn resolve_window(context_tokens: u64, model_id: Option<&str>) -> Option<u64> {
+    let base = model_id.and_then(|m| {
+        if m.contains("opus") || m.contains("sonnet") || m.contains("haiku") {
+            Some(200_000u64)
+        } else {
+            None
+        }
+    })?;
+    Some(if context_tokens > base {
+        1_000_000
+    } else {
+        base
+    })
+}
+
+/// Build the detail bar's context-fill line and whether it should render in
+/// the warn color. None when there's no token data yet (omit the line).
+fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
+    let n = evt.context_tokens?;
+    match resolve_window(n, evt.model_id.as_deref()) {
+        Some(w) => {
+            let pct = (n.saturating_mul(100) / w).min(999);
+            let text = format!(
+                "context: {} / {} · {}%",
+                abbreviate_tokens(n),
+                abbreviate_tokens(w),
+                pct
+            );
+            Some((text, pct >= 85))
+        }
+        None => Some((
+            format!("context: {} tokens", abbreviate_tokens(n)),
+            n >= 150_000,
+        )),
+    }
 }
 
 /// Render the most-recently-edited files as up to 3 basenames, joined
@@ -441,5 +499,70 @@ mod tests {
             first_text.contains("loading"),
             "expected 'loading' line, got: {first_text:?}"
         );
+    }
+
+    #[test]
+    fn abbreviate_tokens_uses_k_and_m() {
+        assert_eq!(abbreviate_tokens(950), "950");
+        assert_eq!(abbreviate_tokens(77_081), "77k");
+        assert_eq!(abbreviate_tokens(200_000), "200k");
+        assert_eq!(abbreviate_tokens(1_000_000), "1M");
+        assert_eq!(abbreviate_tokens(1_250_000), "1.2M");
+    }
+
+    #[test]
+    fn resolve_window_maps_known_models_and_upgrades_past_default() {
+        assert_eq!(
+            resolve_window(50_000, Some("claude-opus-4-8")),
+            Some(200_000)
+        );
+        // current fill above the 200k default → treat as the 1M variant
+        assert_eq!(
+            resolve_window(250_000, Some("claude-opus-4-8")),
+            Some(1_000_000)
+        );
+        assert_eq!(resolve_window(50_000, Some("some-unknown-model")), None);
+        assert_eq!(resolve_window(50_000, None), None);
+    }
+
+    #[test]
+    fn format_context_line_known_window_shows_percent() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(100_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_context_line(&evt).unwrap();
+        assert_eq!(text, "context: 100k / 200k · 50%");
+        assert!(!warn);
+    }
+
+    #[test]
+    fn format_context_line_warns_near_limit() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(190_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (_text, warn) = format_context_line(&evt).unwrap();
+        assert!(warn, "expected warn at 95% fill");
+    }
+
+    #[test]
+    fn format_context_line_unknown_window_shows_raw_tokens() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(77_000),
+            model_id: None,
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_context_line(&evt).unwrap();
+        assert_eq!(text, "context: 77k tokens");
+        assert!(!warn);
+    }
+
+    #[test]
+    fn format_context_line_none_when_no_tokens() {
+        let evt = WorkspaceEvents::default();
+        assert!(format_context_line(&evt).is_none());
     }
 }

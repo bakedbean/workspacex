@@ -586,6 +586,7 @@ impl App {
             running,
             user_has_prompted,
             has_prior,
+            None, // TODO(task5): pass the freshness-gated reported state
         )
     }
 }

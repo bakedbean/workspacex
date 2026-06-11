@@ -272,10 +272,17 @@ session's own start) guards against stale rows after session rotation.
 These are assumptions the design rests on that should be confirmed live, not
 taken on faith:
 
-1. **Hook env inheritance.** Confirm Claude Code hook commands actually see
-   `$WSX_WORKSPACE_ID` in their environment. If not, the hook command must be
-   templated with the literal id at spawn time (wsx knows it), e.g.
-   `wsx status set working --workspace <id>`.
+1. **Hook env inheritance. — ✅ VALIDATED 2026-06-11.** Confirmed empirically:
+   a nested `claude -p` (v2.1.173) launched with the hook wired through the
+   inline `--settings` JSON, and `WSX_WORKSPACE_ID`/`WSX_AGENT_INSTANCE_ID`
+   exported on the parent with sentinel values, ran both `UserPromptSubmit` and
+   `Stop` hook commands with those exact sentinel values visible in the hook
+   subprocess's `printenv`. Claude Code passes its full environment through to
+   hook commands, so `wsx status set working` can read `$WSX_WORKSPACE_ID`
+   directly — no spawn-time templating needed. Bonus: Claude Code also sets
+   `CLAUDE_PROJECT_DIR` in the hook env, a second usable anchor. (The
+   templating fallback — `wsx status set working --workspace <id>` — is
+   therefore unnecessary, but remains available if ever needed.)
 2. **Hook → state fidelity.** Verify `Stop` vs `Notification` cleanly separate
    "done" from "waiting on you / needs permission". If `Stop` fires for both
    turn-end and question-end, tier 2 can only assert "not working"; the

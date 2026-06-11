@@ -5396,4 +5396,34 @@ mod process_command_tests {
             .join("\n");
         assert!(rendered.contains("[r] run"), "{rendered}");
     }
+
+    #[test]
+    fn footer_shows_input_prompt_in_input_mode() {
+        let theme = crate::ui::theme::Theme::default();
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| {
+            crate::ui::modal::render_process_list(
+                f,
+                f.area(),
+                "demo",
+                &[],
+                0,
+                Some("cargo run"),
+                None,
+                &theme,
+            );
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("run: cargo run"), "{rendered}");
+    }
 }

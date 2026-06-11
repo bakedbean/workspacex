@@ -575,6 +575,7 @@ fn workspace_row<'a>(
 
 /// Render the floating process-list modal. Reads live App state via
 /// borrowed slices so the modal updates on every render tick.
+#[allow(clippy::too_many_arguments)]
 pub fn render_process_list(
     f: &mut Frame,
     area: Rect,

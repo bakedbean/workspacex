@@ -181,6 +181,83 @@ fn spawn_resolved(
     spawn_parts(parts, cwd)
 }
 
+/// Build the argv for running `command` through a POSIX shell. The whole command
+/// is passed as a single `-c` argument so pipes, `&&`, and env vars work as typed.
+fn shell_argv(command: &str) -> Vec<String> {
+    vec!["sh".to_string(), "-c".to_string(), command.to_string()]
+}
+
+/// Path for a background command's captured output:
+/// `<log_dir>/ws<workspace_id>-<epoch_ms>.log`.
+pub fn background_log_path(log_dir: &Path, workspace_id: i64, epoch_ms: u64) -> std::path::PathBuf {
+    log_dir.join(format!("ws{workspace_id}-{epoch_ms}.log"))
+}
+
+/// Wrap a user command so it runs detached from the wsx process. The command is
+/// run inside a backgrounded subshell (`( … ) &`); the parent `sh` we spawn then
+/// exits immediately, so the subshell is reparented to init and no longer
+/// descends from wsx. That matters because wsx's per-workspace process scan hides
+/// its own descendants (to suppress auto-spawned helpers) — without reparenting,
+/// a command launched here would never appear in the processes modal. Wrapping in
+/// a subshell (rather than appending `&`) backgrounds the whole command as a unit,
+/// so compound commands like `a && b` detach correctly.
+fn detached_command_script(command: &str) -> String {
+    format!("( {command} ) &")
+}
+
+/// Launch `command` as a background process whose working directory is `worktree`,
+/// detached from wsx so it surfaces in the per-workspace process scan and outlives
+/// the dashboard — like running it from a fresh terminal in the worktree.
+///
+/// The command runs through `sh -c` so shell features behave as the user expects.
+/// It is wrapped by [`detached_command_script`] so it reparents away from wsx, and
+/// (on unix) the spawned shell calls `setsid` so the command runs in its own
+/// session with no controlling terminal. stdout and stderr are redirected to
+/// `log_path` (created / truncated); stdin is null.
+pub fn spawn_background_command(worktree: &Path, command: &str, log_path: &Path) -> Result<()> {
+    if command.trim().is_empty() {
+        return Err(Error::UserInput("command is empty".into()));
+    }
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::UserInput(format!("create log dir: {e}")))?;
+    }
+    let log = std::fs::File::create(log_path)
+        .map_err(|e| Error::UserInput(format!("open log {}: {e}", log_path.display())))?;
+    let log_err = log
+        .try_clone()
+        .map_err(|e| Error::UserInput(format!("clone log handle: {e}")))?;
+
+    let parts = shell_argv(&detached_command_script(command));
+    let mut cmd = std::process::Command::new(&parts[0]);
+    cmd.args(&parts[1..])
+        .current_dir(worktree)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log))
+        .stderr(std::process::Stdio::from(log_err));
+
+    // Detach from wsx's controlling terminal so the command can't grab the TTY
+    // (SIGTTOU) and survives the dashboard being closed. Mirrors src/data/setup.rs.
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| Error::UserInput(format!("spawn background command: {e}")))?;
+    // The shell backgrounds the command and exits right away; reap it so wsx
+    // doesn't accumulate a zombie per launch. The detached command keeps running.
+    let _ = child.wait();
+    Ok(())
+}
+
 /// Spawn `parts` (program + argv) detached, with cwd = `cwd`.
 fn spawn_parts(mut parts: Vec<String>, cwd: &Path) -> Result<()> {
     if parts.is_empty() {
@@ -456,5 +533,155 @@ mod tests {
         )
         .unwrap();
         assert_eq!(argv, vec!["tool", "--base={base}", "/tmp/wt"]);
+    }
+
+    #[test]
+    fn shell_argv_wraps_command_as_single_arg() {
+        assert_eq!(
+            shell_argv("npm run dev && echo done"),
+            vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "npm run dev && echo done".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn background_log_path_uses_workspace_id_and_timestamp() {
+        let p = background_log_path(std::path::Path::new("/logs"), 7, 1234);
+        assert_eq!(p, std::path::PathBuf::from("/logs/ws7-1234.log"));
+    }
+
+    #[test]
+    fn detached_command_script_backgrounds_in_subshell() {
+        assert_eq!(detached_command_script("pnpm dev"), "( pnpm dev ) &");
+    }
+
+    #[test]
+    fn detached_command_script_wraps_compound_command_as_a_unit() {
+        // The whole compound runs in the backgrounded subshell, not just the
+        // last segment — so `a && b` detaches as one unit.
+        assert_eq!(detached_command_script("a && b"), "( a && b ) &");
+    }
+
+    // --- background command detachment ---
+
+    /// Walk a process's ancestor chain via `ps -o ppid=`, bounded.
+    #[cfg(unix)]
+    fn ancestor_chain(start: i32) -> Vec<i32> {
+        let mut chain = Vec::new();
+        let mut cur = start;
+        for _ in 0..64 {
+            let Ok(out) = std::process::Command::new("ps")
+                .args(["-o", "ppid=", "-p", &cur.to_string()])
+                .output()
+            else {
+                break;
+            };
+            let Ok(ppid) = String::from_utf8_lossy(&out.stdout).trim().parse::<i32>() else {
+                break;
+            };
+            chain.push(ppid);
+            if ppid <= 1 {
+                break;
+            }
+            cur = ppid;
+        }
+        chain
+    }
+
+    /// All pids whose `ps` command line contains `needle`.
+    #[cfg(unix)]
+    fn pids_matching(needle: &str) -> Vec<i32> {
+        let Ok(out) = std::process::Command::new("ps")
+            .args(["-axo", "pid=,command="])
+            .output()
+        else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.contains(needle))
+            .filter_map(|l| l.split_whitespace().next()?.parse::<i32>().ok())
+            .collect()
+    }
+
+    /// Pids whose `ps` command line is *exactly* `cmd`. Unlike [`pids_matching`],
+    /// this excludes the transient `sh -c "( … ) &"` wrapper — whose command line
+    /// merely contains the command — so the test can target the detached leaf
+    /// without racing the short-lived wrapper.
+    #[cfg(unix)]
+    fn pids_with_exact_command(cmd: &str) -> Vec<i32> {
+        let Ok(out) = std::process::Command::new("ps")
+            .args(["-axo", "pid=,command="])
+            .output()
+        else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| {
+                let (pid, command) = l.trim_start().split_once(char::is_whitespace)?;
+                if command.trim() == cmd {
+                    pid.parse::<i32>().ok()
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Regression test for the reported bug: a command launched from the
+    /// processes modal was spawned as a child of the wsx process, so the
+    /// per-workspace scan (which hides wsx's own descendants) filtered it
+    /// out. The launched command must instead detach from this process so
+    /// it surfaces in the modal — i.e. this process must NOT appear in the
+    /// spawned command's ancestor chain.
+    #[cfg(unix)]
+    #[test]
+    fn spawned_command_does_not_descend_from_this_process() {
+        use std::time::{Duration, Instant};
+
+        let dir = std::env::temp_dir();
+        let log = dir.join(format!("wsx-detach-test-{}.log", std::process::id()));
+        // A unique sleep duration doubles as the process marker.
+        let marker = format!("1{}", std::process::id());
+        let needle = format!("sleep {marker}");
+
+        spawn_background_command(&dir, &needle, &log).expect("spawn should succeed");
+
+        let me = std::process::id() as i32;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut found: Option<i32> = None;
+        while Instant::now() < deadline {
+            // Target the `sleep` leaf by an exact command match. The `sh -c
+            // "( … ) &"` wrapper's command line only *contains* the needle, so
+            // an exact match skips it — otherwise the test could race the
+            // short-lived wrapper (which still descends from this process) and
+            // fail spuriously.
+            if let Some(pid) = pids_with_exact_command(&needle).into_iter().next() {
+                found = Some(pid);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let result = found.map(|pid| (pid, ancestor_chain(pid)));
+
+        // Always clean up: kill every matching process and remove the log.
+        for pid in pids_matching(&needle) {
+            let _ = std::process::Command::new("kill")
+                .arg("-9")
+                .arg(pid.to_string())
+                .status();
+        }
+        let _ = std::fs::remove_file(&log);
+
+        let (pid, chain) = result.expect("detached `sleep` not found in process table");
+        assert!(
+            !chain.contains(&me),
+            "spawned process {pid} still descends from this process {me}; chain={chain:?}"
+        );
     }
 }

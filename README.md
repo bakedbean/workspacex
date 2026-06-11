@@ -285,11 +285,20 @@ The modal lists each process's PID, command, and full cwd:
       12345  npm              /home/user/wt/fix-bug
       12389  pytest           /home/user/wt/fix-bug/tests
     ─────────────────────────────
-    [↑/↓] move   [k] term   [K] kill   [esc] close
+    [↑/↓] move   [r] run   [k] term   [K] kill   [esc] close
 
 `k` sends `SIGTERM` to the highlighted process; `K` sends `SIGKILL`.
 After either, wsx immediately re-scans so the list reflects the new
 state.
+
+`r` opens a prompt to run a command in the selected workspace's worktree —
+handy for starting a dev server without opening a separate terminal. The
+command runs via `sh -c` as a background process, with stdout and stderr
+captured to a log file under `~/.local/state/wsx/logs/`; the path is shown
+after launch. It runs detached (its own session, reparented away from wsx),
+so it keeps running if you close the dashboard and survives until it exits or
+you stop it. Because it runs in the worktree, it appears in this same list on
+the next scan, where `K` stops it.
 
 **Notes:**
 

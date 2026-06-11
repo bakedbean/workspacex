@@ -5251,3 +5251,186 @@ mod attached_wheel_forwarding {
         );
     }
 }
+
+#[cfg(test)]
+mod process_command_tests {
+    use super::*;
+    use crate::data::store::{Store, WorkspaceId};
+    use crate::ui::modal::Modal;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn shared() -> SharedApp {
+        Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ))
+    }
+
+    fn process_list(input: Option<String>) -> Modal {
+        Modal::ProcessList {
+            workspace_id: WorkspaceId(1),
+            selected: 0,
+            input,
+            notice: None,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn r_enters_input_mode() {
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
+        app.modal = Some(process_list(None));
+        let shared = shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::ProcessList { input: Some(ref b), .. }) if b.is_empty()
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn typing_appends_and_backspace_pops() {
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
+        app.modal = Some(process_list(Some(String::new())));
+        let shared = shared();
+        for c in ['l', 's'] {
+            handle_key_modal(
+                &mut app,
+                &shared,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(matches!(
+            app.modal,
+            Some(Modal::ProcessList { input: Some(ref b), .. }) if b == "ls"
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::ProcessList { input: Some(ref b), .. }) if b == "l"
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn esc_in_input_mode_returns_to_list_mode() {
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
+        app.modal = Some(process_list(Some("npm".to_string())));
+        let shared = shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::ProcessList { input: None, .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enter_with_empty_command_is_a_noop() {
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
+        app.modal = Some(process_list(Some("   ".to_string())));
+        let shared = shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::ProcessList { input: Some(ref b), notice: None, .. }) if b == "   "
+        ));
+    }
+
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn footer_shows_run_hint_in_list_mode() {
+        let theme = crate::ui::theme::Theme::default();
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| {
+            crate::ui::modal::render_process_list(f, f.area(), "demo", &[], 0, None, None, &theme);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("[r] run"), "{rendered}");
+    }
+
+    #[test]
+    fn footer_shows_input_prompt_in_input_mode() {
+        let theme = crate::ui::theme::Theme::default();
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| {
+            crate::ui::modal::render_process_list(
+                f,
+                f.area(),
+                "demo",
+                &[],
+                0,
+                Some("cargo run"),
+                None,
+                &theme,
+            );
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("run: cargo run"), "{rendered}");
+    }
+}

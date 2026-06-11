@@ -635,6 +635,8 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.modal = Some(Modal::ProcessList {
                     workspace_id: id,
                     selected: 0,
+                    input: None,
+                    notice: None,
                 });
             }
             // Shift+K on a repo header moves it up one slot.
@@ -954,6 +956,8 @@ async fn handle_key_attached(
                 app.modal = Some(Modal::ProcessList {
                     workspace_id: id,
                     selected: 0,
+                    input: None,
+                    notice: None,
                 });
                 return Ok(());
             }
@@ -1073,6 +1077,33 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
         let _ = session.writer.send(bytes).await;
     }
     Ok(())
+}
+/// Resolve the worktree for `workspace_id`, build a per-launch log path under the
+/// wsx log dir, and spawn `command` there as a background process. Returns a
+/// one-line notice (success with the log path, or an error) for the modal.
+fn launch_workspace_command(
+    app: &App,
+    workspace_id: crate::data::store::WorkspaceId,
+    command: &str,
+) -> String {
+    let Some(worktree) = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == workspace_id)
+        .map(|(_, w)| w.worktree_path.clone())
+    else {
+        return "error: workspace not found".to_string();
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let log_dir = crate::config::Dirs::discover().log_dir();
+    let log_path = crate::commands::external::background_log_path(&log_dir, workspace_id.0, now_ms);
+    match crate::commands::external::spawn_background_command(&worktree, command, &log_path) {
+        Ok(()) => format!("\u{25B6} started \u{2192} {}", log_path.display()),
+        Err(e) => format!("error: {e}"),
+    }
 }
 async fn handle_key_modal(
     app: &mut App,
@@ -1357,12 +1388,86 @@ async fn handle_key_modal(
         Modal::ProcessList {
             workspace_id,
             mut selected,
+            input,
+            notice,
         } => {
             let procs = app
                 .workspace_processes
                 .get(&workspace_id)
                 .cloned()
                 .unwrap_or_default();
+
+            // Input mode: capture keystrokes into the command buffer.
+            if let Some(mut buffer) = input {
+                match k.code {
+                    KeyCode::Esc => {
+                        app.modal = Some(Modal::ProcessList {
+                            workspace_id,
+                            selected,
+                            input: None,
+                            notice,
+                        });
+                    }
+                    KeyCode::Enter => {
+                        let command = buffer.trim().to_string();
+                        if command.is_empty() {
+                            // Empty command: stay in input mode, keep the buffer.
+                            app.modal = Some(Modal::ProcessList {
+                                workspace_id,
+                                selected,
+                                input: Some(buffer),
+                                notice,
+                            });
+                        } else {
+                            let new_notice = launch_workspace_command(app, workspace_id, &command);
+                            app.modal = Some(Modal::ProcessList {
+                                workspace_id,
+                                selected,
+                                input: None,
+                                notice: Some(new_notice),
+                            });
+                            // Best-effort: the just-spawned process may not have
+                            // surfaced in `lsof` yet, so it usually appears on the
+                            // next periodic scan rather than this one. The notice
+                            // confirms the launch in the meantime.
+                            rescan_processes(app).await;
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        buffer.pop();
+                        app.modal = Some(Modal::ProcessList {
+                            workspace_id,
+                            selected,
+                            input: Some(buffer),
+                            notice,
+                        });
+                    }
+                    KeyCode::Char(c) => {
+                        buffer.push(c);
+                        app.modal = Some(Modal::ProcessList {
+                            workspace_id,
+                            selected,
+                            input: Some(buffer),
+                            notice,
+                        });
+                    }
+                    _ => {
+                        app.modal = Some(Modal::ProcessList {
+                            workspace_id,
+                            selected,
+                            input: Some(buffer),
+                            notice,
+                        });
+                    }
+                }
+                return Ok(());
+            }
+
+            // List mode.
+            // ProcessList intentionally does NOT alias j/k to nav like the other
+            // list modals: `k` here means SIGTERM and `K` means SIGKILL, so
+            // vim-style movement would clash with the kill verbs. Arrow keys are
+            // the only navigation; `r` opens the run-command input.
             match k.code {
                 KeyCode::Esc => {
                     app.modal = None;
@@ -1372,6 +1477,8 @@ async fn handle_key_modal(
                     app.modal = Some(Modal::ProcessList {
                         workspace_id,
                         selected,
+                        input: None,
+                        notice,
                     });
                 }
                 KeyCode::Down => {
@@ -1381,12 +1488,20 @@ async fn handle_key_modal(
                     app.modal = Some(Modal::ProcessList {
                         workspace_id,
                         selected,
+                        input: None,
+                        notice,
                     });
                 }
-                // ProcessList intentionally does NOT alias j/k to nav like
-                // the other list modals: `k` here means SIGTERM and `K` means
-                // SIGKILL, so vim-style movement would clash with the kill
-                // verbs. Arrow keys are the only navigation.
+                KeyCode::Char('r') => {
+                    // Clear any prior launch notice when starting a fresh
+                    // command so a stale "started" line doesn't linger.
+                    app.modal = Some(Modal::ProcessList {
+                        workspace_id,
+                        selected,
+                        input: Some(String::new()),
+                        notice: None,
+                    });
+                }
                 KeyCode::Char('k') => {
                     if let Some(p) = procs.get(selected) {
                         let _ = crate::activity::proc::kill_pid(p.pid, "TERM").await;

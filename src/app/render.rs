@@ -722,6 +722,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             crate::ui::modal::Modal::ProcessList {
                 workspace_id,
                 selected,
+                input,
+                notice,
             } => {
                 let workspace_name = app
                     .workspaces
@@ -740,6 +742,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &workspace_name,
                     &procs,
                     *selected,
+                    input.as_deref(),
+                    notice.as_deref(),
                     &app.theme,
                 );
             }

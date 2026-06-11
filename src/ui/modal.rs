@@ -581,6 +581,8 @@ pub fn render_process_list(
     workspace_name: &str,
     procs: &[crate::activity::proc::ProcInfo],
     selected: usize,
+    input: Option<&str>,
+    notice: Option<&str>,
     theme: &Theme,
 ) {
     let w = area.width.clamp(20, 80);
@@ -596,12 +598,26 @@ pub fn render_process_list(
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
+    let has_notice = notice.is_some();
+    let constraints = if has_notice {
+        vec![
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ]
+    } else {
+        vec![Constraint::Min(1), Constraint::Length(1)]
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints(constraints)
         .split(inner);
     let body_area = chunks[0];
-    let footer_area = chunks[1];
+    let (notice_area, footer_area) = if has_notice {
+        (Some(chunks[1]), chunks[2])
+    } else {
+        (None, chunks[1])
+    };
 
     if procs.is_empty() {
         f.render_widget(
@@ -629,11 +645,31 @@ pub fn render_process_list(
         }
         f.render_widget(Paragraph::new(lines), body_area);
     }
-    f.render_widget(
-        Paragraph::new("[\u{2191}/\u{2193}] move   [k] term   [K] kill   [esc] close")
+
+    if let (Some(area), Some(text)) = (notice_area, notice) {
+        let style = if text.starts_with("error") {
+            theme.err_style()
+        } else {
+            theme.ok_style()
+        };
+        f.render_widget(Paragraph::new(text.to_string()).style(style), area);
+    }
+
+    if let Some(buf) = input {
+        f.render_widget(
+            Paragraph::new(format!("run: {buf}\u{2588}   [enter] launch  [esc] cancel"))
+                .style(theme.header_style()),
+            footer_area,
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(
+                "[\u{2191}/\u{2193}] move   [r] run   [k] term   [K] kill   [esc] close",
+            )
             .style(theme.dim_style()),
-        footer_area,
-    );
+            footer_area,
+        );
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

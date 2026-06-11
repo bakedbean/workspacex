@@ -5363,4 +5363,37 @@ mod process_command_tests {
             Some(Modal::ProcessList { input: Some(ref b), notice: None, .. }) if b == "   "
         ));
     }
+
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn footer_shows_run_hint_in_list_mode() {
+        let theme = crate::ui::theme::Theme::default();
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| {
+            crate::ui::modal::render_process_list(
+                f,
+                f.area(),
+                "demo",
+                &[],
+                0,
+                None,
+                None,
+                &theme,
+            );
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("[r] run"), "{rendered}");
+    }
 }

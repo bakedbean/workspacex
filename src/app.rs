@@ -604,6 +604,21 @@ impl App {
             reported,
         )
     }
+
+    /// The freshness-gated agent-pushed status for a workspace, or `None` when
+    /// there is no fresh push. Same liveness rule as the status classifier, so
+    /// the message and the glyph appear/disappear together.
+    pub fn fresh_reported_status(
+        &self,
+        ws_id: crate::data::store::WorkspaceId,
+    ) -> Option<&crate::data::store::ReportedStatus> {
+        let last_log_activity = self
+            .workspace_events
+            .get(&ws_id)
+            .map(|e| e.last_log_activity_ms)
+            .unwrap_or(0);
+        fresh_reported(self.pushed_status.get(&ws_id), last_log_activity)
+    }
 }
 
 /// Zero detail-bar scroll offsets and update the sentinel when the
@@ -653,21 +668,29 @@ pub(crate) fn derive_stopped_kind(
     }
 }
 
-/// Decide whether a pushed status is still authoritative. The push wins while
-/// no JSONL activity has happened strictly after it; once the log grows past
-/// `reported_at`, the agent has acted since reporting and the heuristic
-/// re-arms. `last_log_activity_ms` of 0 means "no log activity observed",
-/// which never contradicts a push.
+/// Decide whether a pushed status is still authoritative, returning the full
+/// record. The push wins while no JSONL activity has happened strictly after
+/// it; once the log grows past `reported_at`, the agent has acted since
+/// reporting and the heuristic re-arms. `last_log_activity_ms` of 0 means "no
+/// log activity observed", which never contradicts a push.
+pub(crate) fn fresh_reported(
+    reported: Option<&crate::data::store::ReportedStatus>,
+    last_log_activity_ms: i64,
+) -> Option<&crate::data::store::ReportedStatus> {
+    let r = reported?;
+    if r.reported_at >= last_log_activity_ms {
+        Some(r)
+    } else {
+        None
+    }
+}
+
+/// The freshness-gated reported *state* (convenience over `fresh_reported`).
 pub(crate) fn fresh_reported_state(
     reported: Option<&crate::data::store::ReportedStatus>,
     last_log_activity_ms: i64,
 ) -> Option<crate::data::store::ReportedState> {
-    let r = reported?;
-    if r.reported_at >= last_log_activity_ms {
-        Some(r.state)
-    } else {
-        None
-    }
+    fresh_reported(reported, last_log_activity_ms).map(|r| r.state)
 }
 
 pub type SharedApp = Arc<Mutex<App>>;
@@ -1771,7 +1794,7 @@ mod derive_stopped_kind_tests {
 
 #[cfg(test)]
 mod reported_freshness_tests {
-    use super::fresh_reported_state;
+    use super::{fresh_reported, fresh_reported_state};
     use crate::data::store::{ReportedState, ReportedStatus};
 
     fn status(at: i64) -> ReportedStatus {
@@ -1803,5 +1826,17 @@ mod reported_freshness_tests {
     #[test]
     fn no_push_is_none() {
         assert_eq!(fresh_reported_state(None, 1500), None);
+    }
+
+    #[test]
+    fn fresh_reported_returns_ref_on_tie_and_none_after() {
+        let s = status(1000);
+        // tie: reported_at == last_log_activity_ms -> still fresh, returns the ref
+        assert!(fresh_reported(Some(&s), 1000).is_some());
+        assert!(fresh_reported(Some(&s), 900).is_some());
+        // log grew after the push -> stale
+        assert!(fresh_reported(Some(&s), 1500).is_none());
+        // no push -> none
+        assert!(fresh_reported(None, 1500).is_none());
     }
 }

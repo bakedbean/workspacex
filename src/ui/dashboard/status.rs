@@ -85,7 +85,16 @@ impl Status {
             Some(StoppedKind::Complete) => return Status::Complete,
             None => {}
         }
-        if stalled {
+        // `stalled` is a purely JSONL-derived signal: it fires after 60s of
+        // no log growth. But a long thinking/streaming phase — most commonly
+        // digesting a freshly-loaded skill body, whose `tool_use` left
+        // `last_stop_reason = ToolUse` with no pending tool — writes nothing
+        // to the JSONL while the terminal streams the spinner sub-second. An
+        // active PTY proves the agent is alive, so suppress the false-positive
+        // `!` and let the running path paint the Thinking spinner. Same
+        // reasoning as the `awaiting_tool && !pty_active` guard above: a
+        // genuine stall is quiet on BOTH channels.
+        if stalled && !pty_active {
             return Status::Stalled;
         }
         if session_running {
@@ -246,9 +255,30 @@ mod tests {
 
     #[test]
     fn stalled_outranks_running_recency() {
+        // With the PTY quiet (30s since last output) AND the JSONL stalled,
+        // the workspace really is stuck — stalled outranks the Waiting
+        // recency path.
+        assert_eq!(
+            Status::classify(false, None, true, s(30), true, true, true),
+            Status::Stalled
+        );
+    }
+
+    #[test]
+    fn stalled_suppressed_when_pty_active() {
+        // The JSONL stall heuristic fires after 60s of no log growth, but a
+        // long thinking/streaming phase (e.g. digesting a freshly-loaded
+        // skill body) writes nothing to the JSONL while the terminal streams
+        // the spinner sub-second. An active PTY proves the agent is alive, so
+        // the stall must be suppressed — mirroring the `awaiting_tool`
+        // suppression. Show the live Thinking spinner instead of `!`.
         assert_eq!(
             Status::classify(false, None, true, s(0), true, true, true),
-            Status::Stalled
+            Status::Thinking
+        );
+        assert_eq!(
+            Status::classify(false, None, true, s(1), true, true, true),
+            Status::Thinking
         );
     }
 
@@ -311,8 +341,10 @@ mod tests {
     fn never_prompted_does_not_override_higher_priority_states() {
         // The not-prompted gate sits below the early returns, so a stall,
         // permission prompt, or completion still wins even with prompted=false.
+        // Stall uses a PTY-quiet recency (30s) — an active PTY would suppress
+        // the stall (see `stalled_suppressed_when_pty_active`).
         assert_eq!(
-            Status::classify(false, None, true, s(0), true, false, false),
+            Status::classify(false, None, true, s(30), true, false, false),
             Status::Stalled
         );
         assert_eq!(

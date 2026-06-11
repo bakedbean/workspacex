@@ -1339,8 +1339,10 @@ mod pm_state_tests {
     }
 
     fn spawn_pm_for_test(app: &mut App) {
+        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
+        // injects no extra flags for a plain Fresh session, so cat stays alive.
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
@@ -1357,7 +1359,7 @@ mod pm_state_tests {
                 24,
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
-                crate::pty::session::AgentKind::Claude,
+                crate::pty::session::AgentKind::Codex,
             )
             .unwrap();
         app.pm = Some(s);
@@ -1365,8 +1367,10 @@ mod pm_state_tests {
 
     fn spawn_attached_workspace(app: &mut App) -> crate::data::store::WorkspaceId {
         use crate::data::store::NewWorkspace;
+        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
+        // injects no extra flags for a plain Fresh session, so cat stays alive.
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let repo_id = app
             .store
             .add_repo(std::path::Path::new("."), "scratch", "test")
@@ -1379,7 +1383,7 @@ mod pm_state_tests {
                 branch: "main",
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
-                agent: crate::pty::session::AgentKind::Claude,
+                agent: crate::pty::session::AgentKind::Codex,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -1399,7 +1403,7 @@ mod pm_state_tests {
                 24,
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
-                crate::pty::session::AgentKind::Claude,
+                crate::pty::session::AgentKind::Codex,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(app, ws_id)));

@@ -14,8 +14,8 @@ pub struct RowColumn {
     pub emphasis: ColumnEmphasis,
 }
 
-/// How the row renderer should color the column body. The leading `└ `
-/// prefix always takes the status color; this controls the body only.
+/// How the row renderer should color the column body. The leading prefix
+/// always takes the status color; this controls the body only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnEmphasis {
     /// Default — non-attention states render dim, as the message line does today.
@@ -24,17 +24,33 @@ pub enum ColumnEmphasis {
     Status,
     /// `Stalled` — paint the body in the warn color.
     Warn,
+    /// Agent-authored push (`wsx status set --message`). Painted in the row's
+    /// status color with a distinct prefix, to read as deliberate/current
+    /// rather than the dim heuristic recap.
+    Reported,
 }
 
 /// Build the status-adaptive flex-column content for one workspace row.
 /// `now_ms` is the shared epoch-ms time base (same one `app.rs` uses), so
 /// stall durations match the detail bar. Returns `None` when there is no
 /// meaningful content (the caller renders the em-dash).
+///
+/// `reported_message` is the freshness-gated agent-pushed message from
+/// `App::fresh_reported_status`. When non-empty it always wins over the
+/// heuristic recap — the short-circuit is before `events?` so it shows
+/// even when there is no session or events yet.
 pub fn row_column(
     status: Status,
     events: Option<&WorkspaceEvents>,
     now_ms: i64,
+    reported_message: Option<&str>,
 ) -> Option<RowColumn> {
+    if let Some(msg) = reported_message.map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(RowColumn {
+            text: collapse_ws(msg),
+            emphasis: ColumnEmphasis::Reported,
+        });
+    }
     let evt = events?;
     match status {
         Status::Question => {
@@ -220,7 +236,7 @@ mod tests {
 
     #[test]
     fn none_events_yields_none() {
-        assert!(row_column(Status::Idle, None, 0).is_none());
+        assert!(row_column(Status::Idle, None, 0, None).is_none());
     }
 
     #[test]
@@ -229,7 +245,7 @@ mod tests {
         e.pending_tool_uses
             .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
         e.pending_question_text = Some("Auth method".into());
-        let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
+        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
         assert_eq!(c.text, "asking: Auth method");
         assert_eq!(c.emphasis, ColumnEmphasis::Status);
     }
@@ -239,7 +255,7 @@ mod tests {
         let mut e = evt();
         e.pending_tool_uses
             .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
-        let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
+        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
         assert_eq!(c.text, "asking…");
         assert_eq!(c.emphasis, ColumnEmphasis::Status);
     }
@@ -252,7 +268,7 @@ mod tests {
         e.pending_tool_uses
             .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
         e.pending_question_text = Some("   ".into());
-        let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
+        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
         assert_eq!(c.text, "asking…");
     }
 
@@ -261,7 +277,7 @@ mod tests {
         let mut e = evt();
         e.pending_tool_uses
             .insert("tu_p".into(), ("ExitPlanMode".into(), 0));
-        let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
+        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
         assert_eq!(c.text, "asking: review plan");
         assert_eq!(c.emphasis, ColumnEmphasis::Status);
     }
@@ -275,14 +291,14 @@ mod tests {
             pending_tool_uses: pending,
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Question, Some(&e), 10_000).unwrap();
+        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
         assert_eq!(c.text, "awaiting: Bash");
         assert_eq!(c.emphasis, ColumnEmphasis::Status);
     }
 
     #[test]
     fn question_with_no_pending_tool_uses_bare_label() {
-        let c = row_column(Status::Question, Some(&evt()), 10_000).unwrap();
+        let c = row_column(Status::Question, Some(&evt()), 10_000, None).unwrap();
         assert_eq!(c.text, "question");
         assert_eq!(c.emphasis, ColumnEmphasis::Status);
     }
@@ -294,7 +310,7 @@ mod tests {
             ..WorkspaceEvents::default()
         };
         // now_ms = 240_000, last_log_activity_ms = 1 → (240_000-1)/1000 = 239s → "3m quiet"
-        let c = row_column(Status::Stalled, Some(&e), 240_000).unwrap();
+        let c = row_column(Status::Stalled, Some(&e), 240_000, None).unwrap();
         assert_eq!(c.text, "stalled · 3m quiet");
         assert_eq!(c.emphasis, ColumnEmphasis::Warn);
     }
@@ -304,20 +320,20 @@ mod tests {
         let mut e = evt();
         e.tool_use_counts.bash = 2;
         e.tool_use_counts.edit = 3;
-        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        let c = row_column(Status::Thinking, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "edited 3 files, ran 2 commands");
         assert_eq!(c.emphasis, ColumnEmphasis::Dim);
     }
 
     #[test]
     fn thinking_with_no_tools_yet_shows_ellipsis_label() {
-        let c = row_column(Status::Thinking, Some(&evt()), 0).unwrap();
+        let c = row_column(Status::Thinking, Some(&evt()), 0, None).unwrap();
         assert_eq!(c.text, "thinking…");
     }
 
     #[test]
     fn waiting_with_no_tools_yet_shows_ellipsis_label() {
-        let c = row_column(Status::Waiting, Some(&evt()), 0).unwrap();
+        let c = row_column(Status::Waiting, Some(&evt()), 0, None).unwrap();
         assert_eq!(c.text, "waiting…");
     }
 
@@ -326,7 +342,7 @@ mod tests {
         let mut e = evt();
         e.tool_use_counts.edit = 3;
         e.current_action = Some("now column_content.rs".into());
-        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        let c = row_column(Status::Thinking, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "edited 3 files · now column_content.rs");
         assert_eq!(c.emphasis, ColumnEmphasis::Dim);
     }
@@ -336,7 +352,7 @@ mod tests {
         let mut e = evt();
         e.tool_use_counts.bash = 5;
         e.current_action = Some("cargo test --lib".into());
-        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        let c = row_column(Status::Thinking, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "ran 5 commands · cargo test --lib");
     }
 
@@ -344,7 +360,7 @@ mod tests {
     fn thinking_shows_action_alone_when_no_counts_yet() {
         let mut e = evt();
         e.current_action = Some("now column_content.rs".into());
-        let c = row_column(Status::Thinking, Some(&e), 0).unwrap();
+        let c = row_column(Status::Thinking, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "now column_content.rs");
     }
 
@@ -355,7 +371,7 @@ mod tests {
         let mut e = evt();
         e.tool_use_counts.bash = 5;
         e.current_action = Some("cargo test --lib".into());
-        let c = row_column(Status::Waiting, Some(&e), 0).unwrap();
+        let c = row_column(Status::Waiting, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "ran 5 commands · cargo test --lib");
         assert_eq!(c.emphasis, ColumnEmphasis::Dim);
     }
@@ -367,7 +383,7 @@ mod tests {
             first_user_text: Some("do the thing".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Complete, Some(&e), 0).unwrap();
+        let c = row_column(Status::Complete, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "split the quick-start into two");
         assert_eq!(c.emphasis, ColumnEmphasis::Dim);
     }
@@ -378,13 +394,13 @@ mod tests {
             first_user_text: Some("migrate auth".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Complete, Some(&e), 0).unwrap();
+        let c = row_column(Status::Complete, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "migrate auth");
     }
 
     #[test]
     fn complete_with_nothing_is_none() {
-        assert!(row_column(Status::Complete, Some(&evt()), 0).is_none());
+        assert!(row_column(Status::Complete, Some(&evt()), 0, None).is_none());
     }
 
     #[test]
@@ -397,7 +413,7 @@ mod tests {
             first_user_text: Some("migrate auth".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Complete, Some(&e), 0).unwrap();
+        let c = row_column(Status::Complete, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "migrate auth");
     }
 
@@ -407,14 +423,14 @@ mod tests {
             first_user_text: Some("backfill the 003 migration".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Idle, Some(&e), 0).unwrap();
+        let c = row_column(Status::Idle, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "backfill the 003 migration");
         assert_eq!(c.emphasis, ColumnEmphasis::Dim);
     }
 
     #[test]
     fn idle_with_no_prompt_is_none() {
-        assert!(row_column(Status::Idle, Some(&evt()), 0).is_none());
+        assert!(row_column(Status::Idle, Some(&evt()), 0, None).is_none());
     }
 
     #[test]
@@ -423,7 +439,7 @@ mod tests {
             first_user_text: Some("migrate auth\n\nto the new token flow".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Idle, Some(&e), 0).unwrap();
+        let c = row_column(Status::Idle, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "migrate auth to the new token flow");
         assert!(!c.text.contains('\n'));
     }
@@ -434,8 +450,61 @@ mod tests {
             last_completed_turn_text: Some("split the quick-start\n  into two   sections".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Complete, Some(&e), 0).unwrap();
+        let c = row_column(Status::Complete, Some(&e), 0, None).unwrap();
         assert_eq!(c.text, "split the quick-start into two sections");
         assert!(!c.text.contains('\n'));
+    }
+
+    // ── reported_message tests ─────────────────────────────────────────────
+
+    #[test]
+    fn reported_message_overrides_heuristic_recap() {
+        // Events that WOULD produce a recap for Complete status.
+        let e = WorkspaceEvents {
+            last_completed_turn_text: Some("split the quick-start into two".into()),
+            first_user_text: Some("do the thing".into()),
+            ..WorkspaceEvents::default()
+        };
+        let c = row_column(
+            Status::Complete,
+            Some(&e),
+            0,
+            Some("running the test suite"),
+        )
+        .unwrap();
+        assert_eq!(c.text, "running the test suite");
+        assert_eq!(c.emphasis, ColumnEmphasis::Reported);
+    }
+
+    #[test]
+    fn reported_message_shows_even_without_events() {
+        // Short-circuit is BEFORE `events?` — message shows with no events at all.
+        let c = row_column(Status::Idle, None, 0, Some("blocked on auth")).unwrap();
+        assert_eq!(c.text, "blocked on auth");
+        assert_eq!(c.emphasis, ColumnEmphasis::Reported);
+    }
+
+    #[test]
+    fn empty_reported_message_falls_back_to_heuristic() {
+        // Whitespace-only message behaves as None — falls back to status logic.
+        let e = WorkspaceEvents {
+            first_user_text: Some("backfill the migration".into()),
+            ..WorkspaceEvents::default()
+        };
+        let c = row_column(Status::Idle, Some(&e), 0, Some("   ")).unwrap();
+        assert_eq!(c.text, "backfill the migration");
+        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+    }
+
+    #[test]
+    fn no_reported_message_is_unchanged() {
+        // Passing None yields the same result as old 3-arg behavior.
+        let e = WorkspaceEvents {
+            first_user_text: Some("migrate auth".into()),
+            ..WorkspaceEvents::default()
+        };
+        let c = row_column(Status::Idle, Some(&e), 0, None).unwrap();
+        assert_eq!(c.text, "migrate auth");
+        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
     }
 }

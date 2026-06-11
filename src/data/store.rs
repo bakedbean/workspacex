@@ -32,6 +32,47 @@ pub enum SetupStatus {
     Cancelled,
 }
 
+/// The agent-facing status vocabulary. Distinct from the six *display*
+/// `Status` states: an agent never reports itself idle or stalled — those
+/// stay wsx-inferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportedState {
+    Working,
+    Waiting,
+    Blocked,
+    Done,
+}
+
+impl ReportedState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReportedState::Working => "working",
+            ReportedState::Waiting => "waiting",
+            ReportedState::Blocked => "blocked",
+            ReportedState::Done => "done",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "working" => Some(ReportedState::Working),
+            "waiting" => Some(ReportedState::Waiting),
+            "blocked" => Some(ReportedState::Blocked),
+            "done" => Some(ReportedState::Done),
+            _ => None,
+        }
+    }
+}
+
+/// A row from the `workspace_status` table: the last status an agent pushed.
+#[derive(Debug, Clone)]
+pub struct ReportedStatus {
+    pub state: ReportedState,
+    pub message: Option<String>,
+    pub source: String,
+    pub reported_at: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Repo {
     pub id: RepoId,
@@ -93,6 +134,10 @@ impl Store {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // Writers (the TUI and a sibling `wsx status` CLI process) contend for
+        // the single WAL writer slot; wait up to 3s rather than erroring out
+        // immediately with SQLITE_BUSY.
+        conn.pragma_update(None, "busy_timeout", 3000)?;
         let store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -283,6 +328,10 @@ impl Store {
                 tx.commit()?;
             }
             self.conn.execute("PRAGMA user_version = 14", [])?;
+        }
+        if v < 15 {
+            self.conn.execute_batch(SCHEMA_V15_WORKSPACE_STATUS)?;
+            self.conn.execute("PRAGMA user_version = 15", [])?;
         }
         Ok(())
     }
@@ -662,6 +711,60 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_workspace_status(
+        &self,
+        id: WorkspaceId,
+        state: ReportedState,
+        message: Option<&str>,
+        source: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO workspace_status \
+                 (workspace_id, state, message, source, reported_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id.0, state.as_str(), message, source, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_workspace_status(&self, id: WorkspaceId) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM workspace_status WHERE workspace_id = ?1",
+            [id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn workspace_status(&self, id: WorkspaceId) -> Result<Option<ReportedStatus>> {
+        let r = self
+            .conn
+            .query_row(
+                "SELECT state, message, source, reported_at \
+                 FROM workspace_status WHERE workspace_id = ?1",
+                [id.0],
+                row_to_reported_status,
+            )
+            .optional()?;
+        Ok(r)
+    }
+
+    pub fn all_workspace_status(
+        &self,
+    ) -> Result<std::collections::HashMap<WorkspaceId, ReportedStatus>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT workspace_id, state, message, source, reported_at FROM workspace_status",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((WorkspaceId(r.get(0)?), row_to_reported_status_offset1(r)?))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (id, status) = row?;
+            map.insert(id, status);
+        }
+        Ok(map)
+    }
+
     pub fn workspaces(&self, repo_id: RepoId) -> Result<Vec<Workspace>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
@@ -877,6 +980,16 @@ CREATE TABLE IF NOT EXISTS workspace_layouts (
 );
 ";
 
+const SCHEMA_V15_WORKSPACE_STATUS: &str = "
+CREATE TABLE IF NOT EXISTS workspace_status (
+    workspace_id INTEGER PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+    state        TEXT NOT NULL,
+    message      TEXT,
+    source       TEXT NOT NULL,
+    reported_at  INTEGER NOT NULL
+);
+";
+
 const SCHEMA_V12_MULTI_AGENT: &str = r#"
 CREATE TABLE IF NOT EXISTS workspace_agents (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -932,6 +1045,26 @@ fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {
         created_at: r.get(7)?,
         yolo: r.get::<_, i64>(8)? != 0,
         agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
+    })
+}
+
+fn row_to_reported_status(r: &rusqlite::Row) -> rusqlite::Result<ReportedStatus> {
+    Ok(ReportedStatus {
+        state: ReportedState::parse(&r.get::<_, String>(0)?).unwrap_or(ReportedState::Working),
+        message: r.get(1)?,
+        source: r.get(2)?,
+        reported_at: r.get(3)?,
+    })
+}
+
+// Same as `row_to_reported_status` but for queries that select the
+// workspace_id in column 0, shifting the status columns to 1..=4.
+fn row_to_reported_status_offset1(r: &rusqlite::Row) -> rusqlite::Result<ReportedStatus> {
+    Ok(ReportedStatus {
+        state: ReportedState::parse(&r.get::<_, String>(1)?).unwrap_or(ReportedState::Working),
+        message: r.get(2)?,
+        source: r.get(3)?,
+        reported_at: r.get(4)?,
     })
 }
 
@@ -1884,7 +2017,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 14);
+        assert_eq!(v, 15);
     }
 
     #[test]
@@ -2030,6 +2163,83 @@ mod tests {
     }
 
     #[test]
+    fn workspace_status_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "r/")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "r/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+            })
+            .unwrap(); // returns WorkspaceId
+
+        assert!(store.workspace_status(ws).unwrap().is_none());
+
+        store
+            .set_workspace_status(ws, ReportedState::Blocked, Some("need a decision"), "model")
+            .unwrap();
+        let got = store.workspace_status(ws).unwrap().unwrap();
+        assert_eq!(got.state, ReportedState::Blocked);
+        assert_eq!(got.message.as_deref(), Some("need a decision"));
+        assert_eq!(got.source, "model");
+        assert!(got.reported_at > 0);
+
+        // INSERT OR REPLACE: second write wins, keyed by workspace.
+        store
+            .set_workspace_status(ws, ReportedState::Done, None, "hook")
+            .unwrap();
+        let got = store.workspace_status(ws).unwrap().unwrap();
+        assert_eq!(got.state, ReportedState::Done);
+        assert_eq!(got.message, None);
+        assert_eq!(got.source, "hook");
+
+        store.clear_workspace_status(ws).unwrap();
+        assert!(store.workspace_status(ws).unwrap().is_none());
+    }
+
+    #[test]
+    fn all_workspace_status_returns_map() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "r/")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "r/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_status(ws, ReportedState::Working, None, "model")
+            .unwrap();
+        let map = store.all_workspace_status().unwrap();
+        assert_eq!(map.get(&ws).map(|s| s.state), Some(ReportedState::Working));
+    }
+
+    #[test]
+    fn reported_state_parse_round_trips() {
+        for st in [
+            ReportedState::Working,
+            ReportedState::Waiting,
+            ReportedState::Blocked,
+            ReportedState::Done,
+        ] {
+            assert_eq!(ReportedState::parse(st.as_str()), Some(st));
+        }
+        assert_eq!(ReportedState::parse("nonsense"), None);
+    }
+
+    #[test]
     fn swap_repo_sort_order_swaps_two_repos() {
         let store = Store::open_in_memory().unwrap();
         let a = store
@@ -2049,5 +2259,19 @@ mod tests {
         let so = |name: &str| repos.iter().find(|r| r.name == name).unwrap().sort_order;
         assert_eq!(so("bbb"), 0);
         assert_eq!(so("aaa"), 1);
+    }
+
+    #[test]
+    fn open_sets_busy_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("state.db")).unwrap();
+        let ms: i64 = store
+            .conn()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            ms, 3000,
+            "Store::open must set busy_timeout to exactly 3000ms"
+        );
     }
 }

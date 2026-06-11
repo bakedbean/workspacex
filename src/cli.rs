@@ -162,6 +162,24 @@ pub static GROUPS: &[GroupInfo] = &[
             blurb: "Install the wsx Claude Code skill",
         }],
     },
+    GroupInfo {
+        name: "status",
+        blurb: "Report agent-driven workspace status",
+        commands: &[
+            CmdInfo {
+                usage: "set <working|waiting|blocked|done> [--message <text>]",
+                blurb: "Set workspace status (model push path)",
+            },
+            CmdInfo {
+                usage: "clear",
+                blurb: "Clear workspace status",
+            },
+            CmdInfo {
+                usage: "from-hook [--agent <kind>]",
+                blurb: "Parse hook JSON from stdin and update status",
+            },
+        ],
+    },
 ];
 
 pub fn group_name(s: &str) -> Option<&'static str> {
@@ -346,6 +364,16 @@ pub enum CliAction {
     AgentAdd {
         kind: String,
     },
+    StatusSet {
+        state: String,
+        message: Option<String>,
+    },
+    StatusClear,
+    StatusFromHook {
+        /// The harness whose event payload is on stdin. `None` falls back to
+        /// the resolved workspace's agent kind.
+        agent: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -448,6 +476,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         "workspace" => parse_workspace(&mut it).map_err(|e| tag_group(e, group)),
         "agent" => parse_agent(&mut it).map_err(|e| tag_group(e, group)),
         "setup" => parse_setup(&mut it).map_err(|e| tag_group(e, group)),
+        "status" => parse_status(&mut it).map_err(|e| tag_group(e, group)),
         other => Err(Error::Usage {
             group: None,
             msg: format!("unknown command: {other}"),
@@ -905,6 +934,55 @@ fn parse_setup(it: &mut Args) -> Result<CliAction> {
                 Some(cmd) => format!("unknown setup command: {cmd}"),
                 None => "missing setup command".into(),
             },
+        }),
+    }
+}
+
+fn parse_status(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("set") => {
+            let state = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "usage: wsx status set <working|waiting|blocked|done> [--message <text>]"
+                    .into(),
+            })?;
+            let mut message = None;
+            while let Some(arg) = it.next() {
+                if arg == "--message" || arg == "-m" {
+                    message = Some(it.next().ok_or_else(|| Error::Usage {
+                        group: None,
+                        msg: "--message requires a value".into(),
+                    })?);
+                } else {
+                    return Err(Error::Usage {
+                        group: None,
+                        msg: format!("unexpected argument: {arg}"),
+                    });
+                }
+            }
+            Ok(CliAction::StatusSet { state, message })
+        }
+        Some("clear") => Ok(CliAction::StatusClear),
+        Some("from-hook") => {
+            let mut agent = None;
+            while let Some(arg) = it.next() {
+                if arg == "--agent" {
+                    agent = Some(it.next().ok_or_else(|| Error::Usage {
+                        group: None,
+                        msg: "--agent requires a value".into(),
+                    })?);
+                } else {
+                    return Err(Error::Usage {
+                        group: None,
+                        msg: format!("unexpected argument: {arg}"),
+                    });
+                }
+            }
+            Ok(CliAction::StatusFromHook { agent })
+        }
+        other => Err(Error::Usage {
+            group: None,
+            msg: format!("unknown status subcommand: {}", other.unwrap_or("(none)")),
         }),
     }
 }
@@ -1373,6 +1451,40 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let agent = crate::pty::session::AgentKind::from_str_or_default(Some(&kind));
             let inst = store.add_workspace_agent(ws.id, agent)?;
             println!("added {}", inst.label());
+        }
+        CliAction::StatusSet { state, message } => {
+            let parsed = crate::data::store::ReportedState::parse(&state).ok_or_else(|| {
+                Error::UserInput(format!(
+                    "invalid status '{state}'; expected working|waiting|blocked|done"
+                ))
+            })?;
+            let ws = resolve_current_workspace(&store)?;
+            store.set_workspace_status(ws.id, parsed, message.as_deref(), "model")?;
+            println!("status: {}", parsed.as_str());
+        }
+        CliAction::StatusClear => {
+            let ws = resolve_current_workspace(&store)?;
+            store.clear_workspace_status(ws.id)?;
+            println!("status cleared");
+        }
+        CliAction::StatusFromHook { agent } => {
+            use std::io::Read;
+            let mut buf = String::new();
+            // Hooks pipe JSON on stdin; tolerate empty/garbage by no-op exit 0
+            // so a hook never fails the agent's turn.
+            let _ = std::io::stdin().read_to_string(&mut buf);
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&buf) {
+                if let Ok(ws) = resolve_current_workspace(&store) {
+                    let kind = match &agent {
+                        Some(a) => crate::pty::session::AgentKind::from_str_or_default(Some(a)),
+                        None => ws.agent,
+                    };
+                    if let Some(state) = crate::agent::status::for_agent(kind).parse_event(&json) {
+                        let _ = store.set_workspace_status(ws.id, state, None, "hook");
+                    }
+                }
+            }
+            // Always succeed: a status hook must never block or fail the turn.
         }
         CliAction::SetupInstallSkill => unreachable!("handled before store open"),
         CliAction::Help(_) | CliAction::Version => {
@@ -2244,7 +2356,15 @@ mod tests {
     fn registry_matches_dispatched_groups() {
         // Every group the dispatcher accepts must have a help entry, and every
         // help entry must be a real group. Update BOTH when adding a command group.
-        let dispatched = ["workspace", "agent", "repo", "config", "remote", "setup"];
+        let dispatched = [
+            "workspace",
+            "agent",
+            "repo",
+            "config",
+            "remote",
+            "setup",
+            "status",
+        ];
         let registry: Vec<&str> = GROUPS.iter().map(|g| g.name).collect();
         for d in dispatched {
             assert!(
@@ -2258,5 +2378,107 @@ mod tests {
                 "group `{r}` in GROUPS but not dispatched"
             );
         }
+    }
+
+    #[test]
+    fn parses_status_set_with_message() {
+        let a = parse_args(
+            [
+                "wsx",
+                "status",
+                "set",
+                "blocked",
+                "--message",
+                "need a decision",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        )
+        .unwrap();
+        match a {
+            CliAction::StatusSet { state, message } => {
+                assert_eq!(state, "blocked");
+                assert_eq!(message.as_deref(), Some("need a decision"));
+            }
+            other => panic!("expected StatusSet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_status_set_without_message() {
+        let a = parse_args(
+            ["wsx", "status", "set", "working"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap();
+        match a {
+            CliAction::StatusSet { state, message } => {
+                assert_eq!(state, "working");
+                assert_eq!(message, None);
+            }
+            other => panic!("expected StatusSet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_status_clear_and_from_hook() {
+        assert!(matches!(
+            parse_args(
+                ["wsx", "status", "clear"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            )
+            .unwrap(),
+            CliAction::StatusClear
+        ));
+        assert!(matches!(
+            parse_args(
+                ["wsx", "status", "from-hook"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            )
+            .unwrap(),
+            CliAction::StatusFromHook { agent: None }
+        ));
+        match parse_args(
+            ["wsx", "status", "from-hook", "--agent", "claude"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap()
+        {
+            CliAction::StatusFromHook { agent } => assert_eq!(agent.as_deref(), Some("claude")),
+            other => panic!("expected StatusFromHook, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_set_message_without_value_is_usage_error() {
+        let err = parse_args(
+            ["wsx", "status", "set", "working", "--message"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Usage { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn status_from_hook_agent_without_value_is_usage_error() {
+        let err = parse_args(
+            ["wsx", "status", "from-hook", "--agent"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Usage { .. }), "got {err:?}");
     }
 }

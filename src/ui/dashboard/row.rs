@@ -238,7 +238,11 @@ pub fn render(
         .saturating_sub(left_consumed + right_consumed)
         .max(1);
     if let Some(col) = inputs.column.as_ref() {
-        let prefix = "└ ";
+        let prefix = if matches!(col.emphasis, ColumnEmphasis::Reported) {
+            "▸ "
+        } else {
+            "└ "
+        };
         let body_width = message_width.saturating_sub(prefix.chars().count());
         let body = truncate(&col.text, body_width);
         spans.push(Span::styled(
@@ -250,6 +254,7 @@ pub fn render(
             ColumnEmphasis::Dim => theme.dim_style(),
             ColumnEmphasis::Status => theme.status_style(inputs.status),
             ColumnEmphasis::Warn => theme.warn_style(),
+            ColumnEmphasis::Reported => theme.status_style(inputs.status),
         };
         spans.push(Span::styled(body_padded, body_style));
     } else {
@@ -427,11 +432,12 @@ mod tests {
     #[test]
     fn column_emphasis_maps_to_body_style() {
         let theme = Theme::wsx();
+        // Helper that finds the body span following either prefix glyph.
         let body_after_prefix = |line: &Line<'_>| -> Style {
             let i = line
                 .spans
                 .iter()
-                .position(|s| s.content.as_ref() == "└ ")
+                .position(|s| matches!(s.content.as_ref(), "└ " | "▸ "))
                 .expect("prefix span present");
             line.spans[i + 1].style
         };
@@ -466,6 +472,24 @@ mod tests {
         });
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         assert_eq!(body_after_prefix(&line).fg, theme.dim_style().fg);
+
+        // Reported emphasis → status color, ▸ prefix.
+        inputs.status = Status::Stalled;
+        inputs.column = Some(RowColumn {
+            text: "need your call on auth".into(),
+            emphasis: ColumnEmphasis::Reported,
+        });
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        assert_eq!(
+            body_after_prefix(&line).fg,
+            theme.status_style(Status::Stalled).fg
+        );
+        let text = line_text(&line);
+        assert!(text.contains("▸ "), "Reported uses ▸ prefix: {text:?}");
+        assert!(
+            !text.contains("└ "),
+            "Reported does not use └ prefix: {text:?}"
+        );
     }
 
     #[test]

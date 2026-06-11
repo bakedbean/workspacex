@@ -853,10 +853,28 @@ pub fn build_claude_command(
         }
     }
 
-    if let SpawnMode::ProjectManager {
-        fast_mode: true, ..
-    } = mode
-    {
+    // Status-reporting wiring goes to the developer agents (Fresh/Continue) via
+    // the harness-agnostic spawn_wiring() entry point; the PM pane keeps just
+    // its fastMode flag. The wiring points at the running wsx binary by
+    // absolute path so PATH differences can't break the callback.
+    let pm_fast = matches!(
+        mode,
+        SpawnMode::ProjectManager {
+            fast_mode: true,
+            ..
+        }
+    );
+    let inject_status = matches!(mode, SpawnMode::Fresh { .. } | SpawnMode::Continue { .. });
+    if inject_status {
+        let wsx_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
+        if let Some(wiring) =
+            crate::agent::status::for_agent(AgentKind::Claude).spawn_wiring(&wsx_bin, false)
+        {
+            for arg in wiring.args {
+                cmd.arg(arg);
+            }
+        }
+    } else if pm_fast {
         cmd.arg("--settings");
         cmd.arg(r#"{"fastMode":true}"#);
     }
@@ -1569,9 +1587,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_echo() {
-        // Substitute claude with `cat` via the env-var seam.
+        // Substitute the agent binary with `cat` via the env-var seam. Use
+        // Codex, whose Fresh spawn injects no extra flags, so `cat` runs clean —
+        // a Claude Fresh spawn now injects `--settings` for status hooks, which
+        // `cat` would reject.
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -1585,7 +1606,7 @@ mod tests {
                 yolo: false,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+            AgentKind::Codex,
             None,
         )
         .unwrap();
@@ -1624,10 +1645,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn kill_all_terminates_child() {
+        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
+        // injects no extra flags for a plain Fresh session, so cat stays alive
+        // (reading stdin) and we can verify kill_all actually terminates it.
         let mut env = EnvGuard::new();
-        // `sh` (with no args) reads stdin forever — the spawn stays alive
-        // so we can verify `kill_all` actually terminates it.
-        env.set("WSX_CLAUDE_BIN", "/bin/sh");
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
         let id = crate::data::store::AgentInstanceId(1);
@@ -1647,10 +1669,11 @@ mod tests {
                     yolo: false,
                 },
                 crate::agent::remote_control::RemoteOpts::disabled(),
-                AgentKind::Claude,
+                AgentKind::Codex,
             )
             .unwrap();
-        // sh -i would run forever; we just check the session was Running.
+        // cat reads stdin forever — the spawn stays alive so we can verify
+        // kill_all actually terminates it.
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(matches!(
             *session.status.read().unwrap(),
@@ -1671,8 +1694,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn empty_enter_does_not_latch_prompt_capture() {
+        // Codex stub: its Fresh spawn injects no extra flags so `cat` starts
+        // clean (Claude now injects `--settings` for status hooks).
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = std::path::PathBuf::from(".");
         let session = spawn_session(
             &cwd,
@@ -1686,7 +1711,7 @@ mod tests {
                 yolo: false,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+            AgentKind::Codex,
             None,
         )
         .unwrap();
@@ -2106,7 +2131,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_mode_never_emits_settings_for_fast_mode() {
+    fn fresh_mode_emits_status_hooks_via_settings() {
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::Fresh {
             rename_ctx: None,
@@ -2121,14 +2146,33 @@ mod tests {
             crate::agent::remote_control::RemoteOpts::disabled(),
         );
         let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--settings"))
+            .expect("Fresh mode should emit --settings for status hooks");
+        let value = argv
+            .get(idx + 1)
+            .expect("expected JSON value after --settings")
+            .to_string_lossy();
+        let v: serde_json::Value =
+            serde_json::from_str(&value).expect("--settings value should be valid JSON");
         assert!(
-            !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
-            "Fresh mode should never emit --settings, argv: {argv:?}"
+            v["hooks"]["Stop"].is_array(),
+            "expected hooks.Stop array, got: {v}"
+        );
+        assert!(
+            v["hooks"]["UserPromptSubmit"].is_array(),
+            "expected hooks.UserPromptSubmit array, got: {v}"
+        );
+        // fastMode must NOT be set for developer-agent spawns
+        assert!(
+            v.get("fastMode").is_none(),
+            "Fresh mode must not set fastMode, got: {v}"
         );
     }
 
     #[test]
-    fn continue_mode_never_emits_settings_for_fast_mode() {
+    fn continue_mode_emits_status_hooks_via_settings() {
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::Continue {
             custom_instructions: None,
@@ -2142,9 +2186,28 @@ mod tests {
             crate::agent::remote_control::RemoteOpts::disabled(),
         );
         let argv = cmd.get_argv();
+        let idx = argv
+            .iter()
+            .position(|a| a == std::ffi::OsStr::new("--settings"))
+            .expect("Continue mode should emit --settings for status hooks");
+        let value = argv
+            .get(idx + 1)
+            .expect("expected JSON value after --settings")
+            .to_string_lossy();
+        let v: serde_json::Value =
+            serde_json::from_str(&value).expect("--settings value should be valid JSON");
         assert!(
-            !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
-            "Continue mode should never emit --settings, argv: {argv:?}"
+            v["hooks"]["Stop"].is_array(),
+            "expected hooks.Stop array, got: {v}"
+        );
+        assert!(
+            v["hooks"]["UserPromptSubmit"].is_array(),
+            "expected hooks.UserPromptSubmit array, got: {v}"
+        );
+        // fastMode must NOT be set for developer-agent spawns
+        assert!(
+            v.get("fastMode").is_none(),
+            "Continue mode must not set fastMode, got: {v}"
         );
     }
 
@@ -2310,8 +2373,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_text_when_settled_writes_after_quiet_window() {
+        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
+        // injects no extra flags for a plain Fresh session, so cat stays alive
+        // and echoes stdin cleanly — exactly what this timing test requires.
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -2325,7 +2391,7 @@ mod tests {
                 yolo: false,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+            AgentKind::Codex,
             None,
         )
         .unwrap();
@@ -2398,8 +2464,11 @@ mod tests {
     async fn send_text_when_settled_times_out_when_no_output() {
         // cat with no input produces no spontaneous output, so activity_ms
         // stays 0 and the quiet-window condition is never met.
+        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
+        // injects no extra flags for a plain Fresh session, so cat stays alive
+        // and fully silent — exactly what this timing test requires.
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -2413,7 +2482,7 @@ mod tests {
                 yolo: false,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+            AgentKind::Codex,
             None,
         )
         .unwrap();
@@ -2427,13 +2496,15 @@ mod tests {
     }
 
     /// Construct a real PTY-backed Session for scrollback unit tests. Uses
-    /// `cat` as the child so spawn succeeds without claude on the path.
+    /// `cat` as the child so spawn succeeds without the agent on the path.
+    /// Uses Codex, whose Fresh spawn injects no extra flags, so `cat` starts
+    /// clean (a Claude Fresh spawn now injects `--settings` for status hooks).
     /// The `EnvGuard` is only needed for the spawn syscall itself —
-    /// `WSX_CLAUDE_BIN` is read by the parent at command-build time, not by
+    /// `WSX_CODEX_BIN` is read by the parent at command-build time, not by
     /// the spawned cat — so dropping it before the test body returns is safe.
     fn spawn_for_test() -> Session {
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", cat_path());
         let cwd = PathBuf::from(".");
         spawn_session(
             &cwd,
@@ -2447,7 +2518,7 @@ mod tests {
                 yolo: false,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
-            AgentKind::Claude,
+            AgentKind::Codex,
             None,
         )
         .expect("spawn_session for scrollback test")

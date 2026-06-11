@@ -162,6 +162,13 @@ pub struct App {
         crate::data::store::WorkspaceId,
         crate::activity::events::WorkspaceEvents,
     >,
+    /// Last agent-pushed status per workspace, loaded from the store in
+    /// `refresh()` (which fires on every external-change tick — a sibling
+    /// `wsx status` write bumps `data_version`).
+    pub pushed_status: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::store::ReportedStatus,
+    >,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity:
         std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
@@ -317,6 +324,7 @@ impl App {
             pr_last_poll_ms: std::collections::HashMap::new(),
             diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
+            pushed_status: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
@@ -421,6 +429,7 @@ impl App {
             .unwrap_or_default()
             .into_iter()
             .collect();
+        self.pushed_status = self.store.all_workspace_status().unwrap_or_default();
         Ok(())
     }
 
@@ -578,6 +587,12 @@ impl App {
             .workspace_events
             .get(&ws.id)
             .is_some_and(|e| e.first_user_text.is_some());
+        let last_log_activity = self
+            .workspace_events
+            .get(&ws.id)
+            .map(|e| e.last_log_activity_ms)
+            .unwrap_or(0);
+        let reported = fresh_reported_state(self.pushed_status.get(&ws.id), last_log_activity);
         crate::ui::dashboard::status::Status::classify(
             awaiting,
             stopped_kind,
@@ -586,7 +601,23 @@ impl App {
             running,
             user_has_prompted,
             has_prior,
+            reported,
         )
+    }
+
+    /// The freshness-gated agent-pushed status for a workspace, or `None` when
+    /// there is no fresh push. Same liveness rule as the status classifier, so
+    /// the message and the glyph appear/disappear together.
+    pub fn fresh_reported_status(
+        &self,
+        ws_id: crate::data::store::WorkspaceId,
+    ) -> Option<&crate::data::store::ReportedStatus> {
+        let last_log_activity = self
+            .workspace_events
+            .get(&ws_id)
+            .map(|e| e.last_log_activity_ms)
+            .unwrap_or(0);
+        fresh_reported(self.pushed_status.get(&ws_id), last_log_activity)
     }
 }
 
@@ -635,6 +666,31 @@ pub(crate) fn derive_stopped_kind(
     } else {
         Some(StoppedKind::Complete)
     }
+}
+
+/// Decide whether a pushed status is still authoritative, returning the full
+/// record. The push wins while no JSONL activity has happened strictly after
+/// it; once the log grows past `reported_at`, the agent has acted since
+/// reporting and the heuristic re-arms. `last_log_activity_ms` of 0 means "no
+/// log activity observed", which never contradicts a push.
+pub(crate) fn fresh_reported(
+    reported: Option<&crate::data::store::ReportedStatus>,
+    last_log_activity_ms: i64,
+) -> Option<&crate::data::store::ReportedStatus> {
+    let r = reported?;
+    if r.reported_at >= last_log_activity_ms {
+        Some(r)
+    } else {
+        None
+    }
+}
+
+/// The freshness-gated reported *state* (convenience over `fresh_reported`).
+pub(crate) fn fresh_reported_state(
+    reported: Option<&crate::data::store::ReportedStatus>,
+    last_log_activity_ms: i64,
+) -> Option<crate::data::store::ReportedState> {
+    fresh_reported(reported, last_log_activity_ms).map(|r| r.state)
 }
 
 pub type SharedApp = Arc<Mutex<App>>;
@@ -1733,5 +1789,54 @@ mod derive_stopped_kind_tests {
 
         assert_eq!(offsets, [0; 4]);
         assert_eq!(last, Some(WorkspaceId(42)));
+    }
+}
+
+#[cfg(test)]
+mod reported_freshness_tests {
+    use super::{fresh_reported, fresh_reported_state};
+    use crate::data::store::{ReportedState, ReportedStatus};
+
+    fn status(at: i64) -> ReportedStatus {
+        ReportedStatus {
+            state: ReportedState::Done,
+            message: None,
+            source: "model".into(),
+            reported_at: at,
+        }
+    }
+
+    #[test]
+    fn push_newer_than_last_log_activity_is_fresh() {
+        assert_eq!(
+            fresh_reported_state(Some(&status(1000)), 900),
+            Some(ReportedState::Done)
+        );
+        assert_eq!(
+            fresh_reported_state(Some(&status(1000)), 1000),
+            Some(ReportedState::Done)
+        );
+    }
+
+    #[test]
+    fn jsonl_activity_after_push_re_arms_heuristic() {
+        assert_eq!(fresh_reported_state(Some(&status(1000)), 1500), None);
+    }
+
+    #[test]
+    fn no_push_is_none() {
+        assert_eq!(fresh_reported_state(None, 1500), None);
+    }
+
+    #[test]
+    fn fresh_reported_returns_ref_on_tie_and_none_after() {
+        let s = status(1000);
+        // tie: reported_at == last_log_activity_ms -> still fresh, returns the ref
+        assert!(fresh_reported(Some(&s), 1000).is_some());
+        assert!(fresh_reported(Some(&s), 900).is_some());
+        // log grew after the push -> stale
+        assert!(fresh_reported(Some(&s), 1500).is_none());
+        // no push -> none
+        assert!(fresh_reported(None, 1500).is_none());
     }
 }

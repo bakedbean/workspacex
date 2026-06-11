@@ -44,6 +44,25 @@ Run `wsx --help` or `wsx <command> --help` to list commands and arguments direct
 
 The full reference is the project README's "CLI reference", "Multi-agent workspaces", and "Related repos" sections — consult it for `wsx config` / `wsx remote` / setup scripts.
 
+## Reporting your status
+
+wsx shows each workspace's state on its dashboard. Keep it accurate by pushing your status as you work. The command operates on the **current workspace** — resolved from `$WSX_WORKSPACE_ID`, else the cwd's worktree — so there are no `<repo>/<slug>` args.
+
+```bash
+wsx status set working --message "running the test suite"
+wsx status set blocked --message "need your call on the auth approach"
+wsx status set done    --message "implemented and tests green"
+```
+
+**When to call it** (the states are `working | waiting | blocked | done`):
+
+- `working` — when you begin substantive work on a request.
+- `blocked` — when you stop to ask the user a question or need a decision.
+- `waiting` — when parked on something external (a build, CI, a long-running command).
+- `done` — when the task is complete.
+
+The `--message` is a short one-liner shown on the dashboard. Claude Code hooks also report coarse state automatically, but an explicit `set` with a message is always clearer — prefer it at the transitions above.
+
 ## Slug rules (read before typing --name)
 
 A slug is a **2-4 word kebab-case summary of the task**: `add-widgets-endpoint`, `fix-login-redirect`.

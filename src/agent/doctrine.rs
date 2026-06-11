@@ -29,6 +29,12 @@ const CLAUSE_WSX_SKILL: &str = "- Load and follow the wsx skill. It is authorita
     for workspace and cross-repo operations in this environment; consult it before \
     running wsx commands.";
 
+const CLAUSE_STATUS: &str = "- Report your status as you go with `wsx status set \
+    <working|waiting|blocked|done> --message \"<one line>\"`: `working` when you start \
+    substantive work, `blocked` when you need a decision or answer from the user, \
+    `waiting` when parked on something external (a build, CI, a long command), and \
+    `done` when the task is finished. This keeps the wsx dashboard accurate.";
+
 /// Values for the `process_doctrine` setting that disable doctrine injection
 /// entirely (matched case-insensitively against the trimmed value).
 const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
@@ -67,6 +73,7 @@ pub fn process_doctrine(agent: AgentKind) -> String {
     }
     clauses.push(CLAUSE_COMMITS);
     clauses.push(CLAUSE_WSX_SKILL);
+    clauses.push(CLAUSE_STATUS);
     format!("{DOCTRINE_HEADER}\n\n{}", clauses.join("\n"))
 }
 
@@ -127,6 +134,15 @@ mod tests {
         assert!(d.contains("plan"), "codex keeps planning clause: {d}");
         assert!(d.contains("commit"), "codex keeps commits clause: {d}");
         assert!(d.contains("wsx skill"), "codex keeps wsx skill clause: {d}");
+    }
+
+    #[test]
+    fn doctrine_mentions_status_reporting() {
+        let d = process_doctrine(AgentKind::Claude).to_lowercase();
+        assert!(
+            d.contains("wsx status"),
+            "doctrine must tell the agent to report status: {d}"
+        );
     }
 
     #[test]

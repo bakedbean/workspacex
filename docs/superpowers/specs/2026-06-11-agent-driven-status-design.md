@@ -105,11 +105,16 @@ Tier 1  Model push     wsx status set blocked --message "need your call on auth"
                         Richest: carries a semantic message. Requires the model
                         to remember (skill + system prompt nudge it).
 
-Tier 2  Hook push       UserPromptSubmit → working
-                        Stop            → done
-                        Notification    → waiting
+Tier 2  Hook push       UserPromptSubmit                          → working
+                        PreToolUse[AskUserQuestion,ExitPlanMode]  → blocked (structured Q)
+                        Notification[permission_prompt]           → blocked (needs perm)
+                        Notification[idle_prompt]                 → waiting
+                        Stop                                      → turn ended → done*
                         Deterministic, fires regardless of model cooperation.
                         Claude-only (other agents have no equivalent hooks).
+                        *Stop can't tell a prose question from a completion on
+                        its own — see Fidelity findings; that edge falls to
+                        tier 1 or tier 3.
 
 Tier 3  JSONL heuristic  existing Status::classify() inputs
                         Universal fallback for pi / hermes / codex, and for any
@@ -192,23 +197,46 @@ top but **below** the hard signals it can't override safely:
 
 ### 4. Hook wiring — extend the `--settings` JSON
 
-For Claude, augment the inline settings already passed at `session.rs:860`:
+For Claude, augment the inline settings already passed at `session.rs:860`.
+The fidelity probe (below) showed a richer, more capable mapping than the
+original three-hook sketch:
 
 ```json
 {
   "fastMode": true,
   "hooks": {
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "wsx status set working" }] }],
-    "Stop":             [{ "hooks": [{ "type": "command", "command": "wsx status set done" }] }],
-    "Notification":     [{ "hooks": [{ "type": "command", "command": "wsx status set waiting" }] }]
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "wsx status set blocked" }] },
+      { "matcher": "ExitPlanMode",    "hooks": [{ "type": "command", "command": "wsx status set blocked" }] }
+    ],
+    "Notification": [
+      { "matcher": "permission_prompt", "hooks": [{ "type": "command", "command": "wsx status set blocked" }] },
+      { "matcher": "idle_prompt",       "hooks": [{ "type": "command", "command": "wsx status set waiting" }] }
+    ],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "wsx status from-hook" }] }]
   }
 }
 ```
 
-The hook command relies on `$WSX_WORKSPACE_ID` being present in the hook's
-environment (Finding 2 makes this likely, since hooks inherit the session env —
-but see *Spike-validation items*). Hooks supply only coarse state, never a
-`--message`; the message is the model-push tier's job.
+Notes:
+
+- The hook command relies on `$WSX_WORKSPACE_ID` in the hook's environment —
+  **validated**, see Finding 2 / Spike-validation item 1.
+- Hooks supply state only, never a `--message`; the message is the model-push
+  tier's job.
+- `Stop` uses `wsx status from-hook` (reads the hook JSON on stdin) rather than
+  a fixed `set done`, because the Stop event alone can't separate a prose
+  question from a completion. `from-hook` can apply the best-effort
+  `last_assistant_message` `?`-suffix check (undocumented field — degrade to
+  plain `done` if absent) and defer the rest to tier 3. Equivalently, map
+  `Stop → done` and let tier-3 `classify()` refine done→question; pick one in
+  implementation.
+- **Hooks block the turn.** Command-hook default timeout is 10 min, but
+  `UserPromptSubmit` is capped at 30s. `wsx status` must be fast (a single
+  indexed SQLite write with `busy_timeout`). If latency is ever a concern, the
+  hook can background the write (`wsx status … & exit 0`), though async command
+  hooks aren't a documented guarantee — prefer just keeping the write cheap.
 
 ### 5. SKILL.md + doctrine
 
@@ -283,16 +311,71 @@ taken on faith:
    `CLAUDE_PROJECT_DIR` in the hook env, a second usable anchor. (The
    templating fallback — `wsx status set working --workspace <id>` — is
    therefore unnecessary, but remains available if ever needed.)
-2. **Hook → state fidelity.** Verify `Stop` vs `Notification` cleanly separate
-   "done" from "waiting on you / needs permission". If `Stop` fires for both
-   turn-end and question-end, tier 2 can only assert "not working"; the
-   question/done distinction then leans on tier 1 (model push) or tier 3
-   (the existing `?`-suffix heuristic). Worth a short manual probe.
+2. **Hook → state fidelity. — ✅ PROBED 2026-06-11.** See *Fidelity findings*
+   below. Outcome: structured questions and permission blocks ARE
+   deterministically separable (via `PreToolUse` and `Notification`
+   `notification_type`); only a *prose* question vs a completion is
+   indistinguishable at `Stop` and falls to tier 1/tier 3. Residual item now
+   tracked as #5.
+5. **PreToolUse[AskUserQuestion] vs Stop ordering (NOT yet validated).**
+   Confirm that when the agent calls `AskUserQuestion`/`ExitPlanMode`, `Stop`
+   does **not** also fire while the tool is pending (which would clobber the
+   `blocked` push with a `done`). Logically it shouldn't — the agent is
+   awaiting a tool result, not "finished responding" — but this needs an
+   interactive check (can't be driven in `-p`). If `Stop` does fire, the
+   `from-hook`/`classify()` resolution must treat a just-pushed `blocked` as
+   sticky until the user replies.
 3. **`busy_timeout`.** Set one on the agent-facing store open and confirm a
    `wsx status` write doesn't `SQLITE_BUSY` against a live TUI under rapid
    pushes.
 4. **Hook latency/noise.** `UserPromptSubmit` → `working` on every prompt is
    fine, but confirm the hooks don't add perceptible input latency or clutter.
+
+## Fidelity findings (probed 2026-06-11, claude 2.1.173)
+
+Two methods: an empirical hook-capture probe (nested `claude -p` with hooks
+wired via `--settings`, logging which hook fired and its full stdin payload
+across a completion turn vs. a question-ending turn), and an authoritative
+docs check of firing conditions and payloads.
+
+**Empirically observed:**
+
+- A plain-completion turn and a prose-question turn produced the *identical*
+  hook sequence: `UserPromptSubmit` then `Stop`. No `Notification` fired for a
+  prose question. So **`Stop` alone cannot separate done from a prose
+  question.**
+- The `Stop` stdin payload carried `last_assistant_message` — `"done"` for the
+  completion, and the full `?`-terminated text for the question. This is a
+  synchronous, in-hook disambiguator for the prose case *if* relied upon — but
+  it is **not in the documented schema** (the documented `Stop` fields are
+  `session_id`, `transcript_path`, `cwd`, `permission_mode`, `effort`,
+  `hook_event_name`, `stop_reason`, `tool_calls`). Treat as best-effort.
+
+**Authoritative (documented) semantics that shape the mapping:**
+
+- **`Notification`** fires with a `notification_type` discriminator and a
+  `message` field; the relevant types are `permission_prompt` (→ blocked,
+  needs permission) and `idle_prompt` (→ waiting). Cleanly separable.
+- **`PreToolUse`** supports a per-tool `matcher`, so `AskUserQuestion` and
+  `ExitPlanMode` invocations fire deterministically with the tool name —
+  the strong signal for structured "blocked / asking" states.
+- **`Stop`** fires on every normal turn end (completion *and* prose question)
+  but **not on user interrupts**. `stop_reason` is `end_turn` for both a
+  completion and a prose question, so it doesn't disambiguate either.
+- **`Stop` vs `SubagentStop`:** key off `Stop` (main agent); `SubagentStop` is
+  Task-tool subagents only.
+- **Blocking/timeout:** command hooks run synchronously and block the turn;
+  default timeout 10 min, but `UserPromptSubmit` is capped at 30s. Keep
+  `wsx status` cheap.
+
+**Net effect on the design:** tier 2 is *more* capable than the original
+sketch — structured questions (`PreToolUse`) and permission blocks
+(`Notification`) are deterministic. The only irreducibly ambiguous case is a
+**prose question vs a completion**, for which no documented hook exists; it is
+resolved by tier 1 (the model knows it asked and pushes `blocked`) or tier 3
+(the existing transcript `?`-suffix / pending-`AskUserQuestion` heuristic in
+`classify()`), with the undocumented `last_assistant_message` available as a
+best-effort in-hook shortcut.
 
 ## Scope summary
 

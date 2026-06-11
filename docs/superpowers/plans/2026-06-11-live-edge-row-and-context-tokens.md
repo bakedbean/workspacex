@@ -25,18 +25,33 @@
 
 # PHASE A — sessionx (separate repo + PR, land first)
 
+> **LAYOUT NOTE (discovered during execution):** sessionx `main` is ahead of the
+> rev wsx currently pins, and has refactored the single `src/activity/events.rs`
+> into a module: the Claude events code now lives in
+> `src/activity/events/mod.rs` (the `WorkspaceEvents` struct, its `Default`,
+> `reset_session_state`, `TailUpdate`, `tail_session`, and the `#[cfg(test)] mod
+> tests` block) and `src/activity/events/parse.rs` (`ParsedLine`,
+> `parse_jsonl_line`, `parse_assistant`). The code bodies are byte-for-byte the
+> same as the old file, so every code block below applies verbatim — only the
+> file paths change. `parse.rs` has NO test module, so add all new tests to the
+> test module in `src/activity/events/mod.rs` (it already imports the parse fns;
+> follow existing tests like `parse_assistant_surfaces_edited_file_paths`).
+> `codex_events.rs` / `pi_events.rs` are separate agent backends — do NOT touch
+> them. We branch from `main` (not the old pinned rev) so the PR merges cleanly.
+
 ### Task A1: Clone sessionx and branch
 
 **Files:** none (setup only)
 
-- [ ] **Step 1: Clone the pinned sessionx and branch**
+- [ ] **Step 1: Branch from main**
 
-The wsx `Cargo.toml:31` pins `rev = "3f83a3abbfe9e5a00521f9d91c7c08c815a9d151"`.
+A clone already exists at `/home/eben/sessionx` on `main` (which is ahead of the
+rev wsx pins, including the events.rs → events/ module refactor — see LAYOUT NOTE).
 
 ```bash
-git clone https://github.com/bakedbean/sessionx /home/eben/sessionx
 cd /home/eben/sessionx
-git checkout 3f83a3abbfe9e5a00521f9d91c7c08c815a9d151
+git fetch origin
+git switch main && git pull --ff-only
 git switch -c live-edge-activity-signals
 ```
 

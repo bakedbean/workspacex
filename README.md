@@ -295,8 +295,10 @@ state.
 handy for starting a dev server without opening a separate terminal. The
 command runs via `sh -c` as a background process, with stdout and stderr
 captured to a log file under `~/.local/state/wsx/logs/`; the path is shown
-after launch. Because it runs in the worktree, it appears in this same list
-on the next scan, where `K` stops it.
+after launch. It runs detached (its own session, reparented away from wsx),
+so it keeps running if you close the dashboard and survives until it exits or
+you stop it. Because it runs in the worktree, it appears in this same list on
+the next scan, where `K` stops it.
 
 **Notes:**
 

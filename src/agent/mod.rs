@@ -12,3 +12,4 @@ pub mod pm;
 pub mod related;
 pub mod remote_control;
 pub mod skill;
+pub mod status;

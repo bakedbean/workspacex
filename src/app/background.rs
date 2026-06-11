@@ -170,6 +170,10 @@ pub async fn tail_workspace_events(
             // Snapshot the just-completed turn's recap through
             // clean_recap; the SESSION SUMMARY column reads this field.
             evt.snapshot_recap_at_turn_end();
+            // The live action label is turn-scoped: once the agent finishes a
+            // turn (awaiting user), drop it so the next turn's Thinking phase
+            // doesn't surface the previous turn's "now …"/command as if live.
+            evt.current_action = None;
         }
     }
     if human_replied_after_last_stop {

@@ -183,7 +183,6 @@ fn spawn_resolved(
 
 /// Build the argv for running `command` through a POSIX shell. The whole command
 /// is passed as a single `-c` argument so pipes, `&&`, and env vars work as typed.
-#[allow(dead_code)]
 fn shell_argv(command: &str) -> Vec<String> {
     vec!["sh".to_string(), "-c".to_string(), command.to_string()]
 }
@@ -196,6 +195,37 @@ pub fn background_log_path(
     epoch_ms: u64,
 ) -> std::path::PathBuf {
     log_dir.join(format!("ws{workspace_id}-{epoch_ms}.log"))
+}
+
+/// Launch `command` as a detached background process whose working directory is
+/// `worktree`. The command runs through `sh -c` so shell features behave as the
+/// user expects. stdout and stderr are redirected to `log_path` (created /
+/// truncated); stdin is null. The process is a child of the wsx session: it runs
+/// until it exits or wsx exits.
+pub fn spawn_background_command(worktree: &Path, command: &str, log_path: &Path) -> Result<()> {
+    if command.trim().is_empty() {
+        return Err(Error::UserInput("command is empty".into()));
+    }
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::UserInput(format!("create log dir: {e}")))?;
+    }
+    let log = std::fs::File::create(log_path)
+        .map_err(|e| Error::UserInput(format!("open log {}: {e}", log_path.display())))?;
+    let log_err = log
+        .try_clone()
+        .map_err(|e| Error::UserInput(format!("clone log handle: {e}")))?;
+
+    let parts = shell_argv(command);
+    let mut cmd = std::process::Command::new(&parts[0]);
+    cmd.args(&parts[1..])
+        .current_dir(worktree)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log))
+        .stderr(std::process::Stdio::from(log_err));
+    cmd.spawn()
+        .map_err(|e| Error::UserInput(format!("spawn background command: {e}")))?;
+    Ok(())
 }
 
 /// Spawn `parts` (program + argv) detached, with cwd = `cwd`.

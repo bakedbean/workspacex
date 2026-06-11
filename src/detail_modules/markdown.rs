@@ -317,6 +317,11 @@ fn parse_blocks(text: &str, theme: &Theme) -> Vec<Block> {
 /// Wrap inline tokens to `width`, prefixing the first line with `lead`
 /// and continuation lines with `cont` (used for list hanging indents and
 /// blockquote bars). `lead` and `cont` are assumed to be the same width.
+///
+/// The `width` bound holds for any realistic detail-column width. When
+/// `width` is smaller than the prefix itself (a degenerate case the detail
+/// bar never produces — it is dozens of columns wide), a line may exceed
+/// `width` by up to the prefix width; the terminal clips the overflow.
 fn flow_lines(
     tokens: &[Tok],
     width: usize,
@@ -370,6 +375,11 @@ fn block_to_lines(block: &Block, width: usize, theme: &Theme) -> Vec<Line<'stati
 /// Render markdown `text` into styled, width-wrapped lines for the
 /// detail bar. Blocks are separated by a single blank line; there are no
 /// leading or trailing blanks (the host owns inter-module spacing).
+///
+/// Lines are wrapped to `width`. For prefixed blocks (lists, blockquotes,
+/// code) at a width narrower than the prefix — a degenerate case the
+/// detail column never reaches — a line may exceed `width` (see
+/// `flow_lines`). The terminal clips any such overflow.
 pub fn render(text: &str, width: u16, theme: &Theme) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![Line::from(Span::styled(

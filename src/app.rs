@@ -472,9 +472,7 @@ impl App {
     pub(crate) fn selection_target_exists(&self, t: SelectionTarget) -> bool {
         match t {
             SelectionTarget::Repo(id) => self.repos.iter().any(|r| r.id == id),
-            SelectionTarget::Workspace(id) => {
-                self.workspaces.iter().any(|(_, w)| w.id == id)
-            }
+            SelectionTarget::Workspace(id) => self.workspaces.iter().any(|(_, w)| w.id == id),
         }
     }
 

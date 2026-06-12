@@ -597,7 +597,11 @@ mod reconcile_selection_tests {
         let new = vec![repo(1), ws(1), ws(3)];
         let (sel, idx) = reconcile_selection(Some(ws(2)), 2, &new, |_| false);
         assert_eq!(idx, 2, "clamped to old index");
-        assert_eq!(sel, Some(ws(3)), "selection becomes the neighbor at that slot");
+        assert_eq!(
+            sel,
+            Some(ws(3)),
+            "selection becomes the neighbor at that slot"
+        );
     }
 
     #[test]

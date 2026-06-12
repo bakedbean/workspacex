@@ -34,6 +34,7 @@ mod tests {
             ppid: 0,
             command: cmd.into(),
             cwd: PathBuf::from("/"),
+            listening: false,
         }
     }
 

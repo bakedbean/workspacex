@@ -306,6 +306,12 @@ the next scan, where `K` stops it.
 - Shells and editors (bash, zsh, nvim, code, etc.) are filtered out so the
   count surfaces what's interesting — your dev server, not the terminal
   hosting it.
+- Helper processes spawned by Claude Code and editors (MCP servers,
+  language servers) are hidden too, since they inherit the worktree cwd
+  but aren't work you launched. The exception is a process holding a
+  listening TCP socket: a dev server started from inside Claude Code (e.g.
+  a `pnpm dev` on `:3000`) still shows up and can be killed here, while the
+  stdio-only helpers stay filtered.
 - wsx never starts these processes itself. Launch them however you
   like (the `[t]` terminal keybind is one option). The feature is
   observability plus a kill hook, not lifecycle management.

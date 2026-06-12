@@ -202,6 +202,25 @@ integration's `spawn_wiring()` is honoured. No other Codex spawn changes.
   long-stable, documented API (far less churn-prone than `hooks.*`), but the live
   TUI check should be re-run on major Codex bumps.
 
+## Verification result (2026-06-12, Codex v0.137.0)
+
+The implementation was verified end-to-end against the real wsx binary and DB:
+
+- **`from-notify` CLI chain** — `wsx status from-notify --agent codex '<json>'`
+  against the live store correctly wrote `done`/`source=notify` for a plain
+  `agent-turn-complete`, `blocked`/`source=notify` for a `?`-terminated message,
+  and was a no-op (exit 0, state unchanged) for malformed JSON and non-turn
+  events.
+- **Full chain under `codex exec`** — a real `codex` turn launched with the exact
+  `-c notify=["…/wsx","status","from-notify","--agent","codex"]` arg that
+  `build_codex_command` emits flipped the workspace from a `working`/`model`
+  sentinel to `done`/`notify`, i.e. Codex itself fired `notify` and drove the
+  push through the real binary.
+- **Residual (human, low-risk):** the same flow inside the interactive **TUI**
+  was not click-tested. Source analysis confirms `notify` dispatches from the
+  shared `core/src/session/turn.rs::run_turn` loop used by both `exec` and the
+  TUI, so this is expected to behave identically; re-confirm on major Codex bumps.
+
 ## Future option (out of scope)
 
 For full deterministic parity — turn-start, structured questions, and

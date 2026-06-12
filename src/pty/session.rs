@@ -4398,6 +4398,10 @@ mod tests {
             !argv.iter().any(|a| a.starts_with("notify=[")),
             "PM should not get status wiring; argv: {argv:?}"
         );
+        assert!(
+            !argv.iter().any(|a| a == "-c"),
+            "PM should not inject the -c flag; argv: {argv:?}"
+        );
     }
 
     #[test]

@@ -1,0 +1,4 @@
+0.5	7	One workspace, one isolated worktree, a live agent
+13	22	Claude reviews and finds the SQL-injection bug
+24	31	Add a second agent — Codex — to the same workspace
+37	50	Codex implements the fix on that same worktree

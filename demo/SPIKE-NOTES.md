@@ -97,8 +97,34 @@ Tapes MUST `Env` both dir vars plus `XDG_STATE_HOME` so wsx passes them to the
 spawned agents. (Pi also works — `PI_CODING_AGENT_DIR` + offline `deepseek-v4-flash`,
 non-blocking trust — but is left out of the demo content by request.)
 
-## Still open (for the multi-agent hero clip)
+## Multi-agent choreography (for the hero clip)
 
-The `Ctrl-x a` agents-panel choreography (add codex+pi to one workspace, pane
-layout, typing into each pane, cross-agent `wsx agent send`) still needs a
-dedicated spike before the hero tape is written.
+Adding a second agent to a workspace and switching between them:
+
+- **Add an agent:** while attached, `Ctrl-x` then `a` opens the agents panel.
+  The "Add:" row lists `claude  pi  hermes  codex`; navigate it with **Down/Up**
+  (NOT Left/Right — Right is a no-op), so `Down ×3` reaches `codex`. `Enter` adds
+  it and closes the panel; the new agent spawns and boots on the same worktree.
+- **Agents bar:** once ≥2 agents exist, the attached view grows a footer row
+  `agents:  ▌claude q   ▎codex w` — `▌` marks the focused pane; `q`/`w` are the
+  switch keys (pool: `q w r y i o p s h j`, primary first).
+- **Switch panes:** **`Ctrl-x` + the switch key** — `Ctrl-x q` → claude,
+  `Ctrl-x w` → codex. **The README is WRONG**: it says the bare key (no leader)
+  switches, but bare `w` is typed into the focused agent as literal text; the
+  `Ctrl-x` leader is required. `Ctrl-x ←/→` does NOT cycle agents either.
+- **Typing:** after switching, normal typing goes to the now-focused pane.
+
+**Timing gotcha (cost a failed hero render):** after `Enter` adds codex, it needs
+**~10-11s** to spawn and register as a switch target. `Ctrl-x w` fired ~2s after
+the add is a **no-op** (stays on claude). So: `Sleep 11s` after adding before
+switching.
+
+**VHS failure mode:** a `Wait` that never matches makes VHS print `recording
+failed` and **discard the whole mp4 + all screenshots**. So `Wait` is only safe
+on *proven* anchors. The hero uses `Wait` for the claude steps (`/bypass
+permissions on/` = ready, `/(SQL inject|injection)/` = review done — both
+reliable) and **fixed `Sleep`s for the entire codex add→switch→fix sequence**
+(codex's edit has no reliable completion anchor; a missed regex there would throw
+away a 90s render). Debug VHS failures by mirroring the tape in tmux with
+`capture-pane`, or by re-running the suspect span as a tiny Sleep+Screenshot tape
+(Screenshots survive; they're only discarded when a `Wait` times out).

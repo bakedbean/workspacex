@@ -1587,12 +1587,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_echo() {
-        // Substitute the agent binary with `cat` via the env-var seam. Use
-        // Codex, whose Fresh spawn injects no extra flags, so `cat` runs clean —
-        // a Claude Fresh spawn now injects `--settings` for status hooks, which
-        // `cat` would reject.
+        // Substitute the agent binary with a wrapper that ignores args and cats
+        // stdin. Codex Fresh now injects `-c notify=...` for status reporting,
+        // which bare `cat` would reject, so we can't use `cat_path()` directly.
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,

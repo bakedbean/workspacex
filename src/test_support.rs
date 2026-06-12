@@ -45,6 +45,21 @@ pub fn false_path() -> &'static str {
     resolve_util(&["/usr/bin/false", "/bin/false", "false"])
 }
 
+/// Path to an executable wrapper that ignores all CLI arguments and cats
+/// stdin. Use in place of `cat_path()` for agent spawns that now inject flags
+/// the bare `cat` would reject (e.g. Codex `-c notify=...`). The script is
+/// (re)written on each call to a stable temp path; callers hold `ENV_LOCK` via
+/// `EnvGuard`, so concurrent writers don't race on the identical content.
+#[cfg(unix)]
+pub fn cat_ignore_args_path() -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let p = std::env::temp_dir().join("wsx_test_cat_ignore_args.sh");
+    std::fs::write(&p, "#!/bin/sh\nexec cat\n").expect("write wrapper script");
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod wrapper script");
+    p
+}
+
 /// RAII guard for env-mutating tests: acquires `ENV_LOCK`, stashes the
 /// original value of any env var it sets/removes, and restores them on
 /// drop — even on panic — so a failed assertion can't leak stale env

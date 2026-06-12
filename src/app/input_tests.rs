@@ -133,7 +133,7 @@ mod pm_state_tests {
             SelectionTarget::Repo(crate::data::store::RepoId(2)),
             SelectionTarget::Repo(crate::data::store::RepoId(3)),
         ];
-        app.dashboard.selected = 2;
+        app.select_index(2);
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
             .await
             .unwrap();
@@ -152,7 +152,7 @@ mod pm_state_tests {
             SelectionTarget::Repo(crate::data::store::RepoId(2)),
             SelectionTarget::Repo(crate::data::store::RepoId(3)),
         ];
-        app.dashboard.selected = 0;
+        app.select_index(0);
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
             .await
             .unwrap();
@@ -169,7 +169,7 @@ mod pm_state_tests {
             SelectionTarget::Repo(crate::data::store::RepoId(2)),
             SelectionTarget::Repo(crate::data::store::RepoId(3)),
         ];
-        app.dashboard.selected = 1;
+        app.select_index(1);
         handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
             .await
             .unwrap();
@@ -1912,7 +1912,7 @@ mod pm_state_tests {
         app.view = crate::ui::View::Dashboard;
         // Point selectable at the workspace so selected_target() returns it.
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
 
         app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
@@ -1958,7 +1958,7 @@ mod pm_state_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
 
         app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
@@ -2016,7 +2016,7 @@ mod pm_state_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
 
         app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
@@ -2076,7 +2076,7 @@ mod pm_state_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
 
         // Three commands in cache but only two chip_rects rendered.
         app.pinned_commands_cache = vec![
@@ -2149,7 +2149,7 @@ mod pm_state_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
         // No pre-existing draft.
         assert_eq!(app.dashboard.reply_draft, "");
         assert!(app.dashboard.reply_draft_clear_at_ms.is_none());
@@ -2209,7 +2209,7 @@ mod pm_state_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
         app.focus = crate::ui::PaneFocus::DetailBarReply;
         // Simulate state right after a chip dispatch: draft echoes the
         // command, deadline is set.
@@ -2291,7 +2291,7 @@ mod pm_state_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
 
         app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
@@ -2346,7 +2346,7 @@ mod pm_state_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
 
         // First Ctrl-X: arms.
         handle_key_dashboard(
@@ -2382,7 +2382,7 @@ mod pm_state_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
         app.modal = None;
 
         // Ctrl-X — arms the leader.
@@ -2851,7 +2851,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn zz_toggles_focused_repo_fold() {
         let (mut app, ids) = make_app_with_n_repos(2);
-        app.dashboard.selected = 0;
+        app.select_index(0);
         let rid = ids[0];
         let key = rid.0 as u64;
         let before = app.dashboard.folded.get(&key).copied();
@@ -2938,7 +2938,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn j_alias_advances_selection_like_down() {
         let (mut app, _) = make_app_with_n_repos(3);
-        app.dashboard.selected = 0;
+        app.select_index(0);
         press(&mut app, 'j', KeyModifiers::NONE).await;
         assert_eq!(app.dashboard.selected, 1, "j should advance like Down");
     }
@@ -2946,7 +2946,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn k_alias_retreats_selection_like_up() {
         let (mut app, _) = make_app_with_n_repos(3);
-        app.dashboard.selected = 2;
+        app.select_index(2);
         press(&mut app, 'k', KeyModifiers::NONE).await;
         assert_eq!(app.dashboard.selected, 1, "k should retreat like Up");
     }
@@ -2955,7 +2955,7 @@ mod pm_state_tests {
     async fn k_does_not_open_process_list_anymore() {
         // `k` is now a nav alias for Up. Process list must be opened by `K`.
         let (mut app, _) = make_app_with_n_repos(1);
-        app.dashboard.selected = 0;
+        app.select_index(0);
         press(&mut app, 'k', KeyModifiers::NONE).await;
         assert!(
             app.modal.is_none(),
@@ -2988,7 +2988,7 @@ mod pm_state_tests {
             .iter()
             .position(|t| matches!(t, SelectionTarget::Workspace(id) if *id == ws_id))
             .expect("workspace should appear in selectable list");
-        app.dashboard.selected = idx;
+        app.select_index(idx);
         press(&mut app, 'K', KeyModifiers::SHIFT).await;
         assert!(
             matches!(app.modal, Some(Modal::ProcessList { workspace_id, .. }) if workspace_id == ws_id),
@@ -2999,7 +2999,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn shift_k_moves_selected_repo_up() {
         let (mut app, ids) = make_app_with_n_repos(3);
-        app.dashboard.selected = 1; // select repo-1 (Repo header)
+        app.select_index(1); // select repo-1 (Repo header)
         press(&mut app, 'K', KeyModifiers::SHIFT).await;
 
         let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
@@ -3018,7 +3018,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn shift_j_moves_selected_repo_down() {
         let (mut app, ids) = make_app_with_n_repos(3);
-        app.dashboard.selected = 1; // select repo-1
+        app.select_index(1); // select repo-1
         press(&mut app, 'J', KeyModifiers::SHIFT).await;
 
         let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
@@ -3033,7 +3033,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn shift_k_at_top_is_noop() {
         let (mut app, ids) = make_app_with_n_repos(3);
-        app.dashboard.selected = 0; // top repo
+        app.select_index(0); // top repo
         press(&mut app, 'K', KeyModifiers::SHIFT).await;
         let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
         assert_eq!(
@@ -3046,7 +3046,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn shift_j_at_bottom_is_noop() {
         let (mut app, ids) = make_app_with_n_repos(3);
-        app.dashboard.selected = 2; // bottom repo
+        app.select_index(2); // bottom repo
         press(&mut app, 'J', KeyModifiers::SHIFT).await;
         let order: Vec<_> = app.repos.iter().map(|r| r.id).collect();
         assert_eq!(
@@ -3059,7 +3059,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn shift_j_repeated_walks_repo_and_selection_follows() {
         let (mut app, ids) = make_app_with_n_repos(3);
-        app.dashboard.selected = 0; // select repo-0 (top)
+        app.select_index(0); // select repo-0 (top)
         // Walk it down twice: [0,1,2] -> [1,0,2] -> [1,2,0].
         press(&mut app, 'J', KeyModifiers::SHIFT).await;
         assert_eq!(
@@ -3118,7 +3118,7 @@ mod pm_state_tests {
             .iter()
             .position(|t| matches!(t, SelectionTarget::Workspace(id) if *id == ws_id))
             .expect("workspace should appear in selectable list");
-        app.dashboard.selected = idx;
+        app.select_index(idx);
         // Capture repo order before pressing Shift+J.
         let order_before: Vec<_> = app.repos.iter().map(|r| r.id).collect();
         press(&mut app, 'J', KeyModifiers::SHIFT).await;
@@ -3134,7 +3134,7 @@ mod pm_state_tests {
         // On a repo header, Enter opens the New Workspace modal. `i` (vim
         // insert) should do the same — it's the "enter this thing" verb.
         let (mut app, _) = make_app_with_n_repos(1);
-        app.dashboard.selected = 0;
+        app.select_index(0);
         assert!(matches!(
             app.selected_target(),
             Some(SelectionTarget::Repo(_))
@@ -3150,7 +3150,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn h_folds_focused_repo() {
         let (mut app, ids) = make_app_with_n_repos(2);
-        app.dashboard.selected = 0;
+        app.select_index(0);
         // Start expanded so we can observe the fold.
         app.dashboard.folded.insert(ids[0].0 as u64, false);
         press(&mut app, 'h', KeyModifiers::NONE).await;
@@ -3164,7 +3164,7 @@ mod pm_state_tests {
     #[tokio::test]
     async fn l_unfolds_focused_repo() {
         let (mut app, ids) = make_app_with_n_repos(2);
-        app.dashboard.selected = 0;
+        app.select_index(0);
         app.dashboard.folded.insert(ids[0].0 as u64, true);
         press(&mut app, 'l', KeyModifiers::NONE).await;
         assert_eq!(
@@ -3180,7 +3180,7 @@ mod pm_state_tests {
         // repo folded. This is the behavior that lets you mash `h` while
         // navigating without accidentally re-opening a row.
         let (mut app, ids) = make_app_with_n_repos(2);
-        app.dashboard.selected = 0;
+        app.select_index(0);
         app.dashboard.folded.insert(ids[0].0 as u64, true);
         press(&mut app, 'h', KeyModifiers::NONE).await;
         press(&mut app, 'h', KeyModifiers::NONE).await;
@@ -3797,7 +3797,7 @@ mod pm_state_tests {
             .iter()
             .position(|t| matches!(t, SelectionTarget::Workspace(_)))
             .expect("workspace target present");
-        app.dashboard.selected = idx;
+        app.select_index(idx);
 
         let backend = TestBackend::new(120, 30);
         let mut term = Terminal::new(backend).unwrap();
@@ -3825,7 +3825,7 @@ mod pm_state_tests {
             .iter()
             .position(|t| matches!(t, SelectionTarget::Repo(_)))
             .expect("repo target present");
-        app.dashboard.selected = repo_idx;
+        app.select_index(repo_idx);
 
         let backend = TestBackend::new(120, 30);
         let mut term = Terminal::new(backend).unwrap();
@@ -4463,7 +4463,7 @@ mod restore_layout_tests {
             .iter()
             .position(|t| matches!(t, SelectionTarget::Workspace(w) if *w == id))
             .expect("workspace in selectable list");
-        app.dashboard.selected = idx;
+        app.select_index(idx);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4636,7 +4636,7 @@ mod detail_bar_focus_tests {
             .iter()
             .position(|t| matches!(t, SelectionTarget::Workspace(_)))
             .unwrap();
-        app.dashboard.selected = idx;
+        app.select_index(idx);
         app
     }
 
@@ -4822,7 +4822,7 @@ mod detail_bar_focus_tests {
 
         app.view = crate::ui::View::Dashboard;
         app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
-        app.dashboard.selected = 0;
+        app.select_index(0);
         app.focus = crate::ui::PaneFocus::DetailBarReply;
         app.dashboard.reply_draft = "half-typed message".to_string();
 

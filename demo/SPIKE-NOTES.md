@@ -82,9 +82,23 @@ VHS hides everything on a failed run. To see what an agent actually shows, drive
 wsx in a dedicated tmux server and `capture-pane -p` at intervals:
 `tmux -L dbg new-session -d -s s -x 150 -y 42 ; tmux -L dbg send-keys ...`.
 
+## All three harnesses solved
+
+Same isolate-config + pre-accept-trust pattern works for each (all in
+`sandbox-bootstrap.sh`), authenticated from copied creds, zero changes to real
+config:
+
+| Harness | Config env | Auth source | Trust handling |
+|---|---|---|---|
+| Claude | `CLAUDE_CONFIG_DIR` | `~/.claude/.credentials.json` | pre-seed `projects[path].hasTrustDialogAccepted=true` in `.claude.json` (keyed by **worktree** path) |
+| Codex | `CODEX_HOME` | `~/.codex/auth.json` | pre-seed `[projects."<repo-root>"] trust_level="trusted"` in `config.toml` (keyed by **repo root**) |
+| Pi | `PI_CODING_AGENT_DIR` | copied `~/.pi/agent` (offline; `PI_OFFLINE=1` set by wsx) | non-blocking; boots ready on `deepseek-v4-flash` |
+
+Tapes MUST `Env` all three dir vars plus `XDG_STATE_HOME` so wsx passes them to
+the spawned agents.
+
 ## Still open (for the multi-agent hero clip)
 
-Codex and Pi have their **own** first-run/trust/onboarding gates, not yet solved.
-The single-agent (claude) flow is fully working. Before recording the hero clip
-(Claude+Codex+Pi on one workspace), spike each of codex and pi the same way and
-extend `sandbox-bootstrap.sh` with their equivalent pre-acceptance.
+The `Ctrl-x a` agents-panel choreography (add codex+pi to one workspace, pane
+layout, typing into each pane, cross-agent `wsx agent send`) still needs a
+dedicated spike before the hero tape is written.

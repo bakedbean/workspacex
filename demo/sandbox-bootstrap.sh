@@ -8,11 +8,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 export WSX_DEMO_ROOT="${WSX_DEMO_ROOT:-/tmp/wsx-demo}"
 export XDG_STATE_HOME="$WSX_DEMO_ROOT/state"
 export CLAUDE_CONFIG_DIR="$WSX_DEMO_ROOT/claude-config"
+export CODEX_HOME="$WSX_DEMO_ROOT/codex-home"
+export PI_CODING_AGENT_DIR="$WSX_DEMO_ROOT/pi-agent"
 REPOS="$WSX_DEMO_ROOT/repos"
 
 # Fresh state each run.
 rm -rf "$WSX_DEMO_ROOT"
-mkdir -p "$XDG_STATE_HOME" "$REPOS" "$CLAUDE_CONFIG_DIR"
+mkdir -p "$XDG_STATE_HOME" "$REPOS" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$PI_CODING_AGENT_DIR"
 
 # --- Isolated Claude config (auth + bypass pre-accepted) ---
 # Copy credentials so the demo agents are authenticated without a login prompt.
@@ -37,6 +39,27 @@ if os.path.exists(src):
 data["skipDangerousModePermissionPrompt"] = True
 json.dump(data, open(os.path.join(d, "settings.json"), "w"), indent=2)
 PY
+
+# --- Isolated Codex config (auth + per-repo-root trust pre-accepted) ---
+# Codex authenticates from auth.json and gates fresh repo roots behind a trust
+# prompt; both relocate with CODEX_HOME. Pre-seed trust for the demo repo roots.
+if [ -f "$HOME/.codex/auth.json" ]; then
+  cp -a "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
+else
+  echo "WARN: ~/.codex/auth.json not found — demo Codex agent may not be authenticated." >&2
+fi
+[ -f "$HOME/.codex/config.toml" ] && cp -a "$HOME/.codex/config.toml" "$CODEX_HOME/config.toml"
+{
+  printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$REPOS/toy-api"
+  printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$REPOS/toy-cli"
+} >> "$CODEX_HOME/config.toml"
+
+# --- Isolated Pi config (copy the agent dir; Pi runs offline via PI_OFFLINE) ---
+if [ -d "$HOME/.pi/agent" ]; then
+  cp -a "$HOME/.pi/agent/." "$PI_CODING_AGENT_DIR/"
+else
+  echo "WARN: ~/.pi/agent not found — demo Pi agent may not be configured." >&2
+fi
 
 # --- Synthetic repos ---
 "$HERE/gen-repos.sh" "$REPOS"
@@ -78,3 +101,5 @@ PY
 echo "sandbox ready at $WSX_DEMO_ROOT"
 echo "  XDG_STATE_HOME=$XDG_STATE_HOME"
 echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
+echo "  CODEX_HOME=$CODEX_HOME"
+echo "  PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR"

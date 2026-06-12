@@ -1,7 +1,7 @@
 # Robust dashboard selection anchoring
 
 **Date:** 2026-06-11
-**Status:** Approved (pending implementation)
+**Status:** Implemented (PR #169)
 **Issue:** [#168](https://github.com/bakedbean/workspacex/issues/168)
 
 ## Problem

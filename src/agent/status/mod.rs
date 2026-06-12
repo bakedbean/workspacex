@@ -8,6 +8,7 @@
 //! from that agent's spawn builder. Nothing else changes.
 
 pub mod claude;
+pub mod codex;
 
 use crate::data::store::ReportedState;
 use crate::pty::session::AgentKind;
@@ -48,6 +49,7 @@ impl StatusIntegration for NoopStatus {
 }
 
 static CLAUDE: claude::ClaudeStatus = claude::ClaudeStatus;
+static CODEX: codex::CodexStatus = codex::CodexStatus;
 static NOOP: NoopStatus = NoopStatus;
 
 /// The status integration for an agent kind. Claude has a hook-based
@@ -55,6 +57,7 @@ static NOOP: NoopStatus = NoopStatus;
 pub fn for_agent(agent: AgentKind) -> &'static dyn StatusIntegration {
     match agent {
         AgentKind::Claude => &CLAUDE,
+        AgentKind::Codex => &CODEX,
         _ => &NOOP,
     }
 }
@@ -75,7 +78,7 @@ mod tests {
     #[test]
     fn other_agents_resolve_to_noop() {
         let ev = serde_json::json!({"hook_event_name": "UserPromptSubmit"});
-        for agent in [AgentKind::Codex, AgentKind::Pi, AgentKind::Hermes] {
+        for agent in [AgentKind::Pi, AgentKind::Hermes] {
             assert_eq!(for_agent(agent).parse_event(&ev), None);
             assert!(
                 for_agent(agent)
@@ -83,5 +86,14 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[test]
+    fn codex_resolves_to_codex_integration() {
+        let ev = serde_json::json!({"type": "agent-turn-complete", "last-assistant-message": "done"});
+        assert_eq!(
+            for_agent(AgentKind::Codex).parse_event(&ev),
+            Some(ReportedState::Done)
+        );
     }
 }

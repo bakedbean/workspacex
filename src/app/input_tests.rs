@@ -3763,6 +3763,75 @@ mod pm_state_tests {
         );
     }
 
+    #[tokio::test]
+    async fn create_in_folded_repo_unfolds_and_keeps_new_workspace_selected() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == repo_id)
+            .unwrap();
+        // Create the workspace up front, since App::new consumes the store.
+        let created = crate::data::workspace::create(
+            &store,
+            &repo,
+            Some("feature"),
+            tmp.path(),
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let new_id = created.workspace.id;
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        // The owning repo is collapsed in the dashboard — the scenario where a
+        // freshly-created workspace would otherwise land on a hidden row and
+        // get parked (no highlight, cursor adrift).
+        app.dashboard.folded.insert(repo_id.0 as u64, true);
+        let my_gen = app.alloc_create_gen();
+        let shared = Arc::new(Mutex::new(app));
+        crate::app::reconcile_create_result(shared.clone(), my_gen, Ok(created)).await;
+
+        let mut g = shared.lock().await;
+        let app: &mut App = &mut g;
+        assert_eq!(
+            app.dashboard.folded.get(&(repo_id.0 as u64)).copied(),
+            Some(false),
+            "creating a workspace in a folded repo must unfold it"
+        );
+        assert_eq!(
+            app.dashboard.selection,
+            Some(SelectionTarget::Workspace(new_id)),
+            "selection should move to the newly created workspace"
+        );
+        // Draw a frame: this rebuilds `selectable` via `visible_targets`,
+        // which hides workspaces inside folded repos. With the repo unfolded,
+        // the new workspace must be a visible target and remain the live
+        // selection rather than parking on an invisible row.
+        let backend = TestBackend::new(120, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, app)).unwrap();
+        assert!(
+            app.selectable.contains(&SelectionTarget::Workspace(new_id)),
+            "new workspace should be a visible selection target after draw"
+        );
+        assert_eq!(
+            app.dashboard.selection,
+            Some(SelectionTarget::Workspace(new_id)),
+            "selection should stay on the new workspace after a draw, not park"
+        );
+    }
+
     fn seed_app_with_workspace() -> App {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let store = Store::open_in_memory().unwrap();

@@ -374,6 +374,13 @@ pub enum CliAction {
         /// the resolved workspace's agent kind.
         agent: Option<String>,
     },
+    StatusFromNotify {
+        /// The harness whose `notify` payload is the trailing positional arg.
+        /// `None` falls back to the resolved workspace's agent kind.
+        agent: Option<String>,
+        /// The raw JSON payload Codex passes as the final argv element.
+        payload: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -980,6 +987,22 @@ fn parse_status(it: &mut Args) -> Result<CliAction> {
             }
             Ok(CliAction::StatusFromHook { agent })
         }
+        Some("from-notify") => {
+            let mut agent = None;
+            let mut payload = None;
+            while let Some(arg) = it.next() {
+                if arg == "--agent" {
+                    agent = Some(it.next().ok_or_else(|| Error::Usage {
+                        group: None,
+                        msg: "--agent requires a value".into(),
+                    })?);
+                } else {
+                    // Codex appends the JSON payload as the final positional arg.
+                    payload = Some(arg);
+                }
+            }
+            Ok(CliAction::StatusFromNotify { agent, payload })
+        }
         other => Err(Error::Usage {
             group: None,
             msg: format!("unknown status subcommand: {}", other.unwrap_or("(none)")),
@@ -1485,6 +1508,26 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 }
             }
             // Always succeed: a status hook must never block or fail the turn.
+        }
+        CliAction::StatusFromNotify { agent, payload } => {
+            // Codex `notify` passes JSON as the final argv (not stdin). Tolerate
+            // missing/garbage payloads by no-op exit 0 — notify must never fail
+            // a turn.
+            if let Some(buf) = payload {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&buf) {
+                    if let Ok(ws) = resolve_current_workspace(&store) {
+                        let kind = match &agent {
+                            Some(a) => crate::pty::session::AgentKind::from_str_or_default(Some(a)),
+                            None => ws.agent,
+                        };
+                        if let Some(state) = crate::agent::status::for_agent(kind).parse_event(&json)
+                        {
+                            let _ = store.set_workspace_status(ws.id, state, None, "notify");
+                        }
+                    }
+                }
+            }
+            // Always succeed.
         }
         CliAction::SetupInstallSkill => unreachable!("handled before store open"),
         CliAction::Help(_) | CliAction::Version => {
@@ -2455,6 +2498,24 @@ mod tests {
         {
             CliAction::StatusFromHook { agent } => assert_eq!(agent.as_deref(), Some("claude")),
             other => panic!("expected StatusFromHook, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_status_from_notify_captures_agent_and_payload() {
+        match parse_args(
+            ["wsx", "status", "from-notify", "--agent", "codex", "{\"type\":\"agent-turn-complete\"}"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap()
+        {
+            CliAction::StatusFromNotify { agent, payload } => {
+                assert_eq!(agent.as_deref(), Some("codex"));
+                assert_eq!(payload.as_deref(), Some("{\"type\":\"agent-turn-complete\"}"));
+            }
+            other => panic!("expected StatusFromNotify, got {other:?}"),
         }
     }
 

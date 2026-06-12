@@ -1431,7 +1431,10 @@ pub(crate) async fn reconcile_create_result(
     if is_mine {
         g.pending_create_gen = None;
     }
-    let new_ws_id = result.as_ref().ok().map(|c| c.workspace.id);
+    let new_ws = result
+        .as_ref()
+        .ok()
+        .map(|c| (c.workspace.id, c.workspace.repo_id));
     match result {
         Ok(_) => {
             if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::SetupRunning { .. })) {
@@ -1439,7 +1442,15 @@ pub(crate) async fn reconcile_create_result(
             }
             let _ = g.refresh();
             // Select the newly created workspace so the dashboard lands on it.
-            if let Some(id) = new_ws_id {
+            if let Some((id, repo_id)) = new_ws {
+                // Unfold the owning repo first. If it was collapsed (explicit
+                // fold or `default_fold` of an idle/empty repo), the new
+                // workspace would be hidden from `visible_targets` on the next
+                // draw, so the selection below would land on an invisible row
+                // and get parked — no highlight, and the nav cursor clamped
+                // onto an unrelated neighbor. Expanding makes the row visible
+                // so the selection sticks.
+                g.dashboard.folded.insert(repo_id.0 as u64, false);
                 if let Some(idx) = g
                     .selectable
                     .iter()

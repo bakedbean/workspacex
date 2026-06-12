@@ -308,7 +308,6 @@ fn footer_line(
             ("t", "term"),
             ("v", "diff"),
             ("g", "lazygit"),
-            ("c", "chronox"),
             ("k", "procs"),
             ("x", "send-^x"),
         ]
@@ -321,7 +320,6 @@ fn footer_line(
             ("t", "term"),
             ("v", "diff"),
             ("g", "lazygit"),
-            ("c", "chronox"),
             ("k", "procs"),
             ("x", "send-^x"),
         ]

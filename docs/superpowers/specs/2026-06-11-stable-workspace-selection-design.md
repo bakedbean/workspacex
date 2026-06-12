@@ -119,26 +119,28 @@ pub fn reconcile_selection(
 
 ```rust
 let new_selectable = dashboard::visible_targets(&inputs, &app.dashboard);
-if new_selectable != app.selectable {
-    let (selection, selected) = dashboard::reconcile_selection(
-        app.dashboard.selection,
-        app.dashboard.selected,
-        &new_selectable,
-        |t| app.selection_target_exists(t),
-    );
-    app.selectable = new_selectable;
-    app.dashboard.selection = selection;
-    app.dashboard.selected = selected;
-} else {
-    // selectable unchanged; keep selection in sync if it was never set.
-    if app.dashboard.selection.is_none() {
-        app.dashboard.selection = app.selectable.get(app.dashboard.selected).copied();
-    }
-}
+// Run every frame (not only when `new_selectable` differs): `refresh()`
+// rebuilds `selectable` between draws, so a deleted selected workspace can
+// leave the shape unchanged here while the target no longer exists. An
+// unconditional reconcile drops the gone target promptly. The call is cheap
+// (a couple of scans over a small vec).
+let prev_selection = app.dashboard.selection;
+let prev_selected = app.dashboard.selected;
+let (selection, selected) = dashboard::reconcile_selection(
+    prev_selection,
+    prev_selected,
+    &new_selectable,
+    |t| app.selection_target_exists(t),
+);
+app.selectable = new_selectable;
+app.dashboard.selection = selection;
+app.dashboard.selected = selected;
 ```
 
 `app.dashboard.selection = app.selected_target();` at the old line 262 is
-removed — `selection` is now authoritative, not re-derived.
+removed — `selection` is now authoritative, not re-derived. (`prev_selection`
+/ `prev_selected` are copied into locals first so the immutable borrow of
+`app` inside the `target_exists` closure doesn't conflict with the writes.)
 
 `App::selection_target_exists(t)` checks `app.workspaces` (for `Workspace`) /
 `app.repos` (for `Repo`).

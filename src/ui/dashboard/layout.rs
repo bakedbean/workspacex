@@ -103,7 +103,6 @@ pub fn footer(
         ("t", "term"),
         ("v", "diff"),
         ("g", "lazygit"),
-        ("c", "chronox"),
         ("G", "group"),
         ("/", "filter"),
         ("q", "quit"),
@@ -299,6 +298,6 @@ mod tests {
             .expect("quit hint present");
         assert_eq!(slice(quit), " q  quit", "quit hint covers pill + label");
         // Every printed keybind gets a hint (none drop out).
-        assert_eq!(hints.len(), 11);
+        assert_eq!(hints.len(), 10);
     }
 }

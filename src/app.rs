@@ -1447,7 +1447,7 @@ pub(crate) async fn reconcile_create_result(
                     .iter()
                     .position(|t| *t == SelectionTarget::Workspace(id))
                 {
-                    g.dashboard.selected = idx;
+                    g.select_index(idx);
                 }
             }
         }

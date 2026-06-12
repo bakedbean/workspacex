@@ -273,9 +273,8 @@ fn move_selected_repo(app: &mut App, up: bool) -> Result<()> {
         .iter()
         .position(|t| *t == SelectionTarget::Repo(rid))
     {
-        app.dashboard.selected = idx;
+        app.select_index(idx);
     }
-    app.dashboard.selection = Some(SelectionTarget::Repo(rid));
     Ok(())
 }
 
@@ -470,11 +469,12 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         (KeyCode::Char('q'), _) => app.quit = true,
         (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
             let max = app.selectable.len().saturating_sub(1);
-            app.dashboard.selected = if app.dashboard.selected == 0 {
+            let idx = if app.dashboard.selected == 0 {
                 max
             } else {
                 app.dashboard.selected - 1
             };
+            app.select_index(idx);
             // Clear any in-flight reply draft so it can't leak to the newly
             // selected workspace (draft is tied to the workspace at the time
             // keystrokes arrived, not to wherever the cursor ends up).
@@ -482,11 +482,12 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         }
         (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
             let max = app.selectable.len().saturating_sub(1);
-            app.dashboard.selected = if app.dashboard.selected >= max {
+            let idx = if app.dashboard.selected >= max {
                 0
             } else {
                 app.dashboard.selected + 1
             };
+            app.select_index(idx);
             // Clear any in-flight reply draft (same rationale as Up/k above).
             app.dashboard.reply_draft.clear();
         }

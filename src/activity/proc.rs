@@ -14,6 +14,13 @@ pub struct ProcInfo {
     pub ppid: i32,
     pub command: String,
     pub cwd: PathBuf,
+    /// True if the process holds at least one listening TCP socket.
+    /// Used to rescue genuine servers (e.g. a `pnpm dev` on :3000) from
+    /// the ancestor denylist when they were spawned under `claude` via
+    /// Claude Code's background runner — MCP stdio helpers, which never
+    /// listen, stay hidden. Populated by `scan`; the cwd-only parser
+    /// leaves it `false`.
+    pub listening: bool,
 }
 
 /// Process names that should never count as user processes for a
@@ -75,6 +82,7 @@ pub fn parse_lsof_output(raw: &str) -> Vec<ProcInfo> {
                 ppid: ppid.take().unwrap_or(0),
                 command: c,
                 cwd: PathBuf::from(n),
+                listening: false,
             });
         } else {
             // Discard partial block fields so they don't bleed into
@@ -100,6 +108,24 @@ pub fn parse_lsof_output(raw: &str) -> Vec<ProcInfo> {
         }
     }
     flush(&mut pid, &mut ppid, &mut command, &mut cwd, &mut out);
+    out
+}
+
+/// Parse `lsof -nP -iTCP -sTCP:LISTEN -F pn` output into the set of
+/// pids holding at least one listening TCP socket.
+///
+/// Only the `p<pid>` lines matter; the `n<addr>` socket lines (one or
+/// more per pid) are ignored. A pid with several listening sockets
+/// collapses to a single set entry.
+pub fn parse_listening_pids(raw: &str) -> std::collections::HashSet<i32> {
+    let mut out = std::collections::HashSet::new();
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix('p')
+            && let Ok(pid) = rest.parse::<i32>()
+        {
+            out.insert(pid);
+        }
+    }
     out
 }
 
@@ -132,6 +158,13 @@ fn ancestor_denied(start_ppid: i32, by_pid: &HashMap<i32, &ProcInfo>) -> bool {
 /// (npm exec wrapper + node) and editor language servers, which
 /// inherit cwd from their denylisted parent — while still showing
 /// `npm run dev` launched from a shell.
+///
+/// A claude-descended process that holds a listening socket
+/// (`p.listening`) is exempt from the ancestor check: it's a genuine
+/// server (a dev server started via Claude Code's background runner)
+/// the user wants to see and kill, not stdio MCP noise. The
+/// self-denylist still applies unconditionally, so a listening editor
+/// or `claude` itself never reappears.
 pub fn bucket_by_worktree(
     procs: &[ProcInfo],
     worktrees: &[(WorkspaceId, &Path)],
@@ -142,7 +175,7 @@ pub fn bucket_by_worktree(
         if PROC_DENYLIST.contains(&p.command.as_str()) {
             continue;
         }
-        if ancestor_denied(p.ppid, &by_pid) {
+        if !p.listening && ancestor_denied(p.ppid, &by_pid) {
             continue;
         }
         for (id, wt) in worktrees {
@@ -204,6 +237,12 @@ pub fn parse_ps_comm(raw: &str) -> HashMap<i32, String> {
 /// `comm` field; if it fails, we keep lsof's `comm` (the macOS-quirky
 /// `p_comm`) so the dashboard still works with slightly degraded
 /// denylist matching.
+///
+/// A third lsof, for listening TCP sockets, runs alongside and marks
+/// `listening` on each matching proc. Like `ps`, it only refines the
+/// result: if it fails, every proc keeps `listening = false` and the
+/// dashboard degrades to the pre-listening behavior (claude-descended
+/// servers stay hidden) rather than breaking.
 pub async fn scan() -> Vec<ProcInfo> {
     let lsof_fut = tokio::process::Command::new("lsof")
         .args(["-d", "cwd", "-F", "pcRn"])
@@ -211,7 +250,10 @@ pub async fn scan() -> Vec<ProcInfo> {
     let ps_fut = tokio::process::Command::new("ps")
         .args(["-axo", "pid=,comm="])
         .output();
-    let (lsof_out, ps_out) = tokio::join!(lsof_fut, ps_fut);
+    let listen_fut = tokio::process::Command::new("lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"])
+        .output();
+    let (lsof_out, ps_out, listen_out) = tokio::join!(lsof_fut, ps_fut, listen_fut);
 
     let mut procs = match lsof_out {
         // lsof exits 1 when some processes can't be inspected; the
@@ -230,6 +272,17 @@ pub async fn scan() -> Vec<ProcInfo> {
         for p in &mut procs {
             if let Some(comm) = comm_map.get(&p.pid) {
                 p.command = comm.clone();
+            }
+        }
+    }
+
+    if let Ok(o) = listen_out
+        && (o.status.success() || !o.stdout.is_empty())
+    {
+        let listening = parse_listening_pids(&String::from_utf8_lossy(&o.stdout));
+        for p in &mut procs {
+            if listening.contains(&p.pid) {
+                p.listening = true;
             }
         }
     }
@@ -274,6 +327,7 @@ mod tests {
             ppid,
             command: command.into(),
             cwd: PathBuf::from(cwd),
+            listening: false,
         }
     }
 
@@ -531,5 +585,72 @@ mod tests {
         let worktrees = vec![(WorkspaceId(10), Path::new("/wt/a") as &Path)];
         let bucketed = bucket_by_worktree(&procs, &worktrees);
         assert_eq!(bucketed.get(&WorkspaceId(10)).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn bucket_keeps_listening_server_under_claude() {
+        // The motivating case: a dev server (`node` on :3000) launched
+        // by Claude Code via run_in_background, so `claude` is in its
+        // ancestor chain. The ancestor denylist would normally hide it,
+        // but a process holding a listening socket is real user work the
+        // user wants to see and be able to kill — so it's kept.
+        let procs = vec![
+            proc(100, 1, "claude", "/wt/a"),
+            ProcInfo {
+                listening: true,
+                ..proc(200, 100, "node", "/wt/a")
+            },
+        ];
+        let worktrees = vec![(WorkspaceId(10), Path::new("/wt/a") as &Path)];
+        let bucketed = bucket_by_worktree(&procs, &worktrees);
+        let list = bucketed.get(&WorkspaceId(10)).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].command, "node");
+    }
+
+    #[test]
+    fn bucket_still_drops_non_listening_node_under_claude() {
+        // An MCP stdio helper (`node`, no listening socket) descended
+        // from claude must stay hidden — the listening exception is the
+        // only thing that rescues a claude descendant.
+        let procs = vec![
+            proc(100, 1, "claude", "/wt/a"),
+            proc(200, 100, "node", "/wt/a"),
+        ];
+        let worktrees = vec![(WorkspaceId(10), Path::new("/wt/a") as &Path)];
+        let bucketed = bucket_by_worktree(&procs, &worktrees);
+        assert!(bucketed.get(&WorkspaceId(10)).is_none_or(|v| v.is_empty()));
+    }
+
+    #[test]
+    fn bucket_drops_self_denylisted_process_even_when_listening() {
+        // The self-denylist is absolute: a listening socket must NOT
+        // rescue a process whose own command is denylisted (an editor
+        // or claude with a debug port shouldn't appear in its own
+        // workspace's list).
+        let procs = vec![ProcInfo {
+            listening: true,
+            ..proc(100, 1, "claude", "/wt/a")
+        }];
+        let worktrees = vec![(WorkspaceId(10), Path::new("/wt/a") as &Path)];
+        let bucketed = bucket_by_worktree(&procs, &worktrees);
+        assert!(bucketed.get(&WorkspaceId(10)).is_none_or(|v| v.is_empty()));
+    }
+
+    #[test]
+    fn parse_listening_pids_collects_pids() {
+        // `lsof -nP -iTCP -sTCP:LISTEN -F pn` emits a `p<pid>` line per
+        // process followed by one or more `n<addr>` socket lines. We
+        // only need the pid set; multiple sockets for one pid collapse.
+        let raw = "p1234\nn*:3000\np5678\nn127.0.0.1:8080\nn*:8081\n";
+        let pids = parse_listening_pids(raw);
+        assert_eq!(pids.len(), 2);
+        assert!(pids.contains(&1234));
+        assert!(pids.contains(&5678));
+    }
+
+    #[test]
+    fn parse_listening_pids_handles_empty() {
+        assert!(parse_listening_pids("").is_empty());
     }
 }

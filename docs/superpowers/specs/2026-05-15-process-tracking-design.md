@@ -18,6 +18,8 @@ wsx never spawns these processes itself. The user retains full launch control. w
 - **Throttle:** scan once every 10 seconds globally (not per-workspace — lsof returns everything in one call). Cached on `App`.
 - **Filter (exclude these process names):** `bash`, `zsh`, `fish`, `sh`, `dash`, `ash`, `wsx`, `claude`, `nvim`, `vim`, `emacs`, `code`, `cursor`, `tmux`, `screen`. The list is small and stable; embedded as a `const`.
 - **Filter (include rule):** process's cwd is the workspace's worktree path, or a path under it.
+- **Filter (ancestor propagation, added post-v1):** a subset of the denylist (`wsx`, `claude`, and editors) also hides its *descendants*, which inherit the worktree cwd — this is what suppresses Claude Code's MCP-server children and editors' language servers. Shells/multiplexers are deliberately non-propagating so `npm run dev` from a terminal still shows.
+- **Filter (listening-socket exception, added post-v1):** a process holding a listening TCP socket is exempt from the ancestor check, so a dev server launched from inside Claude Code's background runner (a `claude` descendant) still appears and can be killed. The self-denylist remains absolute — a listening editor or `claude` itself never reappears. Detected via a third `lsof -nP -iTCP -sTCP:LISTEN` scan run alongside the cwd/comm scans; if it fails the field defaults to `false` (degrades to pre-exception behavior).
 - **Display:**
   - Dashboard row gets a small ` ~N` annotation (e.g., `~2`) styled `merged_style` (cyan), placed between the branch column and the activity word. Hidden when N=0 to keep the row clean.
   - `k` keybind on the dashboard opens `Modal::ProcessList { workspace_id, selected: usize }`. From the attached view, `Ctrl-x k` does the same.

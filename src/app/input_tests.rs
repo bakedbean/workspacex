@@ -1339,10 +1339,10 @@ mod pm_state_tests {
     }
 
     fn spawn_pm_for_test(app: &mut App) {
-        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
-        // injects no extra flags for a plain Fresh session, so cat stays alive.
+        // Use a wrapper that ignores args and cats stdin: Codex Fresh now
+        // injects `-c notify=...` for status reporting, which bare `cat` rejects.
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let cwd = PathBuf::from(".");
         let mode = crate::pty::session::SpawnMode::Fresh {
             rename_ctx: None,
@@ -1367,10 +1367,10 @@ mod pm_state_tests {
 
     fn spawn_attached_workspace(app: &mut App) -> crate::data::store::WorkspaceId {
         use crate::data::store::NewWorkspace;
-        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
-        // injects no extra flags for a plain Fresh session, so cat stays alive.
+        // Use a wrapper that ignores args and cats stdin: Codex Fresh now
+        // injects `-c notify=...` for status reporting, which bare `cat` rejects.
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let repo_id = app
             .store
             .add_repo(std::path::Path::new("."), "scratch", "test")

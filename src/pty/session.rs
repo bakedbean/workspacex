@@ -1546,6 +1546,22 @@ pub fn build_codex_command(
         cmd.env(k, v);
     }
 
+    // Status reporting: developer sessions (Fresh/Continue) get `-c notify=...`
+    // so Codex calls back into `wsx status from-notify` on agent-turn-complete.
+    // The PM pane is excluded, matching the Claude spawn. `-c` is a global flag
+    // and is accepted before any subcommand (`resume`).
+    if matches!(mode, SpawnMode::Fresh { .. } | SpawnMode::Continue { .. }) {
+        let wsx_bin =
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
+        if let Some(wiring) =
+            crate::agent::status::for_agent(AgentKind::Codex).spawn_wiring(&wsx_bin, false)
+        {
+            for arg in wiring.args {
+                cmd.arg(arg);
+            }
+        }
+    }
+
     let (resume, yolo, pm) = match mode {
         SpawnMode::Fresh { yolo, .. } => (false, *yolo, false),
         SpawnMode::Continue { yolo, .. } => (true, *yolo, false),
@@ -4344,6 +4360,43 @@ mod tests {
         assert!(
             argv.windows(2).any(|w| w[0] == "-m" && w[1] == "gpt-5.4"),
             "model must be passed via -m: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn codex_fresh_injects_notify_status_wiring() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        env.remove("WSX_CODEX_MODEL");
+        let argv = codex_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        assert!(argv.iter().any(|a| a == "-c"), "argv: {argv:?}");
+        assert!(
+            argv.iter()
+                .any(|a| a.starts_with("notify=[") && a.contains("from-notify")),
+            "argv: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn codex_pm_omits_notify_status_wiring() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        let argv = codex_argv(&SpawnMode::ProjectManager {
+            workspaces_json_path: std::path::PathBuf::from("/tmp/pm/workspaces.json"),
+            custom_instructions: None,
+            additional_dirs: vec![],
+            resume: false,
+            fast_mode: false,
+        });
+        assert!(
+            !argv.iter().any(|a| a.starts_with("notify=[")),
+            "PM should not get status wiring; argv: {argv:?}"
         );
     }
 

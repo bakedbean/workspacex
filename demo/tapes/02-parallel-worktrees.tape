@@ -67,9 +67,8 @@ Ctrl+x
 Type "d"
 Sleep 800ms
 
-# Back on the dashboard: three agents working in parallel.
-Sleep 4s
-Screenshot demo/out/02-parallel-working.png
+# Back on the dashboard: three agents working in parallel. End on this held
+# frame — do NOT quit (quitting would close the clip on the raw shell).
 Sleep 2s
-Type "q"
-Sleep 1s
+Screenshot demo/out/02-parallel-working.png
+Sleep 6s

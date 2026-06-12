@@ -1644,11 +1644,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn kill_all_terminates_child() {
-        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
-        // injects no extra flags for a plain Fresh session, so cat stays alive
-        // (reading stdin) and we can verify kill_all actually terminates it.
+        // Use AgentKind::Codex with an arg-ignoring wrapper that execs cat,
+        // because Codex Fresh/Continue now injects `-c notify=...` for status
+        // reporting which bare `cat` would reject. The wrapper preserves the
+        // behavior we rely on: cat stays alive reading stdin so we can verify
+        // kill_all actually terminates it.
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let cwd = std::path::PathBuf::from(".");
         let mut mgr = SessionManager::new();
         let id = crate::data::store::AgentInstanceId(1);
@@ -1693,10 +1695,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn empty_enter_does_not_latch_prompt_capture() {
-        // Codex stub: its Fresh spawn injects no extra flags so `cat` starts
-        // clean (Claude now injects `--settings` for status hooks).
+        // Codex stub: use an arg-ignoring wrapper that execs cat, because
+        // Codex Fresh/Continue now injects `-c notify=...` for status reporting
+        // which bare `cat` would reject. The wrapper starts cat cleanly.
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let cwd = std::path::PathBuf::from(".");
         let session = spawn_session(
             &cwd,
@@ -2372,11 +2375,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_text_when_settled_writes_after_quiet_window() {
-        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
-        // injects no extra flags for a plain Fresh session, so cat stays alive
-        // and echoes stdin cleanly — exactly what this timing test requires.
+        // Use AgentKind::Codex with an arg-ignoring wrapper that execs cat,
+        // because Codex Fresh/Continue now injects `-c notify=...` for status
+        // reporting which bare `cat` would reject. The wrapper preserves the
+        // behavior this timing test requires: cat stays alive and echoes stdin
+        // cleanly.
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -2463,11 +2468,12 @@ mod tests {
     async fn send_text_when_settled_times_out_when_no_output() {
         // cat with no input produces no spontaneous output, so activity_ms
         // stays 0 and the quiet-window condition is never met.
-        // Use AgentKind::Codex (WSX_CODEX_BIN=cat) because build_codex_command
-        // injects no extra flags for a plain Fresh session, so cat stays alive
-        // and fully silent — exactly what this timing test requires.
+        // Use AgentKind::Codex with an arg-ignoring wrapper that execs cat,
+        // because Codex Fresh/Continue now injects `-c notify=...` for status
+        // reporting which bare `cat` would reject. The wrapper preserves the
+        // behavior this timing test requires: cat stays alive and fully silent.
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,
@@ -2495,15 +2501,16 @@ mod tests {
     }
 
     /// Construct a real PTY-backed Session for scrollback unit tests. Uses
-    /// `cat` as the child so spawn succeeds without the agent on the path.
-    /// Uses Codex, whose Fresh spawn injects no extra flags, so `cat` starts
-    /// clean (a Claude Fresh spawn now injects `--settings` for status hooks).
-    /// The `EnvGuard` is only needed for the spawn syscall itself —
-    /// `WSX_CODEX_BIN` is read by the parent at command-build time, not by
-    /// the spawned cat — so dropping it before the test body returns is safe.
+    /// an arg-ignoring wrapper that execs `cat` as the child so spawn succeeds
+    /// without the agent on the path. The wrapper is needed because Codex
+    /// Fresh/Continue now injects `-c notify=...` for status reporting which
+    /// bare `cat` would reject. The `EnvGuard` is only needed for the spawn
+    /// syscall itself — `WSX_CODEX_BIN` is read by the parent at
+    /// command-build time, not by the spawned cat — so dropping it before the
+    /// test body returns is safe.
     fn spawn_for_test() -> Session {
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let cwd = PathBuf::from(".");
         spawn_session(
             &cwd,
@@ -4394,8 +4401,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn codex_spawn_and_echo() {
+        // Use an arg-ignoring wrapper that execs cat, because Codex
+        // Fresh/Continue now injects `-c notify=...` for status reporting
+        // which bare `cat` would reject. The wrapper preserves the echo
+        // behavior this test relies on.
         let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", cat_path());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
         let cwd = PathBuf::from(".");
         let s = spawn_session(
             &cwd,

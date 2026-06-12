@@ -240,26 +240,25 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // selection will appear to skip rows / jump back.
             let new_selectable = dashboard::visible_targets(&inputs, &app.dashboard);
             if new_selectable != app.selectable {
-                // Preserve the user's *target* across reorderings, not
-                // their *index* — keep arrow nav anchored to the same
-                // workspace even if the visible order shifts (e.g.
-                // status change moves it up/down).
-                let prev_target = app.selectable.get(app.dashboard.selected).copied();
+                // Reconcile the durable selection against the rebuilt list.
+                // A temporarily-hidden target (folded repo / filter / quiet
+                // repo) is PARKED on the same WorkspaceId rather than clamped
+                // onto a neighbor, and restored when its row reappears.
+                let prev_selection = app.dashboard.selection;
+                let prev_selected = app.dashboard.selected;
+                let (selection, selected) = dashboard::reconcile_selection(
+                    prev_selection,
+                    prev_selected,
+                    &new_selectable,
+                    |t| app.selection_target_exists(t),
+                );
                 app.selectable = new_selectable;
-                if let Some(t) = prev_target {
-                    if let Some(idx) = app.selectable.iter().position(|s| *s == t) {
-                        app.dashboard.selected = idx;
-                    } else if !app.selectable.is_empty() {
-                        app.dashboard.selected =
-                            app.dashboard.selected.min(app.selectable.len() - 1);
-                    } else {
-                        app.dashboard.selected = 0;
-                    }
-                } else if !app.selectable.is_empty() {
-                    app.dashboard.selected = app.dashboard.selected.min(app.selectable.len() - 1);
-                }
+                app.dashboard.selection = selection;
+                app.dashboard.selected = selected;
+            } else if app.dashboard.selection.is_none() {
+                // First frame / never-selected: seed selection from the cursor.
+                app.dashboard.selection = app.selectable.get(app.dashboard.selected).copied();
             }
-            app.dashboard.selection = app.selected_target();
             dashboard::render_without_footer(
                 f,
                 dashboard_area,

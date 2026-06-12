@@ -378,7 +378,10 @@ pub enum CliAction {
         /// The harness whose `notify` payload is the trailing positional arg.
         /// `None` falls back to the resolved workspace's agent kind.
         agent: Option<String>,
-        /// The raw JSON payload Codex passes as the final argv element.
+        /// The raw JSON payload Codex passes as the final argv element. If
+        /// multiple bare positional args appear, the last one wins; extra args
+        /// are tolerated rather than rejected (unlike `from-hook`) because
+        /// `notify` must never fail a turn.
         payload: Option<String>,
     },
 }
@@ -1513,8 +1516,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             // Codex `notify` passes JSON as the final argv (not stdin). Tolerate
             // missing/garbage payloads by no-op exit 0 — notify must never fail
             // a turn.
-            if let Some(buf) = payload {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&buf) {
+            if let Some(payload) = payload {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&payload) {
                     if let Ok(ws) = resolve_current_workspace(&store) {
                         let kind = match &agent {
                             Some(a) => crate::pty::session::AgentKind::from_str_or_default(Some(a)),
@@ -2514,6 +2517,24 @@ mod tests {
             CliAction::StatusFromNotify { agent, payload } => {
                 assert_eq!(agent.as_deref(), Some("codex"));
                 assert_eq!(payload.as_deref(), Some("{\"type\":\"agent-turn-complete\"}"));
+            }
+            other => panic!("expected StatusFromNotify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_status_from_notify_with_no_args_is_all_none() {
+        match parse_args(
+            ["wsx", "status", "from-notify"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        )
+        .unwrap()
+        {
+            CliAction::StatusFromNotify { agent, payload } => {
+                assert!(agent.is_none());
+                assert!(payload.is_none());
             }
             other => panic!("expected StatusFromNotify, got {other:?}"),
         }

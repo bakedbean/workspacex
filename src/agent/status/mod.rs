@@ -52,8 +52,8 @@ static CLAUDE: claude::ClaudeStatus = claude::ClaudeStatus;
 static CODEX: codex::CodexStatus = codex::CodexStatus;
 static NOOP: NoopStatus = NoopStatus;
 
-/// The status integration for an agent kind. Claude has a hook-based
-/// implementation; everything else is a no-op for now.
+/// The status integration for an agent kind. Claude (hooks) and Codex (notify)
+/// have implementations; Pi and Hermes remain no-ops for now.
 pub fn for_agent(agent: AgentKind) -> &'static dyn StatusIntegration {
     match agent {
         AgentKind::Claude => &CLAUDE,

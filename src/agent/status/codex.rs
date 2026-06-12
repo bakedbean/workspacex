@@ -34,6 +34,8 @@ impl StatusIntegration for CodexStatus {
         })
     }
 
+    // `_fast_mode` is unused: Codex has no fast-mode equivalent (that flag is a
+    // Claude `--settings` concept). The `-c notify` wiring is the same regardless.
     fn spawn_wiring(&self, wsx_bin: &Path, _fast_mode: bool) -> Option<SpawnWiring> {
         // Codex appends the JSON payload as the final argv element, so the
         // invoked command becomes:
@@ -110,16 +112,16 @@ mod tests {
 
     #[test]
     fn spawn_wiring_toml_escapes_bin_path() {
-        // A path with a space and an embedded double-quote must stay valid TOML
-        // inside the array. (`toml` is not a direct dependency, so assert the
-        // escaped substring directly rather than re-parsing.)
+        // A path with a space, a backslash, and an embedded double-quote must
+        // stay valid TOML inside the array. (`toml` is not a dependency, so
+        // assert the escaped substrings directly rather than re-parsing.)
         let w = CodexStatus
-            .spawn_wiring(Path::new(r#"/o dd/"wsx"#), false)
+            .spawn_wiring(Path::new(r#"/o dd\"wsx"#), false)
             .unwrap();
-        // Embedded double-quote is backslash-escaped inside the TOML string,
-        // and the space-containing path is preserved verbatim within quotes.
+        // Backslash is doubled and the double-quote is backslash-escaped:
+        // input `/o dd\"wsx` -> TOML string `"/o dd\\\"wsx"`.
         assert!(
-            w.args[1].contains(r#""/o dd/\"wsx""#),
+            w.args[1].contains(r#""/o dd\\\"wsx""#),
             "got: {}",
             w.args[1]
         );

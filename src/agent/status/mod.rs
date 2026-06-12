@@ -90,7 +90,8 @@ mod tests {
 
     #[test]
     fn codex_resolves_to_codex_integration() {
-        let ev = serde_json::json!({"type": "agent-turn-complete", "last-assistant-message": "done"});
+        let ev =
+            serde_json::json!({"type": "agent-turn-complete", "last-assistant-message": "done"});
         assert_eq!(
             for_agent(AgentKind::Codex).parse_event(&ev),
             Some(ReportedState::Done)

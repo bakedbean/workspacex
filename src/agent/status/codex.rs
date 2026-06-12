@@ -69,7 +69,9 @@ mod tests {
     #[test]
     fn turn_complete_is_done() {
         assert_eq!(
-            ev(serde_json::json!({"type": "agent-turn-complete", "last-assistant-message": "All set."})),
+            ev(
+                serde_json::json!({"type": "agent-turn-complete", "last-assistant-message": "All set."})
+            ),
             Some(ReportedState::Done)
         );
     }
@@ -77,7 +79,9 @@ mod tests {
     #[test]
     fn turn_complete_with_question_is_blocked() {
         assert_eq!(
-            ev(serde_json::json!({"type": "agent-turn-complete", "last-assistant-message": "Which library should I use?"})),
+            ev(
+                serde_json::json!({"type": "agent-turn-complete", "last-assistant-message": "Which library should I use?"})
+            ),
             Some(ReportedState::Blocked)
         );
     }

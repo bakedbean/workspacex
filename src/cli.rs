@@ -1523,7 +1523,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                             Some(a) => crate::pty::session::AgentKind::from_str_or_default(Some(a)),
                             None => ws.agent,
                         };
-                        if let Some(state) = crate::agent::status::for_agent(kind).parse_event(&json)
+                        if let Some(state) =
+                            crate::agent::status::for_agent(kind).parse_event(&json)
                         {
                             let _ = store.set_workspace_status(ws.id, state, None, "notify");
                         }
@@ -2507,16 +2508,26 @@ mod tests {
     #[test]
     fn parse_status_from_notify_captures_agent_and_payload() {
         match parse_args(
-            ["wsx", "status", "from-notify", "--agent", "codex", "{\"type\":\"agent-turn-complete\"}"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            [
+                "wsx",
+                "status",
+                "from-notify",
+                "--agent",
+                "codex",
+                "{\"type\":\"agent-turn-complete\"}",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         )
         .unwrap()
         {
             CliAction::StatusFromNotify { agent, payload } => {
                 assert_eq!(agent.as_deref(), Some("codex"));
-                assert_eq!(payload.as_deref(), Some("{\"type\":\"agent-turn-complete\"}"));
+                assert_eq!(
+                    payload.as_deref(),
+                    Some("{\"type\":\"agent-turn-complete\"}")
+                );
             }
             other => panic!("expected StatusFromNotify, got {other:?}"),
         }

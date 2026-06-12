@@ -1551,8 +1551,7 @@ pub fn build_codex_command(
     // The PM pane is excluded, matching the Claude spawn. `-c` is a global flag
     // and is accepted before any subcommand (`resume`).
     if matches!(mode, SpawnMode::Fresh { .. } | SpawnMode::Continue { .. }) {
-        let wsx_bin =
-            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
+        let wsx_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
         if let Some(wiring) =
             crate::agent::status::for_agent(AgentKind::Codex).spawn_wiring(&wsx_bin, false)
         {

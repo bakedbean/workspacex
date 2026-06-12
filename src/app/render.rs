@@ -239,27 +239,25 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // so it must match what the renderer emits below or the
             // selection will appear to skip rows / jump back.
             let new_selectable = dashboard::visible_targets(&inputs, &app.dashboard);
-            if new_selectable != app.selectable {
-                // Preserve the user's *target* across reorderings, not
-                // their *index* — keep arrow nav anchored to the same
-                // workspace even if the visible order shifts (e.g.
-                // status change moves it up/down).
-                let prev_target = app.selectable.get(app.dashboard.selected).copied();
-                app.selectable = new_selectable;
-                if let Some(t) = prev_target {
-                    if let Some(idx) = app.selectable.iter().position(|s| *s == t) {
-                        app.dashboard.selected = idx;
-                    } else if !app.selectable.is_empty() {
-                        app.dashboard.selected =
-                            app.dashboard.selected.min(app.selectable.len() - 1);
-                    } else {
-                        app.dashboard.selected = 0;
-                    }
-                } else if !app.selectable.is_empty() {
-                    app.dashboard.selected = app.dashboard.selected.min(app.selectable.len() - 1);
-                }
-            }
-            app.dashboard.selection = app.selected_target();
+            // Reconcile the durable selection against the rebuilt list every
+            // frame. A temporarily-hidden target (folded repo / filter / quiet
+            // repo) is PARKED on the same WorkspaceId rather than clamped onto a
+            // neighbor, and restored when its row reappears. Running this
+            // unconditionally (rather than only when `new_selectable` differs)
+            // also drops a selection whose workspace was archived: `refresh()`
+            // rebuilds `selectable` between draws, so the shape can be unchanged
+            // here even though the target no longer exists.
+            let prev_selection = app.dashboard.selection;
+            let prev_selected = app.dashboard.selected;
+            let (selection, selected) = dashboard::reconcile_selection(
+                prev_selection,
+                prev_selected,
+                &new_selectable,
+                |t| app.selection_target_exists(t),
+            );
+            app.selectable = new_selectable;
+            app.dashboard.selection = selection;
+            app.dashboard.selected = selected;
             dashboard::render_without_footer(
                 f,
                 dashboard_area,
@@ -995,6 +993,135 @@ mod layout_indicator_cache_tests {
         assert!(
             !app.workspaces_with_multi_pane_layouts.contains(&a),
             "single-pane layouts should not appear in the cache"
+        );
+    }
+}
+
+#[cfg(test)]
+mod selection_anchoring_tests {
+    //! Integration tests driving the real `draw` → `reconcile_selection`
+    //! wiring through ratatui's `TestBackend`. These exercise the fold →
+    //! park → restore cycle and the archive fallback that the pure
+    //! `reconcile_selection` unit tests cannot reach (the behavior lives in
+    //! the per-frame render wiring, not the pure function).
+    use super::*;
+    use crate::data::store::{NewWorkspace, RepoId, Store, WorkspaceId};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::path::{Path, PathBuf};
+
+    fn app_with_two_workspaces() -> (App, RepoId, WorkspaceId, WorkspaceId) {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(Path::new("/tmp/r"), "r", "x").unwrap();
+        let mk = |name: &str, branch: &str, wt: &str| {
+            store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name,
+                    branch,
+                    worktree_path: Path::new(wt),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                })
+                .unwrap()
+        };
+        let a = mk("a", "x/a", "/tmp/r/a");
+        let b = mk("b", "x/b", "/tmp/r/b");
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        (app, repo, a, b)
+    }
+
+    fn draw_once(app: &mut App) {
+        let backend = TestBackend::new(120, 40);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| super::draw_for_test(f, app)).unwrap();
+    }
+
+    /// Select B, fold its repo so B's row vanishes from the list. Selection
+    /// must stay anchored to B (parked) across frames rather than jumping to a
+    /// neighbor, then restore — with the highlight index pointing back at B —
+    /// when the repo is expanded again. This is the #168 regression guard.
+    #[test]
+    fn selection_parks_on_folded_workspace_and_restores() {
+        let (mut app, repo, _a, b) = app_with_two_workspaces();
+        let repo_key = repo.0 as u64;
+
+        // Force the repo expanded so both workspace rows are selectable, then
+        // select B.
+        app.dashboard.folded.insert(repo_key, false);
+        draw_once(&mut app);
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(b))
+            .expect("B selectable while expanded");
+        app.select_index(idx);
+        draw_once(&mut app);
+        assert_eq!(app.selected_target(), Some(SelectionTarget::Workspace(b)));
+
+        // Fold the repo: B's row disappears. Selection must PARK on B.
+        app.dashboard.folded.insert(repo_key, true);
+        draw_once(&mut app);
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Workspace(b)),
+            "selection parked on B while its row is hidden"
+        );
+        // Steady state: another frame must not drift the parked selection.
+        draw_once(&mut app);
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Workspace(b)),
+            "selection stays parked across frames"
+        );
+
+        // Expand again: B reappears, selection restored AND the nav cursor
+        // resolves back to B's row.
+        app.dashboard.folded.insert(repo_key, false);
+        draw_once(&mut app);
+        assert_eq!(app.selected_target(), Some(SelectionTarget::Workspace(b)));
+        assert_eq!(
+            app.selectable.get(app.dashboard.selected).copied(),
+            Some(SelectionTarget::Workspace(b)),
+            "highlight index restored to B"
+        );
+    }
+
+    /// When the selected workspace is deleted (archive flow calls
+    /// `delete_workspace` then `refresh`), selection must fall back to a live
+    /// target and never keep pointing at the gone workspace.
+    #[test]
+    fn selection_falls_back_when_selected_workspace_archived() {
+        let (mut app, repo, _a, b) = app_with_two_workspaces();
+        let repo_key = repo.0 as u64;
+
+        app.dashboard.folded.insert(repo_key, false);
+        draw_once(&mut app);
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(b))
+            .expect("B selectable while expanded");
+        app.select_index(idx);
+        draw_once(&mut app);
+        assert_eq!(app.selected_target(), Some(SelectionTarget::Workspace(b)));
+
+        // Delete B and refresh, exactly as the archive flow does.
+        app.store.delete_workspace(b).unwrap();
+        app.refresh().unwrap();
+        app.dashboard.folded.insert(repo_key, false);
+        draw_once(&mut app);
+
+        let sel = app.selected_target();
+        assert!(sel.is_some(), "selection falls back to a live target");
+        assert_ne!(
+            sel,
+            Some(SelectionTarget::Workspace(b)),
+            "selection no longer points at the deleted workspace"
+        );
+        assert!(
+            app.selection_target_exists(sel.unwrap()),
+            "fallback target actually exists"
         );
     }
 }

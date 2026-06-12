@@ -326,6 +326,49 @@ pub fn visible_targets(
     out
 }
 
+/// Resolve the durable selection against a freshly-rebuilt `selectable` list.
+/// Returns the `(selection, selected-index)` the dashboard should store.
+///
+/// - **Visible:** the target is still in `new_selectable` → follow it to its
+///   current index (this is how selection survives reorders and restores after
+///   a fold re-expands).
+/// - **Hidden but existing workspace:** a `Workspace` target left
+///   `new_selectable` (its repo auto-folded, a filter hid it, or it dropped to
+///   QUIET REPOS) yet still exists per `target_exists` → *park*: keep the same
+///   target, clamp the nav cursor for safety, and do NOT reassign identity to a
+///   neighbor. The renderer simply draws no highlight until the row returns.
+///   Parking is restricted to workspaces: a `Repo` header is always present in
+///   the by-repo view, so a repo target absent from `new_selectable` means the
+///   view no longer shows repo headers (`GroupMode::Attention`) or the repo was
+///   removed — either way it falls back to a visible neighbor rather than
+///   parking on an invisible repo (which would leave no highlight and let
+///   repo-scoped actions fire in attention view).
+/// - **Gone / no prior selection:** the target was archived (`target_exists`
+///   false), is a non-visible repo, or there was no selection → fall back to
+///   whatever sits at the clamped index (`None` when the list is empty).
+pub fn reconcile_selection(
+    old_selection: Option<SelectionTarget>,
+    old_selected: usize,
+    new_selectable: &[SelectionTarget],
+    target_exists: impl Fn(SelectionTarget) -> bool,
+) -> (Option<SelectionTarget>, usize) {
+    if let Some(t) = old_selection {
+        if let Some(idx) = new_selectable.iter().position(|s| *s == t) {
+            return (Some(t), idx);
+        }
+        if matches!(t, SelectionTarget::Workspace(_)) && target_exists(t) {
+            let idx = old_selected.min(new_selectable.len().saturating_sub(1));
+            return (Some(t), idx);
+        }
+    }
+    if new_selectable.is_empty() {
+        (None, 0)
+    } else {
+        let idx = old_selected.min(new_selectable.len() - 1);
+        (new_selectable.get(idx).copied(), idx)
+    }
+}
+
 /// Case-insensitive substring match against the workspace name, branch,
 /// owning repo name, and the row's status-adaptive column text (when present).
 fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
@@ -516,5 +559,87 @@ mod state_defaults {
     fn default_state_has_empty_reply_draft() {
         let s = DashboardState::default();
         assert_eq!(s.reply_draft, "");
+    }
+}
+
+#[cfg(test)]
+mod reconcile_selection_tests {
+    use super::*;
+    use crate::data::store::{RepoId, WorkspaceId};
+
+    fn ws(n: i64) -> SelectionTarget {
+        SelectionTarget::Workspace(WorkspaceId(n))
+    }
+    fn repo(n: i64) -> SelectionTarget {
+        SelectionTarget::Repo(RepoId(n))
+    }
+
+    #[test]
+    fn follows_target_to_new_index_while_visible() {
+        let new = vec![ws(1), ws(3), ws(2)];
+        let (sel, idx) = reconcile_selection(Some(ws(2)), 0, &new, |_| true);
+        assert_eq!(sel, Some(ws(2)), "identity preserved");
+        assert_eq!(idx, 2, "index follows the target");
+    }
+
+    #[test]
+    fn parks_on_same_target_when_hidden_but_exists() {
+        let new = vec![repo(1), ws(1)];
+        let (sel, idx) = reconcile_selection(Some(ws(2)), 1, &new, |t| t == ws(2));
+        assert_eq!(sel, Some(ws(2)), "selection parked on the same workspace");
+        assert!(idx < new.len(), "nav cursor clamped in-bounds");
+    }
+
+    #[test]
+    fn restores_index_when_target_reappears() {
+        let new = vec![repo(1), ws(1), ws(2)];
+        let (sel, idx) = reconcile_selection(Some(ws(2)), 1, &new, |_| true);
+        assert_eq!(sel, Some(ws(2)));
+        assert_eq!(idx, 2, "highlight resolves back to the workspace");
+    }
+
+    #[test]
+    fn hidden_repo_target_falls_back_instead_of_parking() {
+        // A selected Repo header is absent from `new_selectable` — e.g. the user
+        // toggled to attention view, where `visible_targets` emits only
+        // Workspace targets. Even though the repo still exists, it must NOT park
+        // (which would leave no highlight and fire repo-scoped actions); it
+        // falls back to a visible neighbor at the clamped index.
+        let new = vec![ws(1), ws(2)];
+        let (sel, idx) = reconcile_selection(Some(repo(9)), 0, &new, |_| true);
+        assert_eq!(idx, 0, "clamped to a visible row");
+        assert_eq!(
+            sel,
+            Some(ws(1)),
+            "selection falls back to a visible neighbor"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_neighbor_when_target_gone() {
+        let new = vec![repo(1), ws(1), ws(3)];
+        let (sel, idx) = reconcile_selection(Some(ws(2)), 2, &new, |_| false);
+        assert_eq!(idx, 2, "clamped to old index");
+        assert_eq!(
+            sel,
+            Some(ws(3)),
+            "selection becomes the neighbor at that slot"
+        );
+    }
+
+    #[test]
+    fn empty_selectable_yields_none() {
+        let new: Vec<SelectionTarget> = vec![];
+        let (sel, idx) = reconcile_selection(Some(ws(2)), 5, &new, |_| false);
+        assert_eq!(sel, None);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn none_selection_selects_clamped_index() {
+        let new = vec![repo(1), ws(1)];
+        let (sel, idx) = reconcile_selection(None, 5, &new, |_| true);
+        assert_eq!(idx, 1, "clamped to last");
+        assert_eq!(sel, Some(ws(1)));
     }
 }

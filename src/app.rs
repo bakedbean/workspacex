@@ -449,8 +449,31 @@ impl App {
         g
     }
 
+    /// The durable, authoritative selection target. Returns
+    /// `dashboard.selection` rather than indexing `selectable`, so the
+    /// selection survives a temporarily-hidden row (folded repo / filter /
+    /// quiet repo) instead of silently following the index onto a neighbor.
     pub fn selected_target(&self) -> Option<SelectionTarget> {
-        self.selectable.get(self.dashboard.selected).copied()
+        self.dashboard.selection
+    }
+
+    /// Set the selection by index into the current `selectable`, keeping the
+    /// durable `selection` target and the `selected` nav cursor in sync. Use
+    /// this anywhere selection *intent* changes via an index (nav, click,
+    /// landing on a freshly-created workspace).
+    pub(crate) fn select_index(&mut self, idx: usize) {
+        self.dashboard.selected = idx;
+        self.dashboard.selection = self.selectable.get(idx).copied();
+    }
+
+    /// Whether a selection target still refers to a live repo/workspace.
+    /// Used by `reconcile_selection` to tell a temporarily-hidden target
+    /// (park it) from a removed one (fall back to a neighbor).
+    pub(crate) fn selection_target_exists(&self, t: SelectionTarget) -> bool {
+        match t {
+            SelectionTarget::Repo(id) => self.repos.iter().any(|r| r.id == id),
+            SelectionTarget::Workspace(id) => self.workspaces.iter().any(|(_, w)| w.id == id),
+        }
     }
 
     /// The primary agent instance for a workspace (the creation-time agent).
@@ -1422,7 +1445,7 @@ pub(crate) async fn reconcile_create_result(
                     .iter()
                     .position(|t| *t == SelectionTarget::Workspace(id))
                 {
-                    g.dashboard.selected = idx;
+                    g.select_index(idx);
                 }
             }
         }
@@ -1838,5 +1861,68 @@ mod reported_freshness_tests {
         assert!(fresh_reported(Some(&s), 1500).is_none());
         // no push -> none
         assert!(fresh_reported(None, 1500).is_none());
+    }
+}
+
+#[cfg(test)]
+mod selection_helper_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, Store};
+    use std::path::PathBuf;
+
+    fn app_with_one_workspace() -> (App, crate::data::store::WorkspaceId) {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let w = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        (app, w)
+    }
+
+    #[test]
+    fn select_index_sets_both_fields() {
+        let (mut app, w) = app_with_one_workspace();
+        let idx = app
+            .selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(w))
+            .unwrap();
+        app.select_index(idx);
+        assert_eq!(app.dashboard.selected, idx);
+        assert_eq!(app.dashboard.selection, Some(SelectionTarget::Workspace(w)));
+    }
+
+    #[test]
+    fn selected_target_returns_durable_selection_not_index() {
+        let (mut app, w) = app_with_one_workspace();
+        app.dashboard.selection = Some(SelectionTarget::Workspace(w));
+        // Deliberately desync the index to a different slot (the repo header).
+        app.dashboard.selected = 0;
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Workspace(w)),
+            "selected_target follows the durable selection, not the index"
+        );
+    }
+
+    #[test]
+    fn selection_target_exists_tracks_workspaces_and_repos() {
+        let (app, w) = app_with_one_workspace();
+        let repo_id = app.repos[0].id;
+        assert!(app.selection_target_exists(SelectionTarget::Workspace(w)));
+        assert!(app.selection_target_exists(SelectionTarget::Repo(repo_id)));
+        assert!(!app.selection_target_exists(SelectionTarget::Workspace(
+            crate::data::store::WorkspaceId(9999)
+        )));
     }
 }

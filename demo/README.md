@@ -7,14 +7,17 @@ fully isolated wsx install with synthetic repos, drives the real `wsx` TUI with
 captions under GitHub's 10MB asset cap.
 
 See [`SPIKE-NOTES.md`](SPIKE-NOTES.md) for the hard-won mechanics (config
-isolation, trust pre-seeding, agent-pane switching, VHS gotchas).
+isolation, trust pre-seeding, agent-pane switching, agent-to-agent coordination,
+detail-bar population, VHS gotchas). **If you are an agent picking this up, read
+`SPIKE-NOTES.md` end to end first** — every non-obvious failure mode and its fix
+is recorded there.
 
 ## Clips
 
 | Clip | Shows | Output |
 |---|---|---|
-| **hero** | One workspace, two agents coordinating with no human in the loop: Claude reviews & finds a planted SQL-injection bug, then hands the fix to its Codex teammate over `wsx agent send`; Codex fixes, commits, and reports back the commit hash; Claude verifies. | `out/01-hero.mp4` |
-| **parallel** | Three isolated worktrees across two repos, a reviewing agent deployed to each, then a tour of each workspace's live SESSION SUMMARY / RECENT CHAT detail bar as it fills with that agent's findings. | `out/02-parallel.mp4` |
+| **hero** (~66s) | One workspace, two agents coordinating with no human in the loop: Claude reviews & finds a planted SQL-injection bug, then hands the fix to its Codex teammate over `wsx agent send`; Codex fixes, commits, and reports back the commit hash; Claude verifies. | `out/01-hero.mp4` |
+| **parallel** (~61s) | Three isolated worktrees in one repo (`toy-api`), an agent deployed to each to fix + commit the planted bug, then a tour of each workspace's live detail bar (SESSION SUMMARY / RECENT CHAT / RECENT FILES with `+X −Y` line counts) as it fills in. | `out/02-parallel.mp4` |
 
 ## Prerequisites
 
@@ -41,17 +44,21 @@ make -C demo check      # unit-check the scripted pieces (no recording)
 make -C demo clean      # wipe the sandbox and out/
 ```
 
-Finals land in `out/` (gitignored): `*-raw.mp4` (uncaptioned, for editing),
-`*-collapsed.mp4` (dead air removed), and `NN-name.mp4` (final, captioned,
-≤10MB).
+Everything in `out/` is **gitignored** — the committed deliverable is the harness
+that regenerates the clips, not the `.mp4`s. Intermediates: `*-raw.mp4`
+(uncaptioned, straight from VHS), `*-collapsed.mp4` (dead air removed),
+`*-fast.mp4` (hero only, after the speed-ramp); the final captioned ≤10MB clip is
+`NN-name.mp4` (`01-hero.mp4`, `02-parallel.mp4`).
 
 ## Pipeline
 
 Each clip flows through these stages (chained by the `Makefile`):
 
 1. **`sandbox-bootstrap.sh`** — fresh isolated wsx install + synthetic repos +
-   pre-authed/pre-trusted Claude & Codex configs + session-log symlinks (so the
-   workspace detail bars can find the agents' logs — see below).
+   pre-authed/pre-trusted Claude & Codex configs + the **wsx agent skill** copied
+   into both isolated configs (so agents know the `wsx agent send` CLI — see
+   *Agent coordination* below) + session-log symlinks (so the workspace detail
+   bars can find the agents' logs — see *Isolation* below).
 2. **`render.sh tapes/*.tape`** — VHS drives the real `wsx` TUI with live agents.
    `render.sh` first clears the `CLAUDECODE` / `CLAUDE_CODE_*` parent-session env
    markers, so agents spawned while the harness runs *inside* a Claude Code
@@ -85,11 +92,35 @@ into the sandbox — these bridge the isolated session logs to where wsx reads t
 (`dirs::home_dir()`, no env override) so the detail bars populate. `make clean`
 removes them along with the whole sandbox.
 
+## Agent coordination (the hero's whole point)
+
+The hero shows agents working *together* over wsx's own CLI, no human relaying:
+
+- wsx ships an **agent skill** (`../skills/wsx/SKILL.md`) that teaches agents the
+  `wsx agent send <label> <message>` command. The real installer
+  (`wsx setup install-skill`) writes to `~/.claude/skills` / `~/.codex/skills` via
+  `dirs::home_dir()` and **ignores `CLAUDE_CONFIG_DIR` / `CODEX_HOME`**, so it
+  can't target the sandbox — `sandbox-bootstrap.sh` copies the same skill into the
+  isolated configs directly instead.
+- In the tape, Claude (after reviewing) runs `wsx agent send codex "<bug + location
+  + fix>"`; wsx prints the deterministic `queued message to codex` (the only safe
+  `Wait` anchor for this step). Codex receives it as a `[message from claude]`
+  banner, fixes + commits, then `wsx agent send claude` back with the hash.
+- **Known quirk (worked around in the tape):** a message from Claude often lands in
+  Codex's prompt *unsubmitted*. After switching to Codex (`Ctrl-x w`) the tape
+  presses `Enter` to submit it. Once submitted, Codex reliably replies.
+
 ## Customizing
 
 - **Repos / planted bugs:** `gen-repos.sh`.
 - **What each agent does / pacing:** the `.tape` files (see `SPIKE-NOTES.md` for
   the driving conventions and timing gotchas).
 - **Captions:** `captions/*.txt` — tab-separated `start  end  text` (seconds),
-  timed to the *collapsed* clip.
+  timed to the clip that `post.sh` actually captions: the **post-ramp** clip for
+  the hero (`01-hero-fast.mp4`), the **collapsed** clip for parallel (no ramp).
 - **Dead-air aggressiveness:** `MIN_FREEZE` / `MAX_HOLD` in the `Makefile`.
+- **Hero speed-ramp window:** `HERO_RAMP_START` / `HERO_RAMP_END` /
+  `HERO_RAMP_FACTOR` in the `Makefile` — absolute seconds in the *collapsed* clip,
+  tuned to the recorded take (re-confirm if you re-record; see `SPIKE-NOTES.md`).
+- **Tests:** `make -C demo check` runs `test-{gen-repos,bootstrap,post,speedramp}.sh`
+  (no recording — just the scripted pieces).

@@ -602,14 +602,37 @@ pub(crate) fn build_recent_files(
     column_width: usize,
 ) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
-    let files: Vec<&String> = events
-        .map(|e| e.recent_edited_files.iter().collect())
-        .unwrap_or_default();
+    // The list is the union of (a) files the tailed agent edited this session and
+    // (b) files that changed vs the base branch (the same git diff that powers the
+    // row's +N −M). Session edits come first, in recency order, so live edits show
+    // immediately; committed/delegated changes still appear when the tailed session
+    // made no edits of its own — e.g. one agent delegates the fix to another, or the
+    // session reset after a commit. Both reduce to worktree-relative paths so they
+    // dedupe against each other and annotate against `diff_per_file`.
+    let mut files: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(e) = events {
+        for f in &e.recent_edited_files {
+            let rel = display_relative_path(f, worktree_path);
+            if seen.insert(rel.clone()) {
+                files.push(rel);
+            }
+        }
+    }
+    if let Some(map) = diff_per_file {
+        let mut git_only: Vec<&String> = map.keys().filter(|k| !seen.contains(*k)).collect();
+        git_only.sort(); // deterministic order for files with no session signal
+        for k in git_only {
+            seen.insert(k.clone());
+            files.push(k.clone());
+        }
+    }
     if files.is_empty() {
         out.push(Line::from(Span::styled("—".to_string(), theme.dim_style())));
     } else {
         for f in files.iter().take(5) {
-            let diff = lookup_file_diff(f, worktree_path, diff_per_file);
+            // `f` is already worktree-relative: both the display path and the key.
+            let diff = diff_per_file.and_then(|m| m.get(f)).copied();
             // The right-aligned `+added −removed` cluster, when present.
             let counts = match diff {
                 Some(d) if d.added > 0 || d.removed > 0 => {
@@ -630,8 +653,7 @@ pub(crate) fn build_recent_files(
             } else {
                 column_width
             };
-            let display = display_relative_path(f, worktree_path);
-            let truncated = truncate_to_chars_left(&display, path_width);
+            let truncated = truncate_to_chars_left(f, path_width);
             let mut spans: Vec<Span<'static>> =
                 vec![Span::styled(truncated.clone(), theme.dim_style())];
             if let Some((added, removed)) = counts {
@@ -660,23 +682,6 @@ fn display_relative_path(file: &str, worktree_path: &std::path::Path) -> String 
         .and_then(|p| p.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| file.to_string())
-}
-
-/// Look up a recent-edited file's per-file diff. `file` is whatever
-/// the JSONL `file_path` field contained (usually an absolute path
-/// inside the worktree). `worktree_path` is the workspace's worktree
-/// root. The diff map is keyed by paths relative to that root.
-fn lookup_file_diff(
-    file: &str,
-    worktree_path: &std::path::Path,
-    diff_per_file: Option<&std::collections::HashMap<String, DiffStats>>,
-) -> Option<DiffStats> {
-    let map = diff_per_file?;
-    let rel = std::path::Path::new(file)
-        .strip_prefix(worktree_path)
-        .ok()?;
-    let key = rel.to_str()?;
-    map.get(key).copied()
 }
 
 const REPLY_CHIP: &str = "┃ Reply to agent ┃";
@@ -1553,6 +1558,67 @@ mod tests {
             column_width,
             "path should fill the full column when no counts follow it"
         );
+    }
+
+    #[test]
+    fn build_recent_files_lists_committed_files_with_no_session_edits() {
+        // Regression: RECENT FILES must reflect the worktree's changes vs base
+        // (the same git diff that powers the row's +N −M) even when the tailed
+        // agent's session recorded no edits — e.g. one agent delegated the fix to
+        // another (the editor's log isn't this session's), or the session reset
+        // after a commit. Previously this collapsed to "—" while the row still
+        // showed a count.
+        let theme = Theme::default();
+        let worktree = std::path::PathBuf::from("/wt");
+        let mut diff = std::collections::HashMap::new();
+        diff.insert(
+            "src/auth.py".to_string(),
+            DiffStats {
+                added: 2,
+                removed: 3,
+            },
+        );
+        // No session events at all (tailed agent only read / ran bash).
+        let lines = build_recent_files(None, Some(&diff), &worktree, &theme, 40);
+        assert_eq!(
+            lines.len(),
+            1,
+            "expected the committed file, got: {:?}",
+            lines.iter().map(line_to_string).collect::<Vec<_>>()
+        );
+        let s = line_to_string(&lines[0]);
+        assert!(s.contains("src/auth.py"), "row should list the file: {s:?}");
+        assert!(s.ends_with("+2 −3"), "row should carry git counts: {s:?}");
+    }
+
+    #[test]
+    fn build_recent_files_unions_session_then_git_only_files() {
+        // The list is the union of session-edited files (first, in recency order)
+        // and the remaining git-changed files (after, deterministic order).
+        let theme = Theme::default();
+        let worktree = std::path::PathBuf::from("/wt");
+        let mut evt = crate::activity::events::WorkspaceEvents::default();
+        evt.recent_edited_files.push_back("/wt/b.rs".to_string());
+        let mut diff = std::collections::HashMap::new();
+        diff.insert(
+            "a.rs".to_string(),
+            DiffStats {
+                added: 1,
+                removed: 0,
+            },
+        );
+        diff.insert(
+            "b.rs".to_string(),
+            DiffStats {
+                added: 2,
+                removed: 2,
+            },
+        );
+        let lines = build_recent_files(Some(&evt), Some(&diff), &worktree, &theme, 40);
+        assert_eq!(lines.len(), 2);
+        // session-edited b.rs first, then git-only a.rs.
+        assert!(line_to_string(&lines[0]).contains("b.rs"));
+        assert!(line_to_string(&lines[1]).contains("a.rs"));
     }
 
     #[test]

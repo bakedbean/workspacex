@@ -3,7 +3,7 @@
 # deploy an agent to FIX + commit the bugs in each — created and attached one at
 # a time (cursor stays put, no fragile dashboard navigation). Then tour the
 # detail bars (SESSION SUMMARY / RECENT CHAT / RECENT FILES with +X −Y line
-# counts). Rendered via demo/render.sh (clears Claude Code markers).
+# counts). Rendered via sandbox/render.sh (clears Claude Code markers).
 Output demo/out/02-parallel-raw.mp4
 Set Shell "bash"
 Set FontSize 13

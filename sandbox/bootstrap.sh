@@ -1,27 +1,41 @@
 #!/usr/bin/env bash
 # Stand up an isolated wsx install with synthetic repos registered, plus an
 # isolated, pre-authenticated, pre-accepted Claude config so live agents spawn
-# with zero interactive prompts. Everything lives under $WSX_DEMO_ROOT; the real
+# with zero interactive prompts. Everything lives under $WSX_SANDBOX_ROOT; the real
 # ~/.local/state, ~/.claude.json, and ~/.claude/settings.json are never touched.
 # The ONLY thing written outside the sandbox is a set of transient symlinks under
 # ~/.claude/projects (so wsx's detail bars can find the isolated session logs);
 # `make clean` removes them.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export WSX_DEMO_ROOT="${WSX_DEMO_ROOT:-/tmp/wsx-demo}"
-# Guard: this script `rm -rf`s WSX_DEMO_ROOT, and it's overridable. Refuse to run
-# with an empty value or an obviously catastrophic root (/, $HOME, a top-level dir).
-case "$WSX_DEMO_ROOT" in
-  ""|/|/.|//) echo "FATAL: unsafe WSX_DEMO_ROOT='$WSX_DEMO_ROOT'" >&2; exit 1;;
+# WSX_SANDBOX_ROOT is the canonical var; WSX_DEMO_ROOT is a back-compat fallback.
+export WSX_SANDBOX_ROOT="${WSX_SANDBOX_ROOT:-${WSX_DEMO_ROOT:-/tmp/wsx-demo}}"
+# Normalize away any `..` components BEFORE the destructive-path guards, so a value
+# like /tmp/wsx-test/.. can't slip past the string checks and resolve to a parent
+# that `rm -rf` would then wipe. python3's os.path.abspath is portable (GNU
+# `realpath -m` is not on macOS) and tolerates a not-yet-existing path; it does not
+# resolve symlinks, so the default /tmp root stays /tmp (matching the demo tapes)
+# instead of macOS's /private/tmp.
+WSX_SANDBOX_ROOT="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$WSX_SANDBOX_ROOT")"
+export WSX_SANDBOX_ROOT
+# Guard: this script `rm -rf`s WSX_SANDBOX_ROOT, and it's overridable. Refuse to run
+# with an empty value, an obviously catastrophic root (/, /tmp, $HOME), or any path
+# shallower than two levels — a sandbox is always nested (e.g. /tmp/wsx-demo).
+case "$WSX_SANDBOX_ROOT" in
+  ""|/|/.|//|/tmp|"$HOME") echo "FATAL: unsafe WSX_SANDBOX_ROOT='$WSX_SANDBOX_ROOT'" >&2; exit 1;;
 esac
-[ "$WSX_DEMO_ROOT" = "$HOME" ] && { echo "FATAL: WSX_DEMO_ROOT must not be \$HOME" >&2; exit 1; }
-export XDG_STATE_HOME="$WSX_DEMO_ROOT/state"
-export CLAUDE_CONFIG_DIR="$WSX_DEMO_ROOT/claude-config"
-export CODEX_HOME="$WSX_DEMO_ROOT/codex-home"
-REPOS="$WSX_DEMO_ROOT/repos"
+case "$WSX_SANDBOX_ROOT" in
+  */*/*) : ;;
+  *) echo "FATAL: WSX_SANDBOX_ROOT too shallow to remove safely: '$WSX_SANDBOX_ROOT'" >&2; exit 1;;
+esac
+export XDG_STATE_HOME="$WSX_SANDBOX_ROOT/state"
+export CLAUDE_CONFIG_DIR="$WSX_SANDBOX_ROOT/claude-config"
+export CODEX_HOME="$WSX_SANDBOX_ROOT/codex-home"
+REPOS="$WSX_SANDBOX_ROOT/repos"
+WSX_BIN="${WSX_BIN:-wsx}"
 
 # Fresh state each run.
-rm -rf "$WSX_DEMO_ROOT"
+rm -rf -- "$WSX_SANDBOX_ROOT"
 mkdir -p "$XDG_STATE_HOME" "$REPOS" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"
 
 # --- Isolated Claude config (auth + bypass pre-accepted) ---
@@ -85,14 +99,14 @@ fi
 
 # --- Synthetic repos ---
 "$HERE/gen-repos.sh" "$REPOS"
-wsx repo add "$REPOS/toy-api" --name toy-api --prefix demo
-wsx repo add "$REPOS/toy-cli" --name toy-cli --prefix demo
+"$WSX_BIN" repo add "$REPOS/toy-api" --name toy-api --prefix demo
+"$WSX_BIN" repo add "$REPOS/toy-cli" --name toy-cli --prefix demo
 # Set the base branch explicitly. wsx's per-workspace diff poll (which powers the
 # dashboard +N/-M column and the RECENT FILES +X −Y counts) only runs when a
 # repo's base_branch is Some — `repo add` leaves it None. The repos are created
 # on `main` (gen-repos.sh: git init -b main), so point base_branch there.
-wsx repo set-base-branch toy-api main
-wsx repo set-base-branch toy-cli main
+"$WSX_BIN" repo set-base-branch toy-api main
+"$WSX_BIN" repo set-base-branch toy-cli main
 
 # --- Pre-seed Claude trust for the worktree paths the demo tapes attach to ---
 # Claude gates a fresh folder behind a "do you trust this folder?" dialog that
@@ -138,13 +152,13 @@ PY
 # them. (The encoding replaces every non-alphanumeric char with '-'.)
 #
 # NOTE: this only matters because the agents must also run as TOP-LEVEL claude
-# sessions to persist a jsonl at all — see demo/render.sh, which clears the
+# sessions to persist a jsonl at all — see render.sh, which clears the
 # CLAUDECODE/CLAUDE_CODE_* parent-session markers before launching VHS.
 encode_path() { printf '%s' "$1" | sed 's#^/##; s#[^A-Za-z0-9]#-#g; s#^#-#'; }
 REAL_PROJECTS="$HOME/.claude/projects"
 mkdir -p "$REAL_PROJECTS"
 # Clear stale demo symlinks from a previous run.
-find "$REAL_PROJECTS" -maxdepth 1 -type l -lname "$WSX_DEMO_ROOT/*" -delete 2>/dev/null || true
+find "$REAL_PROJECTS" -maxdepth 1 -type l -lname "$WSX_SANDBOX_ROOT/*" -delete 2>/dev/null || true
 for p in "${DEMO_PATHS[@]}"; do
   enc="$(encode_path "$p")"
   mkdir -p "$CLAUDE_CONFIG_DIR/projects/$enc"
@@ -152,7 +166,7 @@ for p in "${DEMO_PATHS[@]}"; do
 done
 echo "bridged ${#DEMO_PATHS[@]} session-log dirs into ~/.claude/projects (symlinks)"
 
-echo "sandbox ready at $WSX_DEMO_ROOT"
+echo "sandbox ready at $WSX_SANDBOX_ROOT"
 echo "  XDG_STATE_HOME=$XDG_STATE_HOME"
 echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
 echo "  CODEX_HOME=$CODEX_HOME"

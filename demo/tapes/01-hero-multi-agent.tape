@@ -1,7 +1,7 @@
 # Clip 1 — Hero: autonomous agent-to-agent coordination over the wsx CLI.
 # Create a workspace, put Claude + Codex on it, and have CLAUDE delegate the fix
 # to CODEX via `wsx agent send` — Codex fixes, commits, and reports back, all
-# without the user in the loop. Rendered via demo/render.sh.
+# without the user in the loop. Rendered via sandbox/render.sh.
 Output demo/out/01-hero-raw.mp4
 Set Shell "bash"
 Set FontSize 13
@@ -30,13 +30,20 @@ Wait+Screen /bypass permissions on/
 Sleep 1s
 
 # --- Put a second agent (Codex) on the same workspace ---
+# Money shot: wsx isn't Claude-only. Open the agent picker and walk the selector
+# across the available harnesses (claude · pi · hermes · codex) so the viewer sees
+# the menu of pluggable agents before it lands on Codex. The pauses are deliberate
+# and stay at 1x — each is well under deadair's 5s freeze threshold, and the moving
+# selector is changing pixels anyway, so nothing here gets collapsed.
 Ctrl+x
 Type "a"
-Sleep 1500ms
+Sleep 2500ms          # hold on the open picker — all four harnesses on screen
 Down
+Sleep 1100ms          # selector steps: claude -> pi
 Down
+Sleep 1100ms          # pi -> hermes
 Down
-Sleep 700ms
+Sleep 1800ms          # hermes -> codex, then dwell on Codex highlighted
 Enter
 Sleep 11s
 Screenshot demo/out/01-agents.png

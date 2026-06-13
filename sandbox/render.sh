@@ -13,12 +13,9 @@
 #
 # Usage: render.sh <tape-file>
 set -euo pipefail
-exec env \
-  -u AI_AGENT \
-  -u CLAUDECODE \
-  -u CLAUDE_EFFORT \
-  -u CLAUDE_CODE_ENTRYPOINT \
-  -u CLAUDE_CODE_EXECPATH \
-  -u CLAUDE_CODE_SESSION_ID \
-  -u CLAUDE_CODE_CHILD_SESSION \
-  vhs "${1:?usage: render.sh <tape-file>}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
+source "$HERE/agent-env.sh"
+unset_args=()
+for v in "${WSX_AGENT_ENV_UNSET[@]}"; do unset_args+=(-u "$v"); done
+exec env "${unset_args[@]}" vhs "${1:?usage: render.sh <tape-file>}"

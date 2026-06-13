@@ -6,6 +6,11 @@ fully isolated wsx install with synthetic repos, drives the real `wsx` TUI with
 [VHS](https://github.com/charmbracelet/vhs), collapses dead air, and burns in
 captions under GitHub's 10MB asset cap.
 
+> Provisioning is shared with the e2e test harness — see
+> [`../sandbox/README.md`](../sandbox/README.md) (env contract) and
+> [`../test/README.md`](../test/README.md) (running the app for tests). This `demo/`
+> dir is now just the screencast/video-production layer on top of `sandbox/`.
+
 See [`SPIKE-NOTES.md`](SPIKE-NOTES.md) for the hard-won mechanics (config
 isolation, trust pre-seeding, agent-pane switching, agent-to-agent coordination,
 detail-bar population, VHS gotchas). **If you are an agent picking this up, read
@@ -25,7 +30,7 @@ is recorded there.
   through it). `agg` is optional (GIF fallback).
 - The `claude` and `codex` CLIs installed and **logged in** (the harness copies
   their credentials into an isolated config — see Isolation below).
-- `python3` (used by `sandbox-bootstrap.sh` and `deadair.sh`).
+- `python3` (used by `sandbox/bootstrap.sh` and `deadair.sh`).
 
 `vhs`/`ttyd`/`agg` ship as static binaries — no root needed:
 
@@ -54,13 +59,13 @@ that regenerates the clips, not the `.mp4`s. Intermediates: `*-raw.mp4`
 
 Each clip flows through these stages (chained by the `Makefile`):
 
-1. **`sandbox-bootstrap.sh`** — fresh isolated wsx install + synthetic repos +
+1. **`sandbox/bootstrap.sh`** — fresh isolated wsx install + synthetic repos +
    pre-authed/pre-trusted Claude & Codex configs + the **wsx agent skill** copied
    into both isolated configs (so agents know the `wsx agent send` CLI — see
    *Agent coordination* below) + session-log symlinks (so the workspace detail
    bars can find the agents' logs — see *Isolation* below).
-2. **`render.sh tapes/*.tape`** — VHS drives the real `wsx` TUI with live agents.
-   `render.sh` first clears the `CLAUDECODE` / `CLAUDE_CODE_*` parent-session env
+2. **`sandbox/render.sh tapes/*.tape`** — VHS drives the real `wsx` TUI with live
+   agents. `render.sh` first clears the `CLAUDECODE` / `CLAUDE_CODE_*` parent-session env
    markers, so agents spawned while the harness runs *inside* a Claude Code
    session still run as genuine top-level sessions and persist their per-worktree
    session logs (required for SESSION SUMMARY / RECENT CHAT to populate). No-op
@@ -76,7 +81,7 @@ Each clip flows through these stages (chained by the `Makefile`):
 
 ## Isolation (nothing touches your real setup)
 
-Every `wsx`/agent invocation is redirected into `$WSX_DEMO_ROOT` (default
+Every `wsx`/agent invocation is redirected into `$WSX_SANDBOX_ROOT` (default
 `/tmp/wsx-demo`):
 
 - `XDG_STATE_HOME` → isolated wsx `state.db`, worktrees, logs.
@@ -100,7 +105,7 @@ The hero shows agents working *together* over wsx's own CLI, no human relaying:
   `wsx agent send <label> <message>` command. The real installer
   (`wsx setup install-skill`) writes to `~/.claude/skills` / `~/.codex/skills` via
   `dirs::home_dir()` and **ignores `CLAUDE_CONFIG_DIR` / `CODEX_HOME`**, so it
-  can't target the sandbox — `sandbox-bootstrap.sh` copies the same skill into the
+  can't target the sandbox — `sandbox/bootstrap.sh` copies the same skill into the
   isolated configs directly instead.
 - In the tape, Claude (after reviewing) runs `wsx agent send codex "<bug + location
   + fix>"`; wsx prints the deterministic `queued message to codex` (the only safe
@@ -112,15 +117,22 @@ The hero shows agents working *together* over wsx's own CLI, no human relaying:
 
 ## Customizing
 
-- **Repos / planted bugs:** `gen-repos.sh`.
+- **Repos / planted bugs:** `sandbox/gen-repos.sh`.
 - **What each agent does / pacing:** the `.tape` files (see `SPIKE-NOTES.md` for
   the driving conventions and timing gotchas).
 - **Captions:** `captions/*.txt` — tab-separated `start  end  text` (seconds),
   timed to the clip that `post.sh` actually captions: the **post-ramp** clip for
   the hero (`01-hero-fast.mp4`), the **collapsed** clip for parallel (no ramp).
 - **Dead-air aggressiveness:** `MIN_FREEZE` / `MAX_HOLD` in the `Makefile`.
+- **Protect a subtle beat from dead-air collapse:** `HERO_ADD_PROTECT` in the
+  `Makefile` — a `start:end` window (raw-clip seconds) `deadair.sh` keeps at full
+  1×. Needed for beats whose motion is too subtle for `freezedetect` to register
+  (e.g. the agent-picker selector stepping across `claude · pi · hermes · codex`),
+  which would otherwise be collapsed to a flash. Take-specific — re-confirm if you
+  re-record.
 - **Hero speed-ramp window:** `HERO_RAMP_START` / `HERO_RAMP_END` /
   `HERO_RAMP_FACTOR` in the `Makefile` — absolute seconds in the *collapsed* clip,
   tuned to the recorded take (re-confirm if you re-record; see `SPIKE-NOTES.md`).
-- **Tests:** `make -C demo check` runs `test-{gen-repos,bootstrap,post,speedramp}.sh`
-  (no recording — just the scripted pieces).
+- **Tests:** `make -C demo check` runs the screencast scripts `test-{post,speedramp}.sh`
+  (no recording). The provisioning tests moved to `sandbox/`: run them with
+  `bash sandbox/test-{gen-repos,bootstrap,agent-env,env}.sh`.

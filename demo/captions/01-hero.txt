@@ -1,4 +1,5 @@
-0.5	7	One workspace, one isolated worktree, a live agent
-13	22	Claude reviews and finds the SQL-injection bug
-24	31	Add a second agent — Codex — to the same workspace
-37	50	Codex implements the fix on that same worktree
+0.5	8	Spin up a workspace right from the dashboard
+13	21	Claude reviews and finds the SQL-injection bug
+22	30	Add a second agent — Codex — to the same workspace
+33	41	Codex fixes it on that same worktree
+44	53	Done — the dashboard shows the full session summary

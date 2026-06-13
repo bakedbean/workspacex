@@ -3,7 +3,7 @@
 14	31	Claude reviews the code and finds the SQL-injection bug
 32	37	Claude hands the fix to its Codex teammate over the wsx CLI
 38	44	Codex receives the full context: bug, location, and fix
-45	52	Codex applies a parameterized-query fix and commits it
-53	58	Codex reports back to Claude with the commit hash
-59	69	Claude verifies the fix — no human in the loop
-71	81	Two agents coordinated the whole fix end to end
+45	53	Codex applies a parameterized-query fix and commits it
+54	58	Codex reports back to Claude with the commit hash
+59	70	Claude verifies the fix — no human in the loop
+72	80	Two agents coordinated the whole fix end to end

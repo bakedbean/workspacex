@@ -6,7 +6,9 @@ DEST="${1:?usage: gen-repos.sh <dest-dir>}"
 mkdir -p "$DEST"
 
 init_repo() { # <path>
-  git -C "$1" init -q
+  # Default branch `main` so wsx's base-branch diff (which defaults to `main`)
+  # resolves — this is what powers the RECENT FILES `+X −Y` line counts.
+  git -C "$1" init -q -b main
   git -C "$1" config user.email demo@wsx.dev
   git -C "$1" config user.name "wsx demo"
 }

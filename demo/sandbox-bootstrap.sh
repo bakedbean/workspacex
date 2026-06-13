@@ -60,6 +60,12 @@ fi
 "$HERE/gen-repos.sh" "$REPOS"
 wsx repo add "$REPOS/toy-api" --name toy-api --prefix demo
 wsx repo add "$REPOS/toy-cli" --name toy-cli --prefix demo
+# Set the base branch explicitly. wsx's per-workspace diff poll (which powers the
+# dashboard +N/-M column and the RECENT FILES +X −Y counts) only runs when a
+# repo's base_branch is Some — `repo add` leaves it None. The repos are created
+# on `main` (gen-repos.sh: git init -b main), so point base_branch there.
+wsx repo set-base-branch toy-api main
+wsx repo set-base-branch toy-cli main
 
 # --- Pre-seed Claude trust for the worktree paths the demo tapes attach to ---
 # Claude gates a fresh folder behind a "do you trust this folder?" dialog that
@@ -72,6 +78,7 @@ DEMO_PATHS=(
   "$WORKTREES/toy-api/security-review"
   "$WORKTREES/toy-api/add-rate-limit"
   "$WORKTREES/toy-api/fix-auth"
+  "$WORKTREES/toy-api/null-guard"
   "$WORKTREES/toy-cli/arg-parsing"
 )
 python3 - "$CLAUDE_CONFIG_DIR/.claude.json" "${DEMO_PATHS[@]}" <<'PY'

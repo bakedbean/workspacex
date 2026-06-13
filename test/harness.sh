@@ -52,6 +52,9 @@ case "$cmd" in
     # shellcheck source=/dev/null
     source "$ROOT/sandbox/agent-env.sh"; wsx_clear_agent_env
     sock="wsx-harness-$$"
+    # Kill the detached server on exit even if send-keys/capture-pane errors under
+    # `set -e` — a detached tmux server otherwise lingers indefinitely.
+    trap 'tmux -L "$sock" kill-server 2>/dev/null || true' EXIT
     # Launch the sandboxed TUI in a detached tmux session, passing the isolated env.
     tmux -L "$sock" new-session -d -x 200 -y 50 \
       -e "XDG_STATE_HOME=$XDG_STATE_HOME" \

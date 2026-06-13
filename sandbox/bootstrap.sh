@@ -11,11 +11,15 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # WSX_SANDBOX_ROOT is the canonical var; WSX_DEMO_ROOT is a back-compat fallback.
 export WSX_SANDBOX_ROOT="${WSX_SANDBOX_ROOT:-${WSX_DEMO_ROOT:-/tmp/wsx-demo}}"
 # Guard: this script `rm -rf`s WSX_SANDBOX_ROOT, and it's overridable. Refuse to run
-# with an empty value or an obviously catastrophic root (/, $HOME, a top-level dir).
+# with an empty value, an obviously catastrophic root (/, /tmp, $HOME), or any path
+# shallower than two levels — a sandbox is always nested (e.g. /tmp/wsx-demo).
 case "$WSX_SANDBOX_ROOT" in
-  ""|/|/.|//) echo "FATAL: unsafe WSX_SANDBOX_ROOT='$WSX_SANDBOX_ROOT'" >&2; exit 1;;
+  ""|/|/.|//|/tmp|/tmp/|"$HOME"|"$HOME/") echo "FATAL: unsafe WSX_SANDBOX_ROOT='$WSX_SANDBOX_ROOT'" >&2; exit 1;;
 esac
-[ "$WSX_SANDBOX_ROOT" = "$HOME" ] && { echo "FATAL: WSX_SANDBOX_ROOT must not be \$HOME" >&2; exit 1; }
+case "$WSX_SANDBOX_ROOT" in
+  */*/*) : ;;
+  *) echo "FATAL: WSX_SANDBOX_ROOT too shallow to remove safely: '$WSX_SANDBOX_ROOT'" >&2; exit 1;;
+esac
 export XDG_STATE_HOME="$WSX_SANDBOX_ROOT/state"
 export CLAUDE_CONFIG_DIR="$WSX_SANDBOX_ROOT/claude-config"
 export CODEX_HOME="$WSX_SANDBOX_ROOT/codex-home"

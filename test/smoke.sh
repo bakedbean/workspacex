@@ -11,9 +11,11 @@ bash "$H" up
 
 bash "$H" wsx workspace create toy-api --name smoke-check
 
-# Assertion 1 — the CLI lists it.
-bash "$H" wsx workspace list toy-api | grep -q smoke-check \
-  || { echo "FAIL: smoke-check not in workspace list"; exit 1; }
+# Assertion 1 — the CLI lists it. Capture output first so a non-zero `wsx` exit is
+# distinguishable from a missing match (and visible on failure).
+list_out="$(bash "$H" wsx workspace list toy-api)"
+grep -q smoke-check <<<"$list_out" \
+  || { echo "FAIL: smoke-check not in workspace list"; echo "$list_out"; exit 1; }
 
 # Assertion 2 — it landed in state.db.
 bash "$H" state "SELECT name FROM workspaces;" | grep -q smoke-check \

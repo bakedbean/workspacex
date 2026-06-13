@@ -43,8 +43,15 @@ case "$cmd" in
     fi
     ;;
   down)
+    # Destructive: refuse obviously-unsafe roots, and require the root to be nested
+    # at least two levels deep (e.g. /tmp/wsx-test) so a misconfigured var can never
+    # `rm -rf` a system or top-level directory.
     case "$WSX_SANDBOX_ROOT" in
-      ""|/|/.|//|"$HOME") echo "harness: refusing unsafe WSX_SANDBOX_ROOT='$WSX_SANDBOX_ROOT'" >&2; exit 1;;
+      ""|/|/.|//|/tmp|/tmp/|"$HOME"|"$HOME/") echo "harness: refusing unsafe WSX_SANDBOX_ROOT='$WSX_SANDBOX_ROOT'" >&2; exit 1;;
+    esac
+    case "$WSX_SANDBOX_ROOT" in
+      */*/*) : ;;
+      *) echo "harness: WSX_SANDBOX_ROOT too shallow to remove safely: '$WSX_SANDBOX_ROOT'" >&2; exit 1;;
     esac
     rm -rf "$WSX_SANDBOX_ROOT"
     find "$HOME/.claude/projects" -maxdepth 1 -type l -lname "$WSX_SANDBOX_ROOT/*" -delete 2>/dev/null || true

@@ -10,10 +10,13 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # WSX_SANDBOX_ROOT is the canonical var; WSX_DEMO_ROOT is a back-compat fallback.
 export WSX_SANDBOX_ROOT="${WSX_SANDBOX_ROOT:-${WSX_DEMO_ROOT:-/tmp/wsx-demo}}"
-# Canonicalize (resolve any `..`/symlinks) BEFORE the destructive-path guards, so a
-# value like /tmp/wsx-test/.. can't slip past the string checks and resolve to a
-# parent that `rm -rf` would then wipe. `-m` tolerates a not-yet-existing path.
-WSX_SANDBOX_ROOT="$(realpath -m -- "$WSX_SANDBOX_ROOT")"
+# Normalize away any `..` components BEFORE the destructive-path guards, so a value
+# like /tmp/wsx-test/.. can't slip past the string checks and resolve to a parent
+# that `rm -rf` would then wipe. python3's os.path.abspath is portable (GNU
+# `realpath -m` is not on macOS) and tolerates a not-yet-existing path; it does not
+# resolve symlinks, so the default /tmp root stays /tmp (matching the demo tapes)
+# instead of macOS's /private/tmp.
+WSX_SANDBOX_ROOT="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$WSX_SANDBOX_ROOT")"
 export WSX_SANDBOX_ROOT
 # Guard: this script `rm -rf`s WSX_SANDBOX_ROOT, and it's overridable. Refuse to run
 # with an empty value, an obviously catastrophic root (/, /tmp, $HOME), or any path

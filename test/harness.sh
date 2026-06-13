@@ -78,12 +78,13 @@ case "$cmd" in
     echo "shot rendered (see Screenshot path in $tape, under test/out/)"
     ;;
   down)
-    # Destructive. Canonicalize FIRST (resolve any `..`/symlinks) so a value like
-    # /tmp/wsx-test/.. can't slip past the string guards and resolve to a parent;
-    # refuse obviously-unsafe roots; require the root to be nested at least two
-    # levels deep. Operate on the canonical path with `rm -rf --` (the `--` stops a
-    # leading-dash root being read as an option).
-    root="$(realpath -m -- "$WSX_SANDBOX_ROOT")"
+    # Destructive. Normalize away `..` FIRST so a value like /tmp/wsx-test/.. can't
+    # slip past the string guards and resolve to a parent; refuse obviously-unsafe
+    # roots; require the root nested at least two levels deep. Operate on the
+    # normalized path with `rm -rf --` (the `--` stops a leading-dash root being read
+    # as an option). python3's os.path.abspath is portable (GNU `realpath -m` is not
+    # on macOS) and handles a not-yet-existing path.
+    root="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$WSX_SANDBOX_ROOT")"
     case "$root" in
       ""|/|/.|//|/tmp|"$HOME") echo "harness: refusing unsafe WSX_SANDBOX_ROOT='$root'" >&2; exit 1;;
     esac

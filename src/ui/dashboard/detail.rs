@@ -607,7 +607,9 @@ pub(crate) fn build_recent_files(
     // row's +N −M). Session edits come first, in recency order, so live edits show
     // immediately; committed/delegated changes still appear when the tailed session
     // made no edits of its own — e.g. one agent delegates the fix to another, or the
-    // session reset after a commit. Both reduce to worktree-relative paths so they
+    // session reset after a commit. Session paths are reduced to worktree-relative
+    // form to match `diff_per_file`'s keys (a file edited outside the worktree keeps
+    // its absolute path and simply won't find a diff entry), so the two sources
     // dedupe against each other and annotate against `diff_per_file`.
     let mut files: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();

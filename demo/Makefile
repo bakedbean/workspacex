@@ -23,7 +23,7 @@ clips: hero parallel
 
 clean:
 	@root="$${WSX_SANDBOX_ROOT:-$${WSX_DEMO_ROOT:-/tmp/wsx-demo}}"; \
-	root="$$(realpath -m -- "$$root")"; \
+	root="$$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$$root")"; \
 	case "$$root" in ""|/|/.|//|/tmp|"$$HOME") echo "refusing unsafe WSX_SANDBOX_ROOT='$$root'" >&2; exit 1;; esac; \
 	case "$$root" in */*/*) : ;; *) echo "refusing too-shallow WSX_SANDBOX_ROOT='$$root'" >&2; exit 1;; esac; \
 	rm -rf -- "$$root" $(ROOT)/demo/out; \

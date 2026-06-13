@@ -124,6 +124,12 @@ The hero shows agents working *together* over wsx's own CLI, no human relaying:
   timed to the clip that `post.sh` actually captions: the **post-ramp** clip for
   the hero (`01-hero-fast.mp4`), the **collapsed** clip for parallel (no ramp).
 - **Dead-air aggressiveness:** `MIN_FREEZE` / `MAX_HOLD` in the `Makefile`.
+- **Protect a subtle beat from dead-air collapse:** `HERO_ADD_PROTECT` in the
+  `Makefile` — a `start:end` window (raw-clip seconds) `deadair.sh` keeps at full
+  1×. Needed for beats whose motion is too subtle for `freezedetect` to register
+  (e.g. the agent-picker selector stepping across `claude · pi · hermes · codex`),
+  which would otherwise be collapsed to a flash. Take-specific — re-confirm if you
+  re-record.
 - **Hero speed-ramp window:** `HERO_RAMP_START` / `HERO_RAMP_END` /
   `HERO_RAMP_FACTOR` in the `Makefile` — absolute seconds in the *collapsed* clip,
   tuned to the recorded take (re-confirm if you re-record; see `SPIKE-NOTES.md`).

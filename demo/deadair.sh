@@ -2,13 +2,17 @@
 # Collapse long static ("dead air") stretches in a screencast: detect frozen
 # segments and trim each down to a brief hold, leaving active content at natural
 # 1x speed. Reproducible — re-runs freezedetect on whatever clip you give it.
-# Usage: deadair.sh <in.mp4> <out.mp4> [min_freeze_s] [max_hold_s]
+# Usage: deadair.sh <in.mp4> <out.mp4> [min_freeze_s] [max_hold_s] [tail_protect_s] [protect_range]
 set -euo pipefail
 IN="${1:?in}"; OUT="${2:?out}"
 MIN_FREEZE="${3:-5.0}"   # only collapse static stretches longer than this
 MAX_HOLD="${4:-1.3}"     # ...down to this much hold
 TAIL_PROTECT="${5:-3.0}" # never collapse within this many seconds of the end
                          # (protects the closing payoff frame from being eaten)
+PROTECT="${6:-}"         # optional "start:end" window (seconds, input clip) to keep
+                         # at full 1x — for beats whose motion is too subtle for
+                         # freezedetect to see (e.g. a selector marker stepping
+                         # across a menu), which would otherwise be collapsed.
 
 dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$IN")"
 
@@ -20,11 +24,24 @@ freezes="$(ffmpeg -i "$IN" -vf "freezedetect=n=-50dB:d=$MIN_FREEZE" -map 0:v -f 
   | grep -oE 'freeze_(start|duration): [0-9.]+' | awk '{print $2}')"
 
 # Build the list of time ranges to KEEP, dropping the excess of each long freeze.
-keep="$(python3 - "$dur" "$MIN_FREEZE" "$MAX_HOLD" "$freezes" "$TAIL_PROTECT" <<'PY'
+keep="$(python3 - "$dur" "$MIN_FREEZE" "$MAX_HOLD" "$freezes" "$TAIL_PROTECT" "$PROTECT" <<'PY'
 import sys
 dur=float(sys.argv[1]); minf=float(sys.argv[2]); hold=float(sys.argv[3])
 vals=[float(x) for x in sys.argv[4].split()]
 tail=float(sys.argv[5]); protect_start=dur-tail
+# Optional explicit keep-at-1x window "start:end" (subtracted from every drop).
+pwin=None
+if len(sys.argv)>6 and sys.argv[6].strip():
+    ps,pe=sys.argv[6].split(":"); pwin=(float(ps),float(pe))
+def minus_pwin(a,b):
+    # [a,b] with the protected window removed -> 0, 1, or 2 sub-ranges
+    if not pwin: return [(a,b)]
+    pa,pe=pwin
+    if pe<=a or pa>=b: return [(a,b)]
+    out=[]
+    if pa>a: out.append((a,min(pa,b)))
+    if pe<b: out.append((max(pe,a),b))
+    return [(x,y) for x,y in out if y>x]
 # freezedetect prints start then duration, paired
 pairs=list(zip(vals[0::2], vals[1::2]))
 drops=[]  # (a,b) ranges to remove
@@ -33,7 +50,7 @@ for start,d in pairs:
         a,b=start+hold, start+d            # keep first `hold` secs, drop rest
         if a>=protect_start: continue       # entirely in protected tail -> keep
         b=min(b, protect_start)             # don't drop into the protected tail
-        if b>a: drops.append((a,b))
+        if b>a: drops.extend(minus_pwin(a,b))  # honor the explicit keep window
 # invert drops -> keep ranges over [0,dur]
 keep=[]; cur=0.0
 for a,b in sorted(drops):

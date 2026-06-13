@@ -24,8 +24,10 @@ agent-facing harness that drives the live app headlessly for testing.
 
 - **Scope:** refactor + a *thin* harness (a "spin up a live sandboxed wsx and drive
   it" entrypoint), not a full e2e suite. One worked-example smoke test is included.
-- **Drive mode:** headless CLI + state inspection — run `wsx` CLI commands against
-  the sandbox and assert on `state.db` / session logs. No TUI rendering, no video.
+- **Drive mode:** headless CLI + state inspection is the default — run `wsx` CLI
+  commands against the sandbox and assert on `state.db` / session logs. TUI snapshots
+  (tmux text capture, VHS image screenshots) are available on demand for visual
+  confirmation (see Snapshots below). No video.
 - **Agent provisioning:** the shared sandbox keeps doing *everything* bootstrap does
   today, including live-agent auth/skill/trust/session-bridge. No core/opt-in split.
   (Bootstrap already degrades gracefully — it `WARN`s and continues when real
@@ -34,27 +36,34 @@ agent-facing harness that drives the live app headlessly for testing.
   harness) are sibling consumers.
 - **Rename:** `WSX_DEMO_ROOT` → `WSX_SANDBOX_ROOT`, with `WSX_DEMO_ROOT` honored as a
   fallback so nothing breaks.
+- **Snapshots:** the harness exposes *both* a VHS image-screenshot path and a
+  lightweight tmux text-capture path. The VHS *driver* (`render.sh`) is the only
+  reusable part of the screencast stack — the video post-processing
+  (`deadair`/`speedramp`/`post`/captions) is motion-video-only and is **not** reused
+  for stills. So `render.sh` is promoted to a shared `sandbox/` primitive; the
+  post-processing stays demo-only.
 
 ## Target layout
 
 ```
-sandbox/                 # shared: "stand up a real wsx in full isolation"
+sandbox/                 # shared: "stand up a real wsx in full isolation" + drive it
   bootstrap.sh           # was demo/sandbox-bootstrap.sh — behavior unchanged
   gen-repos.sh           # moved verbatim
   agent-env.sh           # NEW — CLAUDECODE/CLAUDE_CODE_* clearing, extracted from render.sh
   env.sh                 # NEW — sourceable: re-enter an already-provisioned sandbox
+  render.sh              # MOVED from demo/ — shared VHS driver (agent-env cleared, exec vhs)
   test-bootstrap.sh      # moved (paths/env-var updated)
   test-gen-repos.sh      # moved
   README.md              # NEW — documents the env contract + provision/enter/clean flow
 
-demo/                    # screencast-only (consumes sandbox/)
-  render.sh              # now sources sandbox/agent-env.sh, then execs vhs
+demo/                    # screencast-only (consumes sandbox/): video post-processing
   deadair.sh speedramp.sh post.sh
   tapes/ captions/ Makefile SPIKE-NOTES.md
   test-post.sh test-speedramp.sh README.md
 
 test/                    # NEW thin e2e harness (consumes sandbox/)
-  harness.sh             # agent-facing entrypoint: up / wsx / state / down
+  harness.sh             # agent-facing entrypoint: up / wsx / state / capture / shot / down
+  shots/                 # NEW — example screenshot tapes (e.g. dashboard.tape)
   smoke.sh               # one worked example = the harness's own self-test
   README.md
 ```
@@ -85,10 +94,10 @@ Behavior is preserved verbatim except for two parameterizations and the rename:
 
 Single source of truth for the parent-session markers that must be cleared so a
 spawned agent runs as a genuine top-level session (and persists its per-worktree
-session jsonl). Today this list is hardcoded in `demo/render.sh`. Shape: a sourceable
-script exposing the marker list (e.g. an `WSX_AGENT_ENV_UNSET` array and/or a
-`wsx_clear_agent_env` helper) so both `demo/render.sh` and `test/harness.sh` clear the
-same set without drift. Markers: `AI_AGENT`, `CLAUDECODE`, `CLAUDE_EFFORT`,
+session jsonl). Today this list is hardcoded in `render.sh`'s `env -u …` line. Shape:
+a sourceable script exposing the marker list (e.g. a `WSX_AGENT_ENV_UNSET` array
+and/or a `wsx_clear_agent_env` helper) so both `sandbox/render.sh` (the VHS driver)
+and `test/harness.sh` (the tmux `capture` path) clear the same set without drift. Markers: `AI_AGENT`, `CLAUDECODE`, `CLAUDE_EFFORT`,
 `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_SESSION_ID`,
 `CLAUDE_CODE_CHILD_SESSION`.
 
@@ -100,6 +109,15 @@ same set without drift. Markers: `AI_AGENT`, `CLAUDECODE`, `CLAUDE_EFFORT`,
 exactly as bootstrap does. Lets a consumer re-enter a sandbox without re-bootstrapping
 (and without duplicating the derivation logic). Does not provision or wipe anything.
 
+### `sandbox/render.sh` (MOVED from `demo/`)
+
+The shared VHS driver: clears the parent-session agent markers (now via
+`sandbox/agent-env.sh` instead of an inline `env -u …` list) and `exec vhs "$tape"`.
+It has zero screencast-post logic, so it is a generic "drive the sandboxed TUI under
+VHS" primitive that both the screencast recordings and the harness's image-screenshot
+mode build on. Because it is a standalone script (never sourced by `bootstrap.sh`),
+CLI-only and text-capture tests never pull in the VHS/ttyd/chromium dependency.
+
 ### `sandbox/README.md` (NEW)
 
 Documents the unit's interface: the env contract (the four vars + `WSX_BIN`), how to
@@ -109,12 +127,12 @@ that `gen-repos.sh` defines the synthetic repos / planted bugs.
 
 ### `demo/` changes (screencast-only)
 
-- `render.sh` sources `sandbox/agent-env.sh` and clears the markers via the shared
-  helper instead of the hardcoded `env -u …` list, then `exec vhs "$tape"`.
-- `Makefile`: recipes call `sandbox/bootstrap.sh` (from `$(ROOT)`) instead of
-  `demo/sandbox-bootstrap.sh`; the `clean` recipe's `WSX_DEMO_ROOT` references become
-  `WSX_SANDBOX_ROOT` (still honoring the fallback); the `check` target runs only the
-  screencast tests (`test-post.sh`, `test-speedramp.sh`).
+- `render.sh` moves to `sandbox/` (see above); `demo/` no longer owns it.
+- `Makefile`: recipes call `sandbox/bootstrap.sh` and `sandbox/render.sh` (from
+  `$(ROOT)`) instead of `demo/sandbox-bootstrap.sh` / `demo/render.sh`; the `clean`
+  recipe's `WSX_DEMO_ROOT` references become `WSX_SANDBOX_ROOT` (still honoring the
+  fallback); the `check` target runs only the screencast tests (`test-post.sh`,
+  `test-speedramp.sh`).
 - `README.md`: trimmed to recording concerns; the Pipeline step 1 and Isolation
   sections point at `sandbox/` and link `sandbox/README.md`; env-var name updated.
 - `SPIKE-NOTES.md`: env-var name and `demo/render.sh`/`demo/sandbox-bootstrap.sh`
@@ -131,11 +149,19 @@ Subcommands for headless CLI + state-inspection testing:
 - `harness.sh wsx <args…>` — run the sandboxed, locally-built wsx with the right env.
 - `harness.sh state [sql]` — convenience query against the sandbox `state.db` (no
   args → a default summary; with SQL → run it) for assertions.
+- `harness.sh capture [keys…] <out.txt>` — **text snapshot.** Launch the sandboxed
+  TUI in a detached tmux session, send optional keys, `tmux capture-pane -p` the
+  rendered screen to a text file. Lightweight, no VHS/chromium — the cheap,
+  deterministic, grep-able way to assert on what the TUI shows.
+- `harness.sh shot <tape> <out.png>` — **image screenshot.** Drive a VHS tape (which
+  contains its own `Screenshot` commands) against the sandboxed TUI via
+  `sandbox/render.sh`, producing PNG image(s). Heavier (ttyd+chromium) — used when a
+  visual artifact actually helps. Example tapes live in `test/shots/`.
 - `harness.sh down` — wipe the sandbox and the bridged `~/.claude` symlinks (same
   guards as `demo/Makefile clean`).
 
-Clears agent-session markers via `sandbox/agent-env.sh` so any wsx-spawned agents run
-as top-level sessions, matching real usage.
+Both `capture` and `shot` clear agent-session markers via `sandbox/agent-env.sh` so
+any wsx-spawned agents run as top-level sessions, matching real usage.
 
 ### `test/smoke.sh` (NEW) — worked example + self-test
 
@@ -146,34 +172,59 @@ future agent copies:
 2. Create a workspace via the wsx CLI against a synthetic repo
    (e.g. `harness.sh wsx workspace create toy-api --name smoke-check`).
 3. Assert it appears — via `harness.sh wsx workspace list` and/or
-   `harness.sh state` querying `state.db`.
-4. `harness.sh down` on exit (trap), always.
+   `harness.sh state` querying `state.db` (the primary, deterministic assertion).
+4. Demonstrate `harness.sh capture` — launch the TUI, text-snapshot the dashboard,
+   and assert the new workspace's name shows up in the rendered screen. This exercises
+   the text-capture path as the copyable example. (`shot`/VHS is documented but not
+   gated in the smoke run, to keep it dependency-light.)
+5. `harness.sh down` on exit (trap), always.
 
 Illustrative, lightweight, and self-cleaning — not a broad suite.
 
+### `test/shots/` (NEW)
+
+A small set of example VHS tapes whose only job is to navigate the sandboxed TUI to a
+state and `Screenshot` it (e.g. `dashboard.tape`). They are the reusable scenarios
+`harness.sh shot` drives, and the copyable starting point for an agent that wants a
+PNG of a particular screen.
+
 ### `test/README.md` (NEW)
 
-"How a future agent runs the app for testing": the `up`/`wsx`/`state`/`down` flow,
-the headless CLI + state-inspection model, and a pointer to `smoke.sh` as the
-copyable example. Links `sandbox/README.md` for the underlying contract.
+"How a future agent runs the app for testing": the
+`up`/`wsx`/`state`/`capture`/`shot`/`down` flow, the headless-CLI + state-inspection
+default with text/image snapshots as needed, and pointers to `smoke.sh` (CLI + text
+capture) and `shots/` (image) as copyable examples. Links `sandbox/README.md` for the
+underlying contract.
 
 ## Testing strategy
 
 - `sandbox/test-bootstrap.sh` + `sandbox/test-gen-repos.sh` — prove provisioning
   still works after the move and rename (updated to `WSX_SANDBOX_ROOT` and new paths).
-- `test/smoke.sh` — proves the harness drives the live app and inspects state.
+- `test/smoke.sh` — proves the harness drives the live app, inspects state, and
+  text-captures the TUI (CLI + `capture` paths).
 - `demo` screencast scripts: `make -C demo check` (`test-post.sh`,
-  `test-speedramp.sh`) proves the recording pieces still run after `render.sh` and
-  `Makefile` edits. A non-recording manual confirmation that `make -C demo hero`
+  `test-speedramp.sh`) proves the recording pieces still run after the `render.sh`
+  move and `Makefile` edits. A non-recording manual confirmation that `make -C demo hero`
   still wires up (bootstrap path resolves) is out of scope for automated checks but
   noted for the implementer.
 - All `*.sh` keep `#!/usr/bin/env bash` + `set -euo pipefail` and should pass
   `shellcheck`.
 
+## Dependencies
+
+- `bootstrap.sh` / `gen-repos.sh` / `env.sh` / `harness.sh up`/`wsx`/`state`: no VHS —
+  just `wsx`, `git`, `python3`, `sqlite3`.
+- `harness.sh capture`: adds `tmux`.
+- `harness.sh shot` + `test/shots/` + the whole `demo/` pipeline: adds `vhs` (+ `ttyd`,
+  headless `chromium`); `demo/` additionally needs `ffmpeg`.
+
+The harness fails a snapshot subcommand with a clear "install X" message when its tool
+is missing, rather than a cryptic error — so the default CLI/state path works on a bare
+host and the visual paths are opt-in.
+
 ## Out of scope
 
 - A broad e2e test suite (only the single smoke example).
-- TUI/PTY-driven testing (headless CLI only, per the drive-mode decision).
 - Re-recording or re-tuning the screencasts.
 - Updating historical `docs/superpowers/plans/*` references.
 

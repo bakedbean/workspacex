@@ -17,11 +17,11 @@ all: clips
 clips: hero parallel
 
 clean:
-	@root="$${WSX_DEMO_ROOT:-/tmp/wsx-demo}"; \
-	case "$$root" in ""|/|/.|//|"$$HOME") echo "refusing unsafe WSX_DEMO_ROOT='$$root'" >&2; exit 1;; esac; \
+	@root="$${WSX_SANDBOX_ROOT:-$${WSX_DEMO_ROOT:-/tmp/wsx-demo}}"; \
+	case "$$root" in ""|/|/.|//|"$$HOME") echo "refusing unsafe WSX_SANDBOX_ROOT='$$root'" >&2; exit 1;; esac; \
 	rm -rf "$$root" $(ROOT)/demo/out
 	@# remove the transient session-log symlinks bridged into ~/.claude/projects
-	find $$HOME/.claude/projects -maxdepth 1 -type l -lname "$${WSX_DEMO_ROOT:-/tmp/wsx-demo}/*" -delete 2>/dev/null || true
+	find $$HOME/.claude/projects -maxdepth 1 -type l -lname "$${WSX_SANDBOX_ROOT:-$${WSX_DEMO_ROOT:-/tmp/wsx-demo}}/*" -delete 2>/dev/null || true
 
 # Clip 1 — Hero: Claude reviews, delegates the fix to Codex over `wsx agent send`,
 # Codex fixes + commits + reports back, Claude verifies — no human in the loop.

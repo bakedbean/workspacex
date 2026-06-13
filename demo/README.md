@@ -14,7 +14,7 @@ isolation, trust pre-seeding, agent-pane switching, VHS gotchas).
 | Clip | Shows | Output |
 |---|---|---|
 | **hero** | One workspace, two different agents: Claude reviews & finds a planted SQL-injection bug, Codex is added to the *same* worktree and fixes it. | `out/01-hero.mp4` |
-| **parallel** | Three isolated worktrees across two repos, a coding agent (Claude/Codex) deployed to each, all working in parallel on the dashboard. | `out/02-parallel.mp4` |
+| **parallel** | Three isolated worktrees across two repos, a reviewing agent deployed to each, then a tour of each workspace's live SESSION SUMMARY / RECENT CHAT detail bar as it fills with that agent's findings. | `out/02-parallel.mp4` |
 
 ## Prerequisites
 
@@ -50,12 +50,19 @@ Finals land in `out/` (gitignored): `*-raw.mp4` (uncaptioned, for editing),
 Each clip flows through four stages (chained by the `Makefile`):
 
 1. **`sandbox-bootstrap.sh`** — fresh isolated wsx install + synthetic repos +
-   pre-authed/pre-trusted Claude & Codex configs.
-2. **`tapes/*.tape`** — VHS drives the real `wsx` TUI with live agents.
+   pre-authed/pre-trusted Claude & Codex configs + session-log symlinks (so the
+   workspace detail bars can find the agents' logs — see below).
+2. **`render.sh tapes/*.tape`** — VHS drives the real `wsx` TUI with live agents.
+   `render.sh` first clears the `CLAUDECODE` / `CLAUDE_CODE_*` parent-session env
+   markers, so agents spawned while the harness runs *inside* a Claude Code
+   session still run as genuine top-level sessions and persist their per-worktree
+   session logs (required for SESSION SUMMARY / RECENT CHAT to populate). No-op
+   for a normal terminal user.
 3. **`deadair.sh`** — `freezedetect`-driven collapse of static stretches (agent
    boots/idle) to a brief hold; active content stays at natural 1×.
-4. **`post.sh`** — burns in `drawtext` captions (from `captions/*.txt`) and
-   enforces a ≤9MB budget, stepping down fps/scale until it fits.
+4. **`post.sh`** — burns in `drawtext` captions (from `captions/*.txt`, via
+   `textfile=` so any text is safe) and enforces a ≤9MB budget, stepping down
+   fps/scale until it fits.
 
 ## Isolation (nothing touches your real setup)
 
@@ -68,8 +75,12 @@ Every `wsx`/agent invocation is redirected into `$WSX_DEMO_ROOT` (default
 - `CODEX_HOME` → copied `auth.json` + `config.toml` with pre-seeded per-repo-root
   trust.
 
-Your real `~/.local/state/wsx`, `~/.claude`, and `~/.codex` are never written.
-`make clean` removes the whole sandbox.
+Your real `~/.local/state/wsx`, `~/.claude.json`, `~/.claude/settings.json`, and
+`~/.codex` are never written. The **only** thing written outside the sandbox is a
+set of transient symlinks under `~/.claude/projects/<encoded-worktree>` pointing
+into the sandbox — these bridge the isolated session logs to where wsx reads them
+(`dirs::home_dir()`, no env override) so the detail bars populate. `make clean`
+removes them along with the whole sandbox.
 
 ## Customizing
 

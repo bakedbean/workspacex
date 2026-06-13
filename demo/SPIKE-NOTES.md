@@ -46,10 +46,10 @@ sessions lose it). Symptom in VHS: the typed prompt leaks onto the screen, the
 including screenshots**.
 
 Fix — a fully isolated, pre-authenticated, pre-accepted Claude config under
-`CLAUDE_CONFIG_DIR` (built by `sandbox-bootstrap.sh`), so agents boot straight to
+`CLAUDE_CONFIG_DIR` (built by `sandbox/bootstrap.sh`), so agents boot straight to
 a ready prompt with zero dialogs and **zero changes to the real `~/.claude`**:
 
-1. `export CLAUDE_CONFIG_DIR=$WSX_DEMO_ROOT/claude-config`
+1. `export CLAUDE_CONFIG_DIR=$WSX_SANDBOX_ROOT/claude-config`
 2. Copy `~/.claude/.credentials.json` → auth (Linux stores the OAuth token here;
    it relocates with `CLAUDE_CONFIG_DIR`).
 3. Copy `~/.claude.json` → app-state, so no first-run onboarding/theme prompts.
@@ -85,7 +85,7 @@ wsx in a dedicated tmux server and `capture-pane -p` at intervals:
 ## Harnesses solved (demo uses Claude + Codex; Pi dropped by request)
 
 Same isolate-config + pre-accept-trust pattern works for each (all in
-`sandbox-bootstrap.sh`), authenticated from copied creds, zero changes to real
+`sandbox/bootstrap.sh`), authenticated from copied creds, zero changes to real
 config:
 
 | Harness | Config env | Auth source | Trust handling |
@@ -143,13 +143,13 @@ a long hunt; the root cause was non-obvious:
    `CLAUDE_CODE_ENTRYPOINT` / `CLAUDE_CODE_EXECPATH` / `AI_AGENT` / `CLAUDE_EFFORT`.
    A claude spawned with those set treats itself as a NESTED CHILD and writes only
    a repo-keyed `…/<repo>/memory/` dir — never a per-worktree session jsonl. So
-   wsx finds nothing → permanent "loading…". `demo/render.sh` clears these before
+   wsx finds nothing → permanent "loading…". `sandbox/render.sh` clears these before
    launching VHS (no-op outside Claude Code). This was THE blocker — verified
    across isolated/real config, /tmp vs $HOME, synthetic vs real-history repos,
    1 vs N turns: nothing persisted until the markers were cleared.
 2. **Base-dir mismatch.** With markers cleared, claude (under the isolated
    `CLAUDE_CONFIG_DIR`) writes the jsonl to `$CLAUDE_CONFIG_DIR/projects/<enc>` —
-   but wsx reads `$HOME/.claude/projects/<enc>`. `sandbox-bootstrap.sh` symlinks
+   but wsx reads `$HOME/.claude/projects/<enc>`. `sandbox/bootstrap.sh` symlinks
    each demo worktree's log dir into `~/.claude/projects` to bridge them. This is
    the ONLY thing written outside the sandbox (transient symlinks; `make clean`
    removes them); real `~/.claude.json` / `settings.json` stay untouched.
@@ -166,7 +166,7 @@ Demonstrates autonomous Claude->Codex delegation over `wsx agent send`.
 
 - **Skill**: `wsx setup install-skill` writes `skills/wsx/SKILL.md` to
   `~/.claude/skills/wsx/` and `~/.codex/skills/wsx/` via `dirs::home_dir()` — it
-  does NOT honor `CLAUDE_CONFIG_DIR`/`CODEX_HOME`. So `sandbox-bootstrap.sh` copies
+  does NOT honor `CLAUDE_CONFIG_DIR`/`CODEX_HOME`. So `sandbox/bootstrap.sh` copies
   the same skill into `$CLAUDE_CONFIG_DIR/skills/wsx/` and `$CODEX_HOME/skills/wsx/`
   directly (sandboxed, no touch to real config). The skill teaches agents the
   `wsx agent send <label> <msg>` CLI.

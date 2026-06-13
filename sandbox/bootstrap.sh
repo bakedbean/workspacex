@@ -140,7 +140,7 @@ PY
 # them. (The encoding replaces every non-alphanumeric char with '-'.)
 #
 # NOTE: this only matters because the agents must also run as TOP-LEVEL claude
-# sessions to persist a jsonl at all — see demo/render.sh, which clears the
+# sessions to persist a jsonl at all — see render.sh, which clears the
 # CLAUDECODE/CLAUDE_CODE_* parent-session markers before launching VHS.
 encode_path() { printf '%s' "$1" | sed 's#^/##; s#[^A-Za-z0-9]#-#g; s#^#-#'; }
 REAL_PROJECTS="$HOME/.claude/projects"

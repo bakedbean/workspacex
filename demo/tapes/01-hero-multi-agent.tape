@@ -1,7 +1,7 @@
 # Clip 1 — Hero: autonomous agent-to-agent coordination over the wsx CLI.
 # Create a workspace, put Claude + Codex on it, and have CLAUDE delegate the fix
 # to CODEX via `wsx agent send` — Codex fixes, commits, and reports back, all
-# without the user in the loop. Rendered via demo/render.sh.
+# without the user in the loop. Rendered via sandbox/render.sh.
 Output demo/out/01-hero-raw.mp4
 Set Shell "bash"
 Set FontSize 13

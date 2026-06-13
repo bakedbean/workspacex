@@ -29,19 +29,19 @@ clean:
 # Pipeline: render -> deadair (drop static air) -> speedramp (compress Codex's
 # churn) -> post (caption + 9MB budget).
 hero:
-	cd $(ROOT) && bash demo/sandbox-bootstrap.sh
-	cd $(ROOT) && bash demo/render.sh demo/tapes/01-hero-multi-agent.tape
+	cd $(ROOT) && bash sandbox/bootstrap.sh
+	cd $(ROOT) && bash sandbox/render.sh demo/tapes/01-hero-multi-agent.tape
 	cd $(ROOT) && bash demo/deadair.sh demo/out/01-hero-raw.mp4 demo/out/01-hero-collapsed.mp4 $(MIN_FREEZE) $(MAX_HOLD)
 	cd $(ROOT) && bash demo/speedramp.sh demo/out/01-hero-collapsed.mp4 demo/out/01-hero-fast.mp4 $(HERO_RAMP_START) $(HERO_RAMP_END) $(HERO_RAMP_FACTOR)
 	cd $(ROOT) && bash demo/post.sh demo/out/01-hero-fast.mp4 demo/out/01-hero.mp4 demo/captions/01-hero.txt
 
 # Clip 2 — three isolated worktrees, agents working in parallel (detail bars populate).
 parallel:
-	cd $(ROOT) && bash demo/sandbox-bootstrap.sh
-	cd $(ROOT) && bash demo/render.sh demo/tapes/02-parallel-worktrees.tape
+	cd $(ROOT) && bash sandbox/bootstrap.sh
+	cd $(ROOT) && bash sandbox/render.sh demo/tapes/02-parallel-worktrees.tape
 	cd $(ROOT) && bash demo/deadair.sh demo/out/02-parallel-raw.mp4 demo/out/02-parallel-collapsed.mp4 $(MIN_FREEZE) $(MAX_HOLD)
 	cd $(ROOT) && bash demo/post.sh demo/out/02-parallel-collapsed.mp4 demo/out/02-parallel.mp4 demo/captions/02-parallel.txt
 
 # Unit checks for the scripted (non-recording) pieces.
 check:
-	cd $(ROOT)/demo && bash test-gen-repos.sh && bash test-bootstrap.sh && bash test-post.sh && bash test-speedramp.sh
+	cd $(ROOT)/demo && bash test-post.sh && bash test-speedramp.sh

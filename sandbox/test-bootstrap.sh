@@ -4,7 +4,7 @@ WSX_DEMO_ROOT="$(mktemp -d)/wsx-demo"
 export WSX_DEMO_ROOT
 # clean both the temp sandbox AND the session-log symlinks bridged into ~/.claude
 trap 'rm -rf "$(dirname "$WSX_DEMO_ROOT")"; find "$HOME/.claude/projects" -maxdepth 1 -type l -lname "$WSX_DEMO_ROOT/*" -delete 2>/dev/null || true' EXIT
-"$(dirname "$0")/sandbox-bootstrap.sh" >/dev/null
+"$(dirname "$0")/bootstrap.sh" >/dev/null
 export XDG_STATE_HOME="$WSX_DEMO_ROOT/state"
 test -f "$XDG_STATE_HOME/wsx/state.db" || { echo "FAIL: no isolated db"; exit 1; }
 wsx repo list | grep -q toy-api || { echo "FAIL: toy-api not registered"; exit 1; }

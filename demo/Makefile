@@ -17,7 +17,9 @@ all: clips
 clips: hero parallel
 
 clean:
-	rm -rf $${WSX_DEMO_ROOT:-/tmp/wsx-demo} $(ROOT)/demo/out
+	@root="$${WSX_DEMO_ROOT:-/tmp/wsx-demo}"; \
+	case "$$root" in ""|/|/.|//|"$$HOME") echo "refusing unsafe WSX_DEMO_ROOT='$$root'" >&2; exit 1;; esac; \
+	rm -rf "$$root" $(ROOT)/demo/out
 	@# remove the transient session-log symlinks bridged into ~/.claude/projects
 	find $$HOME/.claude/projects -maxdepth 1 -type l -lname "$${WSX_DEMO_ROOT:-/tmp/wsx-demo}/*" -delete 2>/dev/null || true
 

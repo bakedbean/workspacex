@@ -12,8 +12,11 @@ TAIL_PROTECT="${5:-3.0}" # never collapse within this many seconds of the end
 
 dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$IN")"
 
-# Detect frozen segments (near-identical frames).
-freezes="$(ffmpeg -i "$IN" -vf "freezedetect=n=-50dB:d=$MAX_HOLD" -map 0:v -f null - 2>&1 \
+# Detect frozen segments (near-identical frames). freezedetect's `d` is the
+# minimum freeze duration to report, so align it with MIN_FREEZE — the threshold
+# below which we keep a freeze untouched — rather than MAX_HOLD: detecting freezes
+# shorter than MIN_FREEZE just wastes work (the collapse step discards them anyway).
+freezes="$(ffmpeg -i "$IN" -vf "freezedetect=n=-50dB:d=$MIN_FREEZE" -map 0:v -f null - 2>&1 \
   | grep -oE 'freeze_(start|duration): [0-9.]+' | awk '{print $2}')"
 
 # Build the list of time ranges to KEEP, dropping the excess of each long freeze.

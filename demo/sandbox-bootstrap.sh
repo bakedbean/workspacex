@@ -9,6 +9,12 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export WSX_DEMO_ROOT="${WSX_DEMO_ROOT:-/tmp/wsx-demo}"
+# Guard: this script `rm -rf`s WSX_DEMO_ROOT, and it's overridable. Refuse to run
+# with an empty value or an obviously catastrophic root (/, $HOME, a top-level dir).
+case "$WSX_DEMO_ROOT" in
+  ""|/|/.|//) echo "FATAL: unsafe WSX_DEMO_ROOT='$WSX_DEMO_ROOT'" >&2; exit 1;;
+esac
+[ "$WSX_DEMO_ROOT" = "$HOME" ] && { echo "FATAL: WSX_DEMO_ROOT must not be \$HOME" >&2; exit 1; }
 export XDG_STATE_HOME="$WSX_DEMO_ROOT/state"
 export CLAUDE_CONFIG_DIR="$WSX_DEMO_ROOT/claude-config"
 export CODEX_HOME="$WSX_DEMO_ROOT/codex-home"
@@ -51,10 +57,16 @@ else
   echo "WARN: ~/.codex/auth.json not found — demo Codex agent may not be authenticated." >&2
 fi
 [ -f "$HOME/.codex/config.toml" ] && cp -a "$HOME/.codex/config.toml" "$CODEX_HOME/config.toml"
-{
-  printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$REPOS/toy-api"
-  printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$REPOS/toy-cli"
-} >> "$CODEX_HOME/config.toml"
+touch "$CODEX_HOME/config.toml"
+# Append a per-repo-root trust block only if that exact table header isn't already
+# present — re-appending would create a duplicate TOML table (invalid TOML, which
+# makes Codex fail to parse the config).
+for r in toy-api toy-cli; do
+  hdr="[projects.\"$REPOS/$r\"]"
+  if ! grep -qF "$hdr" "$CODEX_HOME/config.toml"; then
+    printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$REPOS/$r" >> "$CODEX_HOME/config.toml"
+  fi
+done
 
 # --- Install the wsx agent skill into the isolated configs ---
 # `wsx setup install-skill` writes to ~/.claude/skills and ~/.codex/skills via

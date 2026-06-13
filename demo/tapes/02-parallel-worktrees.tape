@@ -1,30 +1,32 @@
-# Clip 2 — Parallel worktrees: spin up isolated worktrees across repos, deploy a
-# coding agent to each, and watch them work in parallel on the dashboard.
+# Clip 2 — Parallel worktrees with live detail bars.
+# Spin up isolated worktrees, deploy a reviewing agent to each, then tour the
+# dashboard detail bars (SESSION SUMMARY / RECENT CHAT) as they fill with each
+# agent's findings. Rendered via demo/render.sh (clears Claude Code markers so
+# the nested agents persist their session logs).
 Output demo/out/02-parallel-raw.mp4
 Set Shell "bash"
-Set FontSize 14
+Set FontSize 13
 Set Width 1280
 Set Height 720
-Set Padding 16
-Set TypingSpeed 40ms
-Set WaitTimeout 90s
+Set Padding 14
+Set TypingSpeed 35ms
+Set WaitTimeout 120s
 
 Env XDG_STATE_HOME "/tmp/wsx-demo/state"
 Env CLAUDE_CONFIG_DIR "/tmp/wsx-demo/claude-config"
-Env CODEX_HOME "/tmp/wsx-demo/codex-home"
 
-# Spin up three isolated worktrees across two repos (real CLI).
+# Spin up three isolated worktrees across two repos.
 Type "wsx workspace create toy-api --name add-rate-limit --yolo --agent claude"
 Enter
-Sleep 900ms
-Type "wsx workspace create toy-api --name fix-auth --yolo --agent codex"
+Sleep 800ms
+Type "wsx workspace create toy-api --name fix-auth --yolo --agent claude"
 Enter
-Sleep 900ms
+Sleep 800ms
 Type "wsx workspace create toy-cli --name arg-parsing --yolo --agent claude"
 Enter
-Sleep 900ms
+Sleep 800ms
 
-# Open the dashboard and expand all repos.
+# Dashboard, expand all repos.
 Type "wsx"
 Enter
 Sleep 2500ms
@@ -32,43 +34,49 @@ Type "za"
 Sleep 1500ms
 Screenshot demo/out/02-dashboard.png
 
-# Deploy the same task to each agent, detaching after each — they keep running.
-# add-rate-limit (claude)
+# Deploy a review task to each agent (attach -> prompt -> detach; keeps running).
 Down
 Enter
 Wait+Screen /bypass permissions on/
-Type "Review every source file for bugs and propose fixes with code."
+Type "Review every source file in this repo and summarize the bugs you find."
 Enter
 Sleep 1500ms
 Ctrl+x
 Type "d"
 Sleep 800ms
 
-# fix-auth (codex)
 Down
 Enter
-Wait+Screen /(OpenAI Codex|gpt-5)/
-Type "Review every source file for bugs and propose fixes with code."
+Wait+Screen /bypass permissions on/
+Type "Review every source file in this repo and summarize the bugs you find."
 Enter
 Sleep 1500ms
 Ctrl+x
 Type "d"
 Sleep 800ms
 
-# arg-parsing (claude) — Down past the toy-cli header.
 Down
 Down
 Enter
 Wait+Screen /bypass permissions on/
-Type "Review every source file for bugs and propose fixes with code."
+Type "Review every source file in this repo and summarize the bugs you find."
 Enter
 Sleep 1500ms
 Ctrl+x
 Type "d"
 Sleep 800ms
 
-# Back on the dashboard: three agents working in parallel. End on this held
-# frame — do NOT quit (quitting would close the clip on the raw shell).
+# Let all three finish a turn; wsx tails the logs and writes each SESSION SUMMARY.
+Sleep 45s
+
+# Tour the populated detail bars: cursor is on arg-parsing; walk up through each.
+Sleep 3500ms
+Screenshot demo/out/02-detail-1.png
+Up
+Up
+Sleep 3500ms
+Screenshot demo/out/02-detail-2.png
+Up
+Sleep 4s
+Screenshot demo/out/02-detail-3.png
 Sleep 2s
-Screenshot demo/out/02-parallel-working.png
-Sleep 6s

@@ -1,3 +1,3 @@
-0.5	7	Spin up isolated worktrees across two repos
-11	24	Deploy a coding agent to each — Claude and Codex
-27	33.5	Three agents reviewing in parallel
+0.5	7	Spin up isolated worktrees across repos
+13	22	Deploy a reviewing agent to each
+27	39	Each agent's findings fill its workspace detail bar — live

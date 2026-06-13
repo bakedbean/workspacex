@@ -1,0 +1,3 @@
+0.5	11	Create isolated worktrees right from the dashboard
+15	25	Deploy an agent to fix and commit the bugs in each
+45	61	Each workspace's edits and +/− line counts — live in the detail bar

@@ -1,0 +1,4 @@
+0	4	Spin up an isolated wsx workspace
+5	11	Attach a live coding agent — boots straight in
+14	20	Ask it to review the code
+22	34	It finds the planted SQL-injection bug

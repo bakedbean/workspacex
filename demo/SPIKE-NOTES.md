@@ -128,3 +128,34 @@ reliable) and **fixed `Sleep`s for the entire codex add→switch→fix sequence*
 away a 90s render). Debug VHS failures by mirroring the tape in tmux with
 `capture-pane`, or by re-running the suspect span as a tiny Sleep+Screenshot tape
 (Screenshots survive; they're only discarded when a `Wait` times out).
+
+## Workspace detail bars (SESSION SUMMARY / RECENT CHAT) — the big one
+
+These populate from claude's session jsonl at
+`~/.claude/projects/<encode(canonicalize(worktree))>/*.jsonl` (wsx uses
+`dirs::home_dir()`, i.e. real `$HOME`, with NO env override —
+`sessionx/src/extract.rs:599,765`). Getting them to populate in the sandbox took
+a long hunt; the root cause was non-obvious:
+
+1. **Nested Claude Code sessions don't persist.** When the harness runs *inside*
+   a Claude Code session (e.g. an agent driving it), every child inherits
+   `CLAUDECODE` / `CLAUDE_CODE_SESSION_ID` / `CLAUDE_CODE_CHILD_SESSION` /
+   `CLAUDE_CODE_ENTRYPOINT` / `CLAUDE_CODE_EXECPATH` / `AI_AGENT` / `CLAUDE_EFFORT`.
+   A claude spawned with those set treats itself as a NESTED CHILD and writes only
+   a repo-keyed `…/<repo>/memory/` dir — never a per-worktree session jsonl. So
+   wsx finds nothing → permanent "loading…". `demo/render.sh` clears these before
+   launching VHS (no-op outside Claude Code). This was THE blocker — verified
+   across isolated/real config, /tmp vs $HOME, synthetic vs real-history repos,
+   1 vs N turns: nothing persisted until the markers were cleared.
+2. **Base-dir mismatch.** With markers cleared, claude (under the isolated
+   `CLAUDE_CONFIG_DIR`) writes the jsonl to `$CLAUDE_CONFIG_DIR/projects/<enc>` —
+   but wsx reads `$HOME/.claude/projects/<enc>`. `sandbox-bootstrap.sh` symlinks
+   each demo worktree's log dir into `~/.claude/projects` to bridge them. This is
+   the ONLY thing written outside the sandbox (transient symlinks; `make clean`
+   removes them); real `~/.claude.json` / `settings.json` stay untouched.
+3. **Needs >=1 completed turn**, after which wsx tails the jsonl and (a few
+   seconds later) generates the SESSION SUMMARY. The detail-bar clip must let
+   agents finish a turn and pause ~10s before touring the bars.
+
+Encoding: every non-alphanumeric char -> `-`
+(`/tmp/wsx-demo/.../add-rate-limit` -> `-tmp-wsx-demo-...-add-rate-limit`).

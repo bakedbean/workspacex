@@ -2,7 +2,10 @@
 # Stand up an isolated wsx install with synthetic repos registered, plus an
 # isolated, pre-authenticated, pre-accepted Claude config so live agents spawn
 # with zero interactive prompts. Everything lives under $WSX_DEMO_ROOT; the real
-# ~/.local/state and ~/.claude are never touched.
+# ~/.local/state, ~/.claude.json, and ~/.claude/settings.json are never touched.
+# The ONLY thing written outside the sandbox is a set of transient symlinks under
+# ~/.claude/projects (so wsx's detail bars can find the isolated session logs);
+# `make clean` removes them.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export WSX_DEMO_ROOT="${WSX_DEMO_ROOT:-/tmp/wsx-demo}"
@@ -89,6 +92,31 @@ for p in paths:
 json.dump(data, open(cfg, "w"), indent=2)
 print(f"pre-trusted {len(paths)} demo worktree paths")
 PY
+
+# --- Bridge session logs to where wsx reads them (for the detail bars) ---
+# The workspace detail bars (SESSION SUMMARY / RECENT CHAT) are built by reading
+# claude's session jsonl from ~/.claude/projects/<encode(worktree)> — and wsx
+# always uses dirs::home_dir() (real $HOME), with no env override. But our
+# isolated CLAUDE_CONFIG_DIR sends claude's logs to $CLAUDE_CONFIG_DIR/projects.
+# So we symlink each demo worktree's (isolated) log dir into ~/.claude/projects.
+# This touches ONLY ~/.claude/projects (transient symlinks pointing into the
+# sandbox) — never the real ~/.claude.json / settings.json. `make clean` removes
+# them. (The encoding replaces every non-alphanumeric char with '-'.)
+#
+# NOTE: this only matters because the agents must also run as TOP-LEVEL claude
+# sessions to persist a jsonl at all — see demo/render.sh, which clears the
+# CLAUDECODE/CLAUDE_CODE_* parent-session markers before launching VHS.
+encode_path() { printf '%s' "$1" | sed 's#^/##; s#[^A-Za-z0-9]#-#g; s#^#-#'; }
+REAL_PROJECTS="$HOME/.claude/projects"
+mkdir -p "$REAL_PROJECTS"
+# Clear stale demo symlinks from a previous run.
+find "$REAL_PROJECTS" -maxdepth 1 -type l -lname "$WSX_DEMO_ROOT/*" -delete 2>/dev/null || true
+for p in "${DEMO_PATHS[@]}"; do
+  enc="$(encode_path "$p")"
+  mkdir -p "$CLAUDE_CONFIG_DIR/projects/$enc"
+  ln -sfn "$CLAUDE_CONFIG_DIR/projects/$enc" "$REAL_PROJECTS/$enc"
+done
+echo "bridged ${#DEMO_PATHS[@]} session-log dirs into ~/.claude/projects (symlinks)"
 
 echo "sandbox ready at $WSX_DEMO_ROOT"
 echo "  XDG_STATE_HOME=$XDG_STATE_HOME"

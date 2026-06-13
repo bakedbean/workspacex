@@ -78,19 +78,22 @@ case "$cmd" in
     echo "shot rendered (see Screenshot path in $tape, under test/out/)"
     ;;
   down)
-    # Destructive: refuse obviously-unsafe roots, and require the root to be nested
-    # at least two levels deep (e.g. /tmp/wsx-test) so a misconfigured var can never
-    # `rm -rf` a system or top-level directory.
-    case "$WSX_SANDBOX_ROOT" in
-      ""|/|/.|//|/tmp|/tmp/|"$HOME"|"$HOME/") echo "harness: refusing unsafe WSX_SANDBOX_ROOT='$WSX_SANDBOX_ROOT'" >&2; exit 1;;
+    # Destructive. Canonicalize FIRST (resolve any `..`/symlinks) so a value like
+    # /tmp/wsx-test/.. can't slip past the string guards and resolve to a parent;
+    # refuse obviously-unsafe roots; require the root to be nested at least two
+    # levels deep. Operate on the canonical path with `rm -rf --` (the `--` stops a
+    # leading-dash root being read as an option).
+    root="$(realpath -m -- "$WSX_SANDBOX_ROOT")"
+    case "$root" in
+      ""|/|/.|//|/tmp|"$HOME") echo "harness: refusing unsafe WSX_SANDBOX_ROOT='$root'" >&2; exit 1;;
     esac
-    case "$WSX_SANDBOX_ROOT" in
+    case "$root" in
       */*/*) : ;;
-      *) echo "harness: WSX_SANDBOX_ROOT too shallow to remove safely: '$WSX_SANDBOX_ROOT'" >&2; exit 1;;
+      *) echo "harness: WSX_SANDBOX_ROOT too shallow to remove safely: '$root'" >&2; exit 1;;
     esac
-    rm -rf "$WSX_SANDBOX_ROOT"
-    find "$HOME/.claude/projects" -maxdepth 1 -type l -lname "$WSX_SANDBOX_ROOT/*" -delete 2>/dev/null || true
-    echo "sandbox down ($WSX_SANDBOX_ROOT)"
+    rm -rf -- "$root"
+    find "$HOME/.claude/projects" -maxdepth 1 -type l -lname "$root/*" -delete 2>/dev/null || true
+    echo "sandbox down ($root)"
     ;;
   *)
     echo "usage: harness.sh {up|wsx <args>|state [sql]|capture|shot|down}" >&2

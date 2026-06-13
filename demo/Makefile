@@ -18,11 +18,12 @@ clips: hero parallel
 
 clean:
 	@root="$${WSX_SANDBOX_ROOT:-$${WSX_DEMO_ROOT:-/tmp/wsx-demo}}"; \
-	case "$$root" in ""|/|/.|//|/tmp|/tmp/|"$$HOME"|"$$HOME/") echo "refusing unsafe WSX_SANDBOX_ROOT='$$root'" >&2; exit 1;; esac; \
+	root="$$(realpath -m -- "$$root")"; \
+	case "$$root" in ""|/|/.|//|/tmp|"$$HOME") echo "refusing unsafe WSX_SANDBOX_ROOT='$$root'" >&2; exit 1;; esac; \
 	case "$$root" in */*/*) : ;; *) echo "refusing too-shallow WSX_SANDBOX_ROOT='$$root'" >&2; exit 1;; esac; \
-	rm -rf "$$root" $(ROOT)/demo/out
-	@# remove the transient session-log symlinks bridged into ~/.claude/projects
-	find $$HOME/.claude/projects -maxdepth 1 -type l -lname "$${WSX_SANDBOX_ROOT:-$${WSX_DEMO_ROOT:-/tmp/wsx-demo}}/*" -delete 2>/dev/null || true
+	rm -rf -- "$$root" $(ROOT)/demo/out; \
+	: remove the transient session-log symlinks bridged into ~/.claude/projects; \
+	find $$HOME/.claude/projects -maxdepth 1 -type l -lname "$$root/*" -delete 2>/dev/null || true
 
 # Clip 1 — Hero: Claude reviews, delegates the fix to Codex over `wsx agent send`,
 # Codex fixes + commits + reports back, Claude verifies — no human in the loop.

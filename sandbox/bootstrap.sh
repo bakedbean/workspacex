@@ -10,11 +10,16 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # WSX_SANDBOX_ROOT is the canonical var; WSX_DEMO_ROOT is a back-compat fallback.
 export WSX_SANDBOX_ROOT="${WSX_SANDBOX_ROOT:-${WSX_DEMO_ROOT:-/tmp/wsx-demo}}"
+# Canonicalize (resolve any `..`/symlinks) BEFORE the destructive-path guards, so a
+# value like /tmp/wsx-test/.. can't slip past the string checks and resolve to a
+# parent that `rm -rf` would then wipe. `-m` tolerates a not-yet-existing path.
+WSX_SANDBOX_ROOT="$(realpath -m -- "$WSX_SANDBOX_ROOT")"
+export WSX_SANDBOX_ROOT
 # Guard: this script `rm -rf`s WSX_SANDBOX_ROOT, and it's overridable. Refuse to run
 # with an empty value, an obviously catastrophic root (/, /tmp, $HOME), or any path
 # shallower than two levels — a sandbox is always nested (e.g. /tmp/wsx-demo).
 case "$WSX_SANDBOX_ROOT" in
-  ""|/|/.|//|/tmp|/tmp/|"$HOME"|"$HOME/") echo "FATAL: unsafe WSX_SANDBOX_ROOT='$WSX_SANDBOX_ROOT'" >&2; exit 1;;
+  ""|/|/.|//|/tmp|"$HOME") echo "FATAL: unsafe WSX_SANDBOX_ROOT='$WSX_SANDBOX_ROOT'" >&2; exit 1;;
 esac
 case "$WSX_SANDBOX_ROOT" in
   */*/*) : ;;
@@ -27,7 +32,7 @@ REPOS="$WSX_SANDBOX_ROOT/repos"
 WSX_BIN="${WSX_BIN:-wsx}"
 
 # Fresh state each run.
-rm -rf "$WSX_SANDBOX_ROOT"
+rm -rf -- "$WSX_SANDBOX_ROOT"
 mkdir -p "$XDG_STATE_HOME" "$REPOS" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"
 
 # --- Isolated Claude config (auth + bypass pre-accepted) ---

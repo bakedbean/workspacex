@@ -64,6 +64,16 @@ case "$cmd" in
     tmux -L "$sock" kill-server 2>/dev/null || true
     echo "captured TUI text -> $out"
     ;;
+  shot)
+    _need vhs shot
+    tape="${1:?usage: harness.sh shot <tape>}"
+    test -f "$tape" || { echo "harness: no tape at $tape" >&2; exit 1; }
+    mkdir -p "$ROOT/test/out"
+    # render.sh clears agent markers and execs vhs; run from repo root so the tape's
+    # CWD-relative Output/Screenshot paths resolve under test/out/.
+    ( cd "$ROOT" && bash "$ROOT/sandbox/render.sh" "$tape" )
+    echo "shot rendered (see Screenshot path in $tape, under test/out/)"
+    ;;
   down)
     # Destructive: refuse obviously-unsafe roots, and require the root to be nested
     # at least two levels deep (e.g. /tmp/wsx-test) so a misconfigured var can never

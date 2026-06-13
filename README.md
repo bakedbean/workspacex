@@ -11,7 +11,7 @@ https://github.com/user-attachments/assets/17962906-abde-4589-81e1-58737212645b
 
 ## Multi Agent Sessions
 ### Deploy multiple agents to the same workspace, orchestrate with the wsx CLI
-https://github.com/user-attachments/assets/4a1b3f33-c3c9-42b9-93c3-ae87e80b64ab
+https://github.com/user-attachments/assets/30c68dc1-9954-4dc6-b1a1-a8559ea5d665
 
 ## Table of contents
 

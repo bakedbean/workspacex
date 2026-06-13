@@ -42,6 +42,28 @@ case "$cmd" in
            FROM workspaces w JOIN repos r ON r.id = w.repo_id;"
     fi
     ;;
+  capture)
+    _need tmux capture
+    out="${!#:-}"   # last arg is the output text file
+    [ "$#" -ge 1 ] || { echo "usage: harness.sh capture [keys...] <out.txt>" >&2; exit 1; }
+    set -- "${@:1:$(($#-1))}"   # remaining args (if any) are keys to send
+    _enter
+    # Clear agent markers so any agent the TUI spawns runs top-level (matches reality).
+    # shellcheck source=/dev/null
+    source "$ROOT/sandbox/agent-env.sh"; wsx_clear_agent_env
+    sock="wsx-harness-$$"
+    # Launch the sandboxed TUI in a detached tmux session, passing the isolated env.
+    tmux -L "$sock" new-session -d -x 200 -y 50 \
+      -e "XDG_STATE_HOME=$XDG_STATE_HOME" \
+      -e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" \
+      -e "CODEX_HOME=$CODEX_HOME" \
+      "$WSX_BIN"
+    sleep 2                              # let the dashboard paint
+    for k in "$@"; do tmux -L "$sock" send-keys "$k"; sleep 0.3; done
+    tmux -L "$sock" capture-pane -p > "$out"
+    tmux -L "$sock" kill-server 2>/dev/null || true
+    echo "captured TUI text -> $out"
+    ;;
   down)
     # Destructive: refuse obviously-unsafe roots, and require the root to be nested
     # at least two levels deep (e.g. /tmp/wsx-test) so a misconfigured var can never

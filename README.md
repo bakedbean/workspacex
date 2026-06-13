@@ -10,8 +10,8 @@ Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git workt
 https://github.com/user-attachments/assets/17962906-abde-4589-81e1-58737212645b
 
 ## Multi Agent Sessions
-### Deploy multiple agents to the same workspace
-https://github.com/user-attachments/assets/2023a76b-334b-415e-bc70-059ee8fee661
+### Deploy multiple agents to the same workspace, orchestrate with the wsx CLI
+https://github.com/user-attachments/assets/4a1b3f33-c3c9-42b9-93c3-ae87e80b64ab
 
 ## Table of contents
 

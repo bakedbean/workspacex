@@ -159,3 +159,41 @@ a long hunt; the root cause was non-obvious:
 
 Encoding: every non-alphanumeric char -> `-`
 (`/tmp/wsx-demo/.../add-rate-limit` -> `-tmp-wsx-demo-...-add-rate-limit`).
+
+## Agent-to-agent coordination (hero clip)
+
+Demonstrates autonomous Claude->Codex delegation over `wsx agent send`.
+
+- **Skill**: `wsx setup install-skill` writes `skills/wsx/SKILL.md` to
+  `~/.claude/skills/wsx/` and `~/.codex/skills/wsx/` via `dirs::home_dir()` — it
+  does NOT honor `CLAUDE_CONFIG_DIR`/`CODEX_HOME`. So `sandbox-bootstrap.sh` copies
+  the same skill into `$CLAUDE_CONFIG_DIR/skills/wsx/` and `$CODEX_HOME/skills/wsx/`
+  directly (sandboxed, no touch to real config). The skill teaches agents the
+  `wsx agent send <label> <msg>` CLI.
+- **Flow** (verified): add Codex to the workspace (`Ctrl-x a`), prompt Claude to
+  review + delegate. Claude runs `wsx agent send codex "<context+fix+report-back>"`
+  (wsx prints `queued message to codex`). Codex receives it as a
+  `[message from claude]` banner, fixes + commits, then `wsx agent send claude`
+  back. Claude receives `[message from codex]`, verifies (`git show`), done.
+- **Submit gotcha (user-flagged, confirmed)**: the message Claude sends often lands
+  in Codex's prompt **unsubmitted**. Workaround in the tape: after `Ctrl-x w`
+  (switch to Codex), press **Enter** to submit it. Once submitted, Codex reliably
+  responds back to Claude.
+- Anchors: Claude has sent → `Wait+Screen /queued message to codex/` (this is wsx's
+  own output, deterministic — safe to Wait on). Codex's reply/Claude's receipt show
+  as `[message from codex]` / `[message from claude]` banners.
+
+### Pacing the long Codex span (`speedramp.sh`)
+
+The raw hero is ~139s; `deadair.sh` collapses the static stretches to ~91s but
+**cannot** touch Codex's fix→test→commit churn (~35s) — the screen is constantly
+changing, so freezedetect finds no freeze. That span carries no reading-critical
+beat (the delegate, hand-off banner, report-back-with-hash, verify, and outro all
+sit outside it), so `demo/speedramp.sh` speeds **just that window** ~3.5× while
+leaving everything else at 1×. Result: ~66s, all five coordination beats legible.
+Pipeline order: render → deadair → **speedramp** → post (caption + budget).
+The ramp window is absolute seconds in the *collapsed* clip (`HERO_RAMP_START/END`
+in the Makefile), tuned to the recorded take — re-confirm it (frame-strip the
+collapsed clip: `ffmpeg -vf "fps=1/4,...,tile=4x6"`) if you re-record, exactly
+like the fixed `Sleep`s. Captions in `captions/01-hero.txt` are timed to the
+*post-ramp* (final) timeline, not the collapsed one.

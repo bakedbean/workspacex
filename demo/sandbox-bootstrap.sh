@@ -56,6 +56,21 @@ fi
   printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$REPOS/toy-cli"
 } >> "$CODEX_HOME/config.toml"
 
+# --- Install the wsx agent skill into the isolated configs ---
+# `wsx setup install-skill` writes to ~/.claude/skills and ~/.codex/skills via
+# dirs::home_dir() (no env override), so it can't target the sandbox. Copy the
+# same embedded skill (skills/wsx/SKILL.md) into the isolated dirs directly, so
+# the demo agents know how to coordinate over the wsx CLI (wsx agent send) —
+# without touching the real ~/.claude / ~/.codex.
+SKILL_SRC="$(cd "$HERE/.." && pwd)/skills/wsx/SKILL.md"
+if [ -f "$SKILL_SRC" ]; then
+  mkdir -p "$CLAUDE_CONFIG_DIR/skills/wsx" "$CODEX_HOME/skills/wsx"
+  cp "$SKILL_SRC" "$CLAUDE_CONFIG_DIR/skills/wsx/SKILL.md"
+  cp "$SKILL_SRC" "$CODEX_HOME/skills/wsx/SKILL.md"
+else
+  echo "WARN: skills/wsx/SKILL.md not found — agents won't have the wsx skill." >&2
+fi
+
 # --- Synthetic repos ---
 "$HERE/gen-repos.sh" "$REPOS"
 wsx repo add "$REPOS/toy-api" --name toy-api --prefix demo

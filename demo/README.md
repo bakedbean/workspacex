@@ -13,7 +13,7 @@ isolation, trust pre-seeding, agent-pane switching, VHS gotchas).
 
 | Clip | Shows | Output |
 |---|---|---|
-| **hero** | One workspace, two different agents: Claude reviews & finds a planted SQL-injection bug, Codex is added to the *same* worktree and fixes it. | `out/01-hero.mp4` |
+| **hero** | One workspace, two agents coordinating with no human in the loop: Claude reviews & finds a planted SQL-injection bug, then hands the fix to its Codex teammate over `wsx agent send`; Codex fixes, commits, and reports back the commit hash; Claude verifies. | `out/01-hero.mp4` |
 | **parallel** | Three isolated worktrees across two repos, a reviewing agent deployed to each, then a tour of each workspace's live SESSION SUMMARY / RECENT CHAT detail bar as it fills with that agent's findings. | `out/02-parallel.mp4` |
 
 ## Prerequisites
@@ -47,7 +47,7 @@ Finals land in `out/` (gitignored): `*-raw.mp4` (uncaptioned, for editing),
 
 ## Pipeline
 
-Each clip flows through four stages (chained by the `Makefile`):
+Each clip flows through these stages (chained by the `Makefile`):
 
 1. **`sandbox-bootstrap.sh`** — fresh isolated wsx install + synthetic repos +
    pre-authed/pre-trusted Claude & Codex configs + session-log symlinks (so the
@@ -60,7 +60,10 @@ Each clip flows through four stages (chained by the `Makefile`):
    for a normal terminal user.
 3. **`deadair.sh`** — `freezedetect`-driven collapse of static stretches (agent
    boots/idle) to a brief hold; active content stays at natural 1×.
-4. **`post.sh`** — burns in `drawtext` captions (from `captions/*.txt`, via
+4. **`speedramp.sh`** *(hero only)* — speeds up the one long *actively-changing*
+   span deadair can't touch (Codex churning through its fix/commit), leaving every
+   reading-critical beat at 1×. Span is tuned to the take (Makefile `HERO_RAMP_*`).
+5. **`post.sh`** — burns in `drawtext` captions (from `captions/*.txt`, via
    `textfile=` so any text is safe) and enforces a ≤9MB budget, stepping down
    fps/scale until it fits.
 

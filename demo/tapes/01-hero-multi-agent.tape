@@ -1,13 +1,14 @@
-# Clip 1 — Hero: create a workspace in the TUI, two different agents collaborate
-# on it (Claude reviews -> Codex fixes), then close on the dashboard showing the
-# work landed (status + populated detail bar). Rendered via demo/render.sh.
+# Clip 1 — Hero: autonomous agent-to-agent coordination over the wsx CLI.
+# Create a workspace, put Claude + Codex on it, and have CLAUDE delegate the fix
+# to CODEX via `wsx agent send` — Codex fixes, commits, and reports back, all
+# without the user in the loop. Rendered via demo/render.sh.
 Output demo/out/01-hero-raw.mp4
 Set Shell "bash"
-Set FontSize 14
+Set FontSize 13
 Set Width 1280
 Set Height 720
-Set Padding 16
-Set TypingSpeed 45ms
+Set Padding 14
+Set TypingSpeed 40ms
 Set WaitTimeout 150s
 
 Env XDG_STATE_HOME "/tmp/wsx-demo/state"
@@ -18,28 +19,17 @@ Env CODEX_HOME "/tmp/wsx-demo/codex-home"
 Type "wsx"
 Enter
 Sleep 3s
-Screenshot demo/out/01-intro-dashboard.png
-# Shift+N opens the New Workspace modal in permissive mode.
 Type "N"
-Sleep 1500ms
+Sleep 1200ms
 Type "security-review"
-Sleep 1s
-Screenshot demo/out/01-intro-modal.png
+Sleep 600ms
 Enter
 Sleep 2s
-# the new workspace is selected on the dashboard — attach to it.
 Enter
 Wait+Screen /bypass permissions on/
 Sleep 1s
 
-# --- Claude reviews and finds the planted bug ---
-Type "Review src/auth.py and name the most serious security bug in one sentence."
-Enter
-Wait+Screen@140s /(SQL inject|injection)/
-Sleep 3s
-Screenshot demo/out/01-claude-found.png
-
-# --- Add a second agent (Codex) to the SAME workspace and fix it ---
+# --- Put a second agent (Codex) on the same workspace ---
 Ctrl+x
 Type "a"
 Sleep 1500ms
@@ -49,18 +39,33 @@ Down
 Sleep 700ms
 Enter
 Sleep 11s
-Screenshot demo/out/01-codex-added.png
+Screenshot demo/out/01-agents.png
+
+# --- Claude reviews and delegates the fix to Codex over the wsx CLI ---
+Type "Review src/auth.py for the most serious security bug. Then hand the fix to your Codex teammate using `wsx agent send codex`: give it the exact bug, the location, and a parameterized-query fix, and ask it to fix, commit, and report back. Then wait for Codex's reply."
+Enter
+Wait+Screen@120s /queued message to codex/
+Sleep 3s
+Screenshot demo/out/01-claude-delegates.png
+
+# --- Switch to Codex: show the handoff, submit it, let it work + report back ---
 Ctrl+x
 Type "w"
-Sleep 5s
-Type "Fix the SQL injection in src/auth.py with parameterized queries. Keep it brief."
+Sleep 4s
+Screenshot demo/out/01-codex-handoff.png
 Enter
-Sleep 30s
-Screenshot demo/out/01-codex-fixed.png
+Sleep 52s
+Screenshot demo/out/01-codex-reports.png
 
-# --- OUTRO: detach to the dashboard; the work shows up (status + detail bar) ---
+# --- Switch back to Claude: it received Codex's report and verifies the fix ---
+Ctrl+x
+Type "q"
+Sleep 14s
+Screenshot demo/out/01-claude-verifies.png
+
+# --- OUTRO: detach to the dashboard ---
 Ctrl+x
 Type "d"
-Sleep 9s
-Screenshot demo/out/01-outro-dashboard.png
+Sleep 8s
+Screenshot demo/out/01-outro.png
 Sleep 3s

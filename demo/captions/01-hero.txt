@@ -1,5 +1,8 @@
 0.5	8	Spin up a workspace right from the dashboard
-13	21	Claude reviews and finds the SQL-injection bug
-22	30	Add a second agent — Codex — to the same workspace
-33	41	Codex fixes it on that same worktree
-44	53	Done — the dashboard shows the full session summary
+9	17	Claude reviews the code and finds the SQL-injection bug
+18	26	Claude hands the fix to its Codex teammate over the wsx CLI
+27	33	Codex receives the full context: bug, location, and fix
+34	43	Codex applies a parameterized-query fix and commits it
+44	50	Codex reports back to Claude with the commit hash
+51	59	Claude verifies the fix — no human in the loop
+60	66	Two agents coordinated the whole fix end to end

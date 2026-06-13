@@ -5,13 +5,9 @@ Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git workt
 > **A note on this project.** wsx approaches git worktree based agent development from a hands on perspective, choosing to delegate to other tools rather than be an all in one IDE. wsx does not attempt to deliver it's own agent interface.  Rather wsx simply loads the agent TUI of choice with a thin CLI wrapper around it.  Many of wsx's features are only accessible from the CLI and empower the user to define their own behaviors. If you want the power of multi agent worktree based development with an orchestration CLI, prefer working in the terminal, want to use your own tools like Neovim, Emacs and Lazygit, then this might just be something you’d enjoy using too.  Feedback, ideas, and contributions are welcome.
 
 
-## Multi Agent Workflow Example
-### Deploy multiple coding harnesses to the same workspace using wsx's CLI and send messages across agents
-https://github.com/user-attachments/assets/5e5e28c7-d3fc-4301-be12-0be65163bcbf
-
-## Using external tools
-### View diffs via a custom diff command or with Lazygit
-https://github.com/user-attachments/assets/c3ce1a7e-5904-471c-9a33-2a6fb55a16cd
+## Multi Agent Sessions
+### Deploy multiple workspaces at once all working in parallel with real time feedback 
+https://github.com/user-attachments/assets/5998ffda-91bc-4411-9cdb-63723d102825
 
 ## Table of contents
 

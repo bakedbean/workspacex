@@ -1130,11 +1130,26 @@ Unknown names in the list (e.g. a repo you renamed or unregistered) are logged a
 wsx setup install-skill
 ```
 
-Writes the bundled wsx skill to `~/.claude/skills/wsx/SKILL.md`. When Codex is installed, it also writes the same skill to `~/.codex/skills/wsx/SKILL.md`. The skill teaches coding agents how to drive the wsx CLI — workspace operations, slug-vs-`branch_prefix` naming, and the cross-repo orchestration flow that pairs with [Related repos](#related-repos). The file is embedded in the binary at compile time, so installing wsx on a new machine is `cargo install` then `wsx setup install-skill`.
+Writes the [bundled skills](#bundled-skills) to each detected agent's skills directory — `~/.claude/skills/<skill>/SKILL.md` and the equivalent under `~/.codex` / `~/.hermes`. Claude is always targeted; Codex and Hermes are added when detected. The skills are embedded in the binary at compile time, so installing wsx on a new machine is `cargo install` then `wsx setup install-skill`.
 
-Codex is considered installed when `WSX_CODEX_BIN` is set, `codex` is on `PATH`, or `~/.codex` already exists.
+Codex is considered installed when `WSX_CODEX_BIN` is set, `codex` is on `PATH`, or `~/.codex` already exists; Hermes likewise via `WSX_HERMES_BIN`, `hermes` on `PATH`, or `~/.hermes`.
 
 Idempotent: re-running when an installed copy already matches reports "already up to date" without writing. If an installed copy has drifted (you edited it locally, or you're upgrading wsx with skill changes), it's overwritten and reports "updated".
+
+#### Bundled skills
+
+`wsx setup install-skill` installs every bundled skill for each detected agent:
+
+- **`wsx`** — drives the wsx CLI (workspace ops, slug-vs-`branch_prefix` naming, cross-repo orchestration).
+- **`agent-pr`** — run inside a workspace to spin up a peer review agent. It takes the reviewer kind (`claude` | `pi` | `hermes` | `codex`, default `claude`), spawns it with `wsx agent add`, hands it the branch diff vs `main`, and has it report a risk assessment + gap analysis back via `wsx agent send`.
+
+Pin `agent-pr` to a chip so a review is one click away — add a line to your [pinned commands](#pinned-commands). Use `wsx config edit pinned_commands` to append without clobbering existing chips (`wsx config set` replaces the whole value):
+
+```
+agent-pr=/agent-pr
+```
+
+Because chips auto-submit, the chip runs `/agent-pr` (defaulting to a `claude` reviewer); type `/agent-pr codex` manually for a different kind.
 
 ## CLI reference
 

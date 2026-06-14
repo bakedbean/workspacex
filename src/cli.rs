@@ -1036,18 +1036,19 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             Error::UserInput("could not resolve home directory for skill install".into())
         })?;
         for target in targets {
-            let outcome = crate::agent::skill::install_to(&target.path)?;
+            let outcome = crate::agent::skill::install_to(&target)?;
             let path = target.path.display();
+            let skill = target.skill;
             match outcome {
                 crate::agent::skill::InstallOutcome::Created => {
-                    println!("installed wsx skill for {} to {path}", target.agent);
+                    println!("installed {skill} skill for {} to {path}", target.agent);
                 }
                 crate::agent::skill::InstallOutcome::Updated => {
-                    println!("updated wsx skill for {} at {path}", target.agent);
+                    println!("updated {skill} skill for {} at {path}", target.agent);
                 }
                 crate::agent::skill::InstallOutcome::Unchanged => {
                     println!(
-                        "wsx skill for {} already up to date at {path}",
+                        "{skill} skill for {} already up to date at {path}",
                         target.agent
                     );
                 }

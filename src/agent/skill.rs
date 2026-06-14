@@ -72,6 +72,11 @@ pub fn hermes_skills_dir() -> Option<PathBuf> {
 /// Claude is always included. Codex is included when `WSX_CODEX_BIN` is set,
 /// `codex` is on PATH, or `~/.codex` exists. Hermes is included when
 /// `WSX_HERMES_BIN` is set, `hermes` is on PATH, or `~/.hermes` exists.
+///
+/// There is intentionally no separate Pi target: Pi loads skills from
+/// `~/.claude/skills` (the same reason Pi, like Claude, receives the
+/// superpowers-skills doctrine clause and Codex does not — see
+/// `agent::doctrine`), so the Claude target already covers it.
 pub fn default_install_targets() -> Option<Vec<InstallTarget>> {
     let mut agents: Vec<(&'static str, PathBuf)> = vec![("Claude", claude_skills_dir()?)];
     if codex_is_installed() {
@@ -206,6 +211,10 @@ mod tests {
             SKILL_CONTENT.contains("name: wsx"),
             "skill frontmatter missing name field"
         );
+        assert!(
+            SKILL_CONTENT.contains("description:"),
+            "skill frontmatter missing description field (needed for discovery)"
+        );
     }
 
     #[test]
@@ -218,6 +227,29 @@ mod tests {
             AGENT_PR_SKILL_CONTENT.contains("name: agent-pr"),
             "agent-pr skill frontmatter missing name field"
         );
+        assert!(
+            AGENT_PR_SKILL_CONTENT.contains("description:"),
+            "agent-pr skill frontmatter missing description field (needed for discovery)"
+        );
+    }
+
+    #[test]
+    fn install_to_writes_the_targets_own_content() {
+        // The public wrapper must write `target.content`, not a hardcoded
+        // skill — a regression to the wsx content would otherwise go unnoticed.
+        let tmp = TempDir::new().unwrap();
+        let target = InstallTarget {
+            agent: "Claude",
+            skill: "agent-pr",
+            content: AGENT_PR_SKILL_CONTENT,
+            path: tmp.path().join("agent-pr").join("SKILL.md"),
+        };
+        assert_eq!(install_to(&target).unwrap(), InstallOutcome::Created);
+        assert_eq!(
+            std::fs::read_to_string(&target.path).unwrap(),
+            AGENT_PR_SKILL_CONTENT
+        );
+        assert_ne!(AGENT_PR_SKILL_CONTENT, SKILL_CONTENT);
     }
 
     #[test]

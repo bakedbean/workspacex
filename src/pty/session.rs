@@ -145,6 +145,9 @@ pub struct Session {
     pub writer: mpsc::Sender<Vec<u8>>,
     pub status: Arc<RwLock<SessionStatus>>,
     pub activity_ms: Arc<AtomicU64>,
+    /// Which agent backs this session. Drives input quirks like how an
+    /// injected message is submitted (see `submit_writes`).
+    pub agent: AgentKind,
     /// Rows back from live tail. 0 = live. The render path calls
     /// `parser.set_scrollback(offset)` before reading `parser.screen()`,
     /// so vt100 clamps to whatever scrollback actually exists.
@@ -292,18 +295,47 @@ impl Session {
                     .unwrap_or(0);
                 let since_last = now_ms.saturating_sub(last);
                 if since_last >= quiet_ms {
-                    // Two writes so claude's TUI sees the text as typed input
-                    // and the trailing CR as a separate Enter (submit). A
-                    // single payload "<text>\r" can look like a bracketed
-                    // paste and not auto-submit.
-                    let _ = self.writer.send(text.as_bytes().to_vec()).await;
+                    // Inject the text and the submitting CR as two writes (see
+                    // `submit_writes` for the per-agent byte shapes). The CR is
+                    // a separate write so the agent's TUI sees it as a distinct
+                    // Enter rather than part of the typed/pasted text.
+                    let (body, enter) = submit_writes(self.agent, text);
+                    let _ = self.writer.send(body).await;
                     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                    let _ = self.writer.send(b"\r".to_vec()).await;
+                    let _ = self.writer.send(enter).await;
                     return;
                 }
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+    }
+}
+
+/// Build the two writes used to inject `text` into an agent and submit it:
+/// `(body, enter)`, sent as separate writes by `send_text_when_settled`.
+///
+/// Codex's input parser does paste-burst detection: a multi-byte chunk that
+/// arrives in one `read()` is treated as a paste, and a trailing CR folded into
+/// that same chunk becomes a literal newline in the composer rather than an
+/// Enter — so the message lands as an unsubmitted multi-line draft. This bites
+/// the first message to a freshly-spawned Codex (and any time the body and CR
+/// writes coalesce under load), which is exactly the "sat there until I pressed
+/// Enter myself" symptom. Wrapping the body in a bracketed paste
+/// (`ESC[200~ … ESC[201~`) makes the paste boundary explicit in the byte
+/// stream, so the following CR is an unambiguous Enter even when the two writes
+/// arrive in a single read. Other agents (Claude/Pi/Hermes) submit fine on a
+/// plain `text` + CR, so they keep the simpler form and are untouched.
+pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) {
+    let enter = b"\r".to_vec();
+    match agent {
+        AgentKind::Codex => {
+            let mut body = Vec::with_capacity(text.len() + 12);
+            body.extend_from_slice(b"\x1b[200~");
+            body.extend_from_slice(text.as_bytes());
+            body.extend_from_slice(b"\x1b[201~");
+            (body, enter)
+        }
+        AgentKind::Claude | AgentKind::Pi | AgentKind::Hermes => (text.as_bytes().to_vec(), enter),
     }
 }
 
@@ -1352,6 +1384,7 @@ pub fn spawn_session(
         writer: tx,
         status,
         activity_ms,
+        agent,
         scrollback_offset: std::sync::atomic::AtomicUsize::new(0),
         master: Mutex::new(pair.master),
         killer: Mutex::new(killer),
@@ -2386,6 +2419,30 @@ mod tests {
             .map(|s| s.to_string_lossy().to_string())
             .collect();
         assert!(!args.iter().any(|a| a == "--add-dir"), "got: {args:?}");
+    }
+
+    #[test]
+    fn submit_writes_wraps_codex_in_bracketed_paste() {
+        // Codex folds a coalesced "<text>\r" into its composer (paste-burst
+        // detection), so the body must be wrapped in a bracketed paste and the
+        // CR kept as a separate, unambiguous Enter.
+        let (body, enter) = submit_writes(AgentKind::Codex, "[message from claude]\nreview pls");
+        assert_eq!(
+            body,
+            b"\x1b[200~[message from claude]\nreview pls\x1b[201~".to_vec()
+        );
+        assert_eq!(enter, b"\r".to_vec());
+    }
+
+    #[test]
+    fn submit_writes_keeps_other_agents_plain() {
+        // Claude/Pi/Hermes submit on a plain text + CR; no bracketed paste so
+        // their proven-working behavior is untouched.
+        for agent in [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes] {
+            let (body, enter) = submit_writes(agent, "hello\nworld");
+            assert_eq!(body, b"hello\nworld".to_vec(), "agent {agent:?}");
+            assert_eq!(enter, b"\r".to_vec(), "agent {agent:?}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

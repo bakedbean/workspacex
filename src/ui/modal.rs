@@ -111,19 +111,19 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 /// renderers (updates, processes, repo settings, agents) so they look
 /// identical; each caller lays its own body/footer split inside the returned
 /// inner rect.
-fn panel_frame(
+fn panel_frame<'a>(
     f: &mut Frame,
     area: Rect,
     w: u16,
     h: u16,
-    title: impl Into<String>,
+    title: impl Into<Line<'a>>,
     theme: &Theme,
 ) -> Rect {
     let rect = centered(area, w, h);
     f.render_widget(Clear, rect);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(title.into())
+        .title(title)
         .style(theme.dim_style());
     let inner = block.inner(rect);
     f.render_widget(block, rect);

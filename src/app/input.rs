@@ -39,6 +39,17 @@ use tokio::sync::Mutex;
 /// `Ctrl-a` setup).
 const LEADER_KEY: KeyCode = KeyCode::Char('x');
 
+/// Surface a failed external-tool launch as an error modal. The `e`/`t`/`v`/
+/// `g`/`c` handlers in both the dashboard and attached views share this so a
+/// launch failure always reports the same way.
+fn report_external_open<E: std::fmt::Display>(app: &mut App, result: std::result::Result<(), E>) {
+    if let Err(e) = result {
+        app.modal = Some(Modal::Error {
+            message: e.to_string(),
+        });
+    }
+}
+
 fn encode_key_for_pty(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
     use crossterm::event::{KeyCode, KeyModifiers};
     match (k.code, k.modifiers) {
@@ -531,100 +542,51 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
         }
         (KeyCode::Char('e'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
-                let info = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(rid, w)| (*rid, w.worktree_path.clone()));
-                if let Some((_, path)) = info {
-                    let cmd = app.store.get_setting("editor_cmd").ok().flatten();
-                    if let Err(e) = crate::commands::external::open_in_editor(&path, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
-                }
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
+                && let Some(path) = app.workspace_path(id)
+            {
+                let cmd = app.store.get_setting("editor_cmd").ok().flatten();
+                let r = crate::commands::external::open_in_editor(&path, cmd.as_deref());
+                report_external_open(app, r);
             }
         }
         (KeyCode::Char('t'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
-                let info = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(rid, w)| (*rid, w.worktree_path.clone()));
-                if let Some((_, path)) = info {
-                    let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
-                    if let Err(e) =
-                        crate::commands::external::open_in_terminal(&path, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
-                }
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
+                && let Some(path) = app.workspace_path(id)
+            {
+                let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
+                let r = crate::commands::external::open_in_terminal(&path, cmd.as_deref());
+                report_external_open(app, r);
             }
         }
         (KeyCode::Char('v'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
-                let info = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| w.worktree_path.clone());
-                if let Some(path) = info {
-                    let cmd = app.store.get_setting("diff_cmd").ok().flatten();
-                    let base = crate::git::resolve_base_branch(&path).await;
-                    if let Err(e) =
-                        crate::commands::external::open_diff(&path, &base, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
-                }
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
+                && let Some(path) = app.workspace_path(id)
+            {
+                let cmd = app.store.get_setting("diff_cmd").ok().flatten();
+                let base = crate::git::resolve_base_branch(&path).await;
+                let r = crate::commands::external::open_diff(&path, &base, cmd.as_deref());
+                report_external_open(app, r);
             }
             // 'v' on a Repo header is intentionally a no-op.
         }
         (KeyCode::Char('g'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
-                let info = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| w.worktree_path.clone());
-                if let Some(path) = info {
-                    let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
-                    if let Err(e) =
-                        crate::commands::external::open_in_lazygit(&path, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
-                }
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
+                && let Some(path) = app.workspace_path(id)
+            {
+                let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
+                let r = crate::commands::external::open_in_lazygit(&path, cmd.as_deref());
+                report_external_open(app, r);
             }
             // 'g' on a Repo header is intentionally a no-op.
         }
         (KeyCode::Char('c'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
-                let info = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| w.worktree_path.clone());
-                if let Some(path) = info {
-                    let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
-                    if let Err(e) =
-                        crate::commands::external::open_in_chronox(&path, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
-                }
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
+                && let Some(path) = app.workspace_path(id)
+            {
+                let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
+                let r = crate::commands::external::open_in_chronox(&path, cmd.as_deref());
+                report_external_open(app, r);
             }
             // 'c' on a Repo header is intentionally a no-op.
         }
@@ -861,92 +823,43 @@ async fn handle_key_attached(
                 return Ok(());
             }
             KeyCode::Char('e') => {
-                let path = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| w.worktree_path.clone());
-                if let Some(path) = path {
+                if let Some(path) = app.workspace_path(id) {
                     let cmd = app.store.get_setting("editor_cmd").ok().flatten();
-                    if let Err(e) = crate::commands::external::open_in_editor(&path, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
+                    let r = crate::commands::external::open_in_editor(&path, cmd.as_deref());
+                    report_external_open(app, r);
                 }
                 return Ok(());
             }
             KeyCode::Char('t') => {
-                let path = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| w.worktree_path.clone());
-                if let Some(path) = path {
+                if let Some(path) = app.workspace_path(id) {
                     let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
-                    if let Err(e) =
-                        crate::commands::external::open_in_terminal(&path, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
+                    let r = crate::commands::external::open_in_terminal(&path, cmd.as_deref());
+                    report_external_open(app, r);
                 }
                 return Ok(());
             }
             KeyCode::Char('v') => {
-                let path = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| w.worktree_path.clone());
-                if let Some(path) = path {
+                if let Some(path) = app.workspace_path(id) {
                     let cmd = app.store.get_setting("diff_cmd").ok().flatten();
                     let base = crate::git::resolve_base_branch(&path).await;
-                    if let Err(e) =
-                        crate::commands::external::open_diff(&path, &base, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
+                    let r = crate::commands::external::open_diff(&path, &base, cmd.as_deref());
+                    report_external_open(app, r);
                 }
                 return Ok(());
             }
             KeyCode::Char('g') => {
-                let path = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| w.worktree_path.clone());
-                if let Some(path) = path {
+                if let Some(path) = app.workspace_path(id) {
                     let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
-                    if let Err(e) =
-                        crate::commands::external::open_in_lazygit(&path, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
+                    let r = crate::commands::external::open_in_lazygit(&path, cmd.as_deref());
+                    report_external_open(app, r);
                 }
                 return Ok(());
             }
             KeyCode::Char('c') => {
-                let path = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == id)
-                    .map(|(_, w)| w.worktree_path.clone());
-                if let Some(path) = path {
+                if let Some(path) = app.workspace_path(id) {
                     let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
-                    if let Err(e) =
-                        crate::commands::external::open_in_chronox(&path, cmd.as_deref())
-                    {
-                        app.modal = Some(Modal::Error {
-                            message: e.to_string(),
-                        });
-                    }
+                    let r = crate::commands::external::open_in_chronox(&path, cmd.as_deref());
+                    report_external_open(app, r);
                 }
                 return Ok(());
             }

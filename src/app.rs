@@ -457,6 +457,19 @@ impl App {
         self.dashboard.selection
     }
 
+    /// Worktree path of the workspace with `id`, or `None` if it's not in the
+    /// current list. Centralizes the `workspaces.iter().find(...).map(...)`
+    /// lookup that the key handlers repeat to launch external tools.
+    pub(crate) fn workspace_path(
+        &self,
+        id: crate::data::store::WorkspaceId,
+    ) -> Option<std::path::PathBuf> {
+        self.workspaces
+            .iter()
+            .find(|(_, w)| w.id == id)
+            .map(|(_, w)| w.worktree_path.clone())
+    }
+
     /// Set the selection by index into the current `selectable`, keeping the
     /// durable `selection` target and the `selected` nav cursor in sync. Use
     /// this anywhere selection *intent* changes via an index (nav, click,

@@ -151,88 +151,28 @@ impl Store {
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if v < 2 {
             self.conn.execute_batch(SCHEMA_V2_SETTINGS)?;
-            // ALTER TABLE only if the column doesn't already exist (handles
-            // partial-migration retries cleanly).
-            let has_col: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'custom_instructions'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_col == 0 {
-                self.conn
-                    .execute("ALTER TABLE repos ADD COLUMN custom_instructions TEXT", [])?;
-            }
+            self.add_column_if_missing("repos", "custom_instructions", "custom_instructions TEXT")?;
             self.conn.execute("PRAGMA user_version = 2", [])?;
         }
         if v < 3 {
-            let has_setup: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'setup_script'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_setup == 0 {
-                self.conn
-                    .execute("ALTER TABLE repos ADD COLUMN setup_script TEXT", [])?;
-            }
-            let has_archive: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'archive_script'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_archive == 0 {
-                self.conn
-                    .execute("ALTER TABLE repos ADD COLUMN archive_script TEXT", [])?;
-            }
+            self.add_column_if_missing("repos", "setup_script", "setup_script TEXT")?;
+            self.add_column_if_missing("repos", "archive_script", "archive_script TEXT")?;
             self.conn.execute("PRAGMA user_version = 3", [])?;
         }
         if v < 4 {
-            let has_yolo: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('workspaces') WHERE name = 'yolo'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_yolo == 0 {
-                self.conn.execute(
-                    "ALTER TABLE workspaces ADD COLUMN yolo INTEGER NOT NULL DEFAULT 0",
-                    [],
-                )?;
-            }
+            self.add_column_if_missing("workspaces", "yolo", "yolo INTEGER NOT NULL DEFAULT 0")?;
             self.conn.execute("PRAGMA user_version = 4", [])?;
         }
         if v < 5 {
-            let has_col: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'pinned_commands'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_col == 0 {
-                self.conn
-                    .execute("ALTER TABLE repos ADD COLUMN pinned_commands TEXT", [])?;
-            }
+            self.add_column_if_missing("repos", "pinned_commands", "pinned_commands TEXT")?;
             self.conn.execute("PRAGMA user_version = 5", [])?;
         }
         if v < 6 {
-            let has_col: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'related_repos'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_col == 0 {
-                self.conn
-                    .execute("ALTER TABLE repos ADD COLUMN related_repos TEXT", [])?;
-            }
+            self.add_column_if_missing("repos", "related_repos", "related_repos TEXT")?;
             self.conn.execute("PRAGMA user_version = 6", [])?;
         }
         if v < 7 {
-            let has_col: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'base_branch'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_col == 0 {
-                self.conn
-                    .execute("ALTER TABLE repos ADD COLUMN base_branch TEXT", [])?;
-            }
+            self.add_column_if_missing("repos", "base_branch", "base_branch TEXT")?;
             self.conn.execute("PRAGMA user_version = 7", [])?;
         }
         if v < 8 {
@@ -240,17 +180,11 @@ impl Store {
             self.conn.execute("PRAGMA user_version = 8", [])?;
         }
         if v < 9 {
-            let has_col: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('workspaces') WHERE name = 'agent'",
-                [],
-                |r| r.get(0),
+            self.add_column_if_missing(
+                "workspaces",
+                "agent",
+                "agent TEXT NOT NULL DEFAULT 'claude'",
             )?;
-            if has_col == 0 {
-                self.conn.execute(
-                    "ALTER TABLE workspaces ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'",
-                    [],
-                )?;
-            }
             self.conn.execute("PRAGMA user_version = 9", [])?;
         }
         if v < 10 {
@@ -258,15 +192,7 @@ impl Store {
             self.conn.execute("PRAGMA user_version = 10", [])?;
         }
         if v < 11 {
-            let has_col: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'detail_bar_config'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_col == 0 {
-                self.conn
-                    .execute("ALTER TABLE repos ADD COLUMN detail_bar_config TEXT", [])?;
-            }
+            self.add_column_if_missing("repos", "detail_bar_config", "detail_bar_config TEXT")?;
             self.conn.execute("PRAGMA user_version = 11", [])?;
         }
         if v < 12 {
@@ -282,15 +208,7 @@ impl Store {
             self.conn.execute("PRAGMA user_version = 12", [])?;
         }
         if v < 13 {
-            let has_chronology: i64 = self.conn.query_row(
-                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'chronology_config'",
-                [],
-                |r| r.get(0),
-            )?;
-            if has_chronology == 0 {
-                self.conn
-                    .execute("ALTER TABLE repos ADD COLUMN chronology_config TEXT", [])?;
-            }
+            self.add_column_if_missing("repos", "chronology_config", "chronology_config TEXT")?;
             self.conn.execute("PRAGMA user_version = 13", [])?;
         }
         if v < 14 {
@@ -332,6 +250,30 @@ impl Store {
         if v < 15 {
             self.conn.execute_batch(SCHEMA_V15_WORKSPACE_STATUS)?;
             self.conn.execute("PRAGMA user_version = 15", [])?;
+        }
+        Ok(())
+    }
+
+    /// Add `column` to `table` only if it is not already present.
+    ///
+    /// `migrate()` re-runs on every startup (SCHEMA_V1 resets `user_version`),
+    /// so each `ALTER TABLE ... ADD COLUMN` must be idempotent — this guards it
+    /// behind a `pragma_table_info` existence check and cleanly survives
+    /// partial-migration retries. `column_def` is the full definition that
+    /// follows `ADD COLUMN` (e.g. `"yolo INTEGER NOT NULL DEFAULT 0"`).
+    ///
+    /// `table`/`column_def` are interpolated into the SQL because identifiers
+    /// cannot be bound; every caller passes a hardcoded literal, never user
+    /// input.
+    fn add_column_if_missing(&self, table: &str, column: &str, column_def: &str) -> Result<()> {
+        let exists: i64 = self.conn.query_row(
+            &format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
+            rusqlite::params![column],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            self.conn
+                .execute(&format!("ALTER TABLE {table} ADD COLUMN {column_def}"), [])?;
         }
         Ok(())
     }

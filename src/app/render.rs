@@ -165,17 +165,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         crate::pty::session::SessionStatus::Running { .. }
                     )
                 });
-                let secs = session.as_ref().map(|s| {
-                    let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
-                    if last == 0 {
-                        return 0;
-                    }
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0);
-                    now.saturating_sub(last) / 1000
-                });
+                let secs = session.as_ref().map(|s| s.idle_secs().unwrap_or(0));
                 let awaiting = app.awaiting_permission(ws.id).is_some();
                 let now_ms = crate::time::now_ms();
                 let stopped_kind = app

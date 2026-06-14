@@ -161,6 +161,18 @@ pub struct Session {
 }
 
 impl Session {
+    /// Whole seconds since this session last produced PTY output, or `None`
+    /// when no output has been observed yet (`activity_ms == 0`). Callers that
+    /// treat "idle-unknown" the same as "idle 0s" can `.unwrap_or(0)`; callers
+    /// that must distinguish unknown from fresh output keep the `None`.
+    pub fn idle_secs(&self) -> Option<u64> {
+        let last = self.activity_ms.load(Ordering::Relaxed);
+        if last == 0 {
+            return None;
+        }
+        Some(crate::time::now_ms_u64().saturating_sub(last) / 1000)
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
         self.master
             .lock()

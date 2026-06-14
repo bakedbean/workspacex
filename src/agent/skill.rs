@@ -1,10 +1,11 @@
-//! Embedded agent skill and installer.
+//! Embedded agent skills and installer.
 //!
-//! The skill teaches coding agents to drive the `wsx` CLI (workspace
-//! operations, slug-vs-branch naming, cross-repo orchestration). It's
-//! bundled into the binary at compile time so `wsx setup install-skill`
-//! can write it to each supported agent's skill directory on any machine
-//! where wsx is installed.
+//! Skills are bundled into the binary at compile time (see `BUNDLED_SKILLS`)
+//! so `wsx setup install-skill` can write each one to every supported agent's
+//! skill directory on any machine where wsx is installed. Currently: the `wsx`
+//! skill (drives the `wsx` CLI — workspace operations, slug-vs-branch naming,
+//! cross-repo orchestration) and the `agent-pr` skill (spawns a peer review
+//! agent for the current branch).
 
 use crate::error::{Error, Result};
 use std::io::Write;

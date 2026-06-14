@@ -14,6 +14,26 @@ pub struct CreatedWorkspace {
     pub setup_result: SetupResult,
 }
 
+/// Compose a workspace's git branch from its repo's branch prefix and the
+/// workspace name: `<prefix>/<name>`, or just `<name>` when no prefix is set.
+/// Shared by create, create_with_app, and rename so the shape never drifts.
+fn compose_branch(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}/{}", prefix.trim_end_matches('/'), name)
+    }
+}
+
+/// Map a setup run's outcome to the persisted setup status.
+fn setup_status_for(result: &SetupResult) -> SetupStatus {
+    match result {
+        SetupResult::Ok => SetupStatus::Ok,
+        SetupResult::Skipped => SetupStatus::Skipped,
+        SetupResult::Failed { .. } => SetupStatus::Failed,
+    }
+}
+
 /// Create a new workspace: insert pending row, create worktree, mark
 /// ready, run setup script, record setup status.
 // Workspace creation genuinely needs all these inputs; a params struct would
@@ -38,11 +58,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         _ => names::generate(),
     };
     let prefix = crate::data::repo::resolve_branch_prefix(repo, store)?;
-    let branch = if prefix.is_empty() {
-        name.clone()
-    } else {
-        format!("{}/{}", prefix.trim_end_matches('/'), name)
-    };
+    let branch = compose_branch(&prefix, &name);
     let worktree_path = worktree_base.join(&repo.name).join(&name);
 
     let base = repo
@@ -102,11 +118,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         }
         Err(e) => return Err(e),
     };
-    let status = match &setup_result {
-        SetupResult::Ok => SetupStatus::Ok,
-        SetupResult::Skipped => SetupStatus::Skipped,
-        SetupResult::Failed { .. } => SetupStatus::Failed,
-    };
+    let status = setup_status_for(&setup_result);
     store.set_setup_status(id, status)?;
 
     let ws = store
@@ -146,11 +158,7 @@ pub async fn create_with_app(
             _ => crate::names::generate(),
         };
         let prefix = crate::data::repo::resolve_branch_prefix(&repo, &g.store)?;
-        let branch = if prefix.is_empty() {
-            resolved_name.clone()
-        } else {
-            format!("{}/{}", prefix.trim_end_matches('/'), resolved_name)
-        };
+        let branch = compose_branch(&prefix, &resolved_name);
         let worktree_path = worktree_base.join(&repo.name).join(&resolved_name);
         (resolved_name, branch, worktree_path)
     };
@@ -231,11 +239,7 @@ pub async fn create_with_app(
         }
         Err(e) => return Err(e),
     };
-    let status = match &setup_result {
-        SetupResult::Ok => SetupStatus::Ok,
-        SetupResult::Skipped => SetupStatus::Skipped,
-        SetupResult::Failed { .. } => SetupStatus::Failed,
-    };
+    let status = setup_status_for(&setup_result);
 
     // --- Phase 6 (short, locked): finalize. ---
     let ws = {
@@ -424,11 +428,7 @@ pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) 
         return Ok(());
     }
     let prefix = crate::data::repo::resolve_branch_prefix(repo, store)?;
-    let new_branch = if prefix.is_empty() {
-        new_name.to_string()
-    } else {
-        format!("{}/{}", prefix.trim_end_matches('/'), new_name)
-    };
+    let new_branch = compose_branch(&prefix, new_name);
     // Branch rename first — if it fails (e.g. name collision), DB stays intact.
     git::rename_branch(&repo.path, &ws.branch, &new_branch).await?;
     store.rename_workspace(ws.id, new_name)?;

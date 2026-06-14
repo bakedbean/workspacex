@@ -17,3 +17,4 @@ mod activity;
 mod layout;
 mod schema;
 mod settings;
+mod status;

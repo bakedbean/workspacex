@@ -10,3 +10,11 @@ pub mod repo;
 pub mod setup;
 pub mod store;
 pub mod workspace;
+
+// Internal `impl Store` blocks split out of store.rs by concern; no public
+// surface of their own, so they stay private modules.
+mod activity;
+mod layout;
+mod schema;
+mod settings;
+mod status;

@@ -288,6 +288,29 @@ fn title_bar_spans(
     spans
 }
 
+/// The footer/chip "key pill" style: a dim, bold glyph on the soft chip
+/// background. Shared by the footer keybinds, the pinned-chip row, and the
+/// agents row so every pill reads identically.
+fn key_pill_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft)
+}
+
+/// The three spans forming one key pill: a 1-cell pad, the `key` glyph in
+/// [`key_pill_style`], and a trailing 1-cell pad — all on the chip background.
+/// Width is always `2 + key.chars().count()`. Callers append any label tail
+/// themselves (the agents row has none; the footer/chip rows do).
+fn key_pill_spans(key: &str, theme: &Theme) -> [Span<'static>; 3] {
+    let pad_style = theme.chip_bg_style();
+    [
+        Span::styled(" ".to_string(), pad_style),
+        Span::styled(key.to_string(), key_pill_style(theme)),
+        Span::styled(" ".to_string(), pad_style),
+    ]
+}
+
 /// V5-styled footer: workspace label in `header_style`, then the `^x`
 /// leader, then per-keybind chips (`<key>` in dim+bold, ` <label>` in
 /// `path` color), separated by 2 spaces. Matches the dashboard footer's
@@ -324,12 +347,7 @@ fn footer_line(
             ("x", "send-^x"),
         ]
     };
-    let key_style = Style::default()
-        .fg(theme.dim)
-        .add_modifier(Modifier::BOLD)
-        .bg(theme.bg_soft);
     let label_style = Style::default().fg(theme.path);
-    let pad_style = theme.chip_bg_style();
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(2 + keys.len() * 5 + 4);
     // `col` tracks the running column so each pill (and the `^x` leader pill)
@@ -358,21 +376,9 @@ fn footer_line(
     // ^x leader rendered as a standalone pill (no label tail). Clicking it
     // arms the leader, exactly like pressing Ctrl-x.
     let leader_start = col;
-    push(
-        &mut spans,
-        &mut col,
-        Span::styled(" ".to_string(), pad_style),
-    );
-    push(
-        &mut spans,
-        &mut col,
-        Span::styled("^x".to_string(), key_style),
-    );
-    push(
-        &mut spans,
-        &mut col,
-        Span::styled(" ".to_string(), pad_style),
-    );
+    for s in key_pill_spans("^x", theme) {
+        push(&mut spans, &mut col, s);
+    }
     hints.push(FooterHintSpan {
         start_col: leader_start,
         width: col - leader_start,
@@ -381,21 +387,9 @@ fn footer_line(
     for (key, lbl) in keys {
         push(&mut spans, &mut col, Span::raw("  ".to_string()));
         let start = col;
-        push(
-            &mut spans,
-            &mut col,
-            Span::styled(" ".to_string(), pad_style),
-        );
-        push(
-            &mut spans,
-            &mut col,
-            Span::styled((*key).to_string(), key_style),
-        );
-        push(
-            &mut spans,
-            &mut col,
-            Span::styled(" ".to_string(), pad_style),
-        );
+        for s in key_pill_spans(key, theme) {
+            push(&mut spans, &mut col, s);
+        }
         push(
             &mut spans,
             &mut col,
@@ -518,12 +512,7 @@ pub(crate) fn render_chip_row(
     theme: &Theme,
 ) -> (Vec<Rect>, Option<Rect>) {
     let rects = layout_chip_row(area, pinned);
-    let key_style = Style::default()
-        .fg(theme.dim)
-        .add_modifier(Modifier::BOLD)
-        .bg(theme.bg_soft);
     let label_style = Style::default().fg(theme.path);
-    let pad_style = theme.chip_bg_style();
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 5 + 2);
     let mut used: usize = 0;
     for (i, (_rect, cmd)) in rects.iter().zip(pinned.iter()).enumerate() {
@@ -533,12 +522,8 @@ pub(crate) fn render_chip_row(
         }
         let label = truncate_label(&cmd.label, 12);
         let chip_text = format!("{}", i + 1);
-        spans.push(Span::styled(" ".to_string(), pad_style));
-        used += 1;
-        spans.push(Span::styled(chip_text, key_style));
-        used += 1;
-        spans.push(Span::styled(" ".to_string(), pad_style));
-        used += 1;
+        used += 2 + chip_text.chars().count();
+        spans.extend(key_pill_spans(&chip_text, theme));
         let label_with_lead = format!(" {label}");
         used += label_with_lead.chars().count();
         spans.push(Span::styled(label_with_lead, label_style));
@@ -679,12 +664,6 @@ pub fn agents_row_spans(
     active: Option<AgentInstanceId>,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
-    let key_style = Style::default()
-        .fg(theme.dim)
-        .add_modifier(Modifier::BOLD)
-        .bg(theme.bg_soft);
-    let pad_style = theme.chip_bg_style();
-
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(1 + agents.len() * 6);
     spans.push(Span::raw(AGENTS_ROW_PREFIX.to_string()));
     for (i, (id, kind, label, key)) in agents.iter().enumerate() {
@@ -708,9 +687,7 @@ pub fn agents_row_spans(
         };
         spans.push(label_span);
         if let Some(key) = key {
-            spans.push(Span::styled(" ".to_string(), pad_style));
-            spans.push(Span::styled(key.to_string(), key_style));
-            spans.push(Span::styled(" ".to_string(), pad_style));
+            spans.extend(key_pill_spans(&key.to_string(), theme));
         }
     }
     spans

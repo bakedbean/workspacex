@@ -185,12 +185,12 @@ pub fn build_claude_command(
 /// agent. Handles internal single quotes via the `'\''` escape so the
 /// agent renders a valid `wsx workspace rename` invocation even when
 /// repo names contain spaces or shell metacharacters.
-pub(crate) fn shell_quote(s: &str) -> String {
+fn shell_quote(s: &str) -> String {
     let escaped = s.replace('\'', r"'\''");
     format!("'{escaped}'")
 }
 
-pub(crate) fn render_rename_system_prompt(
+fn render_rename_system_prompt(
     current_branch: &str,
     _branch_prefix: &str,
     repo_name: &str,
@@ -433,7 +433,7 @@ pub fn build_hermes_command(
 /// Pi version of the rename system prompt. Pi uses `bash` (lowercase) as its
 /// tool name and has no permission system, so we don't need to
 /// pre-authorize the wsx workspace rename command.
-pub(crate) fn render_rename_system_prompt_pi(
+fn render_rename_system_prompt_pi(
     current_branch: &str,
     _branch_prefix: &str,
     repo_name: &str,
@@ -465,7 +465,7 @@ pub(crate) fn render_rename_system_prompt_pi(
 /// the Pi version — Hermes has no permission system and uses plain bash, same
 /// as Pi. Keep this function distinct from the Pi helper so future divergence
 /// (e.g., a Hermes-specific tool naming convention) is a one-place change.
-pub(crate) fn render_rename_system_prompt_hermes(
+fn render_rename_system_prompt_hermes(
     current_branch: &str,
     branch_prefix: &str,
     repo_name: &str,

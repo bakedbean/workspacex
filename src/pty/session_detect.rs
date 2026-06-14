@@ -96,7 +96,7 @@ pub(crate) fn write_hermes_spawn_marker(worktree: &Path) {
 
 /// Update the cached session_id in the marker file, preserving the
 /// original start_ts. Best-effort: silent on IO error.
-pub(crate) fn cache_hermes_session_id_in_marker(worktree: &Path, session_id: &str) {
+fn cache_hermes_session_id_in_marker(worktree: &Path, session_id: &str) {
     let Some(existing) = read_hermes_spawn_marker(worktree) else {
         return;
     };
@@ -151,7 +151,7 @@ pub fn has_prior_pi_session(worktree: &Path) -> bool {
 /// Opens the db read-only (no `immutable=1`) so the reader sees WAL-pending
 /// writes from a live Hermes process. WAL mode supports concurrent
 /// readers + 1 writer, so this neither blocks Hermes nor returns stale data.
-pub(crate) fn latest_hermes_session_id(db_path: &Path, spawn_ts: f64) -> Option<String> {
+fn latest_hermes_session_id(db_path: &Path, spawn_ts: f64) -> Option<String> {
     if !db_path.is_file() {
         return None;
     }

@@ -15,12 +15,12 @@ use crate::pty::session_detect::{read_hermes_spawn_marker, write_hermes_spawn_ma
 use crate::pty::session::RenameContext;
 use std::path::Path;
 
-pub(crate) const HERMES_BLOCK_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
-pub(crate) const HERMES_BLOCK_END: &str = "<!-- END wsx-managed -->";
+const HERMES_BLOCK_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
+const HERMES_BLOCK_END: &str = "<!-- END wsx-managed -->";
 
 /// Marker prefixing `CLAUDE.md` content copied into a freshly-created
 /// `AGENTS.md`, so a reader can tell where it came from.
-pub(crate) const CLAUDE_PROVENANCE_COMMENT: &str = "<!-- Copied from CLAUDE.md by wsx -->";
+const CLAUDE_PROVENANCE_COMMENT: &str = "<!-- Copied from CLAUDE.md by wsx -->";
 
 /// Read a repo's root `CLAUDE.md`, returning its contents only if the file
 /// exists and holds non-whitespace text. Used to seed a newly-created
@@ -41,7 +41,7 @@ fn read_claude_md(cwd: &Path) -> Option<String> {
 /// None. Skips the write entirely if the result equals the existing file.
 ///
 /// Best-effort: any IO error is silently swallowed.
-pub(crate) fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
+fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
     let path = cwd.join("AGENTS.md");
     // Capture existence before reading: when wsx creates AGENTS.md fresh we
     // seed it with the repo's CLAUDE.md (if any) so Hermes/Codex get the same
@@ -133,7 +133,7 @@ fn strip_wsx_block(source: &str) -> std::borrow::Cow<'_, str> {
 ///
 /// Best-effort: silently no-ops on any IO/parse error or if `.git/` is
 /// absent. `info/exclude` is per-gitdir-local and never committed.
-pub(crate) fn ensure_git_exclude(worktree: &Path, name: &str) {
+fn ensure_git_exclude(worktree: &Path, name: &str) {
     let dot_git = worktree.join(".git");
     let gitdir = match resolve_gitdir(&dot_git, worktree) {
         Some(p) => p,

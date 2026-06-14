@@ -1141,15 +1141,15 @@ Idempotent: re-running when an installed copy already matches reports "already u
 `wsx setup install-skill` installs every bundled skill for each detected agent:
 
 - **`wsx`** — drives the wsx CLI (workspace ops, slug-vs-`branch_prefix` naming, cross-repo orchestration).
-- **`agent-pr`** — run inside a workspace to spin up a peer review agent. It takes the reviewer kind (`claude` | `pi` | `hermes` | `codex`, default `claude`), spawns it with `wsx agent add`, hands it the branch diff vs `main`, and has it report a risk assessment + gap analysis back via `wsx agent send`.
+- **`agent-review`** — run inside a workspace to spin up a peer review agent. It takes the reviewer kind (`claude` | `pi` | `hermes` | `codex`, default `claude`), spawns it with `wsx agent add`, hands it the branch diff vs `main`, and has it report a risk assessment + gap analysis back via `wsx agent send`.
 
-Pin `agent-pr` to a chip so a review is one click away — add a line to your [pinned commands](#pinned-commands). Use `wsx config edit pinned_commands` to append without clobbering existing chips (`wsx config set` replaces the whole value):
+Pin `agent-review` to a chip so a review is one click away — add a line to your [pinned commands](#pinned-commands). Use `wsx config edit pinned_commands` to append without clobbering existing chips (`wsx config set` replaces the whole value):
 
 ```
-agent-pr=/agent-pr
+agent-review=/agent-review
 ```
 
-Because chips auto-submit, the chip runs `/agent-pr` (defaulting to a `claude` reviewer); type `/agent-pr codex` manually for a different kind.
+Because chips auto-submit, the chip runs `/agent-review` (defaulting to a `claude` reviewer); type `/agent-review codex` manually for a different kind.
 
 ## CLI reference
 

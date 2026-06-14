@@ -11,71 +11,84 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The wsx skill content, embedded at compile time from `skills/wsx/SKILL.md`.
+/// Retained as a named const for tests and any direct call sites.
 pub const SKILL_CONTENT: &str = include_str!("../../skills/wsx/SKILL.md");
+
+/// The agent-pr skill content, embedded from `skills/agent-pr/SKILL.md`.
+pub const AGENT_PR_SKILL_CONTENT: &str = include_str!("../../skills/agent-pr/SKILL.md");
+
+/// A skill bundled into the binary and installed by `wsx setup install-skill`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BundledSkill {
+    /// Directory name under each agent's `skills/` dir (`<dir>/<name>/SKILL.md`).
+    pub name: &'static str,
+    /// Markdown content embedded at compile time.
+    pub content: &'static str,
+}
+
+/// Every skill wsx ships. Installed for each detected agent.
+pub const BUNDLED_SKILLS: &[BundledSkill] = &[
+    BundledSkill {
+        name: "wsx",
+        content: SKILL_CONTENT,
+    },
+    BundledSkill {
+        name: "agent-pr",
+        content: AGENT_PR_SKILL_CONTENT,
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallTarget {
+    /// Display name of the agent (`"Claude"`, `"Codex"`, `"Hermes"`).
     pub agent: &'static str,
+    /// The bundled skill's directory name (`"wsx"`, `"agent-pr"`).
+    pub skill: &'static str,
+    /// The content to write for this skill.
+    pub content: &'static str,
+    /// Destination file (`<skills-dir>/<skill>/SKILL.md`).
     pub path: PathBuf,
 }
 
-/// Default Claude install location (`~/.claude/skills/wsx/SKILL.md`).
-/// Returns `None` if the home directory can't be resolved.
-pub fn default_claude_install_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| {
-        h.join(".claude")
-            .join("skills")
-            .join("wsx")
-            .join("SKILL.md")
-    })
+/// Claude's skills directory (`~/.claude/skills`). `None` if no home dir.
+pub fn claude_skills_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude").join("skills"))
 }
 
-/// Default Codex install location (`~/.codex/skills/wsx/SKILL.md`).
-/// Returns `None` if the home directory can't be resolved.
-pub fn default_codex_install_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".codex").join("skills").join("wsx").join("SKILL.md"))
+/// Codex's skills directory (`~/.codex/skills`). `None` if no home dir.
+pub fn codex_skills_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".codex").join("skills"))
 }
 
-/// Default Hermes install location (`~/.hermes/skills/wsx/SKILL.md`).
-/// Returns `None` if the home directory can't be resolved.
-pub fn default_hermes_install_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| {
-        h.join(".hermes")
-            .join("skills")
-            .join("wsx")
-            .join("SKILL.md")
-    })
+/// Hermes's skills directory (`~/.hermes/skills`). `None` if no home dir.
+pub fn hermes_skills_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".hermes").join("skills"))
 }
 
-/// Default install location kept for older call sites.
-pub fn default_install_path() -> Option<PathBuf> {
-    default_claude_install_path()
-}
-
-/// Install targets for `wsx setup install-skill`.
+/// Install targets for `wsx setup install-skill`: every bundled skill, for
+/// every detected agent.
 ///
-/// Claude is always included because this command historically installs the
-/// bundled Claude Code skill. Codex is included only when it appears to be
-/// installed, either via `WSX_CODEX_BIN`, a `codex` executable on PATH, or an
-/// existing `~/.codex` directory from a prior Codex run. Hermes is included
-/// when `WSX_HERMES_BIN` is set, the `hermes` binary is on PATH, or
-/// `~/.hermes` exists.
+/// Claude is always included. Codex is included when `WSX_CODEX_BIN` is set,
+/// `codex` is on PATH, or `~/.codex` exists. Hermes is included when
+/// `WSX_HERMES_BIN` is set, `hermes` is on PATH, or `~/.hermes` exists.
 pub fn default_install_targets() -> Option<Vec<InstallTarget>> {
-    let mut targets = vec![InstallTarget {
-        agent: "Claude",
-        path: default_claude_install_path()?,
-    }];
+    let mut agents: Vec<(&'static str, PathBuf)> = vec![("Claude", claude_skills_dir()?)];
     if codex_is_installed() {
-        targets.push(InstallTarget {
-            agent: "Codex",
-            path: default_codex_install_path()?,
-        });
+        agents.push(("Codex", codex_skills_dir()?));
     }
     if hermes_is_installed() {
-        targets.push(InstallTarget {
-            agent: "Hermes",
-            path: default_hermes_install_path()?,
-        });
+        agents.push(("Hermes", hermes_skills_dir()?));
+    }
+    let mut targets = Vec::new();
+    for (agent, dir) in agents {
+        for skill in BUNDLED_SKILLS {
+            targets.push(InstallTarget {
+                agent,
+                skill: skill.name,
+                content: skill.content,
+                path: dir.join(skill.name).join("SKILL.md"),
+            });
+        }
     }
     Some(targets)
 }
@@ -130,21 +143,26 @@ pub enum InstallOutcome {
     Updated,
 }
 
-/// Install the embedded skill to `target`. Creates parent directories as
-/// needed. If `target` already contains identical content, no write is
-/// performed and `Unchanged` is returned (so users can re-run safely and
-/// see no false "updated" output).
-pub fn install_to(target: &Path) -> Result<InstallOutcome> {
-    if let Some(parent) = target.parent() {
+/// Install one bundled skill (`target.content`) to `target.path`. Creates
+/// parent directories as needed. Returns `Unchanged` without writing when the
+/// file already holds identical content (safe to re-run).
+pub fn install_to(target: &InstallTarget) -> Result<InstallOutcome> {
+    install_content_to(&target.path, target.content)
+}
+
+/// Write `content` to `path`, reporting Created/Updated/Unchanged. Split out so
+/// tests can exercise the outcome logic directly.
+fn install_content_to(path: &Path, content: &str) -> Result<InstallOutcome> {
+    if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let outcome = match std::fs::read_to_string(target) {
-        Ok(existing) if existing == SKILL_CONTENT => return Ok(InstallOutcome::Unchanged),
+    let outcome = match std::fs::read_to_string(path) {
+        Ok(existing) if existing == content => return Ok(InstallOutcome::Unchanged),
         Ok(_) => InstallOutcome::Updated,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => InstallOutcome::Created,
         Err(e) => return Err(Error::Io(e)),
     };
-    write_atomic(target, SKILL_CONTENT)?;
+    write_atomic(path, content)?;
     Ok(outcome)
 }
 
@@ -189,10 +207,25 @@ mod tests {
     }
 
     #[test]
+    fn agent_pr_skill_has_frontmatter() {
+        assert!(
+            AGENT_PR_SKILL_CONTENT.starts_with("---\n"),
+            "agent-pr skill missing YAML frontmatter"
+        );
+        assert!(
+            AGENT_PR_SKILL_CONTENT.contains("name: agent-pr"),
+            "agent-pr skill frontmatter missing name field"
+        );
+    }
+
+    #[test]
     fn install_creates_when_missing() {
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("deep").join("nested").join("SKILL.md");
-        assert_eq!(install_to(&target).unwrap(), InstallOutcome::Created);
+        assert_eq!(
+            install_content_to(&target, SKILL_CONTENT).unwrap(),
+            InstallOutcome::Created
+        );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), SKILL_CONTENT);
     }
 
@@ -200,10 +233,11 @@ mod tests {
     fn install_is_idempotent_on_identical_content() {
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("SKILL.md");
-        install_to(&target).unwrap();
-        // Second install of identical content should report Unchanged
-        // without rewriting.
-        assert_eq!(install_to(&target).unwrap(), InstallOutcome::Unchanged);
+        install_content_to(&target, SKILL_CONTENT).unwrap();
+        assert_eq!(
+            install_content_to(&target, SKILL_CONTENT).unwrap(),
+            InstallOutcome::Unchanged
+        );
     }
 
     #[test]
@@ -211,32 +245,38 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("SKILL.md");
         std::fs::write(&target, "stale content").unwrap();
-        assert_eq!(install_to(&target).unwrap(), InstallOutcome::Updated);
+        assert_eq!(
+            install_content_to(&target, SKILL_CONTENT).unwrap(),
+            InstallOutcome::Updated
+        );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), SKILL_CONTENT);
     }
 
     #[test]
-    fn default_targets_include_claude_only_when_codex_is_absent() {
+    fn default_targets_cover_every_bundled_skill_for_claude_only() {
         let mut env = EnvGuard::new();
         let home = TempDir::new().unwrap();
         env.set("HOME", home.path());
         env.set("PATH", "");
         env.remove("WSX_CODEX_BIN");
+        env.remove("WSX_HERMES_BIN");
 
         let targets = default_install_targets().unwrap();
 
-        assert_eq!(
-            targets,
-            vec![InstallTarget {
-                agent: "Claude",
-                path: home
-                    .path()
-                    .join(".claude")
-                    .join("skills")
-                    .join("wsx")
-                    .join("SKILL.md"),
-            }]
+        // Only Claude is detected, but one target per bundled skill.
+        assert_eq!(targets.len(), BUNDLED_SKILLS.len());
+        assert!(targets.iter().all(|t| t.agent == "Claude"));
+        let claude_skills = home.path().join(".claude").join("skills");
+        assert!(
+            targets.iter().any(|t| {
+                t.skill == "wsx" && t.path == claude_skills.join("wsx").join("SKILL.md")
+            })
         );
+        assert!(targets.iter().any(|t| {
+            t.skill == "agent-pr"
+                && t.path == claude_skills.join("agent-pr").join("SKILL.md")
+                && t.content == AGENT_PR_SKILL_CONTENT
+        }));
     }
 
     #[test]

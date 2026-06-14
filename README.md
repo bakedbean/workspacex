@@ -1136,6 +1136,21 @@ Codex is considered installed when `WSX_CODEX_BIN` is set, `codex` is on `PATH`,
 
 Idempotent: re-running when an installed copy already matches reports "already up to date" without writing. If an installed copy has drifted (you edited it locally, or you're upgrading wsx with skill changes), it's overwritten and reports "updated".
 
+#### Bundled skills
+
+`wsx setup install-skill` installs every bundled skill for each detected agent:
+
+- **`wsx`** — drives the wsx CLI (workspace ops, slug-vs-`branch_prefix` naming, cross-repo orchestration).
+- **`agent-pr`** — run inside a workspace to spin up a peer review agent. It takes the reviewer kind (`claude` | `pi` | `hermes` | `codex`, default `claude`), spawns it with `wsx agent add`, hands it the branch diff vs `main`, and has it report a risk assessment + gap analysis back via `wsx agent send`.
+
+Pin `agent-pr` to a chip so a review is one click away:
+
+```
+wsx config set pinned_commands "agent-pr=/agent-pr"
+```
+
+Because chips auto-submit, the chip runs `/agent-pr` (defaulting to a `claude` reviewer); type `/agent-pr codex` manually for a different kind.
+
 ## CLI reference
 
 Run `wsx --help` for the full command list, or `wsx <command> --help` (e.g. `wsx agent --help`) for a group's commands and arguments. `wsx --version` prints the version.

@@ -150,8 +150,9 @@ pub fn install_to(target: &InstallTarget) -> Result<InstallOutcome> {
     install_content_to(&target.path, target.content)
 }
 
-/// Write `content` to `path`, reporting Created/Updated/Unchanged. Split out so
-/// tests can exercise the outcome logic directly.
+/// Write `content` to `path`, creating parent dirs and reporting
+/// Created/Updated/Unchanged. Atomic: writes a temp file then renames. Used by
+/// `install_to` and directly by tests.
 fn install_content_to(path: &Path, content: &str) -> Result<InstallOutcome> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -267,11 +268,11 @@ mod tests {
         assert_eq!(targets.len(), BUNDLED_SKILLS.len());
         assert!(targets.iter().all(|t| t.agent == "Claude"));
         let claude_skills = home.path().join(".claude").join("skills");
-        assert!(
-            targets.iter().any(|t| {
-                t.skill == "wsx" && t.path == claude_skills.join("wsx").join("SKILL.md")
-            })
-        );
+        assert!(targets.iter().any(|t| {
+            t.skill == "wsx"
+                && t.path == claude_skills.join("wsx").join("SKILL.md")
+                && t.content == SKILL_CONTENT
+        }));
         assert!(targets.iter().any(|t| {
             t.skill == "agent-pr"
                 && t.path == claude_skills.join("agent-pr").join("SKILL.md")
@@ -308,6 +309,10 @@ mod tests {
                         .join("wsx")
                         .join("SKILL.md")
         }));
+        let codex_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Codex").collect();
+        assert_eq!(codex_targets.len(), BUNDLED_SKILLS.len());
+        assert!(codex_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(codex_targets.iter().any(|t| t.skill == "wsx"));
     }
 
     #[test]
@@ -322,6 +327,10 @@ mod tests {
         let targets = default_install_targets().unwrap();
 
         assert!(targets.iter().any(|t| t.agent == "Codex"));
+        let codex_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Codex").collect();
+        assert_eq!(codex_targets.len(), BUNDLED_SKILLS.len());
+        assert!(codex_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(codex_targets.iter().any(|t| t.skill == "wsx"));
     }
 
     #[test]
@@ -349,6 +358,10 @@ mod tests {
         let targets = default_install_targets().unwrap();
 
         assert!(targets.iter().any(|t| t.agent == "Codex"));
+        let codex_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Codex").collect();
+        assert_eq!(codex_targets.len(), BUNDLED_SKILLS.len());
+        assert!(codex_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(codex_targets.iter().any(|t| t.skill == "wsx"));
     }
 
     #[test]
@@ -381,6 +394,10 @@ mod tests {
                         .join("wsx")
                         .join("SKILL.md")
         }));
+        let hermes_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Hermes").collect();
+        assert_eq!(hermes_targets.len(), BUNDLED_SKILLS.len());
+        assert!(hermes_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(hermes_targets.iter().any(|t| t.skill == "wsx"));
     }
 
     #[test]
@@ -396,6 +413,10 @@ mod tests {
         let targets = default_install_targets().unwrap();
 
         assert!(targets.iter().any(|t| t.agent == "Hermes"));
+        let hermes_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Hermes").collect();
+        assert_eq!(hermes_targets.len(), BUNDLED_SKILLS.len());
+        assert!(hermes_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(hermes_targets.iter().any(|t| t.skill == "wsx"));
     }
 
     #[test]
@@ -425,5 +446,9 @@ mod tests {
         let targets = default_install_targets().unwrap();
 
         assert!(targets.iter().any(|t| t.agent == "Hermes"));
+        let hermes_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Hermes").collect();
+        assert_eq!(hermes_targets.len(), BUNDLED_SKILLS.len());
+        assert!(hermes_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(hermes_targets.iter().any(|t| t.skill == "wsx"));
     }
 }

@@ -7,6 +7,9 @@
 pub mod agents;
 pub mod messages;
 pub mod repo;
+// Schema DDL + migration ladder; contributes an `impl Store` block and has no
+// public surface of its own, so it stays a private module.
+mod schema;
 pub mod setup;
 pub mod store;
 pub mod workspace;

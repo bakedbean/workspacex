@@ -12,4 +12,6 @@ pub mod names;
 pub mod pty;
 #[doc(hidden)]
 pub mod test_support;
+/// Internal wall-clock helpers; not part of the public API.
+pub(crate) mod time;
 pub mod ui;

@@ -161,6 +161,18 @@ pub struct Session {
 }
 
 impl Session {
+    /// Whole seconds since this session last produced PTY output, or `None`
+    /// when no output has been observed yet (`activity_ms == 0`). Callers that
+    /// treat "idle-unknown" the same as "idle 0s" can `.unwrap_or(0)`; callers
+    /// that must distinguish unknown from fresh output keep the `None`.
+    pub fn idle_secs(&self) -> Option<u64> {
+        let last = self.activity_ms.load(Ordering::Relaxed);
+        if last == 0 {
+            return None;
+        }
+        Some(crate::time::now_ms_u64().saturating_sub(last) / 1000)
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
         self.master
             .lock()
@@ -289,10 +301,7 @@ impl Session {
             }
             let last = self.activity_ms.load(Ordering::Relaxed);
             if last > 0 {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
+                let now_ms = now_ms();
                 let since_last = now_ms.saturating_sub(last);
                 if since_last >= quiet_ms {
                     // Inject the text and the submitting CR as two writes (see
@@ -1393,11 +1402,7 @@ pub fn spawn_session(
 }
 
 fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    crate::time::now_ms_u64()
 }
 
 pub struct SessionManager {

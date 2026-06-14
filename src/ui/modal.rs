@@ -105,6 +105,31 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
         .split(popup)[1]
 }
 
+/// Draw a centered, bordered modal box of size `w`×`h` (centered within
+/// `area`) titled `title`: clears the region, paints the dim-styled border,
+/// and returns the inner content area. Shared framing for the floating panel
+/// renderers (updates, processes, repo settings, agents) so they look
+/// identical; each caller lays its own body/footer split inside the returned
+/// inner rect.
+fn panel_frame<'a>(
+    f: &mut Frame,
+    area: Rect,
+    w: u16,
+    h: u16,
+    title: impl Into<Line<'a>>,
+    theme: &Theme,
+) -> Rect {
+    let rect = centered(area, w, h);
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(theme.dim_style());
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    inner
+}
+
 pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme) {
     // UpdatesPanel and ProcessList are rendered by their dedicated
     // helpers directly from `draw()` because they need live App state.
@@ -353,15 +378,7 @@ pub fn render_updates_panel(
     // Sizing: ~80 cols wide, ~25 rows tall, but never larger than the area.
     let w = area.width.clamp(20, 80);
     let h = area.height.clamp(8, 25);
-    let rect = centered(area, w, h);
-    f.render_widget(Clear, rect);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Workspace updates ")
-        .style(theme.dim_style());
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner = panel_frame(f, area, w, h, " Workspace updates ", theme);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -588,16 +605,14 @@ pub fn render_process_list(
 ) {
     let w = area.width.clamp(20, 80);
     let h = area.height.clamp(8, 25);
-    let rect = centered(area, w, h);
-    f.render_widget(Clear, rect);
-
-    let title = format!(" Processes — {workspace_name} ");
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(theme.dim_style());
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner = panel_frame(
+        f,
+        area,
+        w,
+        h,
+        format!(" Processes — {workspace_name} "),
+        theme,
+    );
 
     let has_notice = notice.is_some();
     let constraints = if has_notice {
@@ -695,16 +710,14 @@ pub fn render_repo_settings(
 ) {
     let w = area.width.clamp(40, 90);
     let h = area.height.clamp(12, 20);
-    let rect = centered(area, w, h);
-    f.render_widget(Clear, rect);
-
-    let title = format!(" Repo settings — {repo_name} ");
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(theme.dim_style());
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner = panel_frame(
+        f,
+        area,
+        w,
+        h,
+        format!(" Repo settings — {repo_name} "),
+        theme,
+    );
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -794,14 +807,7 @@ pub fn render_agents_panel(
     selected: usize,
     theme: &Theme,
 ) {
-    let rect = centered(area, 60, 16);
-    f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" agents ")
-        .style(theme.dim_style());
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner = panel_frame(f, area, 60, 16, " agents ", theme);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from("Attached:"));

@@ -89,7 +89,7 @@ Branch: feat/widgets (3 commits, 7 files changed). Review this branch against
 main: run \`git diff main...HEAD\` to see the full change. Provide (1) a risk
 assessment — security, performance, breaking changes, edge cases; and (2) a gap
 analysis — test coverage, documentation, error handling. When done, send your
-findings back to me with: wsx agent send claude \"<your findings>\"."
+findings back to me with: wsx agent send <your-label> \"<your findings>\"."
 ```
 
 ## Notes

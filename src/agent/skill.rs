@@ -4,7 +4,7 @@
 //! so `wsx setup install-skill` can write each one to every supported agent's
 //! skill directory on any machine where wsx is installed. Currently: the `wsx`
 //! skill (drives the `wsx` CLI — workspace operations, slug-vs-branch naming,
-//! cross-repo orchestration) and the `agent-pr` skill (spawns a peer review
+//! cross-repo orchestration) and the `agent-review` skill (spawns a peer review
 //! agent for the current branch).
 
 use crate::error::{Error, Result};
@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 /// Retained as a named const for tests and any direct call sites.
 pub const SKILL_CONTENT: &str = include_str!("../../skills/wsx/SKILL.md");
 
-/// The agent-pr skill content, embedded from `skills/agent-pr/SKILL.md`.
-pub const AGENT_PR_SKILL_CONTENT: &str = include_str!("../../skills/agent-pr/SKILL.md");
+/// The agent-review skill content, embedded from `skills/agent-review/SKILL.md`.
+pub const AGENT_REVIEW_SKILL_CONTENT: &str = include_str!("../../skills/agent-review/SKILL.md");
 
 /// A skill bundled into the binary and installed by `wsx setup install-skill`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,8 +34,8 @@ pub const BUNDLED_SKILLS: &[BundledSkill] = &[
         content: SKILL_CONTENT,
     },
     BundledSkill {
-        name: "agent-pr",
-        content: AGENT_PR_SKILL_CONTENT,
+        name: "agent-review",
+        content: AGENT_REVIEW_SKILL_CONTENT,
     },
 ];
 
@@ -43,7 +43,7 @@ pub const BUNDLED_SKILLS: &[BundledSkill] = &[
 pub struct InstallTarget {
     /// Display name of the agent (`"Claude"`, `"Codex"`, `"Hermes"`).
     pub agent: &'static str,
-    /// The bundled skill's directory name (`"wsx"`, `"agent-pr"`).
+    /// The bundled skill's directory name (`"wsx"`, `"agent-review"`).
     pub skill: &'static str,
     /// The content to write for this skill.
     pub content: &'static str,
@@ -218,18 +218,18 @@ mod tests {
     }
 
     #[test]
-    fn agent_pr_skill_has_frontmatter() {
+    fn agent_review_skill_has_frontmatter() {
         assert!(
-            AGENT_PR_SKILL_CONTENT.starts_with("---\n"),
-            "agent-pr skill missing YAML frontmatter"
+            AGENT_REVIEW_SKILL_CONTENT.starts_with("---\n"),
+            "agent-review skill missing YAML frontmatter"
         );
         assert!(
-            AGENT_PR_SKILL_CONTENT.contains("name: agent-pr"),
-            "agent-pr skill frontmatter missing name field"
+            AGENT_REVIEW_SKILL_CONTENT.contains("name: agent-review"),
+            "agent-review skill frontmatter missing name field"
         );
         assert!(
-            AGENT_PR_SKILL_CONTENT.contains("description:"),
-            "agent-pr skill frontmatter missing description field (needed for discovery)"
+            AGENT_REVIEW_SKILL_CONTENT.contains("description:"),
+            "agent-review skill frontmatter missing description field (needed for discovery)"
         );
     }
 
@@ -240,16 +240,16 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let target = InstallTarget {
             agent: "Claude",
-            skill: "agent-pr",
-            content: AGENT_PR_SKILL_CONTENT,
-            path: tmp.path().join("agent-pr").join("SKILL.md"),
+            skill: "agent-review",
+            content: AGENT_REVIEW_SKILL_CONTENT,
+            path: tmp.path().join("agent-review").join("SKILL.md"),
         };
         assert_eq!(install_to(&target).unwrap(), InstallOutcome::Created);
         assert_eq!(
             std::fs::read_to_string(&target.path).unwrap(),
-            AGENT_PR_SKILL_CONTENT
+            AGENT_REVIEW_SKILL_CONTENT
         );
-        assert_ne!(AGENT_PR_SKILL_CONTENT, SKILL_CONTENT);
+        assert_ne!(AGENT_REVIEW_SKILL_CONTENT, SKILL_CONTENT);
     }
 
     #[test]
@@ -307,9 +307,9 @@ mod tests {
                 && t.content == SKILL_CONTENT
         }));
         assert!(targets.iter().any(|t| {
-            t.skill == "agent-pr"
-                && t.path == claude_skills.join("agent-pr").join("SKILL.md")
-                && t.content == AGENT_PR_SKILL_CONTENT
+            t.skill == "agent-review"
+                && t.path == claude_skills.join("agent-review").join("SKILL.md")
+                && t.content == AGENT_REVIEW_SKILL_CONTENT
         }));
     }
 
@@ -344,7 +344,7 @@ mod tests {
         }));
         let codex_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Codex").collect();
         assert_eq!(codex_targets.len(), BUNDLED_SKILLS.len());
-        assert!(codex_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(codex_targets.iter().any(|t| t.skill == "agent-review"));
         assert!(codex_targets.iter().any(|t| t.skill == "wsx"));
     }
 
@@ -362,7 +362,7 @@ mod tests {
         assert!(targets.iter().any(|t| t.agent == "Codex"));
         let codex_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Codex").collect();
         assert_eq!(codex_targets.len(), BUNDLED_SKILLS.len());
-        assert!(codex_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(codex_targets.iter().any(|t| t.skill == "agent-review"));
         assert!(codex_targets.iter().any(|t| t.skill == "wsx"));
     }
 
@@ -393,7 +393,7 @@ mod tests {
         assert!(targets.iter().any(|t| t.agent == "Codex"));
         let codex_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Codex").collect();
         assert_eq!(codex_targets.len(), BUNDLED_SKILLS.len());
-        assert!(codex_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(codex_targets.iter().any(|t| t.skill == "agent-review"));
         assert!(codex_targets.iter().any(|t| t.skill == "wsx"));
     }
 
@@ -429,7 +429,7 @@ mod tests {
         }));
         let hermes_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Hermes").collect();
         assert_eq!(hermes_targets.len(), BUNDLED_SKILLS.len());
-        assert!(hermes_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(hermes_targets.iter().any(|t| t.skill == "agent-review"));
         assert!(hermes_targets.iter().any(|t| t.skill == "wsx"));
     }
 
@@ -448,7 +448,7 @@ mod tests {
         assert!(targets.iter().any(|t| t.agent == "Hermes"));
         let hermes_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Hermes").collect();
         assert_eq!(hermes_targets.len(), BUNDLED_SKILLS.len());
-        assert!(hermes_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(hermes_targets.iter().any(|t| t.skill == "agent-review"));
         assert!(hermes_targets.iter().any(|t| t.skill == "wsx"));
     }
 
@@ -481,7 +481,7 @@ mod tests {
         assert!(targets.iter().any(|t| t.agent == "Hermes"));
         let hermes_targets: Vec<_> = targets.iter().filter(|t| t.agent == "Hermes").collect();
         assert_eq!(hermes_targets.len(), BUNDLED_SKILLS.len());
-        assert!(hermes_targets.iter().any(|t| t.skill == "agent-pr"));
+        assert!(hermes_targets.iter().any(|t| t.skill == "agent-review"));
         assert!(hermes_targets.iter().any(|t| t.skill == "wsx"));
     }
 }

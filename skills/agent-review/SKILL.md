@@ -1,9 +1,9 @@
 ---
-name: agent-pr
+name: agent-review
 description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex, default claude); spawns the peer, hands it branch-diff-vs-main context, and has it report findings back to you.
 ---
 
-# agent-pr
+# agent-review
 
 Spin up a peer **review agent** in the current wsx workspace and hand it the
 branch's review context. You (the agent invoking this skill) act as the
@@ -14,10 +14,10 @@ its findings.
 
 A single optional argument: the reviewer **kind**, one of `claude`, `pi`,
 `hermes`, `codex`. Defaults to `claude` when omitted (e.g. when fired from the
-`agent-pr` pinned chip, which submits `/agent-pr` with no argument).
+`agent-review` pinned chip, which submits `/agent-review` with no argument).
 
-- `/agent-pr` → spawn a `claude` reviewer
-- `/agent-pr codex` → spawn a `codex` reviewer
+- `/agent-review` → spawn a `claude` reviewer
+- `/agent-review codex` → spawn a `codex` reviewer
 
 If an argument is given that is not one of the four kinds, stop and tell the
 user the valid kinds. Do not guess.

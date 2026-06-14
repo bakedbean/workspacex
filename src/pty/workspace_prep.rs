@@ -10,14 +10,17 @@
 use crate::pty::command::compose_injected_prompt;
 use crate::pty::session::{SpawnMode, resolve_gitdir};
 use crate::pty::session_detect::{read_hermes_spawn_marker, write_hermes_spawn_marker};
+// `RenameContext` is only constructed by this module's co-located tests.
+#[cfg(test)]
+use crate::pty::session::RenameContext;
 use std::path::Path;
 
-pub(crate) const HERMES_BLOCK_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
-pub(crate) const HERMES_BLOCK_END: &str = "<!-- END wsx-managed -->";
+const HERMES_BLOCK_BEGIN: &str = "<!-- BEGIN wsx-managed -->";
+const HERMES_BLOCK_END: &str = "<!-- END wsx-managed -->";
 
 /// Marker prefixing `CLAUDE.md` content copied into a freshly-created
 /// `AGENTS.md`, so a reader can tell where it came from.
-pub(crate) const CLAUDE_PROVENANCE_COMMENT: &str = "<!-- Copied from CLAUDE.md by wsx -->";
+const CLAUDE_PROVENANCE_COMMENT: &str = "<!-- Copied from CLAUDE.md by wsx -->";
 
 /// Read a repo's root `CLAUDE.md`, returning its contents only if the file
 /// exists and holds non-whitespace text. Used to seed a newly-created
@@ -38,7 +41,7 @@ fn read_claude_md(cwd: &Path) -> Option<String> {
 /// None. Skips the write entirely if the result equals the existing file.
 ///
 /// Best-effort: any IO error is silently swallowed.
-pub(crate) fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
+fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
     let path = cwd.join("AGENTS.md");
     // Capture existence before reading: when wsx creates AGENTS.md fresh we
     // seed it with the repo's CLAUDE.md (if any) so Hermes/Codex get the same
@@ -130,7 +133,7 @@ fn strip_wsx_block(source: &str) -> std::borrow::Cow<'_, str> {
 ///
 /// Best-effort: silently no-ops on any IO/parse error or if `.git/` is
 /// absent. `info/exclude` is per-gitdir-local and never committed.
-pub(crate) fn ensure_git_exclude(worktree: &Path, name: &str) {
+fn ensure_git_exclude(worktree: &Path, name: &str) {
     let dot_git = worktree.join(".git");
     let gitdir = match resolve_gitdir(&dot_git, worktree) {
         Some(p) => p,
@@ -196,5 +199,442 @@ pub(crate) fn prepare_codex_workspace(cwd: &Path, mode: &SpawnMode) {
     write_agents_md_section(cwd, injected.as_deref());
     if had_content {
         ensure_git_exclude(cwd, "AGENTS.md");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod hermes_git_exclude {
+        use std::fs;
+        use std::io::Read;
+
+        fn init_gitdir(dir: &std::path::Path) {
+            fs::create_dir_all(dir.join(".git/info")).unwrap();
+        }
+
+        fn read(path: &std::path::Path) -> String {
+            let mut s = String::new();
+            fs::File::open(path)
+                .unwrap()
+                .read_to_string(&mut s)
+                .unwrap();
+            s
+        }
+
+        #[test]
+        fn creates_exclude_line_when_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let contents = read(&tmp.path().join(".git/info/exclude"));
+            assert!(
+                contents.lines().any(|l| l == "AGENTS.md"),
+                "expected AGENTS.md line in {contents:?}"
+            );
+        }
+
+        #[test]
+        fn idempotent_when_entry_already_present() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let exclude = tmp.path().join(".git/info/exclude");
+            fs::write(&exclude, "AGENTS.md\n").unwrap();
+            let before = read(&exclude);
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let after = read(&exclude);
+            assert_eq!(before, after);
+        }
+
+        #[test]
+        fn handles_missing_info_dir() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::create_dir_all(tmp.path().join(".git")).unwrap();
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            let contents = read(&tmp.path().join(".git/info/exclude"));
+            assert!(contents.contains("AGENTS.md"));
+        }
+
+        #[test]
+        fn no_op_when_gitdir_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            // No .git/ at all. Must not panic.
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+            assert!(!tmp.path().join(".git").exists());
+        }
+
+        #[test]
+        fn follows_worktree_style_git_file_with_absolute_gitdir() {
+            let tmp = tempfile::tempdir().unwrap();
+            // External gitdir lives outside the worktree
+            let external = tempfile::tempdir().unwrap();
+            let gitdir = external.path().join("worktrees/feature-x");
+            fs::create_dir_all(&gitdir).unwrap();
+            // worktree/.git is a FILE pointing at the external gitdir
+            fs::write(
+                tmp.path().join(".git"),
+                format!("gitdir: {}\n", gitdir.display()),
+            )
+            .unwrap();
+
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+
+            let exclude = gitdir.join("info/exclude");
+            let contents = read(&exclude);
+            assert!(
+                contents.contains("AGENTS.md"),
+                "expected AGENTS.md in {}: {contents:?}",
+                exclude.display()
+            );
+        }
+
+        #[test]
+        fn follows_worktree_style_git_file_with_relative_gitdir() {
+            let tmp = tempfile::tempdir().unwrap();
+            // Relative gitdir resolved against the worktree path
+            let rel = "external-gitdir";
+            fs::create_dir_all(tmp.path().join(rel)).unwrap();
+            fs::write(tmp.path().join(".git"), format!("gitdir: {rel}\n")).unwrap();
+
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+
+            let exclude = tmp.path().join(rel).join("info/exclude");
+            let contents = read(&exclude);
+            assert!(contents.contains("AGENTS.md"));
+        }
+
+        #[test]
+        fn returns_silently_when_git_file_unparseable() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::write(tmp.path().join(".git"), "not a valid git pointer\n").unwrap();
+            // Must not panic and must not create any files
+            super::ensure_git_exclude(tmp.path(), "AGENTS.md");
+        }
+    }
+
+    mod hermes_agents_md {
+        use std::fs;
+
+        #[test]
+        fn creates_file_with_fenced_block_when_absent() {
+            let tmp = tempfile::tempdir().unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(
+                contents.contains(super::HERMES_BLOCK_BEGIN),
+                "missing BEGIN marker: {contents:?}"
+            );
+            assert!(
+                contents.contains(super::HERMES_BLOCK_END),
+                "missing END marker: {contents:?}"
+            );
+            assert!(contents.contains("inject me"));
+        }
+
+        #[test]
+        fn preserves_user_content_outside_wsx_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "# User notes\n\nKeep me.\n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("# User notes"));
+            assert!(contents.contains("Keep me."));
+            assert!(contents.contains("inject me"));
+        }
+
+        #[test]
+        fn replaces_existing_wsx_block_idempotently() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            let after_first = fs::read_to_string(&path).unwrap();
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            let after_second = fs::read_to_string(&path).unwrap();
+            assert_eq!(
+                after_first, after_second,
+                "second write should be byte-identical"
+            );
+        }
+
+        #[test]
+        fn replacing_block_with_new_content_replaces_in_place() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            super::write_agents_md_section(tmp.path(), Some("first"));
+            super::write_agents_md_section(tmp.path(), Some("second"));
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("second"));
+            assert!(!contents.contains("first"), "old content should be removed");
+        }
+
+        #[test]
+        fn strips_block_when_content_is_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "user content\n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("temp"));
+            super::write_agents_md_section(tmp.path(), None);
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(contents.contains("user content"));
+            assert!(!contents.contains(super::HERMES_BLOCK_BEGIN));
+            assert!(!contents.contains("temp"));
+        }
+
+        #[test]
+        fn no_write_when_content_is_none_and_no_existing_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            // Don't create the file at all.
+            super::write_agents_md_section(tmp.path(), None);
+            assert!(
+                !path.exists(),
+                "should not create AGENTS.md just to strip nothing"
+            );
+        }
+
+        #[test]
+        fn survives_unreadable_agents_md() {
+            use std::os::unix::fs::PermissionsExt;
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "untouchable\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+            // Must not panic.
+            super::write_agents_md_section(tmp.path(), Some("inject"));
+            // Restore perms so tempdir cleanup works.
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        #[test]
+        fn copies_claude_md_after_block_on_fresh_create() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::write(
+                tmp.path().join("CLAUDE.md"),
+                "# Project rules\n\nBe nice.\n",
+            )
+            .unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(
+                contents.contains(super::CLAUDE_PROVENANCE_COMMENT),
+                "missing provenance comment: {contents:?}"
+            );
+            assert!(
+                contents.contains("Be nice."),
+                "missing CLAUDE.md content: {contents:?}"
+            );
+            // CLAUDE.md content must come AFTER the wsx-managed block.
+            let end_idx = contents.find(super::HERMES_BLOCK_END).unwrap();
+            let prov_idx = contents.find(super::CLAUDE_PROVENANCE_COMMENT).unwrap();
+            assert!(
+                prov_idx > end_idx,
+                "CLAUDE.md content must follow the wsx block: {contents:?}"
+            );
+        }
+
+        #[test]
+        fn no_claude_md_means_no_copy() {
+            let tmp = tempfile::tempdir().unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(
+                !contents.contains(super::CLAUDE_PROVENANCE_COMMENT),
+                "should not add provenance comment when no CLAUDE.md: {contents:?}"
+            );
+        }
+
+        #[test]
+        fn does_not_copy_claude_md_when_agents_md_already_exists() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("AGENTS.md");
+            fs::write(&path, "# Existing notes\n").unwrap();
+            fs::write(tmp.path().join("CLAUDE.md"), "Be nice.\n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(&path).unwrap();
+            assert!(
+                !contents.contains(super::CLAUDE_PROVENANCE_COMMENT),
+                "must not copy CLAUDE.md when AGENTS.md pre-existed: {contents:?}"
+            );
+            assert!(
+                !contents.contains("Be nice."),
+                "must not copy CLAUDE.md content: {contents:?}"
+            );
+        }
+
+        #[test]
+        fn blank_claude_md_is_not_copied() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::write(tmp.path().join("CLAUDE.md"), "   \n\n  \n").unwrap();
+            super::write_agents_md_section(tmp.path(), Some("inject me"));
+            let contents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(
+                !contents.contains(super::CLAUDE_PROVENANCE_COMMENT),
+                "blank CLAUDE.md should not be copied: {contents:?}"
+            );
+        }
+    }
+
+    mod hermes_prepare_workspace {
+        use std::fs;
+
+        fn init_gitdir(dir: &std::path::Path) {
+            fs::create_dir_all(dir.join(".git/info")).unwrap();
+        }
+
+        #[test]
+        fn fresh_with_rename_writes_agents_md_and_exclude() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let mode = super::SpawnMode::Fresh {
+                rename_ctx: Some(super::RenameContext {
+                    current_branch: "wsx/bold-fern".into(),
+                    branch_prefix: "wsx".into(),
+                    repo_name: "myrepo".into(),
+                    current_slug: "bold-fern".into(),
+                }),
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &mode);
+
+            let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+            assert!(agents.contains("<!-- BEGIN wsx-managed -->"));
+            assert!(agents.contains("wsx workspace rename 'myrepo' 'bold-fern'"));
+
+            let exclude = fs::read_to_string(tmp.path().join(".git/info/exclude")).unwrap();
+            assert!(exclude.lines().any(|l| l == "AGENTS.md"));
+        }
+
+        #[test]
+        fn continue_without_custom_instructions_strips_block() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            // First prepare a Fresh+rename state.
+            let fresh = super::SpawnMode::Fresh {
+                rename_ctx: Some(super::RenameContext {
+                    current_branch: "wsx/bold-fern".into(),
+                    branch_prefix: "wsx".into(),
+                    repo_name: "myrepo".into(),
+                    current_slug: "bold-fern".into(),
+                }),
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &fresh);
+            // Now spawn Continue with nothing to inject.
+            let cont = super::SpawnMode::Continue {
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &cont);
+            let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap_or_default();
+            assert!(
+                !agents.contains("<!-- BEGIN wsx-managed -->"),
+                "wsx block should be removed; got: {agents}"
+            );
+            assert!(
+                !agents.contains("wsx workspace rename"),
+                "rename text should be gone; got: {agents}"
+            );
+        }
+
+        #[test]
+        fn no_op_when_continue_no_custom_and_no_existing_agents_md() {
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            let cont = super::SpawnMode::Continue {
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &cont);
+            assert!(!tmp.path().join("AGENTS.md").exists());
+        }
+
+        #[test]
+        fn does_not_overwrite_existing_marker() {
+            // Write a marker with a known timestamp, then call prepare_hermes_workspace
+            // in Fresh mode. The marker must NOT be overwritten — start_ts stays 1000.0.
+            let tmp = tempfile::tempdir().unwrap();
+            init_gitdir(tmp.path());
+            // Manually write a marker with a specific (old) timestamp.
+            std::fs::write(tmp.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
+            let fresh_mode = super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            };
+            super::prepare_hermes_workspace(tmp.path(), &fresh_mode);
+            let marker = super::read_hermes_spawn_marker(tmp.path())
+                .expect("marker should still exist after prepare");
+            assert!(
+                (marker.start_ts - 1000.0).abs() < 0.001,
+                "start_ts must be preserved; got {}",
+                marker.start_ts
+            );
+        }
+    }
+
+    #[test]
+    fn prepare_codex_workspace_injects_rename_block_into_agents_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        let mode = SpawnMode::Fresh {
+            rename_ctx: Some(RenameContext {
+                current_branch: "prefix/my-slug".to_string(),
+                branch_prefix: "prefix".to_string(),
+                repo_name: "myrepo".to_string(),
+                current_slug: "my-slug".to_string(),
+            }),
+            custom_instructions: None,
+            doctrine: Some("DOCTRINE-MARKER".to_string()),
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        prepare_codex_workspace(cwd, &mode);
+        let agents = std::fs::read_to_string(cwd.join("AGENTS.md")).unwrap();
+        assert!(
+            agents.contains("BEGIN wsx-managed"),
+            "block markers: {agents}"
+        );
+        assert!(
+            agents.contains("DOCTRINE-MARKER"),
+            "doctrine injected: {agents}"
+        );
+        assert!(
+            agents.contains("wsx workspace rename"),
+            "rename hint: {agents}"
+        );
+    }
+
+    #[test]
+    fn prepare_codex_workspace_writes_no_hermes_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        std::fs::create_dir_all(cwd.join(".git/info")).unwrap();
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: Some("CUSTOM".to_string()),
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        prepare_codex_workspace(cwd, &mode);
+        // Codex uses cwd-in-file detection, not the Hermes spawn marker.
+        assert!(
+            !cwd.join(".git/info/wsx-hermes-spawn-at").exists(),
+            "codex must not write the hermes spawn marker"
+        );
     }
 }

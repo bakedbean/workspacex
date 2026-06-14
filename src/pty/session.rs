@@ -289,10 +289,7 @@ impl Session {
             }
             let last = self.activity_ms.load(Ordering::Relaxed);
             if last > 0 {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
+                let now_ms = now_ms();
                 let since_last = now_ms.saturating_sub(last);
                 if since_last >= quiet_ms {
                     // Inject the text and the submitting CR as two writes (see
@@ -1393,11 +1390,7 @@ pub fn spawn_session(
 }
 
 fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    crate::time::now_ms_u64()
 }
 
 pub struct SessionManager {

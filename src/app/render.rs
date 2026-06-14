@@ -73,10 +73,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let nerd_fonts = nerd_fonts_enabled(&app.store);
 
             // Build per-workspace inputs in V5 shape.
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
+            let now_ms = crate::time::now_ms();
             let mut workspaces: Vec<dashboard::WorkspaceItem<'_>> = Vec::new();
             for repo in &app.repos {
                 for (rid, ws) in &app.workspaces {
@@ -180,10 +177,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     now.saturating_sub(last) / 1000
                 });
                 let awaiting = app.awaiting_permission(ws.id).is_some();
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
+                let now_ms = crate::time::now_ms();
                 let stopped_kind = app
                     .workspace_events
                     .get(&ws.id)
@@ -212,10 +206,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // Aggregate the retained hourly buckets into a fixed 24-bar,
             // time-aligned sparkline for the configured window.
             let window = crate::config::usage_window::resolve(&app.store);
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            let now_secs = crate::time::now_secs();
             let now_hour = now_secs - (now_secs % 3600);
             // VecDeque is non-contiguous; collect into a slice-able Vec so
             // aggregate_buckets can take it as `&[(u64, u32)]`.
@@ -290,10 +281,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         // growing (gets stamped to "now" on the first tail
                         // pass after startup, so all workspaces would
                         // otherwise show the same age starting from zero).
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as i64)
-                            .unwrap_or(0);
+                        let now_ms = crate::time::now_ms();
                         let session_last_ms = session
                             .as_ref()
                             .map(|s| {
@@ -674,10 +662,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     if let Some(m) = &app.modal {
         match m {
             crate::ui::modal::Modal::UpdatesPanel { selected } => {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
+                let now_ms = crate::time::now_ms();
                 let mut awaiting: std::collections::HashMap<
                     crate::data::store::WorkspaceId,
                     (String, i64),
@@ -901,10 +886,7 @@ fn compute_attention_line(
     attached_id: Option<crate::data::store::WorkspaceId>,
     max_width: usize,
 ) -> Option<crate::ui::updates_bar::AttentionLine> {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+    let now_ms = crate::time::now_ms();
     let candidates: Vec<crate::ui::updates_bar::WorkspaceUpdateInfo> = app
         .workspaces
         .iter()

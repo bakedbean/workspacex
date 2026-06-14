@@ -132,10 +132,7 @@ pub async fn tail_workspace_events(
     if new_offset != tail_from {
         // The log grew this iteration — stamp the activity marker so
         // is_stalled can compute time-since-last-write.
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+        let now_ms = crate::time::now_ms();
         evt.last_log_activity_ms = now_ms;
     }
     evt.file_path = Some(file);
@@ -326,10 +323,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
             //     is wasteful on large repos and the column doesn't need
             //     sub-10s freshness.
             if let Some(base) = base_branch.as_deref() {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
+                let now_ms = crate::time::now_ms();
                 let should_poll = {
                     let g = app.lock().await;
                     g.diff_last_poll_ms
@@ -355,10 +349,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
 
             // 3) PR lifecycle — throttled to once per 30s per workspace.
             //    gh is a network call, so we don't run it every tick.
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
+            let now_ms = crate::time::now_ms();
             let should_poll_pr = {
                 let g = app.lock().await;
                 g.pr_last_poll_ms
@@ -405,10 +396,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
         //    lsof returns everything in a single call, so we don't pay per-workspace.
         let should_scan = {
             let g = app.lock().await;
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
+            let now_ms = crate::time::now_ms();
             now_ms.saturating_sub(g.last_proc_scan_ms) >= 10_000
         };
         if should_scan {
@@ -425,10 +413,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                 .map(|(id, path)| (*id, path.as_path()))
                 .collect();
             let bucketed = crate::activity::proc::bucket_by_worktree(&procs, &worktree_refs);
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
+            let now_ms = crate::time::now_ms();
             let mut g = app.lock().await;
             g.workspace_processes = bucketed;
             g.last_proc_scan_ms = now_ms;

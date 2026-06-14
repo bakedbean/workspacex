@@ -546,10 +546,7 @@ impl App {
         ws_id: crate::data::store::WorkspaceId,
     ) -> Option<(String, i64)> {
         let evt = self.workspace_events.get(&ws_id)?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+        let now = crate::time::now_ms();
         evt.pending_permission_tool(now, 3_000)
     }
 
@@ -593,10 +590,7 @@ impl App {
         } else {
             crate::pty::session::has_prior_session_for(&ws.worktree_path, ws.agent)
         };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+        let now_ms = crate::time::now_ms();
         let stopped_kind = self
             .workspace_events
             .get(&ws.id)
@@ -840,10 +834,7 @@ pub async fn run<B: Backend + std::io::Write>(
                 // input. Set by `fire_chip` so the user briefly sees
                 // which command was sent; wiped here once the deadline
                 // is reached.
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
+                let now_ms = crate::time::now_ms_u64();
                 if matches!(g.dashboard.reply_draft_clear_at_ms, Some(t) if now_ms >= t) {
                     g.dashboard.reply_draft.clear();
                     g.dashboard.reply_draft_clear_at_ms = None;
@@ -857,10 +848,7 @@ pub async fn run<B: Backend + std::io::Write>(
                 if g.poll_external_changes() {
                     g.drain_agent_messages();
                 }
-                let now_secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                let now_secs = crate::time::now_secs();
                 let now_hour = now_secs - (now_secs % 3600);
                 let live = g
                     .workspaces
@@ -945,10 +933,7 @@ pub(crate) async fn rescan_processes(app: &mut App) {
         .map(|(id, path)| (*id, path.as_path()))
         .collect();
     app.workspace_processes = crate::activity::proc::bucket_by_worktree(&procs, &worktree_refs);
-    app.last_proc_scan_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+    app.last_proc_scan_ms = crate::time::now_ms();
     // Clamp the modal's `selected` index after the list size changes.
     // Read workspace_id out first (Copy) to avoid a simultaneous
     // borrow of `app.workspace_processes` and `app.modal`.

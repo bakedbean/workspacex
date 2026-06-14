@@ -12,4 +12,5 @@ pub mod names;
 pub mod pty;
 #[doc(hidden)]
 pub mod test_support;
+pub mod time;
 pub mod ui;

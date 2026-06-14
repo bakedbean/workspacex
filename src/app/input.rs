@@ -197,10 +197,7 @@ async fn fire_chip(app: &mut App, idx: usize) {
         // deadline elapses (or earlier if the user interacts with the
         // input directly).
         app.dashboard.reply_draft = command_text;
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now_ms = crate::time::now_ms_u64();
         app.dashboard.reply_draft_clear_at_ms = Some(now_ms + 600);
         app.focus = crate::ui::PaneFocus::Dashboard;
     }
@@ -1095,10 +1092,7 @@ fn launch_workspace_command(
     else {
         return "error: workspace not found".to_string();
     };
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    let now_ms = crate::time::now_ms_u64();
     let log_dir = crate::config::Dirs::discover().log_dir();
     let log_path = crate::commands::external::background_log_path(&log_dir, workspace_id.0, now_ms);
     match crate::commands::external::spawn_background_command(&worktree, command, &log_path) {

@@ -2,7 +2,6 @@ use crate::error::Result;
 use crate::pty::session::AgentKind;
 use rusqlite::{Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RepoId(pub i64);
@@ -969,10 +968,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_undelivered
 "#;
 
 pub(crate) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    crate::time::now_ms()
 }
 
 fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {

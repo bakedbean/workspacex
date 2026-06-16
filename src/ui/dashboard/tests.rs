@@ -110,7 +110,11 @@ fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
     let joined = lines.join("\n");
     assert!(joined.contains("wsx · dashboard"), "{joined}");
     assert!(joined.contains("? 2 question"), "status strip: {joined}");
-    assert!(joined.contains("▾ wsx"), "wsx repo header: {joined}");
+    // wsx header: name right-justified, path flush-right.
+    assert!(
+        joined.contains("/home/eben/workspace/wsx"),
+        "wsx repo header: {joined}"
+    );
     assert!(
         joined.contains("theme-tokens"),
         "stalled workspace row: {joined}"

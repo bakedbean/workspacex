@@ -56,17 +56,18 @@ pub struct PanesDrawOutput {
     pub footer_hint_rects: Vec<(Rect, crate::ui::footer::FooterHintAction)>,
 }
 
-/// Render one or more attached panes plus the shared chrome (optional
-/// chip row, optional attention line, footer). Returns a [`PanesDrawOutput`]:
+/// Render one or more attached panes plus the shared chrome (info line,
+/// separator, chip row, optional agents row). Returns a [`PanesDrawOutput`]:
 /// the per-chip clickable rects plus each pane's `(session, content rect)`,
 /// both consumed by the input handler for mouse hit-testing.
 ///
 /// Layout (top to bottom):
+///   - one row of focused workspace label + cross-workspace attention status,
+///   - a `─` separator rule beneath it,
 ///   - the pane area, subdivided per `panes[i].rect` (which the caller
 ///     pre-computed from `SplitTree::layout`),
-///   - one row of pinned-command chips (only when `pinned` is non-empty),
-///   - one row of cross-workspace attention status (only when `Some`),
-///   - one row of footer hints.
+///   - one row of pinned-command chips / `^x` menu hint,
+///   - one row of agent pills (only when the workspace has extra agents).
 ///
 /// When there are multiple panes, each pane also gets a 1-row title bar
 /// at the top of its rect showing the workspace name and a focus marker.
@@ -77,8 +78,9 @@ pub fn render_panes(
     f: &mut Frame,
     panes: &[PaneSpec<'_>],
     dividers: &[Divider],
+    info_area: Rect,
+    separator_area: Rect,
     chip_area: Rect,
-    bottom_area: Rect,
     agents_area: Rect,
     label: &str,
     agent: Option<AgentKind>,
@@ -100,9 +102,18 @@ pub fn render_panes(
 
     render_dividers(f, dividers, theme);
 
-    // Bottom line: agent bar + focused label, then attention items.
-    let line = bottom_line(label, agent, attention_line, theme);
-    f.render_widget(Paragraph::new(line), bottom_area);
+    // Info line (top): agent bar + focused label, then attention items, with a
+    // full-width `─` rule beneath it — same dim chrome as the chip-row rule —
+    // to set the indicator off from the pane content below.
+    let line = info_line(label, agent, attention_line, theme);
+    f.render_widget(Paragraph::new(line), info_area);
+    if separator_area.width > 0 {
+        let rule = "─".repeat(separator_area.width as usize);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(rule, theme.dim_style()))),
+            separator_area,
+        );
+    }
 
     // `^x: menu` hint at the far left of the chip row: a `^x` key-pill + a
     // ` menu` label. Clickable — arms the leader (opens the overlay) exactly
@@ -234,23 +245,25 @@ fn render_dividers(f: &mut Frame, dividers: &[Divider], theme: &Theme) {
     }
 }
 
-/// Carve the attached view's `area` into pane / chip / bottom-line / agents
-/// sub-areas. The chip row and bottom line are each 1 cell tall and always
-/// present; the agents row is 1 cell when `agents_present`, else 0. The
-/// bottom line hosts the focused workspace label + attention items (no
-/// separate footer — navigation lives in the Ctrl-x overlay).
-pub fn layout_chrome(area: Rect, agents_present: bool) -> (Rect, Rect, Rect, Rect) {
+/// Carve the attached view's `area` into info-line / separator / pane / chip /
+/// agents sub-areas. The info line hosts the focused workspace label +
+/// attention items and now sits at the TOP, with a 1-cell `─` separator rule
+/// beneath it to set it off from the pane content. The chip row stays at the
+/// bottom; the agents row below it is 1 cell when `agents_present`, else 0.
+/// Returns `(info, separator, pane, chip, agents)`.
+pub fn layout_chrome(area: Rect, agents_present: bool) -> (Rect, Rect, Rect, Rect, Rect) {
     let agents_h = if agents_present { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),
+            Constraint::Length(1),        // info line (label + attention)
+            Constraint::Length(1),        // separator rule
+            Constraint::Min(1),           // pane area
             Constraint::Length(1),        // chip row
-            Constraint::Length(1),        // bottom line (label + attention)
             Constraint::Length(agents_h), // agents row (0 when absent)
         ])
         .split(area);
-    (chunks[0], chunks[1], chunks[2], chunks[3])
+    (chunks[0], chunks[1], chunks[2], chunks[3], chunks[4])
 }
 
 /// Resize a session's PTY to fill its pane area (minus a per-pane title
@@ -260,19 +273,19 @@ pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
     let _ = session.resize(pane_rect.width, pane_rect.height.saturating_sub(title));
 }
 
-/// Width in columns of the bottom line's leading `[agent-bar ]label   ` prefix,
+/// Width in columns of the info line's leading `[agent-bar ]label   ` prefix,
 /// before the attention items begin. Shared by `render.rs` (to shrink the
-/// attention width budget and offset its click rects) and `bottom_line` (to
+/// attention width budget and offset its click rects) and `info_line` (to
 /// draw it) so the two never disagree.
-pub fn bottom_line_prefix_width(label: &str, agent: Option<AgentKind>) -> u16 {
+pub fn info_line_prefix_width(label: &str, agent: Option<AgentKind>) -> u16 {
     let bar = if agent.is_some() { 2 } else { 0 }; // "▎" + " "
     bar + label.chars().count() as u16 + 3 // 3-col gap before attention
 }
 
-/// Build the bottom line: optional agent identity bar, the focused workspace
+/// Build the info line: optional agent identity bar, the focused workspace
 /// label (header style), then — when present — the attention items. The
 /// attention `Line` is pre-truncated by the caller to the post-prefix width.
-fn bottom_line(
+fn info_line(
     label: &str,
     agent: Option<AgentKind>,
     attention: Option<Line<'static>>,
@@ -373,30 +386,75 @@ mod tests {
     }
 
     #[test]
-    fn layout_chrome_reclaims_footer_rows() {
+    fn layout_chrome_puts_info_line_on_top_with_separator() {
         let area = ratatui::layout::Rect::new(0, 0, 80, 30);
-        let (pane, chip, bottom, agents) = layout_chrome(area, false);
+        let (info, separator, pane, chip, agents) = layout_chrome(area, false);
+        // Info line is the top row; the separator sits directly beneath it.
+        assert_eq!(info.y, area.y, "info line is the top row");
+        assert_eq!(separator.y, info.y + 1, "separator sits just below info");
+        assert_eq!(pane.y, separator.y + 1, "pane content follows the rule");
+        assert_eq!(info.height, 1, "info line always present");
+        assert_eq!(separator.height, 1, "separator always present");
         assert_eq!(chip.height, 1);
-        assert_eq!(bottom.height, 1, "bottom line always present");
         assert_eq!(agents.height, 0);
         assert_eq!(
-            pane.height + chip.height + bottom.height + agents.height,
+            info.height + separator.height + pane.height + chip.height + agents.height,
             area.height
         );
-        let (_, _, _, agents2) = layout_chrome(area, true);
+        let (_, _, _, _, agents2) = layout_chrome(area, true);
         assert_eq!(agents2.height, 1);
     }
 
     #[test]
-    fn bottom_line_prefix_width_matches_drawn_prefix() {
+    fn render_panes_draws_info_on_top_and_full_width_separator() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = Theme::wsx();
+        let (w, h) = (40u16, 10u16);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| {
+            let area = Rect::new(0, 0, w, h);
+            let (info, separator, _pane, chip, agents) = layout_chrome(area, false);
+            // Empty pane slice → renders only the chrome rows (no live Session).
+            render_panes(
+                f,
+                &[],
+                &[],
+                info,
+                separator,
+                chip,
+                agents,
+                "wsx/foo",
+                None,
+                None,
+                &[],
+                None,
+                None,
+                &[],
+                None,
+                &theme,
+            );
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        // Row 0 starts with the workspace label.
+        let row0: String = (0..w).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert!(row0.starts_with("wsx/foo"), "row0={row0:?}");
+        // Row 1 is the full-width separator rule.
+        let row1: String = (0..w).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert_eq!(row1, "─".repeat(w as usize), "separator spans the width");
+    }
+
+    #[test]
+    fn info_line_prefix_width_matches_drawn_prefix() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         let theme = Theme::wsx();
         let attn = Line::from(vec![Span::raw("ATTN".to_string())]);
-        let prefix = bottom_line_prefix_width("wsx/foo", Some(AgentKind::Claude)) as usize;
+        let prefix = info_line_prefix_width("wsx/foo", Some(AgentKind::Claude)) as usize;
         let mut term = Terminal::new(TestBackend::new(60, 1)).unwrap();
         term.draw(|f| {
-            let line = bottom_line(
+            let line = info_line(
                 "wsx/foo",
                 Some(AgentKind::Claude),
                 Some(attn.clone()),
@@ -408,16 +466,16 @@ mod tests {
         let buf = term.backend().buffer();
         // Collect per-column symbols so multibyte glyphs (the `▎` agent bar)
         // count as one column, keeping the slice index in column space —
-        // the same space `bottom_line_prefix_width` returns.
+        // the same space `info_line_prefix_width` returns.
         let cols: Vec<String> = (0..60).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         let attn: String = cols[prefix..prefix + 4].concat();
         assert_eq!(attn, "ATTN", "cols={cols:?}");
     }
 
     #[test]
-    fn bottom_line_label_only_when_no_attention() {
+    fn info_line_label_only_when_no_attention() {
         let theme = Theme::wsx();
-        let line = bottom_line("wsx/foo", None, None, &theme);
+        let line = info_line("wsx/foo", None, None, &theme);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(text, "wsx/foo");
     }

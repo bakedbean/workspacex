@@ -471,6 +471,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
+        app.leader_selected = 0;
         return Ok(());
     }
     match (k.code, k.modifiers) {
@@ -720,6 +721,179 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     }
     Ok(())
 }
+/// Fire a single attached-view leader action for `k` (already-armed leader).
+/// Extracted so both the letter-accelerator path and the overlay's Enter path
+/// dispatch through identical code. Caller clears `leader_pending` first.
+async fn dispatch_leader_action(
+    app: &mut App,
+    target: crate::ui::split::AttachTarget,
+    k: crossterm::event::KeyEvent,
+) -> Result<()> {
+    let id = target.workspace_id;
+    let session = match app.sessions.get(target.instance) {
+        Some(s) => s,
+        None => {
+            app.view = View::Dashboard;
+            return Ok(());
+        }
+    };
+    match k.code {
+        KeyCode::Char('d') => {
+            // In multi-pane mode, close just the focused pane; the
+            // other panes' sessions keep running. Detach to dashboard
+            // only when the last pane closes.
+            if let View::Attached(state) = &mut app.view {
+                if state.leaf_count() > 1 {
+                    let closed = state.focused_target();
+                    match state.close_focused() {
+                        CloseOutcome::Focus(_) => {
+                            // Refresh the closed pane's workspace. If another pane
+                            // shares the same workspace this may redundantly refresh
+                            // a still-attached workspace — harmless (at most one
+                            // extra poll).
+                            if let Some(cid) = closed {
+                                schedule_detach_refresh(app, [cid.workspace_id]);
+                            }
+                            return Ok(());
+                        }
+                        CloseOutcome::Empty => {
+                            if let Some(cid) = closed {
+                                schedule_detach_refresh(app, [cid.workspace_id]);
+                            }
+                            app.view = View::Dashboard;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            let leaves: Vec<_> = match &app.view {
+                View::Attached(state) => state.leaves().iter().map(|t| t.workspace_id).collect(),
+                _ => Vec::new(),
+            };
+            schedule_detach_refresh(app, leaves);
+            app.view = View::Dashboard;
+            Ok(())
+        }
+        KeyCode::Esc => {
+            if let View::Attached(state) = &app.view {
+                save_layout_for(app, state.clone());
+            }
+            let leaves: Vec<_> = match &app.view {
+                View::Attached(state) => state.leaves().iter().map(|t| t.workspace_id).collect(),
+                _ => Vec::new(),
+            };
+            schedule_detach_refresh(app, leaves);
+            app.view = View::Dashboard;
+            Ok(())
+        }
+        KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+            let arrow = match k.code {
+                KeyCode::Left => Arrow::Left,
+                KeyCode::Right => Arrow::Right,
+                KeyCode::Up => Arrow::Up,
+                KeyCode::Down => Arrow::Down,
+                _ => unreachable!(),
+            };
+            if let View::Attached(state) = &mut app.view {
+                state.focus_direction(arrow);
+            }
+            Ok(())
+        }
+        KeyCode::Char('x') => {
+            // Send a literal Ctrl-x (0x18) to claude.
+            session.scroll_to_live();
+            let _ = session.writer.send(vec![0x18]).await;
+            Ok(())
+        }
+        KeyCode::Char('u') => {
+            app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+            Ok(())
+        }
+        KeyCode::Char('a') => {
+            app.modal = Some(crate::ui::modal::Modal::AgentsPanel {
+                workspace_id: id,
+                selected: 0,
+            });
+            Ok(())
+        }
+        KeyCode::Char('e') => {
+            if let Some(path) = app.workspace_path(id) {
+                let cmd = app.store.get_setting("editor_cmd").ok().flatten();
+                let r = crate::commands::external::open_in_editor(&path, cmd.as_deref());
+                report_external_open(app, r);
+            }
+            Ok(())
+        }
+        KeyCode::Char('t') => {
+            if let Some(path) = app.workspace_path(id) {
+                let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
+                let r = crate::commands::external::open_in_terminal(&path, cmd.as_deref());
+                report_external_open(app, r);
+            }
+            Ok(())
+        }
+        KeyCode::Char('v') => {
+            if let Some(path) = app.workspace_path(id) {
+                let cmd = app.store.get_setting("diff_cmd").ok().flatten();
+                let base = crate::git::resolve_base_branch(&path).await;
+                let r = crate::commands::external::open_diff(&path, &base, cmd.as_deref());
+                report_external_open(app, r);
+            }
+            Ok(())
+        }
+        KeyCode::Char('g') => {
+            if let Some(path) = app.workspace_path(id) {
+                let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
+                let r = crate::commands::external::open_in_lazygit(&path, cmd.as_deref());
+                report_external_open(app, r);
+            }
+            Ok(())
+        }
+        KeyCode::Char('c') => {
+            if let Some(path) = app.workspace_path(id) {
+                let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
+                let r = crate::commands::external::open_in_chronox(&path, cmd.as_deref());
+                report_external_open(app, r);
+            }
+            Ok(())
+        }
+        KeyCode::Char('k') => {
+            app.modal = Some(Modal::ProcessList {
+                workspace_id: id,
+                selected: 0,
+                input: None,
+                notice: None,
+            });
+            Ok(())
+        }
+        KeyCode::Char(c @ '1'..='9') => {
+            let idx = (c as u8 - b'1') as usize;
+            if let Some(cmd) = app.pinned_commands_cache.get(idx) {
+                let mut bytes = cmd.command.as_bytes().to_vec();
+                bytes.push(b'\r');
+                session.scroll_to_live();
+                let _ = session.writer.send(bytes).await;
+            }
+            Ok(())
+        }
+        // Fallback: any other leftover letter may be an agent switch key
+        // from the footer agents row. Matched against the same
+        // `agent_switch_keys` pool the renderer used, so the displayed key
+        // equals the bound key. Placed last so it never shadows the
+        // specific arms above (the pool excludes all of them).
+        KeyCode::Char(c) => {
+            let agents = app.store.workspace_agents(id).unwrap_or_default();
+            if agents.len() > 1 {
+                let keys = crate::ui::attached::agent_switch_keys(agents.len());
+                if let Some(idx) = keys.iter().position(|k| *k == c) {
+                    app.switch_focused_pane_to(agents[idx].id)?;
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
 async fn handle_key_attached(
     app: &mut App,
     target: crate::ui::split::AttachTarget,
@@ -736,172 +910,40 @@ async fn handle_key_attached(
             return Ok(());
         }
     };
-    // Leader-key prefix handling. See `LEADER_KEY`.
+    // Leader armed: ↑↓ move the overlay highlight (leader stays armed); Enter
+    // fires the highlighted action; any other key is a direct accelerator that
+    // fires immediately. Esc / second Ctrl-x fall through to the dispatch which
+    // clears the leader.
     if app.leader_pending {
-        app.leader_pending = false;
+        let multi_pane = matches!(&app.view, View::Attached(s) if s.leaf_count() > 1);
+        let items = crate::ui::attached::nav_menu_items(multi_pane);
         match k.code {
-            KeyCode::Char('d') => {
-                // In multi-pane mode, close just the focused pane; the
-                // other panes' sessions keep running. Detach to dashboard
-                // only when the last pane closes.
-                if let View::Attached(state) = &mut app.view {
-                    if state.leaf_count() > 1 {
-                        let closed = state.focused_target();
-                        match state.close_focused() {
-                            CloseOutcome::Focus(_) => {
-                                // Refresh the closed pane's workspace. If another pane
-                                // shares the same workspace this may redundantly refresh
-                                // a still-attached workspace — harmless (at most one
-                                // extra poll).
-                                if let Some(cid) = closed {
-                                    schedule_detach_refresh(app, [cid.workspace_id]);
-                                }
-                                return Ok(());
-                            }
-                            CloseOutcome::Empty => {
-                                if let Some(cid) = closed {
-                                    schedule_detach_refresh(app, [cid.workspace_id]);
-                                }
-                                app.view = View::Dashboard;
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-                let leaves: Vec<_> = match &app.view {
-                    View::Attached(state) => {
-                        state.leaves().iter().map(|t| t.workspace_id).collect()
-                    }
-                    _ => Vec::new(),
-                };
-                schedule_detach_refresh(app, leaves);
-                app.view = View::Dashboard;
+            KeyCode::Up => {
+                let n = items.len();
+                app.leader_selected = (app.leader_selected + n - 1) % n;
                 return Ok(());
             }
-            KeyCode::Esc => {
-                if let View::Attached(state) = &app.view {
-                    save_layout_for(app, state.clone());
-                }
-                let leaves: Vec<_> = match &app.view {
-                    View::Attached(state) => {
-                        state.leaves().iter().map(|t| t.workspace_id).collect()
-                    }
-                    _ => Vec::new(),
-                };
-                schedule_detach_refresh(app, leaves);
-                app.view = View::Dashboard;
+            KeyCode::Down => {
+                let n = items.len();
+                app.leader_selected = (app.leader_selected + 1) % n;
                 return Ok(());
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
-                let arrow = match k.code {
-                    KeyCode::Left => Arrow::Left,
-                    KeyCode::Right => Arrow::Right,
-                    KeyCode::Up => Arrow::Up,
-                    KeyCode::Down => Arrow::Down,
-                    _ => unreachable!(),
-                };
-                if let View::Attached(state) = &mut app.view {
-                    state.focus_direction(arrow);
+            KeyCode::Enter => {
+                app.leader_pending = false;
+                if let Some(key) = crate::ui::attached::nav_item_key(&items, app.leader_selected) {
+                    return dispatch_leader_action(app, target, key).await;
                 }
                 return Ok(());
             }
-            KeyCode::Char('x') => {
-                // Send a literal Ctrl-x (0x18) to claude.
-                session.scroll_to_live();
-                let _ = session.writer.send(vec![0x18]).await;
-                return Ok(());
+            _ => {
+                app.leader_pending = false;
+                return dispatch_leader_action(app, target, k).await;
             }
-            KeyCode::Char('u') => {
-                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
-                return Ok(());
-            }
-            KeyCode::Char('a') => {
-                app.modal = Some(crate::ui::modal::Modal::AgentsPanel {
-                    workspace_id: id,
-                    selected: 0,
-                });
-                return Ok(());
-            }
-            KeyCode::Char('e') => {
-                if let Some(path) = app.workspace_path(id) {
-                    let cmd = app.store.get_setting("editor_cmd").ok().flatten();
-                    let r = crate::commands::external::open_in_editor(&path, cmd.as_deref());
-                    report_external_open(app, r);
-                }
-                return Ok(());
-            }
-            KeyCode::Char('t') => {
-                if let Some(path) = app.workspace_path(id) {
-                    let cmd = app.store.get_setting("terminal_cmd").ok().flatten();
-                    let r = crate::commands::external::open_in_terminal(&path, cmd.as_deref());
-                    report_external_open(app, r);
-                }
-                return Ok(());
-            }
-            KeyCode::Char('v') => {
-                if let Some(path) = app.workspace_path(id) {
-                    let cmd = app.store.get_setting("diff_cmd").ok().flatten();
-                    let base = crate::git::resolve_base_branch(&path).await;
-                    let r = crate::commands::external::open_diff(&path, &base, cmd.as_deref());
-                    report_external_open(app, r);
-                }
-                return Ok(());
-            }
-            KeyCode::Char('g') => {
-                if let Some(path) = app.workspace_path(id) {
-                    let cmd = app.store.get_setting("lazygit_cmd").ok().flatten();
-                    let r = crate::commands::external::open_in_lazygit(&path, cmd.as_deref());
-                    report_external_open(app, r);
-                }
-                return Ok(());
-            }
-            KeyCode::Char('c') => {
-                if let Some(path) = app.workspace_path(id) {
-                    let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
-                    let r = crate::commands::external::open_in_chronox(&path, cmd.as_deref());
-                    report_external_open(app, r);
-                }
-                return Ok(());
-            }
-            KeyCode::Char('k') => {
-                app.modal = Some(Modal::ProcessList {
-                    workspace_id: id,
-                    selected: 0,
-                    input: None,
-                    notice: None,
-                });
-                return Ok(());
-            }
-            KeyCode::Char(c @ '1'..='9') => {
-                let idx = (c as u8 - b'1') as usize;
-                if let Some(cmd) = app.pinned_commands_cache.get(idx) {
-                    let mut bytes = cmd.command.as_bytes().to_vec();
-                    bytes.push(b'\r');
-                    session.scroll_to_live();
-                    let _ = session.writer.send(bytes).await;
-                }
-                return Ok(());
-            }
-            // Fallback: any other leftover letter may be an agent switch key
-            // from the footer agents row. Matched against the same
-            // `agent_switch_keys` pool the renderer used, so the displayed key
-            // equals the bound key. Placed last so it never shadows the
-            // specific arms above (the pool excludes all of them).
-            KeyCode::Char(c) => {
-                let agents = app.store.workspace_agents(id).unwrap_or_default();
-                if agents.len() > 1 {
-                    let keys = crate::ui::attached::agent_switch_keys(agents.len());
-                    if let Some(idx) = keys.iter().position(|k| *k == c) {
-                        app.switch_focused_pane_to(agents[idx].id)?;
-                    }
-                }
-                return Ok(());
-            }
-            _ => return Ok(()),
         }
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
+        app.leader_selected = 0;
         return Ok(());
     }
     let bytes = encode_key(k);
@@ -949,6 +991,35 @@ async fn handle_key_attached(
     }
     Ok(())
 }
+/// Fire a single PM-pane leader action for `k` (already-armed leader).
+/// Extracted so the letter-accelerator path and the overlay's Enter path
+/// dispatch through identical code. Caller clears `leader_pending` first.
+async fn dispatch_pm_leader_action(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    let session = match app.pm.clone() {
+        Some(s) => s,
+        None => {
+            app.view = View::Dashboard;
+            return Ok(());
+        }
+    };
+    match k.code {
+        KeyCode::Char('d') => {
+            app.view = View::Dashboard;
+            Ok(())
+        }
+        KeyCode::Char('x') => {
+            // Send a literal Ctrl-x (0x18) to claude.
+            session.scroll_to_live();
+            let _ = session.writer.send(vec![0x18]).await;
+            Ok(())
+        }
+        KeyCode::Char('u') => {
+            app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
 async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
     let session = match app.pm.clone() {
         Some(s) => s,
@@ -959,27 +1030,34 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
         }
     };
     if app.leader_pending {
-        app.leader_pending = false;
+        let items = crate::ui::attached::pm_nav_menu_items();
         match k.code {
-            KeyCode::Char('d') => {
-                app.view = View::Dashboard;
+            KeyCode::Up => {
+                let n = items.len();
+                app.leader_selected = (app.leader_selected + n - 1) % n;
                 return Ok(());
             }
-            KeyCode::Char('x') => {
-                // Send a literal Ctrl-x (0x18) to claude.
-                session.scroll_to_live();
-                let _ = session.writer.send(vec![0x18]).await;
+            KeyCode::Down => {
+                let n = items.len();
+                app.leader_selected = (app.leader_selected + 1) % n;
                 return Ok(());
             }
-            KeyCode::Char('u') => {
-                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+            KeyCode::Enter => {
+                app.leader_pending = false;
+                if let Some(key) = crate::ui::attached::nav_item_key(&items, app.leader_selected) {
+                    return dispatch_pm_leader_action(app, key).await;
+                }
                 return Ok(());
             }
-            _ => return Ok(()),
+            _ => {
+                app.leader_pending = false;
+                return dispatch_pm_leader_action(app, k).await;
+            }
         }
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
+        app.leader_selected = 0;
         return Ok(());
     }
     let bytes = encode_key(k);

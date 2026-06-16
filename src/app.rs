@@ -135,6 +135,9 @@ pub struct App {
     pub selectable: Vec<SelectionTarget>,
     pub worktree_base: PathBuf,
     pub leader_pending: bool,
+    /// Highlighted row in the Ctrl-x navigation overlay. Reset to 0 each time
+    /// the attached/PM leader is armed; adjusted by ↑↓ while the overlay is up.
+    pub leader_selected: usize,
     pub z_leader_pending: bool,
     pub quit: bool,
     pub workspace_status:
@@ -315,6 +318,7 @@ impl App {
             selectable: Vec::new(),
             worktree_base,
             leader_pending: false,
+            leader_selected: 0,
             z_leader_pending: false,
             quit: false,
             workspace_status: std::collections::HashMap::new(),

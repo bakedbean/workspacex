@@ -396,11 +396,13 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .find(|(_, w)| w.id == focused_id)
                 .map(|(_, w)| w.agent);
 
-            // Conservative right margin for the status row; `render_panes`
-            // renders the attention line flush at `status_area.x` with no
-            // prefix, so each segment's `start_col` maps directly to a screen
-            // column (load-bearing for attention-entry click hit-testing).
-            let max_width = (area.width as usize).saturating_sub(3);
+            // The attention items follow the bottom line's label prefix, so
+            // shrink their width budget by the prefix and offset their click
+            // rects by it too — `bottom_line_prefix_width` is the single source
+            // of truth shared with the renderer.
+            let prefix_w =
+                attached::bottom_line_prefix_width(&focused_label, focused_agent) as usize;
+            let max_width = (area.width as usize).saturating_sub(3 + prefix_w);
             let attention = if matches!(
                 app.modal,
                 Some(crate::ui::modal::Modal::UpdatesPanel { .. })
@@ -465,13 +467,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             };
             let agents_present = !focused_agents_list.is_empty();
 
-            let (pane_area, chip_area, status_area, footer_area, agents_area) =
-                attached::layout_chrome(
-                    area,
-                    attention.is_some(),
-                    !pinned.is_empty(),
-                    agents_present,
-                );
+            let (pane_area, chip_area, bottom_area, agents_area) =
+                attached::layout_chrome(area, agents_present);
             let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
                 attention
                     .as_ref()
@@ -482,8 +479,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                                 (
                                     s.workspace_id,
                                     ratatui::layout::Rect {
-                                        x: status_area.x.saturating_add(s.start_col),
-                                        y: status_area.y,
+                                        x: bottom_area
+                                            .x
+                                            .saturating_add(prefix_w as u16)
+                                            .saturating_add(s.start_col),
+                                        y: bottom_area.y,
                                         width: s.width,
                                         height: 1,
                                     },
@@ -554,12 +554,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 &specs,
                 &dividers,
                 chip_area,
-                status_area,
-                footer_area,
+                bottom_area,
                 agents_area,
                 &focused_label,
                 focused_agent,
-                multi_pane,
                 attention_line,
                 &pinned,
                 diff,
@@ -578,7 +576,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         }
         crate::ui::View::AttachedPm => {
             if let Some(session) = app.pm.as_ref() {
-                let max_width = (area.width as usize).saturating_sub(3);
+                let prefix_w = attached::bottom_line_prefix_width("project-manager", None) as usize;
+                let max_width = (area.width as usize).saturating_sub(3 + prefix_w);
                 let attention = if matches!(
                     app.modal,
                     Some(crate::ui::modal::Modal::UpdatesPanel { .. })
@@ -589,8 +588,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 };
                 // PM pane is out of scope for pinned commands per spec.
                 let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
-                let (pane_area, chip_area, status_area, footer_area, agents_area) =
-                    attached::layout_chrome(area, attention.is_some(), false, false);
+                let (pane_area, chip_area, bottom_area, agents_area) =
+                    attached::layout_chrome(area, false);
                 let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
                     attention
                         .as_ref()
@@ -601,8 +600,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                                     (
                                         s.workspace_id,
                                         ratatui::layout::Rect {
-                                            x: status_area.x.saturating_add(s.start_col),
-                                            y: status_area.y,
+                                            x: bottom_area
+                                                .x
+                                                .saturating_add(prefix_w as u16)
+                                                .saturating_add(s.start_col),
+                                            y: bottom_area.y,
                                             width: s.width,
                                             height: 1,
                                         },
@@ -625,12 +627,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &specs,
                     &[],
                     chip_area,
-                    status_area,
-                    footer_area,
+                    bottom_area,
                     agents_area,
                     "project-manager",
                     None,
-                    false,
                     attention_line,
                     pinned,
                     None,
@@ -762,6 +762,32 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         );
         app.usage_window_option_rects = rects;
     }
+    draw_attached_nav_overlay(f, area, app);
+}
+
+/// Render the Ctrl-x navigation overlay when the leader is armed in an
+/// attached view. Keyed off `leader_pending`, so letter accelerators and the
+/// overlay share one state. Context (multi-pane vs PM) selects the item list.
+fn draw_attached_nav_overlay(f: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) {
+    if !app.leader_pending {
+        return;
+    }
+    let (items, pinned_hint) = match &app.view {
+        crate::ui::View::Attached(state) => (
+            crate::ui::attached::nav_menu_items(state.leaf_count() > 1),
+            !app.pinned_commands_cache.is_empty(),
+        ),
+        crate::ui::View::AttachedPm => (crate::ui::attached::pm_nav_menu_items(), false),
+        _ => return,
+    };
+    crate::ui::attached::render_nav_overlay(
+        f,
+        area,
+        &items,
+        app.leader_selected,
+        pinned_hint,
+        &app.theme,
+    );
 }
 
 #[doc(hidden)]

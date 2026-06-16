@@ -1,9 +1,10 @@
 0.5	5	Spin up a workspace right from the dashboard
-6	12	Add any agent harness to the same workspace — here, Codex
-14	31	Claude reviews the code and finds the SQL-injection bug
-32	37	Claude hands the fix to its Codex teammate over the wsx CLI
-38	44	Codex receives the full context: bug, location, and fix
-45	53	Codex applies a parameterized-query fix and commits it
-54	58	Codex reports back to Claude with the commit hash
-59	70	Claude verifies the fix — no human in the loop
-72	80	Two agents coordinated the whole fix end to end
+6	9	Every workspace action lives behind Ctrl-x
+10	15	Add any agent harness to the same workspace — here, Codex
+17	34	Claude reviews the code and finds the SQL-injection bug
+35	40	Claude hands the fix to its Codex teammate over the wsx CLI
+41	47	Codex receives the full context: bug, location, and fix
+48	56	Codex applies a parameterized-query fix and commits it
+57	61	Codex reports back to Claude with the commit hash
+62	73	Claude verifies the fix — no human in the loop
+75	83	Two agents coordinated the whole fix end to end

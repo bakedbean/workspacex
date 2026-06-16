@@ -1,6 +1,7 @@
 //! Extracted from ui/attached.rs.
 
 use super::*;
+use crate::ui::footer::{FooterHintAction, FooterHintSpan, key_for_glyph};
 
 /// V5-styled footer: workspace label in `header_style`, then the `^x`
 /// leader, then per-keybind chips (`<key>` in dim+bold, ` <label>` in

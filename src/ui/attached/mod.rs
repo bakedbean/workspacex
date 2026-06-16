@@ -3,7 +3,6 @@ use crate::data::store::AgentInstanceId;
 use crate::git::forge::BranchLifecycle;
 use crate::pty::render::render_screen;
 use crate::pty::session::{AgentKind, Session};
-use crate::ui::footer::{FooterHintAction, FooterHintSpan, key_for_glyph};
 use crate::ui::split::{Divider, SplitDirection};
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -14,12 +13,14 @@ use std::sync::Arc;
 
 mod agents_row;
 mod chip_row;
+// Footer chrome is no longer rendered (the bottom line replaced it); the
+// module is retained only until its file is removed in a follow-up task.
+#[allow(dead_code)]
 mod footer;
 mod nav_menu;
 
 // render_panes (below) draws the chrome rows from these submodules.
 use agents_row::{agents_row_spans, layout_agents_row};
-use footer::footer_line;
 // Re-exported for app::render / app::input via `crate::ui::attached::*`.
 pub use agents_row::agent_switch_keys;
 pub(crate) use chip_row::render_chip_row;
@@ -81,12 +82,10 @@ pub fn render_panes(
     panes: &[PaneSpec<'_>],
     dividers: &[Divider],
     chip_area: Rect,
-    status_area: Rect,
-    footer_area: Rect,
+    bottom_area: Rect,
     agents_area: Rect,
-    footer_label: &str,
-    footer_agent: Option<AgentKind>,
-    multi_pane_footer: bool,
+    label: &str,
+    agent: Option<AgentKind>,
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
     diff: Option<crate::git::DiffStats>,
@@ -105,33 +104,14 @@ pub fn render_panes(
 
     render_dividers(f, dividers, theme);
 
-    if let Some(line) = attention_line {
-        f.render_widget(Paragraph::new(line), status_area);
-    }
+    // Bottom line: agent bar + focused label, then attention items.
+    let line = bottom_line(label, agent, attention_line, theme);
+    f.render_widget(Paragraph::new(line), bottom_area);
 
-    // Footer rect is 2 cells tall; the empty first line gives the keys
-    // breathing room from the row above without doubling spacing
-    // throughout the chrome stack.
-    let (footer_keys_line, footer_hints) =
-        footer_line(footer_label, footer_agent, multi_pane_footer, theme);
-    // Keys render on the footer's second row, so hint rects are anchored there.
-    let footer_keys_row = footer_area.y.saturating_add(1);
-    let footer_hint_rects =
-        crate::ui::dashboard::footer_hint_rects(footer_area, footer_keys_row, &footer_hints);
-    let footer_text = ratatui::text::Text::from(vec![
-        Line::from(Vec::<Span<'static>>::new()),
-        footer_keys_line,
-    ]);
-    f.render_widget(Paragraph::new(footer_text), footer_area);
-
-    // Chips + inline rule filler + right-justified info block (diff count and,
-    // when present, the PR chip). Always renders so the rule shows even when
-    // there are no pinned commands.
+    // Chip row (pinned + rule + diff/PR). The `^x: menu` hint is added in the
+    // next task; for now no footer hints are emitted.
     let (chip_rects, pr_link_rect) = render_chip_row(f, chip_area, pinned, diff, pr, theme);
 
-    // Agents row: only rendered when the workspace has more than its primary
-    // agent. Each pill's clickable rect is computed alongside the spans so the
-    // input handler can retarget the focused pane on click.
     let agent_chip_rects: Vec<(AgentInstanceId, Rect)> = if agents.is_empty() {
         Vec::new()
     } else {
@@ -146,7 +126,7 @@ pub fn render_panes(
         pr_link_rect,
         pane_rects,
         agent_chip_rects,
-        footer_hint_rects,
+        footer_hint_rects: Vec::new(),
     }
 }
 
@@ -231,36 +211,23 @@ fn render_dividers(f: &mut Frame, dividers: &[Divider], theme: &Theme) {
     }
 }
 
-/// Carve the attached view's full `area` into pane / chip / status /
-/// footer / agents sub-areas. Chip and attention rows are 1 cell tall
-/// (flush with each other — the chip row's inline `─` rule already
-/// provides visual separation from above). The footer rect is 2 cells
-/// tall so its leading blank line lifts the keys one cell away from the
-/// rows above, regardless of whether the attention line is present.
-/// When `agents_present` is true an additional 1-row agents strip is
-/// appended below the footer.
-///
-/// The chip row carries either pinned-command chips followed by a `─`
-/// rule filler, or just the rule when no chips are configured.
-pub fn layout_chrome(
-    area: Rect,
-    attention_present: bool,
-    _pinned_present: bool,
-    agents_present: bool,
-) -> (Rect, Rect, Rect, Rect, Rect) {
-    let status_h = if attention_present { 1 } else { 0 };
+/// Carve the attached view's `area` into pane / chip / bottom-line / agents
+/// sub-areas. The chip row and bottom line are each 1 cell tall and always
+/// present; the agents row is 1 cell when `agents_present`, else 0. The
+/// bottom line hosts the focused workspace label + attention items (no
+/// separate footer — navigation lives in the Ctrl-x overlay).
+pub fn layout_chrome(area: Rect, agents_present: bool) -> (Rect, Rect, Rect, Rect) {
     let agents_h = if agents_present { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
             Constraint::Length(1),        // chip row
-            Constraint::Length(status_h), // attention row (0 when absent)
-            Constraint::Length(2),        // footer keys with 1-cell spacer above
+            Constraint::Length(1),        // bottom line (label + attention)
             Constraint::Length(agents_h), // agents row (0 when absent)
         ])
         .split(area);
-    (chunks[0], chunks[1], chunks[2], chunks[3], chunks[4])
+    (chunks[0], chunks[1], chunks[2], chunks[3])
 }
 
 /// Resize a session's PTY to fill its pane area (minus a per-pane title
@@ -268,6 +235,37 @@ pub fn layout_chrome(
 pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
     let title: u16 = if multi_pane { 1 } else { 0 };
     let _ = session.resize(pane_rect.width, pane_rect.height.saturating_sub(title));
+}
+
+/// Width in columns of the bottom line's leading `[agent-bar ]label   ` prefix,
+/// before the attention items begin. Shared by `render.rs` (to shrink the
+/// attention width budget and offset its click rects) and `bottom_line` (to
+/// draw it) so the two never disagree.
+pub fn bottom_line_prefix_width(label: &str, agent: Option<AgentKind>) -> u16 {
+    let bar = if agent.is_some() { 2 } else { 0 }; // "▎" + " "
+    bar + label.chars().count() as u16 + 3 // 3-col gap before attention
+}
+
+/// Build the bottom line: optional agent identity bar, the focused workspace
+/// label (header style), then — when present — the attention items. The
+/// attention `Line` is pre-truncated by the caller to the post-prefix width.
+fn bottom_line(
+    label: &str,
+    agent: Option<AgentKind>,
+    attention: Option<Line<'static>>,
+    theme: &Theme,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if let Some(a) = agent {
+        spans.push(Span::styled("▎".to_string(), theme.agent_style(a)));
+        spans.push(Span::raw(" ".to_string()));
+    }
+    spans.push(Span::styled(label.to_string(), theme.header_style()));
+    if let Some(line) = attention {
+        spans.push(Span::raw("   ".to_string()));
+        spans.extend(line.spans);
+    }
+    Line::from(spans)
 }
 
 /// Build the spans for a pane's title bar: an optional per-agent identity
@@ -352,43 +350,52 @@ mod tests {
     }
 
     #[test]
-    fn layout_chrome_places_spacer_above_footer_keys() {
-        // The chip and attention rows sit flush with each other (the
-        // chip's `─` rule does the visual separation from above). The
-        // footer rect is 2 cells tall so its leading blank line provides
-        // a single cell of breathing room just above the keys —
-        // independent of whether the attention row is present.
+    fn layout_chrome_reclaims_footer_rows() {
         let area = ratatui::layout::Rect::new(0, 0, 80, 30);
-        let (pane, chip, status, footer, agents) = layout_chrome(area, true, true, false);
-        assert_eq!(chip.height, 1, "chip row is 1 tall (no spacer below)");
+        let (pane, chip, bottom, agents) = layout_chrome(area, false);
+        assert_eq!(chip.height, 1);
+        assert_eq!(bottom.height, 1, "bottom line always present");
+        assert_eq!(agents.height, 0);
         assert_eq!(
-            status.height, 1,
-            "attention row is 1 tall (flush with chip)"
+            pane.height + chip.height + bottom.height + agents.height,
+            area.height
         );
-        assert_eq!(
-            footer.height, 2,
-            "footer rect is 2 tall (spacer + keys row)"
-        );
-        assert_eq!(agents.height, 0, "agents row absent when not requested");
-        assert_eq!(
-            pane.height + chip.height + status.height + footer.height + agents.height,
-            area.height,
-            "chrome chunks should tile the full area without overlap"
-        );
+        let (_, _, _, agents2) = layout_chrome(area, true);
+        assert_eq!(agents2.height, 1);
+    }
 
-        let (_, chip2, status2, footer2, agents2) = layout_chrome(area, false, true, false);
-        assert_eq!(chip2.height, 1);
-        assert_eq!(
-            status2.height, 0,
-            "attention row collapses to 0 when absent"
-        );
-        assert_eq!(
-            footer2.height, 2,
-            "footer rect still has its leading spacer when attention absent"
-        );
-        assert_eq!(agents2.height, 0);
+    #[test]
+    fn bottom_line_prefix_width_matches_drawn_prefix() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = Theme::wsx();
+        let attn = Line::from(vec![Span::raw("ATTN".to_string())]);
+        let prefix = bottom_line_prefix_width("wsx/foo", Some(AgentKind::Claude)) as usize;
+        let mut term = Terminal::new(TestBackend::new(60, 1)).unwrap();
+        term.draw(|f| {
+            let line = bottom_line(
+                "wsx/foo",
+                Some(AgentKind::Claude),
+                Some(attn.clone()),
+                &theme,
+            );
+            f.render_widget(Paragraph::new(line), Rect::new(0, 0, 60, 1));
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        // Collect per-column symbols so multibyte glyphs (the `▎` agent bar)
+        // count as one column, keeping the slice index in column space —
+        // the same space `bottom_line_prefix_width` returns.
+        let cols: Vec<String> = (0..60).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        let attn: String = cols[prefix..prefix + 4].concat();
+        assert_eq!(attn, "ATTN", "cols={cols:?}");
+    }
 
-        let (_, _, _, _, agents3) = layout_chrome(area, false, true, true);
-        assert_eq!(agents3.height, 1, "agents row is 1 tall when present");
+    #[test]
+    fn bottom_line_label_only_when_no_attention() {
+        let theme = Theme::wsx();
+        let line = bottom_line("wsx/foo", None, None, &theme);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(text, "wsx/foo");
     }
 }

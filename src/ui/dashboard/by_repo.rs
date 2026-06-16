@@ -42,7 +42,7 @@ const RULE_PAD: usize = 2;
 /// Width that right-justifies every repo's `name` to a shared right edge: the
 /// widest repo name's character count. `header_line` left-pads each shorter
 /// name up to this width so all names end in the same column.
-pub fn name_align_width(repos: &[RepoView<'_>]) -> usize {
+fn name_align_width(repos: &[RepoView<'_>]) -> usize {
     repos
         .iter()
         .map(|r| r.name.chars().count())
@@ -50,7 +50,7 @@ pub fn name_align_width(repos: &[RepoView<'_>]) -> usize {
         .unwrap_or(0)
 }
 
-pub fn header_line(
+fn header_line(
     view: &RepoView<'_>,
     name_width: usize,
     width: usize,
@@ -116,15 +116,22 @@ pub fn header_line(
         ));
     }
 
-    // Path is flush-right; the rule fills the gap between counts and path.
+    // Path is flush-right; the rule fills the gap between the counts and the
+    // path, flanked by RULE_PAD spaces. Size the rule from the *actual* gap so
+    // the path's right edge lands exactly at `width` — never force a minimum
+    // rule, which would push the line one column past `width` and clip the
+    // path. When the gap is too small for a padded rule, fall back to plain
+    // spaces; if the left content + path already overflow, the gap is zero.
     let path_len = view.path.chars().count();
     let used_left: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    let rule_len = width
-        .saturating_sub(used_left + path_len + RULE_PAD * 2)
-        .max(1);
-    spans.push(Span::raw(" ".repeat(RULE_PAD)));
-    spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
-    spans.push(Span::raw(" ".repeat(RULE_PAD)));
+    let gap = width.saturating_sub(used_left + path_len);
+    if gap > RULE_PAD * 2 {
+        spans.push(Span::raw(" ".repeat(RULE_PAD)));
+        spans.push(Span::styled("─".repeat(gap - RULE_PAD * 2), theme.dim_style()));
+        spans.push(Span::raw(" ".repeat(RULE_PAD)));
+    } else {
+        spans.push(Span::raw(" ".repeat(gap)));
+    }
     spans.push(Span::styled(view.path.to_string(), theme.dim_style()));
     Line::from(spans)
 }
@@ -276,6 +283,39 @@ mod tests {
         // Paths are flush to the terminal's right edge.
         assert_eq!(substr_end_col(&short_line, &views[0].path), width);
         assert_eq!(substr_end_col(&long_line, &views[1].path), width);
+    }
+
+    #[test]
+    fn path_stays_flush_right_without_overflow() {
+        // Across every width, the rendered line is exactly `width` once the
+        // content fits, and never longer (which would clip the flush-right
+        // path). Below the fit threshold it stays pinned at the minimum
+        // content width. Regression for forcing a >=1 rule that overshot by one
+        // column at the boundary.
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let view = make_view(repos.iter().find(|r| r.name == "wsx").unwrap(), 1, true);
+        let name_width = name_align_width(std::slice::from_ref(&view));
+        // Minimum content width = the line with a zero gap (rendered at width 0).
+        let min_content = header_text(&header_line(&view, name_width, 0, &theme))
+            .chars()
+            .count();
+        for width in 0..=200 {
+            let line = header_line(&view, name_width, width, &theme);
+            let len = header_text(&line).chars().count();
+            assert_eq!(
+                len,
+                width.max(min_content),
+                "line width must be exactly `width` when it fits (never +1): width={width}"
+            );
+            if width >= min_content {
+                assert_eq!(
+                    substr_end_col(&line, &view.path),
+                    width,
+                    "path stays flush to the right edge at width={width}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -36,6 +36,17 @@ Launch `wsx` (no args) → dashboard. Then:
 Type the review prompt directly into the attached agent pane, `Enter`, then
 `Wait+Screen@<timeout> /regex/` to block on the real answer.
 
+**The attached view's keybind footer is gone** — pressing `Ctrl-x` now draws a
+centered **"actions" overlay** (rows `d/u/a/e/t/v/g/k/x`, `↑↓ move · enter ·
+esc`) that stays up until the next key, and the chip row shows a `^x menu` hint.
+The direct letter shortcuts still dispatch (`Ctrl-x` then `a`/`w`/`q`/`d`), so
+the tapes didn't change navigation — but to **showcase** the overlay, the hero
+tape now holds ~1.8s on it after the first `Ctrl-x`, before `a`. Keep that dwell
+**under `MIN_FREEZE` (5s)** so `deadair` doesn't collapse the static overlay (or
+add it to `HERO_ADD_PROTECT`). Note `w`/`q` are pane-cycle keys, not overlay
+rows, so leave those switches quick. The workspace indicator also moved to the
+**top** of the attached view with a separator rule.
+
 ## The blocker, and the fix: isolated + pre-accepted Claude config
 
 A fresh worktree triggers Claude Code's **"Quick safety check: Is this a project

@@ -66,48 +66,55 @@ pub fn header_line(
     };
     spans.push(Span::styled(fold_glyph.to_string(), theme.dim_style()));
     spans.push(Span::raw(" ".to_string()));
-    // Right-justify the name: left-pad up to the widest repo name so every
-    // name ends in the same column.
+    // Right-justify the name, filling the blank space its left-pad opens up
+    // with a rule (matching the pinned-command row's filler). A space on each
+    // side keeps the rule from touching the glyph or the name.
     let name_len = view.name.chars().count();
-    spans.push(Span::raw(" ".repeat(name_width.saturating_sub(name_len))));
-    spans.push(Span::styled(view.name.to_string(), theme.header_style()));
-    spans.push(Span::raw("  ".to_string()));
-
-    // Status counts move to immediately follow the name.
-    let cells = [
-        (Status::Question, view.counts.question, true),
-        (Status::Stalled, view.counts.stalled, true),
-        (Status::Waiting, view.counts.waiting, false),
-        (Status::Thinking, view.counts.thinking, false),
-        (Status::Complete, view.counts.complete, false),
-        (Status::Idle, view.counts.idle, false),
-    ];
-    let mut first = true;
-    for (status, n, bold) in cells {
-        if n == 0 {
-            continue;
+    let pad = name_width.saturating_sub(name_len);
+    if pad > 0 {
+        if pad > 1 {
+            spans.push(Span::styled("─".repeat(pad - 1), theme.dim_style()));
         }
-        if !first {
-            spans.push(Span::raw("  ".to_string()));
-        }
-        first = false;
-        let mut style = theme.status_style(status);
-        if bold {
-            style = style.add_modifier(Modifier::BOLD);
-        }
-        if matches!(status, Status::Idle) {
-            style = theme.dim_style();
-        }
-        spans.push(Span::styled(format!("{} {}", status.glyph(), n), style));
+        spans.push(Span::raw(" ".to_string()));
     }
+    spans.push(Span::styled(view.name.to_string(), theme.header_style()));
 
-    let suffix = if view.counts.total() == 0 {
-        "no workspaces".to_string()
-    } else {
-        format!("{} ws", view.counts.total())
-    };
-    spans.push(Span::raw("    ".to_string()));
-    spans.push(Span::styled(suffix, theme.dim_style()));
+    // Status counts immediately follow the name. Empty repos show nothing —
+    // the absence of workspace rows is self-explanatory, no label needed.
+    if view.counts.total() > 0 {
+        spans.push(Span::raw("  ".to_string()));
+        let cells = [
+            (Status::Question, view.counts.question, true),
+            (Status::Stalled, view.counts.stalled, true),
+            (Status::Waiting, view.counts.waiting, false),
+            (Status::Thinking, view.counts.thinking, false),
+            (Status::Complete, view.counts.complete, false),
+            (Status::Idle, view.counts.idle, false),
+        ];
+        let mut first = true;
+        for (status, n, bold) in cells {
+            if n == 0 {
+                continue;
+            }
+            if !first {
+                spans.push(Span::raw("  ".to_string()));
+            }
+            first = false;
+            let mut style = theme.status_style(status);
+            if bold {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            if matches!(status, Status::Idle) {
+                style = theme.dim_style();
+            }
+            spans.push(Span::styled(format!("{} {}", status.glyph(), n), style));
+        }
+        spans.push(Span::raw("    ".to_string()));
+        spans.push(Span::styled(
+            format!("{} ws", view.counts.total()),
+            theme.dim_style(),
+        ));
+    }
 
     // Path is flush-right; the rule fills the gap between counts and path.
     let path_len = view.path.chars().count();
@@ -217,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn header_for_empty_repo_shows_no_workspaces() {
+    fn header_for_empty_repo_omits_count_label() {
         let theme = Theme::wsx();
         let repos = fixture::repos();
         let frontend = repos.iter().find(|r| r.name == "frontend").unwrap();
@@ -229,7 +236,14 @@ mod tests {
             t.starts_with("  frontend"),
             "no fold glyph for empty: {t:?}"
         );
-        assert!(t.contains("no workspaces"));
+        // Empty repos carry no count label — not even "no workspaces".
+        assert!(
+            !t.contains("no workspaces"),
+            "empty repo label dropped: {t:?}"
+        );
+        assert!(!t.contains(" ws"), "no count suffix for empty repo: {t:?}");
+        // Path still renders flush-right.
+        assert!(t.trim_end().ends_with("/home/eben/meals/frontend"));
     }
 
     /// Char column where the first occurrence of `needle` ends in the text.
@@ -262,6 +276,25 @@ mod tests {
         // Paths are flush to the terminal's right edge.
         assert_eq!(substr_end_col(&short_line, &views[0].path), width);
         assert_eq!(substr_end_col(&long_line, &views[1].path), width);
+    }
+
+    #[test]
+    fn short_names_get_a_left_fill_rule() {
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let short = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let long = repos.iter().find(|r| r.name == "scp-admin").unwrap();
+        let views = [make_view(short, 1, true), make_view(long, 2, true)];
+        let name_width = name_align_width(&views);
+
+        // The shorter name's left-pad is filled with a rule (one space before
+        // the name), matching the pinned-command row's filler.
+        let short_t = header_text(&header_line(&views[0], name_width, 120, &theme));
+        assert!(short_t.contains("─ wsx"), "left-fill rule: {short_t:?}");
+
+        // The widest name has no left pad, so it hugs the glyph — no rule.
+        let long_t = header_text(&header_line(&views[1], name_width, 120, &theme));
+        assert!(long_t.starts_with("▾ scp-admin"), "no rule: {long_t:?}");
     }
 
     #[test]

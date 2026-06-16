@@ -13,10 +13,6 @@ use std::sync::Arc;
 
 mod agents_row;
 mod chip_row;
-// Footer chrome is no longer rendered (the bottom line replaced it); the
-// module is retained only until its file is removed in a follow-up task.
-#[allow(dead_code)]
-mod footer;
 mod nav_menu;
 
 // render_panes (below) draws the chrome rows from these submodules.

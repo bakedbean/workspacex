@@ -1105,6 +1105,104 @@ mod pm_state_tests {
     }
 
     #[test]
+    fn updates_panel_render_omits_repos_without_workspaces() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let store = Store::open_in_memory().unwrap();
+        // repo-alpha has a workspace; repo-beta is empty.
+        let repo1 = store
+            .add_repo(std::path::Path::new("/tmp/r1"), "repo-alpha", "")
+            .unwrap();
+        let ws1 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo1,
+                name: "alpha-ws",
+                branch: "repo-alpha/alpha-ws",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws1, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .add_repo(std::path::Path::new("/tmp/r2"), "repo-beta", "")
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("repo-alpha") && rendered.contains("alpha-ws"),
+            "populated repo should still render:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("repo-beta"),
+            "empty repo header should be omitted:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("(no workspaces)"),
+            "empty-repo placeholder should no longer appear:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn updates_panel_render_shows_global_empty_state_when_all_repos_empty() {
+        use crate::data::store::Store;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let store = Store::open_in_memory().unwrap();
+        // Repos exist but none have workspaces — exercises the global
+        // empty-state path (no headers, single "(no workspaces)" line).
+        store
+            .add_repo(std::path::Path::new("/tmp/r1"), "repo-alpha", "")
+            .unwrap();
+        store
+            .add_repo(std::path::Path::new("/tmp/r2"), "repo-beta", "")
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("(no workspaces)"),
+            "global empty-state line should render:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("repo-alpha") && !rendered.contains("repo-beta"),
+            "no repo headers should render when all repos are empty:\n{rendered}"
+        );
+    }
+
+    #[test]
     fn updates_panel_render_scrolls_to_keep_selected_visible() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use ratatui::Terminal;

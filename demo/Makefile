@@ -8,7 +8,7 @@ MAX_HOLD := 1.3
 # stepping across the agent menu (claude · pi · hermes · codex) is too subtle for
 # freezedetect, so deadair would otherwise collapse the whole walk. This is the
 # raw-clip window of that beat — re-confirm if you re-record (see demo/SPIKE-NOTES.md).
-HERO_ADD_PROTECT := 8.5:15.5
+HERO_ADD_PROTECT := 8:18
 # Hero: speed-ramp Codex's fix/commit churn (deadair can't touch it — the screen
 # is constantly changing). Span is absolute seconds in the collapsed clip, tuned
 # to the recorded take (re-confirm if you re-record — see demo/SPIKE-NOTES.md).

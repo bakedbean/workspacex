@@ -101,51 +101,51 @@ pub fn render_updates_panel(
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
     for repo in repos {
-        lines.push(Line::from(Span::styled(
-            repo.name.clone(),
-            theme.header_style(),
-        )));
         let ws_for_repo: Vec<&crate::data::store::Workspace> = workspaces
             .iter()
             .filter(|(rid, _)| *rid == repo.id)
             .map(|(_, w)| w)
             .filter(|w| pos_of.contains_key(&w.id))
             .collect();
+        // Omit repos with no workspaces entirely — header included. The panel
+        // is only ever opened from an attached/agent view, where empty repos
+        // are noise rather than the dashboard's full repo inventory.
+        if ws_for_repo.is_empty() {
+            continue;
+        }
+        lines.push(Line::from(Span::styled(
+            repo.name.clone(),
+            theme.header_style(),
+        )));
         // Already pre-sorted in `order`; preserve that ordering here too.
         let mut ws_sorted = ws_for_repo;
         ws_sorted.sort_by_key(|w| pos_of.get(&w.id).copied().unwrap_or(usize::MAX));
-        if ws_sorted.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  (no workspaces)".to_string(),
-                theme.dim_style(),
-            )));
-        } else {
-            for w in ws_sorted {
-                let is_selected = pos_of.get(&w.id).copied() == Some(selected);
-                if is_selected {
-                    selected_visual_line = Some(lines.len());
-                }
-                let status = statuses.get(&w.id).copied().unwrap_or(Status::Idle);
-                let lifecycle = lifecycles.get(&w.id).copied();
-                lines.push(workspace_row(
-                    w,
-                    events.get(&w.id),
-                    activity.get(&w.id).copied(),
-                    needs_attention.contains(&w.id),
-                    awaiting.get(&w.id),
-                    is_selected,
-                    status,
-                    lifecycle,
-                    now_ms,
-                    theme,
-                ));
+        for w in ws_sorted {
+            let is_selected = pos_of.get(&w.id).copied() == Some(selected);
+            if is_selected {
+                selected_visual_line = Some(lines.len());
             }
+            let status = statuses.get(&w.id).copied().unwrap_or(Status::Idle);
+            let lifecycle = lifecycles.get(&w.id).copied();
+            lines.push(workspace_row(
+                w,
+                events.get(&w.id),
+                activity.get(&w.id).copied(),
+                needs_attention.contains(&w.id),
+                awaiting.get(&w.id),
+                is_selected,
+                status,
+                lifecycle,
+                now_ms,
+                theme,
+            ));
         }
         lines.push(Line::from(""));
     }
-    if repos.is_empty() {
+    // Nothing to show when no repo has any workspace (or there are no repos).
+    if lines.is_empty() {
         lines.push(Line::from(Span::styled(
-            "(no repos)".to_string(),
+            "(no workspaces)".to_string(),
             theme.dim_style(),
         )));
     }

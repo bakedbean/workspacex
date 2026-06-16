@@ -922,6 +922,89 @@ mod pm_state_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_down_enter_fires_highlighted_action() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "a",
+                branch: "repo/a",
+                worktree_path: &std::path::PathBuf::from("/tmp/wsx-nav-a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let inst = test_primary_instance(&app, id);
+        app.sessions
+            .spawn(
+                inst,
+                id,
+                std::path::Path::new("."),
+                80,
+                24,
+                crate::pty::session::SpawnMode::Fresh {
+                    rename_ctx: None,
+                    custom_instructions: None,
+                    doctrine: None,
+                    additional_dirs: vec![],
+                    yolo: false,
+                },
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        let target = test_target(&app, id);
+        app.view = crate::ui::View::Attached(AttachedState::single(target));
+
+        // Arm leader (selected=0 => "detach"), Down once => index 1 ("updates").
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending);
+        assert_eq!(app.leader_selected, 0);
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert_eq!(app.leader_selected, 1);
+        assert!(app.leader_pending, "↑↓ keep the leader armed");
+
+        // Enter fires "updates" — same effect as pressing 'u' after ^x.
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending);
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::UpdatesPanel { .. })
+            ),
+            "Enter on the updates row opens the updates panel"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_modal_swallows_other_keys() {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();

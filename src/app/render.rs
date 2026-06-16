@@ -927,6 +927,7 @@ fn compute_attention_line(
                 events: app.workspace_events.get(&w.id),
                 activity,
                 needs_attention: app.workspace_needs_attention.contains(&w.id),
+                lifecycle: app.pr_lifecycle.get(&w.id).copied(),
                 awaiting_tool: app.awaiting_permission(w.id),
             }
         })

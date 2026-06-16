@@ -15,6 +15,7 @@ use std::sync::Arc;
 mod agents_row;
 mod chip_row;
 mod footer;
+mod nav_menu;
 
 // render_panes (below) draws the chrome rows from these submodules.
 use agents_row::{agents_row_spans, layout_agents_row};
@@ -22,6 +23,7 @@ use footer::footer_line;
 // Re-exported for app::render / app::input via `crate::ui::attached::*`.
 pub use agents_row::agent_switch_keys;
 pub(crate) use chip_row::render_chip_row;
+pub use nav_menu::{NavItem, nav_item_key, nav_menu_items, pm_nav_menu_items};
 
 /// One pane in the attached view: a workspace's PTY plus its label,
 /// the rect it occupies, and whether it's the focused pane (cursor + chip

@@ -105,7 +105,7 @@ pub fn render_panes(
     // Info line (top): agent bar + focused label, then attention items, with a
     // full-width `─` rule beneath it — same dim chrome as the chip-row rule —
     // to set the indicator off from the pane content below.
-    let line = bottom_line(label, agent, attention_line, theme);
+    let line = info_line(label, agent, attention_line, theme);
     f.render_widget(Paragraph::new(line), info_area);
     if separator_area.width > 0 {
         let rule = "─".repeat(separator_area.width as usize);
@@ -273,19 +273,19 @@ pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
     let _ = session.resize(pane_rect.width, pane_rect.height.saturating_sub(title));
 }
 
-/// Width in columns of the bottom line's leading `[agent-bar ]label   ` prefix,
+/// Width in columns of the info line's leading `[agent-bar ]label   ` prefix,
 /// before the attention items begin. Shared by `render.rs` (to shrink the
-/// attention width budget and offset its click rects) and `bottom_line` (to
+/// attention width budget and offset its click rects) and `info_line` (to
 /// draw it) so the two never disagree.
-pub fn bottom_line_prefix_width(label: &str, agent: Option<AgentKind>) -> u16 {
+pub fn info_line_prefix_width(label: &str, agent: Option<AgentKind>) -> u16 {
     let bar = if agent.is_some() { 2 } else { 0 }; // "▎" + " "
     bar + label.chars().count() as u16 + 3 // 3-col gap before attention
 }
 
-/// Build the bottom line: optional agent identity bar, the focused workspace
+/// Build the info line: optional agent identity bar, the focused workspace
 /// label (header style), then — when present — the attention items. The
 /// attention `Line` is pre-truncated by the caller to the post-prefix width.
-fn bottom_line(
+fn info_line(
     label: &str,
     agent: Option<AgentKind>,
     attention: Option<Line<'static>>,
@@ -446,15 +446,15 @@ mod tests {
     }
 
     #[test]
-    fn bottom_line_prefix_width_matches_drawn_prefix() {
+    fn info_line_prefix_width_matches_drawn_prefix() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         let theme = Theme::wsx();
         let attn = Line::from(vec![Span::raw("ATTN".to_string())]);
-        let prefix = bottom_line_prefix_width("wsx/foo", Some(AgentKind::Claude)) as usize;
+        let prefix = info_line_prefix_width("wsx/foo", Some(AgentKind::Claude)) as usize;
         let mut term = Terminal::new(TestBackend::new(60, 1)).unwrap();
         term.draw(|f| {
-            let line = bottom_line(
+            let line = info_line(
                 "wsx/foo",
                 Some(AgentKind::Claude),
                 Some(attn.clone()),
@@ -466,16 +466,16 @@ mod tests {
         let buf = term.backend().buffer();
         // Collect per-column symbols so multibyte glyphs (the `▎` agent bar)
         // count as one column, keeping the slice index in column space —
-        // the same space `bottom_line_prefix_width` returns.
+        // the same space `info_line_prefix_width` returns.
         let cols: Vec<String> = (0..60).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         let attn: String = cols[prefix..prefix + 4].concat();
         assert_eq!(attn, "ATTN", "cols={cols:?}");
     }
 
     #[test]
-    fn bottom_line_label_only_when_no_attention() {
+    fn info_line_label_only_when_no_attention() {
         let theme = Theme::wsx();
-        let line = bottom_line("wsx/foo", None, None, &theme);
+        let line = info_line("wsx/foo", None, None, &theme);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(text, "wsx/foo");
     }

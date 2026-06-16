@@ -8,6 +8,7 @@
 
 use crate::activity::events::WorkspaceEvents;
 use crate::data::store::WorkspaceId;
+use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::text::{Line, Span};
@@ -37,6 +38,10 @@ pub struct WorkspaceUpdateInfo<'a> {
     pub events: Option<&'a WorkspaceEvents>,
     pub activity: ActivityState,
     pub needs_attention: bool,
+    /// Cached PR lifecycle for this workspace's branch, mirroring the
+    /// dashboard's `app.pr_lifecycle`. Drives the attention entry's
+    /// name color so the top bar matches the dashboard's PR hues.
+    pub lifecycle: Option<BranchLifecycle>,
     /// `Some((tool_name, first_seen_ms))` when a tool_use has been pending
     /// for the App's stale threshold. Caller computes via
     /// `App::awaiting_permission`.
@@ -59,6 +64,11 @@ pub struct AttentionEntry {
     /// whether a workspace is waiting for an answer, finished a
     /// task, or hit a permission prompt.
     pub activity: ActivityState,
+    /// PR lifecycle for this workspace, used to color the `repo/name`
+    /// text with the same hues the dashboard uses (green=open,
+    /// purple=merged, …). `None` (or a colorless lifecycle like NoPr)
+    /// falls back to the muted `path` color.
+    pub lifecycle: Option<BranchLifecycle>,
 }
 
 /// The rendered attention line plus the clickable geometry of each entry.
@@ -165,9 +175,15 @@ pub fn format_attention_line_styled(
         let glyph = status.glyph().to_string();
         spans.push(Span::styled(glyph, theme.status_style(status)));
         spans.push(Span::raw(" ".to_string()));
+        // Color the name by PR lifecycle to match the dashboard (green
+        // open, purple merged, …). Colorless lifecycles (NoPr/PrDraft)
+        // and never-polled workspaces fall back to the muted `path` hue.
+        let name_style = theme
+            .lifecycle_style(e.lifecycle)
+            .unwrap_or_else(|| ratatui::style::Style::default().fg(theme.path));
         spans.push(Span::styled(
             format!("{}/{}", e.repo_name, e.name),
-            ratatui::style::Style::default().fg(theme.path),
+            name_style,
         ));
         let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
         spans.push(Span::styled(format!(" ({age})"), theme.dim_style()));
@@ -218,6 +234,7 @@ pub fn collect_attention(
                 name: c.name.to_string(),
                 age_anchor_ms,
                 activity: c.activity,
+                lifecycle: c.lifecycle,
             }
         })
         .collect();
@@ -357,6 +374,7 @@ mod tests {
                         events: events.as_ref(),
                         activity: *activity,
                         needs_attention: *needs_attention,
+                        lifecycle: None,
                         awaiting_tool: awaiting.clone(),
                     }
                 },
@@ -428,6 +446,7 @@ mod tests {
                 name: "x".into(),
                 age_anchor_ms: 9_000, // 1s before now
                 activity: ActivityState::Awaiting,
+                lifecycle: None,
             },
             AttentionEntry {
                 workspace_id: WorkspaceId(2),
@@ -435,6 +454,7 @@ mod tests {
                 name: "y".into(),
                 age_anchor_ms: 5_000, // 5s before now
                 activity: ActivityState::Awaiting,
+                lifecycle: None,
             },
         ];
         let line = format_attention_line(&entries, 10_000, 80).expect("line");
@@ -450,6 +470,7 @@ mod tests {
                 name: format!("ws{i}"),
                 age_anchor_ms: 10_000 - i * 1000,
                 activity: ActivityState::Awaiting,
+                lifecycle: None,
             })
             .collect();
         // Width 35: fits 1 entry ("⚠ repo0/ws0 (1s)", ~18 chars) plus the
@@ -474,6 +495,7 @@ mod tests {
             name: "workspace-name".into(),
             age_anchor_ms: 9_000,
             activity: ActivityState::Awaiting,
+            lifecycle: None,
         }];
         let line = format_attention_line(&entries, 10_000, 10).expect("line");
         assert!(line.ends_with('…'), "expected ellipsis truncation: {line}");
@@ -488,6 +510,7 @@ mod tests {
             name: "alpha".into(),
             age_anchor_ms: 0,
             activity: ActivityState::AwaitingAnswer,
+            lifecycle: None,
         }];
         let line = format_attention_line(&entries, 5_000, 80).expect("line");
         assert!(line.starts_with("? demo/alpha"), "got: {line}");
@@ -501,6 +524,7 @@ mod tests {
             name: "alpha".into(),
             age_anchor_ms: 0,
             activity: ActivityState::Complete,
+            lifecycle: None,
         }];
         let line = format_attention_line(&entries, 5_000, 80).expect("line");
         assert!(line.starts_with("\u{2713} demo/alpha"), "got: {line}");
@@ -514,6 +538,7 @@ mod tests {
             name: "alpha".into(),
             age_anchor_ms: 0,
             activity: ActivityState::Awaiting,
+            lifecycle: None,
         }];
         let line = format_attention_line(&entries, 5_000, 80).expect("line");
         assert!(line.starts_with("⚠ demo/alpha"), "got: {line}");
@@ -530,6 +555,63 @@ mod tests {
     }
 
     #[test]
+    fn styled_line_colors_name_by_pr_lifecycle() {
+        use crate::git::forge::BranchLifecycle;
+        let theme = Theme::wsx();
+        let entries = vec![
+            // Open PR -> green (theme.ok).
+            AttentionEntry {
+                workspace_id: WorkspaceId(1),
+                repo_name: "r".into(),
+                name: "open".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::Awaiting,
+                lifecycle: Some(BranchLifecycle::PrOpen),
+            },
+            // Merged PR -> purple (theme.merged).
+            AttentionEntry {
+                workspace_id: WorkspaceId(2),
+                repo_name: "r".into(),
+                name: "merged".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::Complete,
+                lifecycle: Some(BranchLifecycle::PrMerged),
+            },
+            // No PR -> falls back to the muted path color.
+            AttentionEntry {
+                workspace_id: WorkspaceId(3),
+                repo_name: "r".into(),
+                name: "nopr".into(),
+                age_anchor_ms: 9_000,
+                activity: ActivityState::Awaiting,
+                lifecycle: Some(BranchLifecycle::NoPr),
+            },
+        ];
+        let line = format_attention_line_styled(&entries, 10_000, 200, &theme)
+            .expect("line")
+            .line;
+        let name_fg = |name: &str| {
+            line.spans
+                .iter()
+                .find(|s| s.content.as_ref().ends_with(name))
+                .unwrap_or_else(|| panic!("name span for {name:?} present"))
+                .style
+                .fg
+        };
+        assert_eq!(name_fg("r/open"), Some(theme.ok), "open PR name is green");
+        assert_eq!(
+            name_fg("r/merged"),
+            Some(theme.merged),
+            "merged PR name is purple"
+        );
+        assert_eq!(
+            name_fg("r/nopr"),
+            Some(theme.path),
+            "no-PR name falls back to path color"
+        );
+    }
+
+    #[test]
     fn styled_line_colors_each_entry_by_status() {
         let theme = Theme::wsx();
         let entries = vec![
@@ -539,6 +621,7 @@ mod tests {
                 name: "q".into(),
                 age_anchor_ms: 9_000,
                 activity: ActivityState::AwaitingAnswer,
+                lifecycle: None,
             },
             AttentionEntry {
                 workspace_id: WorkspaceId(2),
@@ -546,6 +629,7 @@ mod tests {
                 name: "s".into(),
                 age_anchor_ms: 9_000,
                 activity: ActivityState::Stalled,
+                lifecycle: None,
             },
         ];
         let line = format_attention_line_styled(&entries, 10_000, 200, &theme)
@@ -587,6 +671,7 @@ mod tests {
                 name: "q".into(),
                 age_anchor_ms: 9_000,
                 activity: ActivityState::AwaitingAnswer,
+                lifecycle: None,
             },
             AttentionEntry {
                 workspace_id: WorkspaceId(2),
@@ -594,6 +679,7 @@ mod tests {
                 name: "ss".into(),
                 age_anchor_ms: 9_000,
                 activity: ActivityState::Stalled,
+                lifecycle: None,
             },
         ];
         // now_ms - age_anchor_ms = 1_000 -> age "1s" (2 chars) for both.
@@ -622,6 +708,7 @@ mod tests {
                 name: "q".into(),
                 age_anchor_ms: 9_000,
                 activity: ActivityState::AwaitingAnswer,
+                lifecycle: None,
             },
             AttentionEntry {
                 workspace_id: WorkspaceId(2),
@@ -629,6 +716,7 @@ mod tests {
                 name: "ss".into(),
                 age_anchor_ms: 9_000,
                 activity: ActivityState::Stalled,
+                lifecycle: None,
             },
         ];
         // max_width 10 fits only entry 0 ("? a/q (1s)" is exactly 10).

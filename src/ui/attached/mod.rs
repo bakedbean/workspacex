@@ -23,7 +23,7 @@ use footer::footer_line;
 // Re-exported for app::render / app::input via `crate::ui::attached::*`.
 pub use agents_row::agent_switch_keys;
 pub(crate) use chip_row::render_chip_row;
-pub use nav_menu::{NavItem, nav_item_key, nav_menu_items, pm_nav_menu_items};
+pub use nav_menu::{NavItem, nav_item_key, nav_menu_items, pm_nav_menu_items, render_nav_overlay};
 
 /// One pane in the attached view: a workspace's PTY plus its label,
 /// the rect it occupies, and whether it's the focused pane (cursor + chip

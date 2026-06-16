@@ -108,9 +108,36 @@ pub fn render_panes(
     let line = bottom_line(label, agent, attention_line, theme);
     f.render_widget(Paragraph::new(line), bottom_area);
 
-    // Chip row (pinned + rule + diff/PR). The `^x: menu` hint is added in the
-    // next task; for now no footer hints are emitted.
-    let (chip_rects, pr_link_rect) = render_chip_row(f, chip_area, pinned, diff, pr, theme);
+    // `^x: menu` hint at the far left of the chip row: a `^x` key-pill + a
+    // ` menu` label. Clickable — arms the leader (opens the overlay) exactly
+    // like pressing Ctrl-x. The pinned chips/rule/right-block render in the
+    // area to its right, unchanged.
+    let menu_label = " menu";
+    // pill width = 2 + "^x".chars().count() = 4; label width = 5; total = 9.
+    let hint_w = (2 + "^x".chars().count() as u16) + menu_label.chars().count() as u16;
+    let mut hint_spans: Vec<Span<'static>> = Vec::with_capacity(4);
+    hint_spans.extend(key_pill_spans("^x", theme));
+    hint_spans.push(Span::styled(
+        menu_label.to_string(),
+        Style::default().fg(theme.path),
+    ));
+    let hint_rect = Rect {
+        x: chip_area.x,
+        y: chip_area.y,
+        width: hint_w.min(chip_area.width),
+        height: 1,
+    };
+    f.render_widget(Paragraph::new(Line::from(hint_spans)), hint_rect);
+    let footer_hint_rects = vec![(hint_rect, crate::ui::footer::FooterHintAction::ArmLeader)];
+
+    // Chips render to the right of the hint (plus a 2-col gap).
+    let chips_area = Rect {
+        x: chip_area.x.saturating_add(hint_w + 2),
+        y: chip_area.y,
+        width: chip_area.width.saturating_sub(hint_w + 2),
+        height: 1,
+    };
+    let (chip_rects, pr_link_rect) = render_chip_row(f, chips_area, pinned, diff, pr, theme);
 
     let agent_chip_rects: Vec<(AgentInstanceId, Rect)> = if agents.is_empty() {
         Vec::new()
@@ -126,7 +153,7 @@ pub fn render_panes(
         pr_link_rect,
         pane_rects,
         agent_chip_rects,
-        footer_hint_rects: Vec::new(),
+        footer_hint_rects,
     }
 }
 
@@ -397,5 +424,27 @@ mod tests {
         let line = bottom_line("wsx/foo", None, None, &theme);
         let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(text, "wsx/foo");
+    }
+
+    #[test]
+    fn menu_hint_width_offsets_chips() {
+        // The chips must start past the "^x menu" hint + 2-col gap.
+        let hint_w = (2 + "^x".chars().count() as u16) + " menu".chars().count() as u16;
+        let chip_area = Rect::new(0, 5, 80, 1);
+        let chips_area = Rect {
+            x: chip_area.x + hint_w + 2,
+            y: chip_area.y,
+            width: chip_area.width - (hint_w + 2),
+            height: 1,
+        };
+        let pinned = [crate::commands::pinned::PinnedCommand {
+            label: "pr".into(),
+            command: "/pr".into(),
+        }];
+        let rects = chip_row::layout_chip_row(chips_area, &pinned);
+        assert!(
+            rects[0].x >= chip_area.x + hint_w + 2,
+            "chip clears the hint"
+        );
     }
 }

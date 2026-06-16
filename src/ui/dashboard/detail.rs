@@ -350,27 +350,16 @@ fn render_container(
     theme: &Theme,
     offset: &mut u16,
 ) {
-    use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+    use ratatui::widgets::Paragraph;
 
     if module_ids.is_empty() || area.height == 0 || area.width == 0 {
         return;
     }
 
-    // Reserve the rightmost column for the scrollbar so column width stays
-    // stable regardless of whether content currently overflows.
-    let content_width = area.width.saturating_sub(1);
-    let content_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: content_width,
-        height: area.height,
-    };
-    let bar_area = Rect {
-        x: area.x + content_width,
-        y: area.y,
-        width: 1,
-        height: area.height,
-    };
+    // Scrollbars are intentionally not drawn: content scrolls via keyboard/wheel
+    // and the full container width is used for content. Overflow is silent.
+    let content_width = area.width;
+    let content_area = area;
 
     let label_style = Style::default().fg(theme.path).add_modifier(Modifier::BOLD);
 
@@ -407,16 +396,6 @@ fn render_container(
     let end = (start + area.height as usize).min(virtual_lines.len());
     let visible: Vec<Line<'static>> = virtual_lines[start..end].to_vec();
     f.render_widget(Paragraph::new(visible), content_area);
-
-    if content_height > area.height {
-        let mut state = ScrollbarState::new(content_height as usize)
-            .position(*offset as usize)
-            .viewport_content_length(area.height as usize);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None);
-        f.render_stateful_widget(scrollbar, bar_area, &mut state);
-    }
 }
 
 use ratatui::style::{Modifier, Style};
@@ -1741,18 +1720,21 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        // Rightmost column (x=39) should be blank — no scrollbar painted.
+        // No column is reserved for a scrollbar, so no scrollbar track/thumb
+        // glyph is drawn in the rightmost column (x=39). Content is free to
+        // render there, so we assert the absence of scrollbar glyphs rather
+        // than blankness.
         for y in 0..10 {
             let sym = buf[(39, y)].symbol();
-            assert_eq!(
-                sym, " ",
-                "expected blank scrollbar column at row {y}, got {sym:?}"
+            assert!(
+                sym != "│" && sym != "█",
+                "unexpected scrollbar glyph {sym:?} in rightmost column at row {y}"
             );
         }
     }
 
     #[test]
-    fn render_container_tall_content_renders_scrollbar() {
+    fn render_container_tall_content_draws_no_scrollbar() {
         let backend = TestBackend::new(40, 4); // very short — forces overflow
         let mut terminal = Terminal::new(backend).unwrap();
         let reg = make_registry();
@@ -1789,11 +1771,17 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        let any_nonblank = (0..4).any(|y| buf[(39, y)].symbol() != " ");
-        assert!(
-            any_nonblank,
-            "expected scrollbar glyphs in rightmost column"
-        );
+        // Even though content overflows, no scrollbar is drawn. The bar would
+        // have occupied the rightmost column (x=39), so we constrain the check
+        // there rather than scanning the whole buffer — `│` legitimately
+        // appears elsewhere in the UI.
+        for y in 0..4 {
+            let sym = buf[(39, y)].symbol();
+            assert!(
+                sym != "│" && sym != "█",
+                "unexpected scrollbar glyph {sym:?} in rightmost column at row {y}"
+            );
+        }
     }
 
     #[test]

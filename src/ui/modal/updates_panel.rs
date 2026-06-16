@@ -157,9 +157,9 @@ pub fn render_updates_panel(
         scroll_offset_for_selected(selected_visual_line, lines.len(), body_area.height as usize);
 
     // No widget-level style: per-span styles drive the row colors, and
-    // every dim element (empty-repo hint, "(no repos)") already self-styles.
-    // A widget-level dim would leak into spans with fg=None — notably the
-    // workspace name when lifecycle is unknown.
+    // the dim "(no workspaces)" fallback already self-styles. A widget-level
+    // dim would leak into spans with fg=None — notably the workspace name
+    // when lifecycle is unknown.
     f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
         Paragraph::new(

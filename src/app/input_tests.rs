@@ -1162,6 +1162,47 @@ mod pm_state_tests {
     }
 
     #[test]
+    fn updates_panel_render_shows_global_empty_state_when_all_repos_empty() {
+        use crate::data::store::Store;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let store = Store::open_in_memory().unwrap();
+        // Repos exist but none have workspaces — exercises the global
+        // empty-state path (no headers, single "(no workspaces)" line).
+        store
+            .add_repo(std::path::Path::new("/tmp/r1"), "repo-alpha", "")
+            .unwrap();
+        store
+            .add_repo(std::path::Path::new("/tmp/r2"), "repo-beta", "")
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+
+        let backend = TestBackend::new(100, 30);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let rendered = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("(no workspaces)"),
+            "global empty-state line should render:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("repo-alpha") && !rendered.contains("repo-beta"),
+            "no repo headers should render when all repos are empty:\n{rendered}"
+        );
+    }
+
+    #[test]
     fn updates_panel_render_scrolls_to_keep_selected_visible() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use ratatui::Terminal;

@@ -12,8 +12,8 @@ HERO_ADD_PROTECT := 8:18
 # Hero: speed-ramp Codex's fix/commit churn (deadair can't touch it — the screen
 # is constantly changing). Span is absolute seconds in the collapsed clip, tuned
 # to the recorded take (re-confirm if you re-record — see demo/SPIKE-NOTES.md).
-HERO_RAMP_START := 44
-HERO_RAMP_END := 69
+HERO_RAMP_START := 33
+HERO_RAMP_END := 58
 HERO_RAMP_FACTOR := 3.5
 
 .PHONY: all clips clean hero parallel check

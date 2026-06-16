@@ -1720,13 +1720,15 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        // No column is reserved for a scrollbar; short content leaves the
-        // rightmost column (x=39) blank rather than painting a bar there.
+        // No column is reserved for a scrollbar, so no scrollbar track/thumb
+        // glyph is drawn in the rightmost column (x=39). Content is free to
+        // render there, so we assert the absence of scrollbar glyphs rather
+        // than blankness.
         for y in 0..10 {
             let sym = buf[(39, y)].symbol();
-            assert_eq!(
-                sym, " ",
-                "expected blank rightmost column at row {y}, got {sym:?}"
+            assert!(
+                sym != "│" && sym != "█",
+                "unexpected scrollbar glyph {sym:?} in rightmost column at row {y}"
             );
         }
     }
@@ -1769,16 +1771,16 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        // Even though content overflows, no scrollbar track/thumb glyphs are
-        // drawn anywhere — scrollbars are intentionally hidden.
+        // Even though content overflows, no scrollbar is drawn. The bar would
+        // have occupied the rightmost column (x=39), so we constrain the check
+        // there rather than scanning the whole buffer — `│` legitimately
+        // appears elsewhere in the UI.
         for y in 0..4 {
-            for x in 0..40 {
-                let sym = buf[(x, y)].symbol();
-                assert!(
-                    sym != "│" && sym != "█",
-                    "unexpected scrollbar glyph {sym:?} at ({x},{y})"
-                );
-            }
+            let sym = buf[(39, y)].symbol();
+            assert!(
+                sym != "│" && sym != "█",
+                "unexpected scrollbar glyph {sym:?} in rightmost column at row {y}"
+            );
         }
     }
 

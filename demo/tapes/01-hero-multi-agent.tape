@@ -36,6 +36,8 @@ Sleep 1s
 # and stay at 1x — each is well under deadair's 5s freeze threshold, and the moving
 # selector is changing pixels anyway, so nothing here gets collapsed.
 Ctrl+x
+Sleep 1800ms          # dwell on the new centered "actions" overlay so it reads
+                      # (static screen, < MIN_FREEZE 5s, so deadair won't collapse it)
 Type "a"
 Sleep 2500ms          # hold on the open picker — all four harnesses on screen
 Down

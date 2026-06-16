@@ -126,8 +126,9 @@ fn header_line(
     let used_left: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let gap = width.saturating_sub(used_left + path_len);
     if gap > RULE_PAD * 2 {
+        let rule = "─".repeat(gap - RULE_PAD * 2);
         spans.push(Span::raw(" ".repeat(RULE_PAD)));
-        spans.push(Span::styled("─".repeat(gap - RULE_PAD * 2), theme.dim_style()));
+        spans.push(Span::styled(rule, theme.dim_style()));
         spans.push(Span::raw(" ".repeat(RULE_PAD)));
     } else {
         spans.push(Span::raw(" ".repeat(gap)));

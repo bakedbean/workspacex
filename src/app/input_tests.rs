@@ -1343,8 +1343,8 @@ mod pm_state_tests {
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| draw_for_test(f, &mut app)).unwrap();
         let buf = term.backend().buffer();
-        // The bottom row is the footer with "Ctrl-x d detach". The second-
-        // to-last row should NOT contain a status indicator glyph.
+        // The bottom line shows the workspace label + attention items (no footer).
+        // The second-to-last row should NOT contain a status indicator glyph.
         let h = buf.area.height;
         let second_to_last: String = (0..buf.area.width)
             .map(|x| buf[(x, h - 2)].symbol())
@@ -1410,6 +1410,67 @@ mod pm_state_tests {
             app.modal,
             Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_down_enter_fires_highlighted_action_pm() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Spawn a PM session so handle_key_attached_pm has one (mirrors the
+        // setup used by leader_u_in_attached_pm_opens_updates_panel).
+        let cwd = PathBuf::from(".");
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let s = app
+            .sessions
+            .spawn_pm(
+                &cwd,
+                80,
+                24,
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        app.pm = Some(s);
+        app.view = crate::ui::View::AttachedPm;
+
+        // Arm the leader with Ctrl-x; overlay highlight should be at index 0.
+        handle_key_attached_pm(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "leader should be armed after Ctrl-x");
+        assert_eq!(app.leader_selected, 0, "highlight starts at index 0");
+
+        // Down once moves to index 1 ("u" = updates) but keeps the leader armed.
+        handle_key_attached_pm(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(app.leader_selected, 1, "Down moves highlight to index 1");
+        assert!(app.leader_pending, "↑↓ keep the leader armed");
+
+        // Enter fires the highlighted action (index 1 = updates panel).
+        handle_key_attached_pm(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert!(!app.leader_pending, "Enter clears the leader");
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::UpdatesPanel { .. })
+            ),
+            "Enter on the updates row opens the updates panel"
+        );
     }
 
     fn mouse_event(kind: MouseEventKind) -> MouseEvent {

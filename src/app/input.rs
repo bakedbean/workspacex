@@ -471,6 +471,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
+        app.leader_selected = 0;
         return Ok(());
     }
     match (k.code, k.modifiers) {
@@ -990,6 +991,35 @@ async fn handle_key_attached(
     }
     Ok(())
 }
+/// Fire a single PM-pane leader action for `k` (already-armed leader).
+/// Extracted so the letter-accelerator path and the overlay's Enter path
+/// dispatch through identical code. Caller clears `leader_pending` first.
+async fn dispatch_pm_leader_action(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    let session = match app.pm.clone() {
+        Some(s) => s,
+        None => {
+            app.view = View::Dashboard;
+            return Ok(());
+        }
+    };
+    match k.code {
+        KeyCode::Char('d') => {
+            app.view = View::Dashboard;
+            Ok(())
+        }
+        KeyCode::Char('x') => {
+            // Send a literal Ctrl-x (0x18) to claude.
+            session.scroll_to_live();
+            let _ = session.writer.send(vec![0x18]).await;
+            Ok(())
+        }
+        KeyCode::Char('u') => {
+            app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
 async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
     let session = match app.pm.clone() {
         Some(s) => s,
@@ -1000,27 +1030,34 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
         }
     };
     if app.leader_pending {
-        app.leader_pending = false;
+        let items = crate::ui::attached::pm_nav_menu_items();
         match k.code {
-            KeyCode::Char('d') => {
-                app.view = View::Dashboard;
+            KeyCode::Up => {
+                let n = items.len();
+                app.leader_selected = (app.leader_selected + n - 1) % n;
                 return Ok(());
             }
-            KeyCode::Char('x') => {
-                // Send a literal Ctrl-x (0x18) to claude.
-                session.scroll_to_live();
-                let _ = session.writer.send(vec![0x18]).await;
+            KeyCode::Down => {
+                let n = items.len();
+                app.leader_selected = (app.leader_selected + 1) % n;
                 return Ok(());
             }
-            KeyCode::Char('u') => {
-                app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+            KeyCode::Enter => {
+                app.leader_pending = false;
+                if let Some(key) = crate::ui::attached::nav_item_key(&items, app.leader_selected) {
+                    return dispatch_pm_leader_action(app, key).await;
+                }
                 return Ok(());
             }
-            _ => return Ok(()),
+            _ => {
+                app.leader_pending = false;
+                return dispatch_pm_leader_action(app, k).await;
+            }
         }
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
+        app.leader_selected = 0;
         return Ok(());
     }
     let bytes = encode_key(k);

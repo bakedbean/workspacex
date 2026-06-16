@@ -94,6 +94,14 @@ pub fn nav_item_key(items: &[NavItem], selected: usize) -> Option<crossterm::eve
     items.get(selected).and_then(|i| key_for_glyph(i.glyph))
 }
 
+/// Visible column width of one overlay row, mirroring the spans built in
+/// `render_nav_overlay`'s loop: marker(2) + key pill(`2 + glyph_len`, per
+/// `key_pill_spans`) + gap(3) + label. Measuring the pill with the real glyph
+/// length keeps multi-cell glyphs like "←→" from being truncated.
+fn nav_row_width(glyph_len: usize, label_len: usize) -> usize {
+    2 + (2 + glyph_len) + 3 + label_len
+}
+
 /// Draw the centered Ctrl-x navigation overlay. Keybind column first, then
 /// label; the `selected` row carries a `▌` marker. `pinned_hint` adds a
 /// "1-9 pinned" note to the footer hint line when the workspace has pinned
@@ -111,11 +119,12 @@ pub fn render_nav_overlay(
     } else {
         "↑↓ move · enter · esc"
     };
-    // Width: marker(2) + pill(" g " = 3) + gap(3) + label, max over rows & hint.
-    let row_w = |label_len: usize| 2 + 3 + 3 + label_len;
+    // Widest row (or the hint) sets the box width. Each row is measured with
+    // its actual glyph width via `nav_row_width` so multi-cell glyphs like
+    // "←→" don't get truncated on narrow terminals.
     let content_w = items
         .iter()
-        .map(|i| row_w(i.label.chars().count()))
+        .map(|i| nav_row_width(i.glyph.chars().count(), i.label.chars().count()))
         .chain(std::iter::once(hint.chars().count()))
         .max()
         .unwrap_or(20);
@@ -181,6 +190,24 @@ fn centered_box(area: Rect, w: u16, h: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nav_row_width_uses_real_glyph_width() {
+        // The "←→" focus-pane row has a 2-char glyph, so its pill is 4 cells
+        // (2 + 2), not the 3 a single-char glyph gets. The box width must be
+        // measured with the real glyph length or the row truncates on narrow
+        // terminals (regression: the old formula hard-coded the pill at 3).
+        let focus = nav_menu_items(true)
+            .into_iter()
+            .find(|i| i.glyph == "←→")
+            .unwrap();
+        assert_eq!(
+            nav_row_width(focus.glyph.chars().count(), focus.label.chars().count()),
+            2 + 4 + 3 + "focus pane".chars().count(),
+        );
+        // A single-char glyph still measures as before (pill width 3).
+        assert_eq!(nav_row_width(1, "updates".chars().count()), 2 + 3 + 3 + 7);
+    }
 
     #[test]
     fn single_pane_lists_detach_not_close_pane() {

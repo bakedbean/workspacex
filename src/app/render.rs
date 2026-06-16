@@ -467,7 +467,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             };
             let agents_present = !focused_agents_list.is_empty();
 
-            let (pane_area, chip_area, bottom_area, agents_area) =
+            let (info_area, separator_area, pane_area, chip_area, agents_area) =
                 attached::layout_chrome(area, agents_present);
             let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
                 attention
@@ -479,11 +479,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                                 (
                                     s.workspace_id,
                                     ratatui::layout::Rect {
-                                        x: bottom_area
+                                        x: info_area
                                             .x
                                             .saturating_add(prefix_w as u16)
                                             .saturating_add(s.start_col),
-                                        y: bottom_area.y,
+                                        y: info_area.y,
                                         width: s.width,
                                         height: 1,
                                     },
@@ -553,8 +553,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 f,
                 &specs,
                 &dividers,
+                info_area,
+                separator_area,
                 chip_area,
-                bottom_area,
                 agents_area,
                 &focused_label,
                 focused_agent,
@@ -588,7 +589,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 };
                 // PM pane is out of scope for pinned commands per spec.
                 let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
-                let (pane_area, chip_area, bottom_area, agents_area) =
+                let (info_area, separator_area, pane_area, chip_area, agents_area) =
                     attached::layout_chrome(area, false);
                 let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
                     attention
@@ -600,11 +601,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                                     (
                                         s.workspace_id,
                                         ratatui::layout::Rect {
-                                            x: bottom_area
+                                            x: info_area
                                                 .x
                                                 .saturating_add(prefix_w as u16)
                                                 .saturating_add(s.start_col),
-                                            y: bottom_area.y,
+                                            y: info_area.y,
                                             width: s.width,
                                             height: 1,
                                         },
@@ -626,8 +627,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     f,
                     &specs,
                     &[],
+                    info_area,
+                    separator_area,
                     chip_area,
-                    bottom_area,
                     agents_area,
                     "project-manager",
                     None,

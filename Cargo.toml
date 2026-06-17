@@ -47,6 +47,7 @@ rand = "0.10"
 futures = "0.3"
 shlex = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
+strip-ansi-escapes = "0.2.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

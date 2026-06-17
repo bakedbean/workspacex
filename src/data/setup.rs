@@ -441,7 +441,10 @@ mod tests {
 
     #[tokio::test]
     async fn empty_segments_are_skipped_and_trailing_flushed() {
-        assert_eq!(collect_segments(b"line\n\nblank").await, vec!["line", "blank"]);
+        assert_eq!(
+            collect_segments(b"line\n\nblank").await,
+            vec!["line", "blank"]
+        );
     }
 
     #[tokio::test]

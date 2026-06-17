@@ -1139,6 +1139,8 @@ async fn handle_key_modal(
                 let progress = crate::data::progress::SetupProgress::shared();
                 app.modal = Some(Modal::SetupRunning {
                     cancel: cancel.clone(),
+                    progress: progress.clone(),
+                    started: std::time::Instant::now(),
                 });
                 let shared_clone = shared.clone();
                 tokio::spawn(async move {
@@ -1228,7 +1230,7 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        Modal::SetupRunning { cancel } => {
+        Modal::SetupRunning { cancel, .. } => {
             // Esc cancels in-flight create; every other key (including Enter)
             // is intentionally ignored during creation.
             if k.code == KeyCode::Esc {

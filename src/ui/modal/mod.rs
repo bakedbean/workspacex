@@ -53,6 +53,8 @@ pub enum Modal {
     },
     SetupRunning {
         cancel: tokio_util::sync::CancellationToken,
+        progress: crate::data::progress::SharedProgress,
+        started: std::time::Instant,
     },
     ArchiveRunning {
         step: ArchiveStep,
@@ -190,9 +192,25 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             "archive workspace",
             format!("archive '{name}'?\n\n[y] yes   [n]/[esc] cancel"),
         ),
-        Modal::SetupRunning { .. } => {
+        Modal::SetupRunning {
+            progress, started, ..
+        } => {
             let frame = crate::ui::dashboard::spinner::frame(tick);
-            let body = format!("  {frame} Creating workspace…\n\n  [esc] cancel",);
+            let (phase_label, tail) = match progress.lock() {
+                Ok(p) => (p.phase().label(), p.recent(6)),
+                Err(_) => ("Working", Vec::new()),
+            };
+            let secs = started.elapsed().as_secs();
+            let elapsed = format!("{:02}:{:02}", secs / 60, secs % 60);
+            let mut body = format!("  {frame} {phase_label}…   ({elapsed})\n\n");
+            if tail.is_empty() {
+                body.push_str("  (waiting for output…)\n");
+            } else {
+                for line in &tail {
+                    body.push_str(&format!("  {}\n", truncate_to(line, 54)));
+                }
+            }
+            body.push_str("\n  [esc] cancel");
             ("new workspace", body)
         }
         Modal::ArchiveRunning {
@@ -271,6 +289,18 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
     f.render_widget(para, rect);
 }
 
+/// Truncate `s` to at most `max` characters, appending '…' when cut. Used to
+/// keep setup-output tail lines inside the modal's inner width.
+fn truncate_to(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
 /// Uppercase only the first character of `s`. Used to render the agent
 /// name in the AgentMissing modal as a proper sentence-start without
 /// changing the canonical lowercase form returned by `AgentKind::display_name`.
@@ -287,6 +317,63 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    fn render_to_text(modal: &Modal) -> String {
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| render(f, f.area(), modal, 0, &theme))
+            .unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn setup_running_shows_phase_and_recent_lines() {
+        use crate::data::progress::{SetupPhase, SetupProgress};
+        let progress = SetupProgress::shared();
+        {
+            let mut p = progress.lock().unwrap();
+            p.set_phase(SetupPhase::RunningSetup);
+            p.push_line("mise install");
+            p.push_line("Installing dependencies");
+        }
+        let modal = Modal::SetupRunning {
+            cancel: tokio_util::sync::CancellationToken::new(),
+            progress,
+            started: std::time::Instant::now(),
+        };
+        let text = render_to_text(&modal);
+        assert!(text.contains("Running setup"), "missing phase:\n{text}");
+        assert!(
+            text.contains("Installing dependencies"),
+            "missing line:\n{text}"
+        );
+        assert!(text.contains("[esc] cancel"), "missing footer:\n{text}");
+    }
+
+    #[test]
+    fn setup_running_truncates_overwide_line() {
+        use crate::data::progress::SetupProgress;
+        let progress = SetupProgress::shared();
+        progress.lock().unwrap().push_line(&"x".repeat(200));
+        let modal = Modal::SetupRunning {
+            cancel: tokio_util::sync::CancellationToken::new(),
+            progress,
+            started: std::time::Instant::now(),
+        };
+        let text = render_to_text(&modal);
+        assert!(
+            text.contains('…'),
+            "over-wide line should be truncated:\n{text}"
+        );
+    }
 
     #[test]
     fn workspace_actions_overlay_lists_all_actions() {

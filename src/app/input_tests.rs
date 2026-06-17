@@ -5751,15 +5751,13 @@ mod process_command_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn question_mark_opens_and_closes_workspace_actions_overlay() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        use std::path::PathBuf;
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
 
         let open = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
         handle_key_dashboard(&mut app, open).await.unwrap();
         assert!(
-            matches!(app.modal, Some(crate::ui::modal::Modal::WorkspaceActions)),
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
             "expected WorkspaceActions modal open, got {:?}",
             app.modal
         );
@@ -5775,5 +5773,17 @@ mod process_command_tests {
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         handle_key_modal(&mut app, &shared, esc).await.unwrap();
         assert!(app.modal.is_none(), "expected overlay dismissed on Esc");
+
+        // Verify '?' also toggles the overlay closed while it is open.
+        let open2 = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        handle_key_dashboard(&mut app, open2).await.unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "expected WorkspaceActions modal open on second open, got {:?}",
+            app.modal
+        );
+        let close_q = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        handle_key_modal(&mut app, &shared, close_q).await.unwrap();
+        assert!(app.modal.is_none(), "expected overlay dismissed on '?'");
     }
 }

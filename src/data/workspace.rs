@@ -1,3 +1,4 @@
+use crate::data::progress::{SetupPhase, SharedProgress};
 use crate::data::setup::{self, SetupLine, SetupResult};
 use crate::data::store::{
     NewWorkspace, Repo, SetupStatus, Store, Workspace, WorkspaceId, WorkspaceState,
@@ -141,6 +142,9 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
 /// cancellation returns `Err(Cancelled)` cleanly. Cancellation during
 /// setup marks the row `SetupStatus::Cancelled` and leaves the worktree
 /// on disk.
+// Workspace creation genuinely needs all these inputs; a params struct would
+// not improve clarity here.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_with_app(
     app: crate::app::SharedApp,
     repo: Repo,
@@ -148,6 +152,7 @@ pub async fn create_with_app(
     worktree_base: PathBuf,
     yolo: bool,
     agent: AgentKind,
+    progress: SharedProgress,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<CreatedWorkspace> {
     // --- Phase 1 (short, locked): compute names/paths, no I/O. ---
@@ -168,6 +173,9 @@ pub async fn create_with_app(
     }
 
     // --- Phase 2 (unlocked, async): fetch base branch. ---
+    if let Ok(mut p) = progress.lock() {
+        p.set_phase(SetupPhase::Fetching);
+    }
     let base = repo
         .base_branch
         .as_deref()
@@ -203,6 +211,9 @@ pub async fn create_with_app(
     }
 
     // --- Phase 4 (unlocked, async): create worktree. ---
+    if let Ok(mut p) = progress.lock() {
+        p.set_phase(SetupPhase::CreatingWorktree);
+    }
     let worktree_result =
         crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await;
     if let Err(e) = worktree_result {
@@ -222,12 +233,23 @@ pub async fn create_with_app(
     }
 
     // --- Phase 5 (unlocked, async): run setup script. ---
+    if let Ok(mut p) = progress.lock() {
+        p.set_phase(SetupPhase::RunningSetup);
+    }
+    let progress_lines = progress.clone();
     let setup_result = setup::run_setup(
         repo.setup_script.as_deref(),
         &repo.path,
         &worktree_path,
         cancel.clone(),
-        |_| {},
+        move |line| {
+            let text = match line {
+                SetupLine::Stdout(s) | SetupLine::Stderr(s) => s,
+            };
+            if let Ok(mut p) = progress_lines.lock() {
+                p.push_line(&text);
+            }
+        },
     )
     .await;
     let setup_result = match setup_result {
@@ -1042,6 +1064,7 @@ mod tests {
         };
 
         let cancel = CancellationToken::new();
+        let progress = crate::data::progress::SetupProgress::shared();
         let created = create_with_app(
             app.clone(),
             repo,
@@ -1049,6 +1072,7 @@ mod tests {
             base.path().to_path_buf(),
             false,
             crate::pty::session::AgentKind::Claude,
+            progress,
             cancel,
         )
         .await

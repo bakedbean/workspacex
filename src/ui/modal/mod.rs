@@ -281,3 +281,32 @@ fn capitalize_first(s: &str) -> String {
         None => String::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn workspace_actions_overlay_lists_all_actions() {
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| render(f, f.area(), &Modal::WorkspaceActions, 0, &theme))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let text: String = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("edit"), "missing 'edit':\n{text}");
+        assert!(text.contains("term"), "missing 'term':\n{text}");
+        assert!(text.contains("diff"), "missing 'diff':\n{text}");
+        assert!(text.contains("lazygit"), "missing 'lazygit':\n{text}");
+        assert!(text.contains("chronox"), "missing 'chronox':\n{text}");
+    }
+}

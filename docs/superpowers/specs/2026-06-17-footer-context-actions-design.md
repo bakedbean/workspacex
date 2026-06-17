@@ -2,7 +2,15 @@
 
 **Date:** 2026-06-17
 **Branch:** `bakedbean/footer-context-actions`
-**Status:** Approved design
+**Status:** Implemented (PR #193)
+
+> **Updated post-implementation.** This doc has been reconciled with the shipped
+> behavior. Three refinements came out of testing after the original design was
+> approved: the overlay is **navigable** (it drives the dashboard selection and
+> dispatches the action keys rather than swallowing them), `?` only opens **when
+> a workspace is selected**, and the `? actions` footer pill is **hidden** (not
+> just inert) when no workspace is selected. The sections below reflect what was
+> built; see PR #193 for the commit history.
 
 ## Problem
 
@@ -27,7 +35,10 @@ listing them. The footer stays a single stable line.
 ## Non-goals
 
 - No change to the behaviour of the `e`/`t`/`v`/`g`/`c` key handlers themselves.
-- No selection-awareness inside the overlay (it is a static reference list).
+- The overlay's **content** is a static reference list (it does not re-render
+  per selection). It is, however, **navigable**: arrow keys move the underlying
+  dashboard selection while the card stays open. "Static" refers to the rendered
+  text, not to interactivity.
 - No general/global help screen — the overlay lists workspace actions only.
 
 ## Design
@@ -36,50 +47,85 @@ listing them. The footer stays a single stable line.
 
 Remove the four entries `("e", "edit")`, `("t", "term")`, `("v", "diff")`,
 `("g", "lazygit")` from the `keys` array. Add `("?", "actions")` immediately
-before `("q", "quit")`. Resulting footer:
+before `("q", "quit")` — **but only when a workspace is selected**. The footer
+renderer is threaded a `workspace_selected: bool`
+(`footer()` → `render_footer()` → the `render.rs` call site, computed as
+`matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)))`) and the
+`? actions` entry is conditionally pushed. When a repo header or nothing is
+selected the pill is **omitted entirely** (not shown-but-inert). Footer with a
+workspace selected:
 
 ```
 ↑↓ nav   ↵ open   n new   G group   / filter   ? actions   q quit
+```
+
+Footer with no workspace selected (repo header / empty):
+
+```
+↑↓ nav   ↵ open   n new   G group   / filter   q quit
 ```
 
 The clickable-pill machinery is unchanged. The footer loop maps each glyph to a
 synthesized key via `key_for_glyph` (`src/ui/footer.rs:41-58`); `?` maps to the
 `?` key event, so clicking the `? actions` pill opens the overlay exactly as
 typing `?` does. The four removed pills lose their hint **and** their clickable
-`FooterHintSpan` together — no orphaned click region remains.
+`FooterHintSpan` together — no orphaned click region remains. Because the pill
+is omitted when no workspace is selected, there is no clickable region for it
+in that state either.
 
 ### 2. New modal variant (`src/ui/modal/mod.rs:42`)
 
 Add a dataless variant `Modal::WorkspaceActions` to the `Modal` enum. This reuses
 the existing modal system, which is the right tier: when `app.modal.is_some()`
 the dispatch gate at `src/app/input.rs:2051` routes **all** keys to
-`handle_key_modal`, fully capturing input so the `e`/`t`/`v`/`g` keys cannot fire
-their actions while the overlay is open. (The `/` filter and `G` group are inline
-toggles that only partially capture input — wrong tier for this.)
+`handle_key_modal`. (The `/` filter and `G` group are inline toggles that only
+partially capture input — wrong tier for this.)
+
+Rather than swallow every non-dismiss key, the `WorkspaceActions` arm makes the
+card **navigable** by selectively forwarding keys back to `handle_key_dashboard`
+(a safe one-level call — the dashboard handler never calls back into the modal
+handler). See §3 for the exact key routing.
 
 ### 3. Open / dismiss (`src/app/input.rs`)
 
-- **Open:** in `handle_key_dashboard`, add an arm
-  `(KeyCode::Char('?'), _) => { app.modal = Some(Modal::WorkspaceActions); }`,
-  placed alongside the other dashboard key arms (near `/` at `input.rs:672` and
-  `G` at `input.rs:662`).
-- **Dismiss:** in `handle_key_modal`, the `Modal::WorkspaceActions` arm closes the
-  overlay (`app.modal = None`) on `Esc` and on `?` (toggle). All other keys are
-  swallowed with no pass-through, consistent with modal capture.
+- **Open (gated):** in `handle_key_dashboard`, add an arm that opens the overlay
+  **only when a workspace is selected**:
+  ```rust
+  (KeyCode::Char('?'), _) => {
+      if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+          app.modal = Some(Modal::WorkspaceActions);
+      }
+  }
+  ```
+  On a repo header or empty selection, `?` is a no-op. (This pairs with the
+  footer pill being hidden in that state — there is nothing to open.)
+- **Key routing while open** — the `Modal::WorkspaceActions` arm in
+  `handle_key_modal`:
+  - `Esc` / `?` → close the overlay (`app.modal = None`), nothing else.
+  - `Up` / `Down` / `j` / `k` → forward to `handle_key_dashboard` to move the
+    dashboard selection, **keeping the card open** (a "navigable card").
+  - `e` / `t` / `v` / `g` / `c` / `Enter` → close the overlay, then forward to
+    `handle_key_dashboard` so the action fires against the current selection.
+  - Any other key → inert (swallowed), card stays open.
 
-### 4. Render (`src/app/render.rs:653` + small renderer)
+### 4. Render (generic text-modal path in `src/ui/modal/mod.rs`)
 
-Add a `Modal::WorkspaceActions` arm to the `&app.modal` match. Draw the overlay
-with the existing floating-box idiom — `centered(area, w, h)` → `Clear` →
-`Block::default().borders(Borders::ALL).title(...).style(theme.dim_style())`,
-filling `block.inner(rect)` (the `panel_frame` pattern in `src/ui/modal/mod.rs`).
-Size roughly `centered(area, 40, 11)`, adjusted to fit content.
+No `src/app/render.rs` change is needed. `WorkspaceActions` is **not** added to
+the early-return guard in `modal::render`, so the dispatch catch-all
+(`other => modal::render(...)`) routes it to the existing generic text-modal
+renderer, which draws it in the shared `centered(area, 60, 14)` → `Clear` →
+bordered `Block` box styled with `theme.header_style()`. The
+`WorkspaceActions` arm in `render()` just returns a `(title, body)` pair. (The
+earlier `panel_frame`/dedicated-`render.rs`-arm approach was dropped in favor of
+this simpler path — fewer touch points, consistent with the other small text
+modals.)
 
-Static content (two-column layout to stay compact):
+Static content (`(title, body)`):
 
 ```
- Workspace actions
- (apply to the selected workspace)
+ workspace actions
+
+ These apply to the selected workspace:
 
    e   edit        t   term
    v   diff        g   lazygit
@@ -88,25 +134,33 @@ Static content (two-column layout to stay compact):
    ?/Esc  close
 ```
 
-Body text uses `theme.header_style()` for the title and normal/`dim_style` for
-the rows, matching the other modals.
-
 ## Testing
 
-- Unit/layout-level: assert the footer `keys` array no longer contains
-  edit/term/diff/lazygit and does contain `("?", "actions")`.
-- Input: `?` from the dashboard sets `app.modal = Some(Modal::WorkspaceActions)`;
-  `Esc` and `?` from within the overlay clear it; an action key such as `e` while
-  the overlay is open does not invoke the editor (input is captured by the modal
-  gate).
-- Manual smoke test in the running TUI: footer reads correctly, `?` opens the
-  box, click on the `? actions` pill opens it, Esc/`?` close it.
+- Unit/layout-level: with a workspace selected the footer contains
+  `("?", "actions")` and not edit/term/diff/lazygit; with no workspace selected
+  the `? actions` pill is omitted (hint count drops accordingly).
+- Render: rendering `Modal::WorkspaceActions` produces a box listing all five
+  action labels (edit/term/diff/lazygit/chronox).
+- Input — gating: `?` opens the overlay only when a workspace is selected; it is
+  a no-op on a repo header or empty selection.
+- Input — navigable card: from within the overlay, `Esc`/`?` close it; a nav key
+  (`Down`) keeps the card open; an action key (e.g. `c`) and `Enter` close the
+  card (forwarding to the dashboard handler, which acts on the selection).
+- Manual smoke test in the running TUI: footer shows `? actions` only with a
+  workspace selected; `?` opens the box; clicking the pill opens it; arrows
+  navigate with the card open; `e/t/v/g/c`/Enter act + close; Esc/`?` close.
 
 ## Commits (on this branch)
 
-1. Add `Modal::WorkspaceActions` variant, its renderer, and the open/dismiss
-   input wiring.
-2. Remove the four context-only hints from the footer array and add `? actions`.
+As shipped in PR #193 (feedback-driven refinements landed as their own commits):
+
+1. Add `Modal::WorkspaceActions` variant + renderer.
+2. Open the overlay with `?`.
+3. Remove the four context-only hints from the footer array, add `? actions`.
+4. Render-content test asserting the overlay lists all five actions.
+5. Make the overlay a navigable card.
+6. Gate `?` to open only when a workspace is selected.
+7. Hide the `? actions` footer pill when no workspace is selected.
 
 ## Decisions / defaults (easily revisited)
 

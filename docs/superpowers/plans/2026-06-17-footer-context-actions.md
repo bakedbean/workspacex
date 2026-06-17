@@ -2,9 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **⚠️ Plan amended after implementation.** Tasks 1–4 below were executed as
+> written. Three refinements then came out of testing and are **not** captured
+> as task sections here: (a) the overlay is **navigable** and dispatches the
+> action keys rather than swallowing them, (b) `?` opens **only when a workspace
+> is selected**, and (c) the `? actions` footer pill is **hidden** when no
+> workspace is selected. For the authoritative final behavior, read the design
+> spec (`docs/superpowers/specs/2026-06-17-footer-context-actions-design.md`),
+> which has been reconciled with the shipped code (PR #193). The flagged claims
+> below have been corrected inline so they don't mislead, but the step-by-step
+> task bodies still describe the original (pre-refinement) approach.
+
 **Goal:** Remove the four workspace-only hints (edit/term/diff/lazygit) from the dashboard footer and surface all workspace-only actions (incl. chronox) in a `?`-triggered modal overlay.
 
-**Architecture:** Add a dataless `Modal::WorkspaceActions` variant that reuses the existing modal system (full input capture via the `app.modal` dispatch gate + the generic centered/bordered `modal::render` text path). Wire `?` to open it from the dashboard and Esc/`?` to close it. Then trim the static footer `keys` array and add a `? actions` hint.
+**Architecture:** Add a dataless `Modal::WorkspaceActions` variant that reuses the existing modal system (the `app.modal` dispatch gate routes all keys to `handle_key_modal` + the generic centered/bordered `modal::render` text path). The overlay's key arm makes it a **navigable card**: `Esc`/`?` close; arrow keys forward to the dashboard to move the selection while the card stays open; `e/t/v/g/c`/`Enter` close then fire against the selection. Wire `?` to open it from the dashboard **only when a workspace is selected**. Trim the static footer `keys` array and add a `? actions` hint that is shown **only when a workspace is selected**.
 
 **Tech Stack:** Rust, ratatui, crossterm. Build/test with `cargo`. Formatting gate: rustfmt 1.95.0 via `mise exec rust@1.95.0 -- cargo fmt --all --check`.
 
@@ -95,7 +106,15 @@ In `src/app/input.rs`, in `handle_key_modal`, add a `Modal::WorkspaceActions` ar
         }
 ```
 
-All other keys fall through and are swallowed (the modal dispatch gate at `input.rs:2051` already prevents them from reaching dashboard handlers), so `e`/`t`/`v`/`g` cannot fire their actions while the overlay is open.
+> **Amended:** the shipped arm does **not** swallow the action keys. It was
+> refined into a navigable card: `Up`/`Down`/`j`/`k` forward to
+> `handle_key_dashboard` to move the selection (card stays open), and
+> `e`/`t`/`v`/`g`/`c`/`Enter` close the overlay then forward to
+> `handle_key_dashboard` so the action fires against the current selection. Only
+> `Esc`/`?` close without side effects, and unrecognized keys are inert. See the
+> design spec §3 for the final arm.
+
+In the original plan, all other keys fell through and were swallowed by this arm (the modal dispatch gate at `input.rs:2051` prevents keys from reaching dashboard handlers unless this arm forwards them explicitly).
 
 - [ ] **Step 2: Build to verify exhaustiveness is satisfied**
 
@@ -104,15 +123,20 @@ Expected: PASS (both match sites now cover `WorkspaceActions`). The overlay can 
 
 - [ ] **Step 3: Add the open arm**
 
-In `src/app/input.rs`, in `handle_key_dashboard`, add an arm to open the overlay. Place it immediately after the `(KeyCode::Char('/'), _)` filter arm that ends at `input.rs:674`:
+In `src/app/input.rs`, in `handle_key_dashboard`, add an arm to open the overlay. Place it immediately after the `(KeyCode::Char('/'), _)` filter arm that ends at `input.rs:674`.
+
+> **Amended:** the shipped arm gates the open on a workspace being selected
+> (see below). The original plan opened it unconditionally.
 
 ```rust
         (KeyCode::Char('?'), _) => {
-            app.modal = Some(Modal::WorkspaceActions);
+            if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+                app.modal = Some(Modal::WorkspaceActions);
+            }
         }
 ```
 
-Note `Modal` is already in scope in this file (used throughout, e.g. `input.rs:657`), so no new `use` is needed.
+Note `Modal` and `SelectionTarget` are already in scope in this file (used throughout, e.g. `input.rs:657` and the `e`/`t`/`v` arms at `input.rs:545-592`), so no new `use` is needed.
 
 - [ ] **Step 4: Build to verify the open arm compiles**
 
@@ -245,12 +269,12 @@ Expected: no diff. If it reports formatting changes, run `mise exec rust@1.95.0 
 
 - [ ] **Step 4: Manual smoke test in the running TUI**
 
-Run the dashboard (e.g. `cargo run`) and confirm:
-- Footer reads `↑↓ nav  ↵ open  n new  G group  / filter  ? actions  q quit` — no edit/term/diff/lazygit.
-- Pressing `?` opens a centered bordered box listing edit/term/diff/lazygit/chronox with `?/Esc  close`.
+Run the dashboard (e.g. `cargo run`) and confirm (reflecting the shipped behavior):
+- With a **workspace** selected, the footer reads `↑↓ nav  ↵ open  n new  G group  / filter  ? actions  q quit` — no edit/term/diff/lazygit. With a repo header / nothing selected, the `? actions` pill is **absent**.
+- With a workspace selected, pressing `?` opens a centered bordered box listing edit/term/diff/lazygit/chronox with `?/Esc  close`. On a repo header / empty selection, `?` is a **no-op**.
 - Esc closes it; `?` toggles it closed.
 - Clicking the `? actions` footer pill opens the same overlay.
-- With the overlay open, pressing `e`/`t`/`v`/`g` does nothing (no editor/terminal launches) — input is captured by the modal.
+- With the overlay open, `↑↓`/`j`/`k` move the dashboard selection while the card stays open; `e`/`t`/`v`/`g`/`c` and `Enter` fire against the current selection and close the card.
 
 ---
 

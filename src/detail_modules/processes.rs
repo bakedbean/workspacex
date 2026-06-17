@@ -33,6 +33,7 @@ mod tests {
             pid,
             ppid: 0,
             command: cmd.into(),
+            cmdline: String::new(),
             cwd: PathBuf::from("/"),
             listening: false,
         }

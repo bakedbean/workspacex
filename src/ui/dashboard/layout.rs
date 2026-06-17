@@ -99,12 +99,9 @@ pub fn footer(
         ("↑↓", "nav"),
         ("↵", "open"),
         ("n", "new"),
-        ("e", "edit"),
-        ("t", "term"),
-        ("v", "diff"),
-        ("g", "lazygit"),
         ("G", "group"),
         ("/", "filter"),
+        ("?", "actions"),
         ("q", "quit"),
     ];
     let key_style = Style::default()
@@ -229,7 +226,11 @@ mod tests {
         // pill's trailing pad + the label's leading space (2 cells total).
         assert!(t.contains("↑↓"), "key present: {t:?}");
         assert!(t.contains(" nav"), "nav label present: {t:?}");
-        assert!(t.contains(" lazygit"));
+        assert!(t.contains(" actions"), "actions hint present: {t:?}");
+        assert!(!t.contains(" lazygit"), "lazygit hint removed: {t:?}");
+        assert!(!t.contains(" edit"), "edit hint removed: {t:?}");
+        assert!(!t.contains(" term"), "term hint removed: {t:?}");
+        assert!(!t.contains(" diff"), "diff hint removed: {t:?}");
         assert!(t.contains(" group"));
         assert!(t.contains(" quit"));
         assert!(t.contains("24h "));
@@ -298,6 +299,6 @@ mod tests {
             .expect("quit hint present");
         assert_eq!(slice(quit), " q  quit", "quit hint covers pill + label");
         // Every printed keybind gets a hint (none drop out).
-        assert_eq!(hints.len(), 10);
+        assert_eq!(hints.len(), 7);
     }
 }

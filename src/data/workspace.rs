@@ -142,6 +142,9 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
 /// cancellation returns `Err(Cancelled)` cleanly. Cancellation during
 /// setup marks the row `SetupStatus::Cancelled` and leaves the worktree
 /// on disk.
+// Workspace creation genuinely needs all these inputs; a params struct would
+// not improve clarity here.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_with_app(
     app: crate::app::SharedApp,
     repo: Repo,

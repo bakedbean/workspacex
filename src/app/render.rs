@@ -345,8 +345,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             }
             // Render footer below detail/PM so the spec order
             // list / detail / pm / footer is respected.
-            let (graph_rect, footer_hint_rects) =
-                dashboard::render_footer(f, footer_area, &activity, &app.theme, window.label());
+            let (graph_rect, footer_hint_rects) = dashboard::render_footer(
+                f,
+                footer_area,
+                &activity,
+                &app.theme,
+                window.label(),
+                matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))),
+            );
             app.usage_graph_rect = Some(graph_rect);
             app.footer_hint_rects = footer_hint_rects;
         }

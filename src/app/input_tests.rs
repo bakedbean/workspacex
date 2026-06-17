@@ -5748,4 +5748,156 @@ mod process_command_tests {
             .join("\n");
         assert!(rendered.contains("run: cargo run"), "{rendered}");
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn question_mark_ignored_without_workspace_selection() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let k = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+
+        // 1. No selection (empty selectable, selection = None).
+        handle_key_dashboard(&mut app, k).await.unwrap();
+        assert!(
+            app.modal.is_none(),
+            "? with no selection should not open WorkspaceActions, got {:?}",
+            app.modal
+        );
+
+        // 2. Repo selected — ? must be a no-op.
+        app.selectable = vec![SelectionTarget::Repo(crate::data::store::RepoId(1))];
+        app.select_index(0);
+        handle_key_dashboard(&mut app, k).await.unwrap();
+        assert!(
+            app.modal.is_none(),
+            "? with a repo selected should not open WorkspaceActions, got {:?}",
+            app.modal
+        );
+
+        // 3. Workspace selected — positive control.
+        app.selectable = vec![SelectionTarget::Workspace(WorkspaceId(1))];
+        app.select_index(0);
+        handle_key_dashboard(&mut app, k).await.unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "? with workspace selected should open WorkspaceActions, got {:?}",
+            app.modal
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn question_mark_opens_and_closes_workspace_actions_overlay() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![SelectionTarget::Workspace(WorkspaceId(1))];
+        app.select_index(0);
+
+        let open = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        handle_key_dashboard(&mut app, open).await.unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "expected WorkspaceActions modal open, got {:?}",
+            app.modal
+        );
+
+        // Verify Esc closes it.
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_key_modal(&mut app, &shared, esc).await.unwrap();
+        assert!(app.modal.is_none(), "expected overlay dismissed on Esc");
+
+        // Verify '?' also toggles the overlay closed while it is open.
+        let open2 = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        handle_key_dashboard(&mut app, open2).await.unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "expected WorkspaceActions modal open on second open, got {:?}",
+            app.modal
+        );
+        let close_q = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        handle_key_modal(&mut app, &shared, close_q).await.unwrap();
+        assert!(app.modal.is_none(), "expected overlay dismissed on '?'");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn workspace_actions_overlay_navigates_and_dismisses() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let shared = shared();
+        app.selectable = vec![SelectionTarget::Workspace(WorkspaceId(1))];
+        app.select_index(0);
+
+        // 1. Open the overlay with '?'.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "expected WorkspaceActions modal open, got {:?}",
+            app.modal
+        );
+
+        // 2. Down via handle_key_modal keeps the card open.
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "Down should keep WorkspaceActions overlay open, got {:?}",
+            app.modal
+        );
+
+        // 3. Action key 'c' closes the card (no workspace selected, so the
+        //    action itself no-ops — the important thing is the overlay closes).
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            app.modal.is_none(),
+            "action key 'c' should close the overlay"
+        );
+
+        // 4. Re-open with '?', then Enter closes the card.
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "expected WorkspaceActions modal open again, got {:?}",
+            app.modal
+        );
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        // With no workspace selected, Enter is a no-op on the dashboard and sets
+        // no new modal. Assert that the WorkspaceActions card at minimum is gone.
+        assert!(
+            !matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "Enter should close the WorkspaceActions overlay, got {:?}",
+            app.modal
+        );
+    }
 }

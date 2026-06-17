@@ -93,20 +93,20 @@ pub fn footer(
     width: usize,
     theme: &Theme,
     window_label: &str,
+    workspace_selected: bool,
 ) -> (Line<'static>, u16, Vec<FooterHintSpan>) {
     let mut spans: Vec<Span<'static>> = Vec::new();
-    let keys = [
+    let mut keys: Vec<(&str, &str)> = vec![
         ("↑↓", "nav"),
         ("↵", "open"),
         ("n", "new"),
-        ("e", "edit"),
-        ("t", "term"),
-        ("v", "diff"),
-        ("g", "lazygit"),
         ("G", "group"),
         ("/", "filter"),
-        ("q", "quit"),
     ];
+    if workspace_selected {
+        keys.push(("?", "actions"));
+    }
+    keys.push(("q", "quit"));
     let key_style = Style::default()
         .fg(theme.dim)
         .add_modifier(Modifier::BOLD)
@@ -223,13 +223,17 @@ mod tests {
     fn footer_includes_keybinds_and_sparkline() {
         let theme = Theme::wsx();
         let samples = vec![1, 2, 3, 4, 5];
-        let (line, _, _) = footer(&samples, "v0.5.0", 200, &theme, "24h");
+        let (line, _, _) = footer(&samples, "v0.5.0", 200, &theme, "24h", true);
         let t = text(&line);
         // After the V5 pill treatment, key and label are separated by the
         // pill's trailing pad + the label's leading space (2 cells total).
         assert!(t.contains("↑↓"), "key present: {t:?}");
         assert!(t.contains(" nav"), "nav label present: {t:?}");
-        assert!(t.contains(" lazygit"));
+        assert!(t.contains(" actions"), "actions hint present: {t:?}");
+        assert!(!t.contains(" lazygit"), "lazygit hint removed: {t:?}");
+        assert!(!t.contains(" edit"), "edit hint removed: {t:?}");
+        assert!(!t.contains(" term"), "term hint removed: {t:?}");
+        assert!(!t.contains(" diff"), "diff hint removed: {t:?}");
         assert!(t.contains(" group"));
         assert!(t.contains(" quit"));
         assert!(t.contains("24h "));
@@ -243,7 +247,7 @@ mod tests {
         // text on the bar bg — a regression that re-extended bg_soft over
         // the label would visually merge key and label into one block.
         let theme = Theme::wsx();
-        let (line, _, _) = footer(&[1, 2, 3], "v0.5.0", 200, &theme, "24h");
+        let (line, _, _) = footer(&[1, 2, 3], "v0.5.0", 200, &theme, "24h", true);
         let key_span = line
             .spans
             .iter()
@@ -264,7 +268,7 @@ mod tests {
     #[test]
     fn footer_uses_provided_window_label_and_reports_graph_width() {
         let theme = Theme::wsx();
-        let (line, graph_w, _) = footer(&[1, 2, 3], "9.9.9", 120, &theme, "1w");
+        let (line, graph_w, _) = footer(&[1, 2, 3], "9.9.9", 120, &theme, "1w", true);
         let rendered = text(&line);
         assert!(rendered.contains("1w"), "label should appear: {rendered}");
         assert!(!rendered.contains("24h"), "old hardcoded label gone");
@@ -280,7 +284,7 @@ mod tests {
         // (↑↓ nav → Down) and a single-letter hint (q quit → Char('q'))
         // sit over their glyphs.
         let theme = Theme::wsx();
-        let (line, _, hints) = footer(&[1, 2, 3], "v0.5.0", 200, &theme, "24h");
+        let (line, _, hints) = footer(&[1, 2, 3], "v0.5.0", 200, &theme, "24h", true);
         let cells: Vec<char> = text(&line).chars().collect();
         let slice = |h: &FooterHintSpan| -> String {
             cells[h.start_col as usize..(h.start_col + h.width) as usize]
@@ -298,6 +302,20 @@ mod tests {
             .expect("quit hint present");
         assert_eq!(slice(quit), " q  quit", "quit hint covers pill + label");
         // Every printed keybind gets a hint (none drop out).
-        assert_eq!(hints.len(), 10);
+        assert_eq!(hints.len(), 7);
+    }
+
+    #[test]
+    fn footer_omits_actions_pill_without_workspace() {
+        let theme = Theme::wsx();
+        let samples = vec![1, 2, 3, 4, 5];
+        let (line, _, hints) = footer(&samples, "v0.5.0", 200, &theme, "24h", false);
+        let t = text(&line);
+        assert!(!t.contains(" actions"), "actions pill hidden: {t:?}");
+        assert!(t.contains(" nav"), "nav still present: {t:?}");
+        assert!(t.contains(" group"), "group still present: {t:?}");
+        assert!(t.contains(" filter"), "filter still present: {t:?}");
+        assert!(t.contains(" quit"), "quit still present: {t:?}");
+        assert_eq!(hints.len(), 6, "6 hints when actions omitted");
     }
 }

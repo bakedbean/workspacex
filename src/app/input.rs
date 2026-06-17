@@ -672,6 +672,11 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         (KeyCode::Char('/'), _) => {
             app.dashboard.filter = Some(String::new());
         }
+        (KeyCode::Char('?'), _) => {
+            if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+                app.modal = Some(Modal::WorkspaceActions);
+            }
+        }
         (KeyCode::Char('p'), _) if crate::app::render::pm_enabled(&app.store) => {
             if app.pm_visible {
                 // Hide pane; session stays alive.
@@ -1239,6 +1244,31 @@ async fn handle_key_modal(
                 app.modal = None;
             }
         }
+        Modal::WorkspaceActions => match k.code {
+            // Dismiss without side effects.
+            KeyCode::Esc | KeyCode::Char('?') => {
+                app.modal = None;
+            }
+            // Vertical navigation moves the dashboard selection underneath
+            // while the reference card stays open, so the user can target a
+            // workspace and then fire an action against it.
+            KeyCode::Up | KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('k') => {
+                handle_key_dashboard(app, k).await?;
+            }
+            // Workspace actions (and Enter/open) act on the current selection,
+            // then close the card.
+            KeyCode::Char('e')
+            | KeyCode::Char('t')
+            | KeyCode::Char('v')
+            | KeyCode::Char('g')
+            | KeyCode::Char('c')
+            | KeyCode::Enter => {
+                app.modal = None;
+                handle_key_dashboard(app, k).await?;
+            }
+            // Everything else is inert while the card is open.
+            _ => {}
+        },
         Modal::UpdatesPanel { selected } => {
             let selected_now = selected;
             // Build the same ordered workspace list the renderer uses, so

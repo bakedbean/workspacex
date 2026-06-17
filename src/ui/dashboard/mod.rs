@@ -87,7 +87,14 @@ pub fn render(
         ])
         .split(area);
     render_without_footer(f, chunks[0], inputs, state, tick, theme);
-    let _ = render_footer(f, chunks[1], inputs.activity, theme, "24h");
+    let _ = render_footer(
+        f,
+        chunks[1],
+        inputs.activity,
+        theme,
+        "24h",
+        matches!(state.selection, Some(SelectionTarget::Workspace(_))),
+    );
 }
 
 /// Convert a footer line's relative hint spans into absolute screen rects,
@@ -179,6 +186,7 @@ pub fn render_footer(
     activity: &[u32],
     theme: &Theme,
     window_label: &str,
+    workspace_selected: bool,
 ) -> (Rect, Vec<(Rect, crate::ui::footer::FooterHintAction)>) {
     let (line, graph_w, hints) = layout::footer(
         activity,
@@ -186,6 +194,7 @@ pub fn render_footer(
         area.width as usize,
         theme,
         window_label,
+        workspace_selected,
     );
     f.render_widget(Paragraph::new(line), area);
     let hint_rects = footer_hint_rects(area, area.y, &hints);

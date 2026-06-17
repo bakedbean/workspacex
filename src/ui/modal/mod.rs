@@ -100,6 +100,10 @@ pub enum Modal {
         /// (applied) window is read separately from the store at render time.
         selected: usize,
     },
+    /// Static reference card for the workspace-only actions
+    /// (edit/term/diff/lazygit/chronox) — the ones that act only on a
+    /// selected workspace. Carries no state — dismissed without side effects.
+    WorkspaceActions,
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -220,6 +224,15 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
                 binary = binary,
             ),
         ),
+        Modal::WorkspaceActions => (
+            "workspace actions",
+            "These apply to the selected workspace:\n\n  \
+             e   edit        t   term\n  \
+             v   diff        g   lazygit\n  \
+             c   chronox\n\n  \
+             ?/Esc  close"
+                .to_string(),
+        ),
         Modal::AgentPicker {
             selected, current, ..
         } => {
@@ -266,5 +279,34 @@ fn capitalize_first(s: &str) -> String {
     match chars.next() {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn workspace_actions_overlay_lists_all_actions() {
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        term.draw(|f| render(f, f.area(), &Modal::WorkspaceActions, 0, &theme))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let text: String = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("edit"), "missing 'edit':\n{text}");
+        assert!(text.contains("term"), "missing 'term':\n{text}");
+        assert!(text.contains("diff"), "missing 'diff':\n{text}");
+        assert!(text.contains("lazygit"), "missing 'lazygit':\n{text}");
+        assert!(text.contains("chronox"), "missing 'chronox':\n{text}");
     }
 }

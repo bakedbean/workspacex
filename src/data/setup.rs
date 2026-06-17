@@ -1,7 +1,64 @@
 use crate::error::{Error, Result};
 use std::path::Path;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
+
+/// Reads an async byte stream and yields text segments delimited by `\r`
+/// or `\n`. Empty segments — the gap inside a `\r\n` pair, and blank lines —
+/// are skipped; a trailing unterminated segment is flushed at EOF. Splitting
+/// on `\r` lets in-place progress bars (pnpm/mise carriage-return redraws)
+/// surface as individual segments instead of buffering until the next
+/// newline. The logic is stateless across reads, so chunk boundaries — e.g. a
+/// `\r\n` split across two reads — do not matter.
+struct SegmentReader<R> {
+    inner: R,
+    pending: Vec<u8>,
+    eof: bool,
+}
+
+impl<R: AsyncRead + Unpin> SegmentReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            pending: Vec::new(),
+            eof: false,
+        }
+    }
+
+    /// The next non-empty segment, or `None` at end of stream.
+    async fn next_segment(&mut self) -> std::io::Result<Option<String>> {
+        loop {
+            // Carve a segment up to the first delimiter, if one is buffered.
+            if let Some(idx) = self.pending.iter().position(|&b| b == b'\r' || b == b'\n') {
+                let seg: Vec<u8> = self.pending.drain(..=idx).collect();
+                // `seg` ends with the delimiter byte; drop it.
+                let text = String::from_utf8_lossy(&seg[..seg.len() - 1]).into_owned();
+                if text.is_empty() {
+                    continue;
+                }
+                return Ok(Some(text));
+            }
+            if self.eof {
+                if self.pending.is_empty() {
+                    return Ok(None);
+                }
+                let text = String::from_utf8_lossy(&self.pending).into_owned();
+                self.pending.clear();
+                if text.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(text));
+            }
+            let mut chunk = [0u8; 1024];
+            let n = self.inner.read(&mut chunk).await?;
+            if n == 0 {
+                self.eof = true;
+            } else {
+                self.pending.extend_from_slice(&chunk[..n]);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum SetupLine {
@@ -100,8 +157,8 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
 
-    let mut out_reader = BufReader::new(stdout).lines();
-    let mut err_reader = BufReader::new(stderr).lines();
+    let mut out_reader = SegmentReader::new(stdout);
+    let mut err_reader = SegmentReader::new(stderr);
 
     loop {
         tokio::select! {
@@ -111,12 +168,12 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
                 // before draining readers; the OS reaps the process.
                 return Err(Error::Cancelled);
             }
-            line = out_reader.next_line() => match line {
+            line = out_reader.next_segment() => match line {
                 Ok(Some(l)) => on_line(SetupLine::Stdout(l)),
                 Ok(None) => break,
                 Err(e) => return Err(Error::Setup(format!("stdout read: {e}"))),
             },
-            line = err_reader.next_line() => match line {
+            line = err_reader.next_segment() => match line {
                 Ok(Some(l)) => on_line(SetupLine::Stderr(l)),
                 Ok(None) => break,
                 Err(e) => return Err(Error::Setup(format!("stderr read: {e}"))),
@@ -124,10 +181,10 @@ async fn run_script<F: FnMut(SetupLine) + Send>(
         }
     }
     // Drain any remaining stderr after stdout closes (and vice versa).
-    while let Ok(Some(l)) = out_reader.next_line().await {
+    while let Ok(Some(l)) = out_reader.next_segment().await {
         on_line(SetupLine::Stdout(l));
     }
-    while let Ok(Some(l)) = err_reader.next_line().await {
+    while let Ok(Some(l)) = err_reader.next_segment().await {
         on_line(SetupLine::Stderr(l));
     }
 
@@ -355,5 +412,40 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         cancel.cancel();
         assert!(matches!(result, Ok(SetupResult::Ok)), "got {result:?}");
+    }
+
+    async fn collect_segments(input: &[u8]) -> Vec<String> {
+        let mut r = SegmentReader::new(std::io::Cursor::new(input.to_vec()));
+        let mut out = Vec::new();
+        while let Some(seg) = r.next_segment().await.unwrap() {
+            out.push(seg);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn segments_split_on_newline() {
+        assert_eq!(collect_segments(b"a\nb\nc\n").await, vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn segments_split_on_carriage_return() {
+        // No trailing delimiter: the final "c" is flushed at EOF.
+        assert_eq!(collect_segments(b"a\rb\rc").await, vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn crlf_pair_yields_single_segment() {
+        assert_eq!(collect_segments(b"x\r\ny\r\n").await, vec!["x", "y"]);
+    }
+
+    #[tokio::test]
+    async fn empty_segments_are_skipped_and_trailing_flushed() {
+        assert_eq!(collect_segments(b"line\n\nblank").await, vec!["line", "blank"]);
+    }
+
+    #[tokio::test]
+    async fn empty_input_yields_nothing() {
+        assert_eq!(collect_segments(b"").await, Vec::<String>::new());
     }
 }

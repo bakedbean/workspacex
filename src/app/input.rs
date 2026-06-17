@@ -1136,6 +1136,7 @@ async fn handle_key_modal(
                 let base = app.worktree_base.clone();
                 let cancel = tokio_util::sync::CancellationToken::new();
                 let create_gen = app.alloc_create_gen();
+                let progress = crate::data::progress::SetupProgress::shared();
                 app.modal = Some(Modal::SetupRunning {
                     cancel: cancel.clone(),
                 });
@@ -1148,6 +1149,7 @@ async fn handle_key_modal(
                         base,
                         yolo,
                         agent,
+                        progress,
                         cancel,
                     )
                     .await;

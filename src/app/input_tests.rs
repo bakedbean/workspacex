@@ -5750,9 +5750,46 @@ mod process_command_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn question_mark_ignored_without_workspace_selection() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let k = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+
+        // 1. No selection (empty selectable, selection = None).
+        handle_key_dashboard(&mut app, k).await.unwrap();
+        assert!(
+            app.modal.is_none(),
+            "? with no selection should not open WorkspaceActions, got {:?}",
+            app.modal
+        );
+
+        // 2. Repo selected — ? must be a no-op.
+        app.selectable = vec![SelectionTarget::Repo(crate::data::store::RepoId(1))];
+        app.select_index(0);
+        handle_key_dashboard(&mut app, k).await.unwrap();
+        assert!(
+            app.modal.is_none(),
+            "? with a repo selected should not open WorkspaceActions, got {:?}",
+            app.modal
+        );
+
+        // 3. Workspace selected — positive control.
+        app.selectable = vec![SelectionTarget::Workspace(WorkspaceId(1))];
+        app.select_index(0);
+        handle_key_dashboard(&mut app, k).await.unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "? with workspace selected should open WorkspaceActions, got {:?}",
+            app.modal
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn question_mark_opens_and_closes_workspace_actions_overlay() {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![SelectionTarget::Workspace(WorkspaceId(1))];
+        app.select_index(0);
 
         let open = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
         handle_key_dashboard(&mut app, open).await.unwrap();
@@ -5792,6 +5829,8 @@ mod process_command_tests {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         let shared = shared();
+        app.selectable = vec![SelectionTarget::Workspace(WorkspaceId(1))];
+        app.select_index(0);
 
         // 1. Open the overlay with '?'.
         handle_key_dashboard(

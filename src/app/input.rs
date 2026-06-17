@@ -673,7 +673,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             app.dashboard.filter = Some(String::new());
         }
         (KeyCode::Char('?'), _) => {
-            app.modal = Some(Modal::WorkspaceActions);
+            if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
+                app.modal = Some(Modal::WorkspaceActions);
+            }
         }
         (KeyCode::Char('p'), _) if crate::app::render::pm_enabled(&app.store) => {
             if app.pm_visible {

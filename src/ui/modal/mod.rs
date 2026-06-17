@@ -289,16 +289,28 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
     f.render_widget(para, rect);
 }
 
-/// Truncate `s` to at most `max` characters, appending '…' when cut. Used to
-/// keep setup-output tail lines inside the modal's inner width.
+/// Truncate `s` to at most `max` characters, appending '…' (which counts
+/// toward `max`) when characters are dropped. Single pass over the input. Used
+/// to keep setup-output tail lines inside the modal's inner width.
 fn truncate_to(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
+    let mut out = String::with_capacity(max);
+    let mut chars = s.chars();
+    for _ in 0..max {
+        match chars.next() {
+            // `s` fit entirely within `max` — no truncation, return as-is.
+            None => return out,
+            Some(c) => out.push(c),
+        }
     }
+    // Consumed exactly `max` chars; if any remain, truncation occurred.
+    if chars.next().is_some() {
+        // Drop the last kept char for the ellipsis so the total stays ≤ `max`.
+        // When `max == 0` nothing was kept, so there's no room even for '…'.
+        if out.pop().is_some() {
+            out.push('…');
+        }
+    }
+    out
 }
 
 /// Uppercase only the first character of `s`. Used to render the agent
@@ -356,6 +368,22 @@ mod tests {
             "missing line:\n{text}"
         );
         assert!(text.contains("[esc] cancel"), "missing footer:\n{text}");
+    }
+
+    #[test]
+    fn truncate_to_handles_fit_truncate_and_zero() {
+        // Fits exactly — unchanged, no ellipsis.
+        assert_eq!(truncate_to("abc", 3), "abc");
+        // Shorter than max — unchanged.
+        assert_eq!(truncate_to("ab", 5), "ab");
+        // Longer than max — ellipsis counts toward the budget (total == max).
+        assert_eq!(truncate_to("abcdef", 3), "ab…");
+        assert_eq!(truncate_to("abcdef", 3).chars().count(), 3);
+        // max == 0 — never exceeds the budget, even when truncating.
+        assert_eq!(truncate_to("abc", 0), "");
+        assert_eq!(truncate_to("", 0), "");
+        // Multi-byte chars are counted by char, not byte.
+        assert_eq!(truncate_to("héllo", 2), "h…");
     }
 
     #[test]

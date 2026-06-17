@@ -8,11 +8,15 @@ use tokio::process::Command;
 /// are skipped; a trailing unterminated segment is flushed at EOF. Splitting
 /// on `\r` lets in-place progress bars (pnpm/mise carriage-return redraws)
 /// surface as individual segments instead of buffering until the next
-/// newline. The logic is stateless across reads, so chunk boundaries — e.g. a
-/// `\r\n` split across two reads — do not matter.
+/// newline. Segment boundaries are independent of how bytes arrive, so chunk
+/// boundaries — e.g. a `\r\n` split across two reads — do not matter.
 struct SegmentReader<R> {
     inner: R,
     pending: Vec<u8>,
+    /// Number of leading bytes of `pending` already searched and known to be
+    /// delimiter-free. Each read only scans the newly appended tail, keeping
+    /// segmentation linear even for a very long delimiter-less line.
+    scanned: usize,
     eof: bool,
 }
 
@@ -21,6 +25,7 @@ impl<R: AsyncRead + Unpin> SegmentReader<R> {
         Self {
             inner,
             pending: Vec::new(),
+            scanned: 0,
             eof: false,
         }
     }
@@ -28,9 +33,17 @@ impl<R: AsyncRead + Unpin> SegmentReader<R> {
     /// The next non-empty segment, or `None` at end of stream.
     async fn next_segment(&mut self) -> std::io::Result<Option<String>> {
         loop {
-            // Carve a segment up to the first delimiter, if one is buffered.
-            if let Some(idx) = self.pending.iter().position(|&b| b == b'\r' || b == b'\n') {
+            // Carve a segment up to the first delimiter, searching only the
+            // not-yet-scanned tail so a growing buffer isn't rescanned in full.
+            if let Some(rel) = self.pending[self.scanned..]
+                .iter()
+                .position(|&b| b == b'\r' || b == b'\n')
+            {
+                let idx = self.scanned + rel;
                 let seg: Vec<u8> = self.pending.drain(..=idx).collect();
+                // The bytes left after the delimiter shifted to the front and
+                // were never scanned, so restart scanning from the beginning.
+                self.scanned = 0;
                 // `seg` ends with the delimiter byte; drop it.
                 let text = String::from_utf8_lossy(&seg[..seg.len() - 1]).into_owned();
                 if text.is_empty() {
@@ -38,12 +51,15 @@ impl<R: AsyncRead + Unpin> SegmentReader<R> {
                 }
                 return Ok(Some(text));
             }
+            // No delimiter anywhere in `pending`; the whole buffer is scanned.
+            self.scanned = self.pending.len();
             if self.eof {
                 if self.pending.is_empty() {
                     return Ok(None);
                 }
                 let text = String::from_utf8_lossy(&self.pending).into_owned();
                 self.pending.clear();
+                self.scanned = 0;
                 if text.is_empty() {
                     return Ok(None);
                 }

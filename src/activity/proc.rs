@@ -12,7 +12,15 @@ use std::path::{Path, PathBuf};
 pub struct ProcInfo {
     pub pid: i32,
     pub ppid: i32,
+    /// Short process name (`comm`), e.g. `node`. Refined from
+    /// `ps -axo comm=` and used for denylist matching — see `scan`.
     pub command: String,
+    /// Full command line with arguments, e.g.
+    /// `node /path/server.js --port 3000`. Populated from
+    /// `ps -axo command=` for display only; never used for filtering.
+    /// Empty when the cwd-only `lsof` parser builds the proc and `ps`
+    /// hasn't refined it yet.
+    pub cmdline: String,
     pub cwd: PathBuf,
     /// True if the process holds at least one listening TCP socket.
     /// Used to rescue genuine servers (e.g. a `pnpm dev` on :3000) from
@@ -81,6 +89,8 @@ pub fn parse_lsof_output(raw: &str) -> Vec<ProcInfo> {
                 pid: p,
                 ppid: ppid.take().unwrap_or(0),
                 command: c,
+                // lsof gives no argv; `scan` fills this from `ps` later.
+                cmdline: String::new(),
                 cwd: PathBuf::from(n),
                 listening: false,
             });
@@ -227,16 +237,48 @@ pub fn parse_ps_comm(raw: &str) -> HashMap<i32, String> {
     out
 }
 
+/// Parse `ps -axo pid=,command=` output into a `pid → full command line`
+/// map for display.
+///
+/// Unlike `parse_ps_comm`, this keeps the entire argv tail — everything
+/// after the leading pid token — so the process modal can show
+/// `node /path/server.js --port 3000` rather than just `node`. The value
+/// is display-only and never feeds the denylist, so we don't basename or
+/// tokenize it. Lines with a non-numeric pid (the header) or an empty
+/// command are dropped.
+pub fn parse_ps_command(raw: &str) -> HashMap<i32, String> {
+    let mut out = HashMap::new();
+    for line in raw.lines() {
+        let line = line.trim_start();
+        let mut split = line.splitn(2, char::is_whitespace);
+        let Some(pid_str) = split.next() else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<i32>() else {
+            continue;
+        };
+        let cmdline = split.next().unwrap_or("").trim_start();
+        if cmdline.is_empty() {
+            continue;
+        }
+        out.insert(pid, cmdline.to_string());
+    }
+    out
+}
+
 /// Run `lsof -d cwd -F pcRn` (pid, ppid, cwd) in parallel with
-/// `ps -axo pid=,comm=` (authoritative command names), merge the
+/// `ps -axo pid=,comm=` (authoritative command names) and
+/// `ps -axo pid=,command=` (full command lines for display), merge the
 /// results, and return the parsed process list.
 ///
 /// Failure handling is asymmetric and intentional. `lsof` provides the
 /// pid/ppid/cwd that the bucketer needs to function at all — if it's
-/// missing or fails, we return an empty list. `ps` only refines the
-/// `comm` field; if it fails, we keep lsof's `comm` (the macOS-quirky
-/// `p_comm`) so the dashboard still works with slightly degraded
-/// denylist matching.
+/// missing or fails, we return an empty list. The `comm` `ps` only
+/// refines the `comm` field; if it fails, we keep lsof's `comm` (the
+/// macOS-quirky `p_comm`) so the dashboard still works with slightly
+/// degraded denylist matching. The `command` `ps` only fills the
+/// display-only `cmdline`; if it fails, `cmdline` stays empty and the
+/// modal falls back to the short `command`.
 ///
 /// A third lsof, for listening TCP sockets, runs alongside and marks
 /// `listening` on each matching proc. Like `ps`, it only refines the
@@ -250,10 +292,14 @@ pub async fn scan() -> Vec<ProcInfo> {
     let ps_fut = tokio::process::Command::new("ps")
         .args(["-axo", "pid=,comm="])
         .output();
+    let cmd_fut = tokio::process::Command::new("ps")
+        .args(["-axo", "pid=,command="])
+        .output();
     let listen_fut = tokio::process::Command::new("lsof")
         .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"])
         .output();
-    let (lsof_out, ps_out, listen_out) = tokio::join!(lsof_fut, ps_fut, listen_fut);
+    let (lsof_out, ps_out, cmd_out, listen_out) =
+        tokio::join!(lsof_fut, ps_fut, cmd_fut, listen_fut);
 
     let mut procs = match lsof_out {
         // lsof exits 1 when some processes can't be inspected; the
@@ -272,6 +318,17 @@ pub async fn scan() -> Vec<ProcInfo> {
         for p in &mut procs {
             if let Some(comm) = comm_map.get(&p.pid) {
                 p.command = comm.clone();
+            }
+        }
+    }
+
+    if let Ok(o) = cmd_out
+        && (o.status.success() || !o.stdout.is_empty())
+    {
+        let cmd_map = parse_ps_command(&String::from_utf8_lossy(&o.stdout));
+        for p in &mut procs {
+            if let Some(cmdline) = cmd_map.get(&p.pid) {
+                p.cmdline = cmdline.clone();
             }
         }
     }
@@ -326,6 +383,7 @@ mod tests {
             pid,
             ppid,
             command: command.into(),
+            cmdline: String::new(),
             cwd: PathBuf::from(cwd),
             listening: false,
         }
@@ -571,6 +629,38 @@ mod tests {
         let map = parse_ps_comm(raw);
         assert_eq!(map.len(), 1);
         assert_eq!(map.get(&42).map(String::as_str), Some("ok"));
+    }
+
+    #[test]
+    fn parse_ps_command_extracts_full_command_line() {
+        // `ps -axo pid=,command=` emits the full argv after the pid. We
+        // keep everything past the first whitespace run, preserving
+        // internal argument spacing.
+        let raw = "  41203 node /Users/eben/proj/server.js --port 3000\n 1275 -zsh\n";
+        let map = parse_ps_command(raw);
+        assert_eq!(
+            map.get(&41203).map(String::as_str),
+            Some("node /Users/eben/proj/server.js --port 3000")
+        );
+        assert_eq!(map.get(&1275).map(String::as_str), Some("-zsh"));
+    }
+
+    #[test]
+    fn parse_ps_command_skips_malformed_lines() {
+        // Header row (non-numeric pid) and a pid with an empty command
+        // are both dropped; a clean row survives.
+        let raw = "PID COMMAND\n12345 \n42 python -m http.server 8080\n";
+        let map = parse_ps_command(raw);
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.get(&42).map(String::as_str),
+            Some("python -m http.server 8080")
+        );
+    }
+
+    #[test]
+    fn parse_ps_command_handles_empty() {
+        assert!(parse_ps_command("").is_empty());
     }
 
     #[test]

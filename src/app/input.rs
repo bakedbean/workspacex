@@ -672,6 +672,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         (KeyCode::Char('/'), _) => {
             app.dashboard.filter = Some(String::new());
         }
+        (KeyCode::Char('?'), _) => {
+            app.modal = Some(Modal::WorkspaceActions);
+        }
         (KeyCode::Char('p'), _) if crate::app::render::pm_enabled(&app.store) => {
             if app.pm_visible {
                 // Hide pane; session stays alive.
@@ -1236,6 +1239,11 @@ async fn handle_key_modal(
         }
         Modal::Error { .. } => {
             if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
+                app.modal = None;
+            }
+        }
+        Modal::WorkspaceActions => {
+            if matches!(k.code, KeyCode::Esc | KeyCode::Char('?')) {
                 app.modal = None;
             }
         }

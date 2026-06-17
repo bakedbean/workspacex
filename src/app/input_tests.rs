@@ -5748,4 +5748,32 @@ mod process_command_tests {
             .join("\n");
         assert!(rendered.contains("run: cargo run"), "{rendered}");
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn question_mark_opens_and_closes_workspace_actions_overlay() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::path::PathBuf;
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        let open = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+        handle_key_dashboard(&mut app, open).await.unwrap();
+        assert!(
+            matches!(app.modal, Some(crate::ui::modal::Modal::WorkspaceActions)),
+            "expected WorkspaceActions modal open, got {:?}",
+            app.modal
+        );
+
+        // Verify Esc closes it.
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        handle_key_modal(&mut app, &shared, esc).await.unwrap();
+        assert!(app.modal.is_none(), "expected overlay dismissed on Esc");
+    }
 }

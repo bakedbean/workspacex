@@ -100,6 +100,10 @@ pub enum Modal {
         /// (applied) window is read separately from the store at render time.
         selected: usize,
     },
+    /// Static reference card for the workspace-only actions
+    /// (edit/term/diff/lazygit/chronox) — the ones that act only on a
+    /// selected workspace. Carries no state — dismissed without side effects.
+    WorkspaceActions,
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -219,6 +223,15 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
                 name = capitalize_first(agent.display_name()),
                 binary = binary,
             ),
+        ),
+        Modal::WorkspaceActions => (
+            "workspace actions",
+            "These apply to the selected workspace:\n\n  \
+             e   edit        t   term\n  \
+             v   diff        g   lazygit\n  \
+             c   chronox\n\n  \
+             ?/Esc  close"
+                .to_string(),
         ),
         Modal::AgentPicker {
             selected, current, ..

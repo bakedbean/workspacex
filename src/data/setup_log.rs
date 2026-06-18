@@ -41,7 +41,10 @@ pub fn create(
 ) -> Option<BufWriter<File>> {
     let path = setup_log_path(log_dir, repo, name);
     std::fs::create_dir_all(path.parent()?).ok()?;
-    let mut w = BufWriter::new(File::create(&path).ok()?);
+    // 64 KiB buffer: line writes happen inside `run_script`'s async read loop,
+    // so each flush is a blocking `write` on the runtime thread. A larger buffer
+    // keeps those syscalls rare even when a setup script is noisy.
+    let mut w = BufWriter::with_capacity(64 * 1024, File::create(&path).ok()?);
     write_header(&mut w, repo, name, worktree, started_secs).ok()?;
     Some(w)
 }

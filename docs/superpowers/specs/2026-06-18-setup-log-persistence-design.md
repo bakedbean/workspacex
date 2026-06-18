@@ -96,9 +96,12 @@ A small, focused, filesystem-free-testable module:
 /// `<log_dir>/setup-<repo>-<name>.log`, with repo/name sanitized.
 pub fn setup_log_path(log_dir: &Path, repo: &str, name: &str) -> PathBuf;
 
+/// Best-effort: open (truncating) the log file and write the header. Returns
+/// None if the file can't be created. `write_header` is a private helper.
+pub fn create(log_dir: &Path, repo: &str, name: &str,
+              worktree: &Path, started_secs: u64) -> Option<BufWriter<File>>;
+
 /// Pure formatting over any Writer — unit-testable with a Vec<u8>.
-pub fn write_header(w: &mut impl Write, repo: &str, name: &str,
-                    worktree: &Path, started_secs: u64) -> io::Result<()>;
 pub fn write_line(w: &mut impl Write, line: &SetupLine) -> io::Result<()>;
 pub fn write_footer(w: &mut impl Write, result: &SetupResult) -> io::Result<()>;
 ```

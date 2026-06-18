@@ -9,6 +9,7 @@ pub mod messages;
 pub mod progress;
 pub mod repo;
 pub mod setup;
+pub mod setup_log;
 pub mod store;
 pub mod workspace;
 

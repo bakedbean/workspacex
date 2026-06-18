@@ -133,6 +133,54 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     })
 }
 
+/// Run the setup script while teeing each captured line to two consumers: the
+/// live `progress` sink (drives the creation modal) and a best-effort per-
+/// workspace log file under `log_dir` (so a failed setup is inspectable after
+/// the modal closes). The log is opened only when a setup script is present;
+/// all log I/O is best-effort and never affects the returned result. Returns
+/// the same `Result<SetupResult>` as `setup::run_setup`.
+#[allow(clippy::too_many_arguments)]
+async fn run_setup_logged(
+    script: Option<&str>,
+    repo_root: &Path,
+    worktree: &Path,
+    repo_name: &str,
+    ws_name: &str,
+    log_dir: &Path,
+    progress: &SharedProgress,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<SetupResult> {
+    let mut log = match script {
+        Some(s) if !s.trim().is_empty() => crate::data::setup_log::create(
+            log_dir,
+            repo_name,
+            ws_name,
+            worktree,
+            crate::time::now_secs(),
+        ),
+        _ => None,
+    };
+    let log_ref = &mut log;
+    let result = setup::run_setup(script, repo_root, worktree, cancel, |line| {
+        // `push_line` only needs the text; `write_line` below gets the whole
+        // `SetupLine` so it can prefix stderr lines with `! `.
+        let text = match &line {
+            SetupLine::Stdout(s) | SetupLine::Stderr(s) => s.as_str(),
+        };
+        if let Ok(mut p) = progress.lock() {
+            p.push_line(text);
+        }
+        if let Some(w) = log_ref.as_mut() {
+            let _ = crate::data::setup_log::write_line(w, &line);
+        }
+    })
+    .await?;
+    if let Some(mut w) = log {
+        let _ = crate::data::setup_log::write_footer(&mut w, &result);
+    }
+    Ok(result)
+}
+
 /// TUI-friendly variant of `create` that interleaves App lock acquisition
 /// with the long-running async git/setup phases. Unlike `create`, this
 /// function never holds the App lock across `.await` boundaries on git or
@@ -236,20 +284,16 @@ pub async fn create_with_app(
     if let Ok(mut p) = progress.lock() {
         p.set_phase(SetupPhase::RunningSetup);
     }
-    let progress_lines = progress.clone();
-    let setup_result = setup::run_setup(
+    let log_dir = crate::config::Dirs::discover().log_dir();
+    let setup_result = run_setup_logged(
         repo.setup_script.as_deref(),
         &repo.path,
         &worktree_path,
+        &repo.name,
+        &final_name,
+        &log_dir,
+        &progress,
         cancel.clone(),
-        move |line| {
-            let text = match line {
-                SetupLine::Stdout(s) | SetupLine::Stderr(s) => s,
-            };
-            if let Ok(mut p) = progress_lines.lock() {
-                p.push_line(&text);
-            }
-        },
     )
     .await;
     let setup_result = match setup_result {
@@ -1158,6 +1202,77 @@ mod tests {
         super::advance_archive_step(&app, ArchiveStep::RemoveWorktree).await;
         let g = app.lock().await;
         assert!(g.modal.is_none(), "modal should remain None");
+    }
+
+    #[tokio::test]
+    async fn run_setup_logged_writes_failure_log() {
+        use crate::data::progress::SetupProgress;
+        use crate::data::setup::SetupResult;
+        use crate::data::setup_log::setup_log_path;
+        use tokio_util::sync::CancellationToken;
+
+        let work = TempDir::new().unwrap(); // stands in for repo_root + worktree
+        let logs = TempDir::new().unwrap();
+        let progress = SetupProgress::shared();
+        let script = "echo hello-stdout; echo oops-stderr 1>&2; exit 3";
+
+        let result = run_setup_logged(
+            Some(script),
+            work.path(),
+            work.path(),
+            "myrepo",
+            "foo",
+            logs.path(),
+            &progress,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(result, SetupResult::Failed { exit_code: 3 }),
+            "{result:?}"
+        );
+        let body = std::fs::read_to_string(setup_log_path(logs.path(), "myrepo", "foo")).unwrap();
+        assert!(body.contains("=== setup: myrepo/foo ==="), "{body}");
+        assert!(body.contains("hello-stdout"), "{body}");
+        assert!(body.contains("! oops-stderr"), "{body}");
+        assert!(body.contains("=== FAILED (exit 3) ==="), "{body}");
+
+        // The progress sink is still fed (the modal behavior is unchanged).
+        let recent = progress.lock().unwrap().recent(10);
+        assert!(
+            recent.iter().any(|l| l.contains("hello-stdout")),
+            "{recent:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_setup_logged_writes_no_file_without_script() {
+        use crate::data::progress::SetupProgress;
+        use crate::data::setup::SetupResult;
+        use crate::data::setup_log::setup_log_path;
+        use tokio_util::sync::CancellationToken;
+
+        let work = TempDir::new().unwrap();
+        let logs = TempDir::new().unwrap();
+        let progress = SetupProgress::shared();
+
+        let result = run_setup_logged(
+            None,
+            work.path(),
+            work.path(),
+            "myrepo",
+            "bar",
+            logs.path(),
+            &progress,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(result, SetupResult::Skipped), "{result:?}");
+        assert!(!setup_log_path(logs.path(), "myrepo", "bar").exists());
     }
 
     #[tokio::test]

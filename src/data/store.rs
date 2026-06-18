@@ -40,6 +40,13 @@ pub enum ReportedState {
     Waiting,
     Blocked,
     Done,
+    /// Hook-inferred: the agent's turn ended but background work (subagents,
+    /// shell tasks, workflows) is still in flight, so the session is parked and
+    /// will auto-resume — it is *not* done. Never settable via `wsx status set`
+    /// (it is absent from `parse`, the agent-facing vocabulary); only the Claude
+    /// `Stop` hook emits it, from a non-empty `background_tasks` payload. It
+    /// round-trips through storage via `from_stored`.
+    Busy,
 }
 
 impl ReportedState {
@@ -49,9 +56,12 @@ impl ReportedState {
             ReportedState::Waiting => "waiting",
             ReportedState::Blocked => "blocked",
             ReportedState::Done => "done",
+            ReportedState::Busy => "busy",
         }
     }
 
+    /// Parse the *agent-facing* vocabulary (what `wsx status set` accepts).
+    /// Deliberately excludes the internal `busy` state — agents cannot push it.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             "working" => Some(ReportedState::Working),
@@ -59,6 +69,15 @@ impl ReportedState {
             "blocked" => Some(ReportedState::Blocked),
             "done" => Some(ReportedState::Done),
             _ => None,
+        }
+    }
+
+    /// Parse a state read back from storage. Superset of `parse` that also
+    /// accepts the internal `busy` token so a hook-emitted `Busy` round-trips.
+    pub fn from_stored(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "busy" => Some(ReportedState::Busy),
+            other => Self::parse(other),
         }
     }
 }
@@ -1485,6 +1504,18 @@ mod tests {
             assert_eq!(ReportedState::parse(st.as_str()), Some(st));
         }
         assert_eq!(ReportedState::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn busy_state_round_trips_but_is_not_agent_settable() {
+        // `Busy` is hook-internal: it must survive a storage round-trip via
+        // `from_stored`, yet stay out of the agent-facing `parse` vocabulary so
+        // `wsx status set busy` is rejected.
+        assert_eq!(
+            ReportedState::from_stored(ReportedState::Busy.as_str()),
+            Some(ReportedState::Busy)
+        );
+        assert_eq!(ReportedState::parse("busy"), None);
     }
 
     #[test]

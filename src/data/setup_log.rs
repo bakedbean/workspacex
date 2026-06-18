@@ -151,4 +151,21 @@ mod tests {
         assert!(body.contains("1718722921 (unix seconds)"), "{body}");
         assert!(body.contains("hello"), "{body}");
     }
+
+    #[test]
+    fn create_truncates_on_second_run() {
+        let logs = TempDir::new().unwrap();
+        // First run writes a marker line, then the writer is flushed on drop.
+        let mut w1 = create(logs.path(), "myrepo", "foo", Path::new("/wt/foo"), 1).unwrap();
+        write_line(&mut w1, &SetupLine::Stdout("FIRST-RUN-MARKER".into())).unwrap();
+        drop(w1);
+        // A second run for the same workspace must truncate, not append.
+        let w2 = create(logs.path(), "myrepo", "foo", Path::new("/wt/foo"), 2).unwrap();
+        drop(w2);
+        let body = std::fs::read_to_string(setup_log_path(logs.path(), "myrepo", "foo")).unwrap();
+        assert!(
+            !body.contains("FIRST-RUN-MARKER"),
+            "second run should truncate, got: {body}"
+        );
+    }
 }

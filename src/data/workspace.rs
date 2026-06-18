@@ -162,6 +162,8 @@ async fn run_setup_logged(
     };
     let log_ref = &mut log;
     let result = setup::run_setup(script, repo_root, worktree, cancel, |line| {
+        // `push_line` only needs the text; `write_line` below gets the whole
+        // `SetupLine` so it can prefix stderr lines with `! `.
         let text = match &line {
             SetupLine::Stdout(s) | SetupLine::Stderr(s) => s.as_str(),
         };

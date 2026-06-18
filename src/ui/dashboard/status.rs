@@ -89,9 +89,17 @@ impl Status {
         // Tier 1/2 push: the agent (or a hook) explicitly told us it is blocked
         // or done. Terminal user-facing states; trust them over the JSONL
         // stopped_kind heuristic.
+        //
+        // `Busy` sits here too — above `stopped_kind` — on purpose: the Stop
+        // hook reports it when the turn's `end_turn` (which the JSONL heuristic
+        // reads as Complete) coincides with still-running background work. The
+        // heuristic is blind to background tasks, so only this push can prevent
+        // a false ✓. It naturally yields once the agent resumes and the JSONL
+        // grows past `reported_at` (the freshness gate re-arms the heuristic).
         match reported {
             Some(ReportedState::Blocked) => return Status::Question,
             Some(ReportedState::Done) => return Status::Complete,
+            Some(ReportedState::Busy) => return Status::Thinking,
             _ => {}
         }
 
@@ -207,6 +215,24 @@ mod tests {
             classify_reported(Some(ReportedState::Working), false),
             Status::Thinking
         );
+    }
+
+    #[test]
+    fn reported_busy_overrides_stop_complete() {
+        // The Stop hook reports Busy when background work is pending; the same
+        // turn's `end_turn` makes the JSONL heuristic derive Complete. Busy must
+        // win, so a workspace running a background subagent does not flip to ✓.
+        let st = Status::classify(
+            false,
+            Some(StoppedKind::Complete),
+            false,
+            s(5),
+            true,
+            true,
+            false,
+            Some(ReportedState::Busy),
+        );
+        assert_eq!(st, Status::Thinking);
     }
 
     #[test]

@@ -13,6 +13,7 @@ impl StatusIntegration for ClaudeStatus {
     /// - `PreToolUse` for AskUserQuestion/ExitPlanMode -> Blocked
     /// - `Notification` permission_prompt              -> Blocked
     /// - `Notification` idle_prompt                    -> Waiting
+    /// - `Stop` with a non-empty `background_tasks`     -> Busy (parked, not done)
     /// - `Stop` with a `?`-terminated last message     -> Blocked (best-effort)
     /// - `Stop` otherwise                              -> Done
     fn parse_event(&self, json: &serde_json::Value) -> Option<ReportedState> {
@@ -33,6 +34,21 @@ impl StatusIntegration for ClaudeStatus {
                 _ => None,
             },
             "Stop" => {
+                // A `Stop` fires whenever the main agent's turn ends — including
+                // when it dispatched a background subagent/task and yielded to
+                // wait for it. `background_tasks` (Claude Code v2.1.145+) is
+                // non-empty in exactly that case, distinguishing "parked, will
+                // auto-resume" from a genuine completion. Older Claude omits the
+                // field; treat absent/empty as "nothing pending". Reported as
+                // Busy so the dashboard keeps showing work-in-progress rather
+                // than flipping to ✓ while a subagent runs in its own session.
+                let background_pending = json
+                    .get("background_tasks")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|tasks| !tasks.is_empty());
+                if background_pending {
+                    return Some(ReportedState::Busy);
+                }
                 // `last_assistant_message` is observed but undocumented; degrade
                 // to Done when absent. A trailing `?` is the best-effort
                 // prose-question signal, otherwise the turn read as a completion.
@@ -156,6 +172,35 @@ mod tests {
         );
         assert_eq!(
             ev(serde_json::json!({"hook_event_name": "Stop"})),
+            Some(ReportedState::Done)
+        );
+    }
+
+    #[test]
+    fn stop_with_background_tasks_is_busy() {
+        // A subagent (or any task) still in flight at turn end means the
+        // session is parked and will auto-resume — not done. Reported as Busy
+        // even though `last_assistant_message` reads like a completion.
+        assert_eq!(
+            ev(serde_json::json!({
+                "hook_event_name": "Stop",
+                "last_assistant_message": "Waiting for the implementer subagent to finish.",
+                "background_tasks": [{"id": "t1", "type": "subagent", "status": "running"}]
+            })),
+            Some(ReportedState::Busy)
+        );
+    }
+
+    #[test]
+    fn stop_with_empty_background_tasks_is_done() {
+        // Empty array (v2.1.145+, nothing in flight) reads as a real
+        // completion, same as the absent-field case (older Claude Code).
+        assert_eq!(
+            ev(serde_json::json!({
+                "hook_event_name": "Stop",
+                "last_assistant_message": "All done.",
+                "background_tasks": []
+            })),
             Some(ReportedState::Done)
         );
     }

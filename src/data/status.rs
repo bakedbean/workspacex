@@ -64,7 +64,8 @@ impl Store {
 
 fn row_to_reported_status(r: &rusqlite::Row) -> rusqlite::Result<ReportedStatus> {
     Ok(ReportedStatus {
-        state: ReportedState::parse(&r.get::<_, String>(0)?).unwrap_or(ReportedState::Working),
+        state: ReportedState::from_stored(&r.get::<_, String>(0)?)
+            .unwrap_or(ReportedState::Working),
         message: r.get(1)?,
         source: r.get(2)?,
         reported_at: r.get(3)?,
@@ -75,7 +76,8 @@ fn row_to_reported_status(r: &rusqlite::Row) -> rusqlite::Result<ReportedStatus>
 // workspace_id in column 0, shifting the status columns to 1..=4.
 fn row_to_reported_status_offset1(r: &rusqlite::Row) -> rusqlite::Result<ReportedStatus> {
     Ok(ReportedStatus {
-        state: ReportedState::parse(&r.get::<_, String>(1)?).unwrap_or(ReportedState::Working),
+        state: ReportedState::from_stored(&r.get::<_, String>(1)?)
+            .unwrap_or(ReportedState::Working),
         message: r.get(2)?,
         source: r.get(3)?,
         reported_at: r.get(4)?,

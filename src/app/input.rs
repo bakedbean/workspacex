@@ -779,7 +779,11 @@ async fn dispatch_leader_action(
             app.view = View::Dashboard;
             Ok(())
         }
-        KeyCode::Esc => {
+        KeyCode::Char('D') => {
+            // Shift-D: persist the current (intact) pane layout under its anchor
+            // before detaching, so re-attaching restores the same arrangement.
+            // Unlike plain `d` — which tears panes down without touching the
+            // saved layout — this is the explicit "remember this layout" detach.
             if let View::Attached(state) = &app.view {
                 save_layout_for(app, state.clone());
             }
@@ -916,9 +920,8 @@ async fn handle_key_attached(
         }
     };
     // Leader armed: ↑↓ move the overlay highlight (leader stays armed); Enter
-    // fires the highlighted action; any other key is a direct accelerator that
-    // fires immediately. Esc / second Ctrl-x fall through to the dispatch which
-    // clears the leader.
+    // fires the highlighted action; Esc just dismisses the overlay; any other
+    // key is a direct accelerator that fires immediately and clears the leader.
     if app.leader_pending {
         let multi_pane = matches!(&app.view, View::Attached(s) if s.leaf_count() > 1);
         let items = crate::ui::attached::nav_menu_items(multi_pane);
@@ -931,6 +934,12 @@ async fn handle_key_attached(
             KeyCode::Down => {
                 let n = items.len();
                 app.leader_selected = (app.leader_selected + 1) % n;
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                // Esc dismisses the nav overlay only; it must not detach to the
+                // dashboard (that's the "d" accelerator's job).
+                app.leader_pending = false;
                 return Ok(());
             }
             KeyCode::Enter => {

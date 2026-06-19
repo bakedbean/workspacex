@@ -18,9 +18,9 @@ pub struct NavItem {
 }
 
 /// The attached coding-agent view's action list. Multi-pane mode swaps
-/// `detach` → `close pane` and adds a `←→ focus pane` row. Order here is the
-/// order rows render AND the order ↑↓ walks — it is the contract the Enter
-/// handler relies on.
+/// `detach` → `close pane` and adds `←→ focus pane` and `D save layout & detach`
+/// rows. Order here is the order rows render AND the order ↑↓ walks — it is the
+/// contract the Enter handler relies on.
 pub fn nav_menu_items(multi_pane: bool) -> Vec<NavItem> {
     let mut items = vec![NavItem {
         glyph: "d",
@@ -30,6 +30,12 @@ pub fn nav_menu_items(multi_pane: bool) -> Vec<NavItem> {
         items.push(NavItem {
             glyph: "←→",
             label: "focus pane",
+        });
+        // Shift-D persists the current pane arrangement before detaching, so
+        // re-attaching restores it. Only meaningful with more than one pane.
+        items.push(NavItem {
+            glyph: "D",
+            label: "save layout & detach",
         });
     }
     items.extend([
@@ -241,7 +247,17 @@ mod tests {
                 label: "focus pane"
             }
         );
-        assert!(items.len() == nav_menu_items(false).len() + 1);
+        assert_eq!(
+            items[2],
+            NavItem {
+                glyph: "D",
+                label: "save layout & detach"
+            }
+        );
+        // Multi-pane adds two rows over single-pane: focus-pane and save-layout.
+        assert!(items.len() == nav_menu_items(false).len() + 2);
+        // Stable tail order the Enter handler depends on is unchanged.
+        assert_eq!(items.last().unwrap().glyph, "x");
     }
 
     #[test]

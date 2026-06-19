@@ -775,8 +775,8 @@ mod pm_state_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ctrl_x_esc_detach_schedules_refresh_for_attached_workspace() {
-        // Same as the d-path test above, for the Ctrl-X Esc detach.
+    async fn ctrl_x_shift_d_detach_schedules_refresh_for_attached_workspace() {
+        // Same as the d-path test above, for the Ctrl-X Shift-D save+detach.
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
         env.set("WSX_CLAUDE_BIN", cat_path());
@@ -831,7 +831,7 @@ mod pm_state_tests {
         handle_key_attached(
             &mut app,
             target,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
         )
         .await
         .unwrap();
@@ -839,7 +839,7 @@ mod pm_state_tests {
         assert!(matches!(app.view, crate::ui::View::Dashboard));
         assert!(
             app.pending_workspace_refresh.contains(&id),
-            "Esc-detached workspace should be queued for refresh"
+            "Shift-D-detached workspace should be queued for refresh"
         );
     }
 
@@ -1001,6 +1001,77 @@ mod pm_state_tests {
                 Some(crate::ui::modal::Modal::UpdatesPanel { .. })
             ),
             "Enter on the updates row opens the updates panel"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ctrl_x_esc_dismisses_nav_overlay_without_detaching() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "a",
+                branch: "repo/a",
+                worktree_path: &std::path::PathBuf::from("/tmp/wsx-nav-esc-a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let inst = test_primary_instance(&app, id);
+        app.sessions
+            .spawn(
+                inst,
+                id,
+                std::path::Path::new("."),
+                80,
+                24,
+                crate::pty::session::SpawnMode::Fresh {
+                    rename_ctx: None,
+                    custom_instructions: None,
+                    doctrine: None,
+                    additional_dirs: vec![],
+                    yolo: false,
+                },
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Claude,
+            )
+            .unwrap();
+        let target = test_target(&app, id);
+        app.view = crate::ui::View::Attached(AttachedState::single(target));
+
+        // Arm the nav overlay with Ctrl-x.
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "Ctrl-x must arm the nav overlay");
+
+        // Esc dismisses the overlay and leaves us in the attached chat view —
+        // it must NOT detach to the dashboard (that's what 'd' is for).
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(!app.leader_pending, "Esc must dismiss the nav overlay");
+        assert!(
+            matches!(app.view, crate::ui::View::Attached(_)),
+            "Esc on the nav overlay must stay attached, not return to the dashboard"
         );
     }
 
@@ -4572,14 +4643,14 @@ mod detail_scroll {
 }
 
 #[cfg(test)]
-mod ctrl_x_esc_tests {
+mod ctrl_x_shift_d_tests {
     use super::*;
     use crate::test_support::{EnvGuard, cat_path};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ctrl_x_esc_saves_layout_and_returns_to_dashboard() {
+    async fn ctrl_x_shift_d_saves_layout_and_returns_to_dashboard() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use crate::ui::split::{AttachedState, SplitDirection};
         let mut env = EnvGuard::new();
@@ -4663,7 +4734,7 @@ mod ctrl_x_esc_tests {
         state.split(SplitDirection::Vertical, second_target);
         app.view = crate::ui::View::Attached(state);
 
-        // Send Ctrl-x then Esc.
+        // Send Ctrl-x then Shift-D.
         handle_key_attached(
             &mut app,
             first_target,
@@ -4674,7 +4745,7 @@ mod ctrl_x_esc_tests {
         handle_key_attached(
             &mut app,
             first_target,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
         )
         .await
         .unwrap();

@@ -1,0 +1,16 @@
+[book]
+title = "wsx (WorkspaceX)"
+authors = ["Eben Goodman"]
+description = "Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git worktrees."
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/bakedbean/workspacex"
+edit-url-template = "https://github.com/bakedbean/workspacex/edit/main/docs/book/{path}"
+site-url = "/workspacex/"
+default-theme = "navy"
+preferred-dark-theme = "navy"
+
+[output.html.search]
+enable = true

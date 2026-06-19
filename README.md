@@ -81,11 +81,11 @@ Press `n` to create your first workspace, then `enter` to attach. Claude Code sp
 
 ### Next steps: wiring up your tools
 
-Out of the box, wsx drives your agent sessions — but the three keys that make it
+Out of the box, wsx drives your agent sessions, but the three keys that make it
 feel like a cockpit (`[e]` editor, `[v]` diff, `[t]` terminal) do nothing useful
 until you tell wsx *which* tools to launch. These aren't configured by default,
 and the payoff isn't obvious until you've set them: jump straight from a
-workspace into your editor, a full branch diff, or a fresh shell — all rooted in
+workspace into your editor, a full branch diff, or a fresh shell, all rooted in
 that workspace's worktree.
 
 Set them once globally with `wsx config set`. Sample commands for a Neovim +

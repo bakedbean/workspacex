@@ -7,3 +7,6 @@
 tags
 
 .superpowers/
+
+# mdBook build output
+/docs/book/book

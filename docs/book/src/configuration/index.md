@@ -1,1 +1,1 @@
-_Placeholder — migrated in a later task._
+Global settings, themes, agent selection, and per-repo customization.

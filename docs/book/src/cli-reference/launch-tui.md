@@ -1,1 +1,5 @@
-_Placeholder — migrated in a later task._
+```
+wsx
+```
+
+Running with no arguments opens the dashboard.

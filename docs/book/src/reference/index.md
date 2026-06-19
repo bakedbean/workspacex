@@ -1,1 +1,1 @@
-_Placeholder — migrated in a later task._
+Environment variables and on-disk storage/configuration locations.

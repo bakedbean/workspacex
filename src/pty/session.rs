@@ -575,9 +575,9 @@ impl SessionManager {
     /// Resize every backgrounded running session to `cols × rows` (the
     /// projected single-pane size). Sessions in `visible` are skipped: the
     /// attached render path already keeps those sized every frame, and resizing
-    /// one would clip the frame the user is looking at. The PM session
-    /// (`self.pm`) is also untouched — it's resized every frame by its own
-    /// render paths and never goes stale. See `crate::app::resize_sync` for why
+    /// one would clip the frame the user is looking at. The PM session lives in
+    /// `app.pm`, not here, and is synced separately by
+    /// `App::apply_backgrounded_resize`. See `crate::app::resize_sync` for why
     /// this sweep exists.
     pub fn resize_backgrounded(
         &self,

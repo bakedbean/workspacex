@@ -525,11 +525,21 @@ impl App {
     /// every running, non-visible session so re-attaching after a resize shows
     /// a freshly-repainted frame instead of one the vt100 parser clipped to
     /// stale dimensions. Visible panes are handled by the render path and left
-    /// untouched here. See `crate::app::resize_sync` for the full rationale.
+    /// untouched here.
+    ///
+    /// The PM session (`app.pm`) is render-synced on the dashboard and in
+    /// `AttachedPm`, but goes stale while attached to an agent — no render path
+    /// touches it there. So when attached to an agent we resize it too, to the
+    /// projected size `AttachedPm` will use next. See `crate::app::resize_sync`.
     pub fn apply_backgrounded_resize(&self, cols: u16, rows: u16) {
         let (w, h) = crate::app::resize_sync::projected_pane_size(cols, rows);
         let visible = crate::app::resize_sync::visible_instances(&self.view);
         self.sessions.resize_backgrounded(w, h, &visible);
+        if crate::app::resize_sync::should_sync_pm(&self.view)
+            && let Some(pm) = &self.pm
+        {
+            let _ = pm.resize(w, h);
+        }
     }
 
     /// Retarget the focused attached pane to `inst` (switching the visible agent

@@ -117,6 +117,9 @@ const MAX_ACTIVITY_HOURS: u64 = 720;
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
+    /// Coalesces terminal-resize events so backgrounded sessions are resized
+    /// once the resize settles. See `crate::app::resize_sync`.
+    pub resize_debounce: crate::app::resize_sync::ResizeDebounce,
     pub view: View,
     pub modal: Option<Modal>,
     /// Monotonic counter handed out to in-flight workspace creation tasks.
@@ -311,6 +314,7 @@ impl App {
         let mut app = Self {
             store,
             sessions: SessionManager::new(),
+            resize_debounce: Default::default(),
             view: View::Dashboard,
             modal: None,
             dashboard: DashboardState::default(),
@@ -514,6 +518,18 @@ impl App {
         inst: crate::data::store::AgentInstanceId,
     ) -> Option<std::sync::Arc<crate::pty::session::Session>> {
         self.sessions.get(inst)
+    }
+
+    /// Apply a settled terminal resize to backgrounded sessions. Computes the
+    /// projected single-pane size for the new terminal dimensions and resizes
+    /// every running, non-visible session so re-attaching after a resize shows
+    /// a freshly-repainted frame instead of one the vt100 parser clipped to
+    /// stale dimensions. Visible panes are handled by the render path and left
+    /// untouched here. See `crate::app::resize_sync` for the full rationale.
+    pub fn apply_backgrounded_resize(&self, cols: u16, rows: u16) {
+        let (w, h) = crate::app::resize_sync::projected_pane_size(cols, rows);
+        let visible = crate::app::resize_sync::visible_instances(&self.view);
+        self.sessions.resize_backgrounded(w, h, &visible);
     }
 
     /// Retarget the focused attached pane to `inst` (switching the visible agent
@@ -846,6 +862,12 @@ pub async fn run<B: Backend + std::io::Write>(
                 if matches!(g.dashboard.reply_draft_clear_at_ms, Some(t) if now_ms >= t) {
                     g.dashboard.reply_draft.clear();
                     g.dashboard.reply_draft_clear_at_ms = None;
+                }
+                // Apply a settled terminal resize to backgrounded sessions so
+                // re-attaching doesn't show a vt100 frame clipped to the old
+                // size. Visible panes are sized by the render path above.
+                if let Some((cols, rows)) = g.resize_debounce.take_due(now_ms) {
+                    g.apply_backgrounded_resize(cols, rows);
                 }
                 // Pick up workspaces/repos written by sibling `wsx` CLI
                 // processes (e.g. `wsx workspace create` invoked by Claude

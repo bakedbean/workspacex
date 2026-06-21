@@ -2117,7 +2117,14 @@ pub(crate) async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent
         CtEvent::Key(k) if k.kind == KeyEventKind::Press => dispatch_key(app, shared, k).await?,
         CtEvent::Mouse(m) => handle_mouse(app, m).await,
         CtEvent::Paste(content) => handle_paste(app, shared, content).await?,
-        CtEvent::Resize(_, _) => {}
+        CtEvent::Resize(cols, rows) => {
+            // Record the new terminal size; the run loop's tick applies it to
+            // backgrounded sessions once the resize settles (debounced), so a
+            // window drag doesn't trigger a repaint storm. See
+            // `crate::app::resize_sync`.
+            app.resize_debounce
+                .note(cols, rows, crate::time::now_ms_u64());
+        }
         _ => {}
     }
     Ok(())

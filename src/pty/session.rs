@@ -565,6 +565,28 @@ impl SessionManager {
         }
     }
 
+    /// Resize every backgrounded running session to `cols × rows` (the
+    /// projected single-pane size). Sessions in `visible` are skipped: the
+    /// attached render path already keeps those sized every frame, and resizing
+    /// one would clip the frame the user is looking at. See
+    /// `crate::app::resize_sync` for why this sweep exists.
+    pub fn resize_backgrounded(
+        &self,
+        cols: u16,
+        rows: u16,
+        visible: &std::collections::HashSet<crate::data::store::AgentInstanceId>,
+    ) {
+        for (id, session) in &self.sessions {
+            let running = matches!(
+                *session.status.read().unwrap(),
+                SessionStatus::Running { .. }
+            );
+            if crate::app::resize_sync::should_resize_backgrounded(*id, running, visible) {
+                let _ = session.resize(cols, rows);
+            }
+        }
+    }
+
     pub fn spawn_pm(
         &mut self,
         cwd: &Path,

@@ -124,6 +124,13 @@ impl Session {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+        // Floor both dimensions to >=1. A pane area can collapse to 0 on a tiny
+        // terminal (ratatui's `Min(1)` yields 0 when chrome eats all the rows),
+        // and `vt100::Grid::set_size` computes `size.rows - 1`, which underflows
+        // and panics at 0. Guards both the background resize sweep and the
+        // attached render path, which can hit the same case.
+        let cols = cols.max(1);
+        let rows = rows.max(1);
         self.master
             .lock()
             .unwrap()
@@ -568,8 +575,10 @@ impl SessionManager {
     /// Resize every backgrounded running session to `cols × rows` (the
     /// projected single-pane size). Sessions in `visible` are skipped: the
     /// attached render path already keeps those sized every frame, and resizing
-    /// one would clip the frame the user is looking at. See
-    /// `crate::app::resize_sync` for why this sweep exists.
+    /// one would clip the frame the user is looking at. The PM session
+    /// (`self.pm`) is also untouched — it's resized every frame by its own
+    /// render paths and never goes stale. See `crate::app::resize_sync` for why
+    /// this sweep exists.
     pub fn resize_backgrounded(
         &self,
         cols: u16,
@@ -661,6 +670,93 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("hello"), "screen contents: {screen:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resize_to_zero_rows_is_floored_and_does_not_panic() {
+        // A terminal short enough that the projected pane height collapses to 0
+        // (≤3 rows) must not crash the vt100 parser: `Grid::set_size` computes
+        // `size.rows - 1`, which underflows and panics in debug at rows=0.
+        // `Session::resize` floors both dimensions to >=1 to guard this — for
+        // both the background sweep and the pre-existing attached render path.
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
+        let cwd = PathBuf::from(".");
+        let s = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            },
+            crate::agent::remote_control::RemoteOpts::disabled(),
+            AgentKind::Codex,
+            None,
+        )
+        .unwrap();
+        s.resize(80, 0).unwrap();
+        let (rows, cols) = s.parser.lock().unwrap().screen().size();
+        assert_eq!((rows, cols), (1, 80), "rows floored to 1, cols preserved");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resize_backgrounded_resizes_hidden_sessions_and_skips_visible() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
+        let cwd = PathBuf::from(".");
+        let fresh = || SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let mut sm = SessionManager::new();
+        let hidden = sm
+            .spawn(
+                crate::data::store::AgentInstanceId(1),
+                crate::data::store::WorkspaceId(1),
+                &cwd,
+                80,
+                24,
+                fresh(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                AgentKind::Codex,
+            )
+            .unwrap();
+        let visible_session = sm
+            .spawn(
+                crate::data::store::AgentInstanceId(2),
+                crate::data::store::WorkspaceId(2),
+                &cwd,
+                80,
+                24,
+                fresh(),
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                AgentKind::Codex,
+            )
+            .unwrap();
+
+        let visible: std::collections::HashSet<crate::data::store::AgentInstanceId> =
+            [crate::data::store::AgentInstanceId(2)]
+                .into_iter()
+                .collect();
+        sm.resize_backgrounded(100, 40, &visible);
+
+        assert_eq!(
+            hidden.parser.lock().unwrap().screen().size(),
+            (40, 100),
+            "hidden running session resized to the projected size"
+        );
+        assert_eq!(
+            visible_session.parser.lock().unwrap().screen().size(),
+            (24, 80),
+            "visible session left untouched — the render path owns it"
+        );
     }
 
     // Validates the contract under test (portable-pty rejects a missing

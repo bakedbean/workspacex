@@ -17,6 +17,12 @@
 //! repaints at the right width while detached, so the on-attach `resize_pane`
 //! is a no-op and nothing gets clipped.
 //!
+//! The project-manager (PM) session is out of scope here: it lives outside
+//! `SessionManager::sessions` and is resized every frame by its own render
+//! paths (the dashboard PM pane via `pm_pane::resize_session`, and the
+//! full-screen `AttachedPm` view), so it never becomes a stale backgrounded
+//! session. Including it in this sweep would fight those render paths.
+//!
 //! This module holds the pure, clock-injected pieces; the wiring into the event
 //! loop lives in `app.rs` and the per-session resize in `SessionManager`.
 
@@ -72,6 +78,13 @@ impl ResizeDebounce {
 /// The pane size a single-pane attach gives a session on a terminal of
 /// `cols × rows`. Mirrors `ui::attached::layout_chrome(.., false)` so the
 /// on-attach `resize_pane` matches and stays a no-op in the common case.
+///
+/// `agents_present` is assumed `false`: while detached we don't know which
+/// workspace will be attached. When the focused workspace shows the agents row,
+/// the real pane is 1 row shorter, so the on-attach resize trims one row —
+/// cosmetic and self-healing on the agent's next repaint. The width (the
+/// dimension that drives the destructive clip) is always exact for a single
+/// pane.
 pub fn projected_pane_size(cols: u16, rows: u16) -> (u16, u16) {
     let (_, _, pane, _, _) = crate::ui::attached::layout_chrome(Rect::new(0, 0, cols, rows), false);
     (pane.width, pane.height)

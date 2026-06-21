@@ -58,6 +58,12 @@ fn encode_key_for_pty(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
         }
         (KeyCode::Char(c), m) if m.contains(KeyModifiers::CONTROL) => {
             let upper = c.to_ascii_uppercase();
+            // Never forward Ctrl-Z (0x1a / SUSP). See `encode_key` for the
+            // rationale: it suspends a line-disciplined job inside the child
+            // PTY with no reachable prompt to `fg` it back.
+            if upper == 'Z' {
+                return None;
+            }
             if ('@'..='_').contains(&upper) {
                 Some(vec![(upper as u8) - b'@'])
             } else {
@@ -79,6 +85,16 @@ fn encode_key(k: crossterm::event::KeyEvent) -> Vec<u8> {
     match k.code {
         Char(c) => {
             if k.modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_alphabetic() {
+                // Ctrl-Z encodes to 0x1a (SUSP). Forwarding it into the child
+                // PTY suspends whatever job owns the pane (a shell, or the
+                // agent's own process) — and because wsx captures every
+                // keystroke in the attached view there's no reachable prompt
+                // left to `fg` it back, wedging the pane. It's an easy
+                // fat-finger right next to the Ctrl-x leader, so swallow it:
+                // an accidental Ctrl-Z becomes a harmless no-op.
+                if c.eq_ignore_ascii_case(&'z') {
+                    return vec![];
+                }
                 vec![(c.to_ascii_lowercase() as u8) - b'a' + 1]
             } else {
                 let mut buf = [0u8; 4];

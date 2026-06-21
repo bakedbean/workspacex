@@ -5972,3 +5972,46 @@ mod process_command_tests {
         );
     }
 }
+
+/// Ctrl-Z must never reach a child PTY: it raises SIGTSTP for the pane's
+/// foreground job, and wsx captures every keystroke so there's no prompt
+/// left to `fg` it back. Both PTY-forwarding encoders drop it.
+#[cfg(test)]
+mod ctrl_z_suppression_tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn encode_key_swallows_ctrl_z() {
+        let ev = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert!(
+            encode_key(ev).is_empty(),
+            "Ctrl-Z must not be forwarded to the PTY"
+        );
+        // Upper-case form (Shift+Ctrl-Z, or CapsLock) is the same byte.
+        let ev_upper = KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::CONTROL);
+        assert!(encode_key(ev_upper).is_empty());
+    }
+
+    #[test]
+    fn encode_key_still_forwards_other_ctrl_keys() {
+        // Sanity: a neighboring control key like Ctrl-C is untouched (0x03).
+        let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(encode_key(ev), vec![0x03]);
+    }
+
+    #[test]
+    fn encode_key_for_pty_swallows_ctrl_z() {
+        let ev = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert!(
+            encode_key_for_pty(&ev).is_none(),
+            "Ctrl-Z must not be forwarded to the PM PTY"
+        );
+    }
+
+    #[test]
+    fn encode_key_for_pty_still_forwards_other_ctrl_keys() {
+        let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(encode_key_for_pty(&ev), Some(vec![0x03]));
+    }
+}

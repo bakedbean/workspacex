@@ -590,7 +590,9 @@ impl SessionManager {
                 *session.status.read().unwrap(),
                 SessionStatus::Running { .. }
             );
-            if crate::app::resize_sync::should_resize_backgrounded(*id, running, visible) {
+            // Resize only running, non-visible sessions: the render path keeps
+            // visible panes sized, and resizing one would clip the frame in view.
+            if running && !visible.contains(id) {
                 let _ = session.resize(cols, rows);
             }
         }

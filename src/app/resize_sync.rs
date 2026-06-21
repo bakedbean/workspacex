@@ -102,18 +102,6 @@ pub fn visible_instances(view: &View) -> HashSet<AgentInstanceId> {
     }
 }
 
-/// Whether the backgrounded sweep should resize this session. It must be
-/// running (resizing a dead PTY is pointless) and not currently visible: the
-/// render path already keeps visible panes sized every frame, and resizing one
-/// here would clip the very frame the user is looking at.
-pub fn should_resize_backgrounded(
-    instance: AgentInstanceId,
-    is_running: bool,
-    visible: &HashSet<AgentInstanceId>,
-) -> bool {
-    is_running && !visible.contains(&instance)
-}
-
 /// Whether the backgrounded sweep should also resize the PM session. PM is
 /// render-synced on the dashboard (`pm_pane::resize_session`) and in
 /// `AttachedPm` (`resize_pane`), but while attached to an *agent* no render path
@@ -186,29 +174,6 @@ mod tests {
     fn visible_instances_empty_when_not_attached() {
         assert!(visible_instances(&View::Dashboard).is_empty());
         assert!(visible_instances(&View::AttachedPm).is_empty());
-    }
-
-    #[test]
-    fn should_resize_backgrounded_only_when_running_and_hidden() {
-        let visible: HashSet<AgentInstanceId> = [AgentInstanceId(1)].into_iter().collect();
-        // Running + hidden → resize it (the bug case: a detached session).
-        assert!(should_resize_backgrounded(
-            AgentInstanceId(2),
-            true,
-            &visible
-        ));
-        // Running but visible → skip (render path owns it; resizing clips it).
-        assert!(!should_resize_backgrounded(
-            AgentInstanceId(1),
-            true,
-            &visible
-        ));
-        // Not running → skip regardless of visibility.
-        assert!(!should_resize_backgrounded(
-            AgentInstanceId(2),
-            false,
-            &visible
-        ));
     }
 
     #[test]

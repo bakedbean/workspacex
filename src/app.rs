@@ -16,6 +16,7 @@ pub mod bell;
 pub mod input;
 pub mod messaging;
 pub mod render;
+pub mod resize_sync;
 pub use crate::app::activity::{ActivityState, classify_activity, classify_activity_with_events};
 pub use crate::app::background::{branch_drift_poll, tail_workspace_events};
 pub use crate::app::bell::{BellPattern, COLD_START_WINDOW, alert_decision, fire_bell};

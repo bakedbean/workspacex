@@ -720,10 +720,15 @@ pub(crate) fn derive_stopped_kind(
 }
 
 /// Decide whether a pushed status is still authoritative, returning the full
-/// record. The push wins while no JSONL activity has happened strictly after
-/// it; once the log grows past `reported_at`, the agent has acted since
-/// reporting and the heuristic re-arms. `last_log_activity_ms` of 0 means "no
-/// log activity observed", which never contradicts a push.
+/// record. For snapshot states the push wins while no JSONL activity has
+/// happened strictly after it; once the log grows past `reported_at`, the agent
+/// has acted since reporting and the heuristic re-arms. `last_log_activity_ms`
+/// of 0 means "no log activity observed", which never contradicts a push.
+///
+/// `Busy` is the exception: it is exempt from the gate entirely (it predicts
+/// future log growth from background work rather than snapshotting the present)
+/// and stays authoritative until the next hook push supersedes it. See the
+/// in-body comment for the rationale.
 pub(crate) fn fresh_reported(
     reported: Option<&crate::data::store::ReportedStatus>,
     last_log_activity_ms: i64,

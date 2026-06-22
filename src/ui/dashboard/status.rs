@@ -94,12 +94,19 @@ impl Status {
         // hook reports it when the turn's `end_turn` (which the JSONL heuristic
         // reads as Complete) coincides with still-running background work. The
         // heuristic is blind to background tasks, so only this push can prevent
-        // a false ✓. It naturally yields once the agent resumes and the JSONL
-        // grows past `reported_at` (the freshness gate re-arms the heuristic).
+        // a false ✓. Unlike the snapshot states, `Busy` is exempt from the
+        // freshness gate (see `app::fresh_reported`): background work grows the
+        // log without the agent being done, so it stays authoritative until the
+        // next hook push supersedes it — a `Stop` reporting Done once
+        // `background_tasks` empties, or a `UserPromptSubmit` reporting Working.
         match reported {
             Some(ReportedState::Blocked) => return Status::Question,
             Some(ReportedState::Done) => return Status::Complete,
-            Some(ReportedState::Busy) => return Status::Thinking,
+            // `Busy` is sticky (immune to the freshness gate in `fresh_reported`),
+            // so a session that died with a subagent in flight would otherwise
+            // show a perpetual spinner. Only honor it while the session is live;
+            // a dead session falls through to the heuristic below.
+            Some(ReportedState::Busy) if session_running => return Status::Thinking,
             _ => {}
         }
 
@@ -233,6 +240,26 @@ mod tests {
             Some(ReportedState::Busy),
         );
         assert_eq!(st, Status::Thinking);
+    }
+
+    #[test]
+    fn reported_busy_falls_back_to_heuristic_when_session_not_running() {
+        // A `Busy` push is now sticky (immune to the freshness gate), so a
+        // session that died while a subagent was in flight would otherwise show
+        // a perpetual spinner. When the session is no longer running, `Busy`
+        // must not short-circuit to Thinking — it falls through to the
+        // heuristic, here yielding Complete from the prior `end_turn`.
+        let st = Status::classify(
+            false,
+            Some(StoppedKind::Complete),
+            false,
+            None,
+            /*session_running*/ false,
+            true,
+            true,
+            Some(ReportedState::Busy),
+        );
+        assert_eq!(st, Status::Complete);
     }
 
     #[test]

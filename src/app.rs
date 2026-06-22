@@ -720,15 +720,33 @@ pub(crate) fn derive_stopped_kind(
 }
 
 /// Decide whether a pushed status is still authoritative, returning the full
-/// record. The push wins while no JSONL activity has happened strictly after
-/// it; once the log grows past `reported_at`, the agent has acted since
-/// reporting and the heuristic re-arms. `last_log_activity_ms` of 0 means "no
-/// log activity observed", which never contradicts a push.
+/// record. For snapshot states the push wins while no JSONL activity has
+/// happened strictly after it; once the log grows past `reported_at`, the agent
+/// has acted since reporting and the heuristic re-arms. `last_log_activity_ms`
+/// of 0 means "no log activity observed", which never contradicts a push.
+///
+/// `Busy` is the exception: it is exempt from the gate entirely (it predicts
+/// future log growth from background work rather than snapshotting the present)
+/// and stays authoritative until the next hook push supersedes it. See the
+/// in-body comment for the rationale.
 pub(crate) fn fresh_reported(
     reported: Option<&crate::data::store::ReportedStatus>,
     last_log_activity_ms: i64,
 ) -> Option<&crate::data::store::ReportedStatus> {
+    use crate::data::store::ReportedState;
     let r = reported?;
+    // `Busy` is exempt from the freshness gate: it explicitly means background
+    // work (subagents / shell tasks) is in flight, which legitimately grows the
+    // main transcript — a completing subagent writes its result notification
+    // back into the session log — *without* the agent being done. Gating it on
+    // log growth (as every snapshot state correctly is) would drop the push the
+    // instant a sibling subagent finishes, flipping the workspace to ✓ complete
+    // mid-work. It is superseded by the next hook push (a `Stop` reporting Done
+    // once `background_tasks` empties, or a `UserPromptSubmit` reporting
+    // Working), and `classify` falls back to the heuristic if the session dies.
+    if r.state == ReportedState::Busy {
+        return Some(r);
+    }
     if r.reported_at >= last_log_activity_ms {
         Some(r)
     } else {
@@ -1885,6 +1903,29 @@ mod reported_freshness_tests {
     #[test]
     fn no_push_is_none() {
         assert_eq!(fresh_reported_state(None, 1500), None);
+    }
+
+    #[test]
+    fn busy_survives_log_growth_from_background_work() {
+        // `Busy` means background work (subagents / shell tasks) is in flight.
+        // That work legitimately grows the main transcript — a completing
+        // subagent writes its result notification back into the session log —
+        // *without* the agent being done. So a `Busy` push must NOT be gated
+        // out when `last_log_activity_ms` advances past it; otherwise the
+        // workspace flips to ✓ complete mid-work in the window before the next
+        // `Stop` re-pushes `Busy`. Every other state still re-arms normally.
+        let busy = ReportedStatus {
+            state: ReportedState::Busy,
+            message: None,
+            source: "hook".into(),
+            reported_at: 1000,
+        };
+        assert_eq!(
+            fresh_reported_state(Some(&busy), 1500),
+            Some(ReportedState::Busy),
+            "Busy stays authoritative even after the log grows"
+        );
+        assert!(fresh_reported(Some(&busy), 1500).is_some());
     }
 
     #[test]

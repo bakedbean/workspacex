@@ -113,7 +113,7 @@
     <div class="sec-head reveal">
       <p class="kicker">Quickstart</p>
       <h2>Three commands to a running fleet.</h2>
-      <p>No daemon, no config server. Build the binary, point it at your repos, and launch. workspacex discovers your worktrees and starts orchestrating.</p>
+      <p>No daemon, no config server. Build the binary, point it at your repos, and launch. Spin up isolated worktrees in the app and start orchestrating.</p>
     </div>
     <div class="steps">
       <div class="step reveal" data-d="1">
@@ -125,7 +125,7 @@
       <div class="step reveal" data-d="2">
         <span class="step-line"></span>
         <h3>Add a repo</h3>
-        <p>Register any git repository. Existing worktrees are detected and tracked automatically.</p>
+        <p>Register any git repository. Then create isolated worktrees for it right inside the app — one per agent session.</p>
         <div class="scmd"><span class="pfx">$ </span>wsx repo add /path/to/repo</div>
       </div>
       <div class="step reveal" data-d="3">
@@ -149,6 +149,11 @@
     </div>
 
     <div class="feat-grid">
+      <div class="card col-6 reveal" data-d="1">
+        <div class="glyph g-green mono">▮</div>
+        <h3>Your subscription, no extra API costs</h3>
+        <p>workspacex never wraps an agent CLI or calls model APIs itself. It loads each agent's own terminal UI in a PTY — Claude Code, Codex, and friends run exactly as they would in your terminal, on the subscription you already pay for. workspacex adds zero token usage and never incurs extra API charges of its own.</p>
+      </div>
       <div class="card col-3 reveal" data-d="1">
         <div class="glyph g-blue mono">⇄</div>
         <h3>Agent-to-agent CLI</h3>

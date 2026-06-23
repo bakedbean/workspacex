@@ -66,7 +66,7 @@
   if (typeHost) {
     const lines = [
       { pfx: '$ ', txt: 'cargo build --release', out: '   Compiling wsx v0.4.2\n   Finished release [optimized] target(s)' },
-      { pfx: '$ ', txt: './target/release/wsx repo add ~/work/api', out: '   added 1 repo · 3 worktrees discovered' },
+      { pfx: '$ ', txt: './target/release/wsx repo add ~/work/api', out: '   added 1 repo · create worktrees in-app' },
       { pfx: '$ ', txt: './target/release/wsx', out: '   launching dashboard…' },
     ];
     if (reduce) {

@@ -28,7 +28,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install mdBook
         run: |
           mkdir -p "$HOME/.local/bin"
@@ -43,10 +43,10 @@ jobs:
           mkdir -p _site/docs
           # Landing page (site/) at the root.
           cp -R site/. _site/
-          # mdBook docs under /docs (matches book.toml site-url = /workspacex/docs/).
+          # mdBook docs under /docs (matches book.toml site-url = /docs/).
           cp -R docs/book/book/. _site/docs/
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
@@ -59,4 +59,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

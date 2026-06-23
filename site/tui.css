@@ -1,0 +1,169 @@
+/* Shared TUI styling — emulates a Ratatui-rendered terminal pane.
+   1ch grid, monospace, 256-color palette mapped to a balanced dark theme. */
+
+:root {
+  --tui-bg:        #0e1116;
+  --tui-bg-alt:    #131820;
+  --tui-bg-soft:   #181f29;
+  --tui-bg-row:    #1a212d;
+  --tui-bg-sel:    #243043;
+  --tui-rule:      #232b38;
+  --tui-rule-soft: #1c232e;
+
+  --tui-fg:        oklch(0.92 0.01 240);
+  --tui-fg-dim:    oklch(0.74 0.01 240);
+  --tui-fg-muted:  oklch(0.55 0.01 240);
+  --tui-fg-faint:  oklch(0.42 0.01 240);
+
+  /* status — matched chroma/lightness, varied hue (256-color safe-ish) */
+  --tui-question:  oklch(0.80 0.14 78);   /* amber */
+  --tui-waiting:   oklch(0.78 0.13 230);  /* blue  */
+  --tui-stalled:   oklch(0.72 0.16 28);   /* red   */
+  --tui-complete:  oklch(0.78 0.14 152);  /* green */
+  --tui-idle:      oklch(0.55 0.01 240);  /* dim   */
+  --tui-thinking:  oklch(0.78 0.13 295);  /* violet */
+
+  --tui-accent:    oklch(0.78 0.13 230);  /* same as waiting; selection cue */
+
+  /* layout */
+  --tui-font: "JetBrains Mono", "IBM Plex Mono", "Menlo", ui-monospace, monospace;
+  --tui-fs: 13px;
+  --tui-lh: 1.45;
+  --tui-ch: 7.8px; /* approximate char width at 13px JBM */
+}
+
+.tui {
+  background: var(--tui-bg);
+  color: var(--tui-fg);
+  font-family: var(--tui-font);
+  font-size: var(--tui-fs);
+  line-height: var(--tui-lh);
+  font-variant-ligatures: none;
+  font-feature-settings: "calt" 0, "liga" 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  position: relative;
+  white-space: pre;
+}
+
+.tui *, .tui *::before, .tui *::after { box-sizing: border-box; }
+
+/* color helpers */
+.fg-dim    { color: var(--tui-fg-dim); }
+.fg-muted  { color: var(--tui-fg-muted); }
+.fg-faint  { color: var(--tui-fg-faint); }
+.fg-q      { color: var(--tui-question); }
+.fg-w      { color: var(--tui-waiting); }
+.fg-s      { color: var(--tui-stalled); }
+.fg-c      { color: var(--tui-complete); }
+.fg-i      { color: var(--tui-idle); }
+.fg-t      { color: var(--tui-thinking); }
+.fg-a      { color: var(--tui-accent); }
+.bold      { font-weight: 700; }
+.dim       { opacity: 0.65; }
+
+.bg-q { background: color-mix(in oklch, var(--tui-question) 18%, transparent); }
+.bg-w { background: color-mix(in oklch, var(--tui-waiting)  18%, transparent); }
+.bg-s { background: color-mix(in oklch, var(--tui-stalled)  18%, transparent); }
+.bg-c { background: color-mix(in oklch, var(--tui-complete) 14%, transparent); }
+.bg-t { background: color-mix(in oklch, var(--tui-thinking) 18%, transparent); }
+.bg-sel { background: var(--tui-bg-sel); }
+
+/* a chrome bar at top and bottom of the TUI to feel like a real terminal */
+.tui-chrome-top, .tui-chrome-bot {
+  display: flex;
+  align-items: center;
+  font-family: var(--tui-font);
+  font-size: 12px;
+  color: var(--tui-fg-muted);
+  background: var(--tui-bg-alt);
+  padding: 6px 12px;
+  gap: 12px;
+  border-bottom: 1px solid var(--tui-rule);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.tui-chrome-bot {
+  border-top: 1px solid var(--tui-rule);
+  border-bottom: 0;
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+}
+.tui-chrome-top .dot {
+  display: inline-block;
+  width: 10px; height: 10px; border-radius: 50%;
+  margin-right: 4px;
+}
+.tui-keys b {
+  color: var(--tui-fg-dim);
+  font-weight: 600;
+  background: var(--tui-bg-soft);
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--tui-rule);
+}
+.tui-keys { display: inline-flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* generic row */
+.row {
+  display: flex;
+  align-items: baseline;
+  padding: 0 12px;
+  min-height: calc(var(--tui-fs) * var(--tui-lh));
+}
+.row.sel { background: var(--tui-bg-sel); }
+
+/* gutter — a 1-char colored bar that pins state to the leading edge */
+.gutter {
+  display: inline-block;
+  width: var(--tui-ch);
+  flex-shrink: 0;
+}
+.gutter::before { content: "▎"; }
+.gutter.idle::before { content: " "; }
+
+/* status pill — text-mode, monospace-aligned */
+.pill {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 2px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* braille spinner — used for "thinking/waiting" indicators */
+@keyframes tui-spin {
+  0%   { content: "⠋"; }
+  12%  { content: "⠙"; }
+  25%  { content: "⠹"; }
+  37%  { content: "⠸"; }
+  50%  { content: "⠼"; }
+  62%  { content: "⠴"; }
+  75%  { content: "⠦"; }
+  87%  { content: "⠧"; }
+  100% { content: "⠇"; }
+}
+.spinner::before {
+  content: "⠋";
+  animation: tui-spin 1s steps(8) infinite;
+  display: inline-block;
+}
+
+/* pulse for "needs attention" */
+@keyframes tui-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+.pulse { animation: tui-pulse 1.6s ease-in-out infinite; }
+
+/* horizontal rule — single line of box drawing */
+.hr {
+  height: 1px;
+  background: var(--tui-rule);
+  margin: 0;
+}
+
+/* a small "sparkline" of activity made of ▁▂▃▄▅▆▇█ */
+.spark { letter-spacing: 0px; }

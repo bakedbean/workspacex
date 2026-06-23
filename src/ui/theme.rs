@@ -10,6 +10,17 @@ const AGENT_PI: Color = Color::Rgb(0xa9, 0x7b, 0xd6); // purple
 const AGENT_HERMES: Color = Color::Rgb(0xf0, 0xd0, 0x66); // yellow
 const AGENT_CODEX: Color = Color::Rgb(0x5b, 0x9d, 0xe0); // blue
 
+/// Brand accent — the electric blue of the "x" and cursor block in the
+/// "workspace x" wordmark. Matches the site's `--accent` token (#5ab0ff).
+/// Constant across themes, like the agent identity colors above: the brand
+/// should read the same everywhere.
+pub const BRAND_ACCENT: Color = Color::Rgb(0x5a, 0xb0, 0xff);
+
+/// Color of the "workspace" word in the wordmark — a neutral cream white,
+/// paired with the brighter blue [`BRAND_ACCENT`] on the cursor block and "x".
+/// Stays distinct from the blue some themes use for repo headers.
+pub const BRAND_WORDMARK: Color = Color::Rgb(0xe8, 0xe8, 0xd3);
+
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
     /// Repo headers, modal titles, "wsx — Workspaces" banner.

@@ -5,7 +5,7 @@ use crate::ui::dashboard::sort::StatusCounts;
 use crate::ui::dashboard::sparkline;
 use crate::ui::dashboard::status::Status;
 use crate::ui::footer::{FooterHintAction, FooterHintSpan, key_for_glyph};
-use crate::ui::theme::Theme;
+use crate::ui::theme::{BRAND_ACCENT, BRAND_WORDMARK, Theme};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -24,7 +24,24 @@ pub fn top_chrome(
     theme: &Theme,
 ) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = vec![
-        Span::styled("wsx", theme.header_style()),
+        // Brand cursor block (the site's blinking caret) marks this as the
+        // app, not a repo name. The wordmark is two-tone blue — deep
+        // "workspace" + bright "x" — so it reads as the brand on every theme
+        // rather than borrowing `header_style`, which repo headers also use.
+        Span::styled("▌", Style::default().fg(BRAND_ACCENT)),
+        Span::raw(" "),
+        Span::styled(
+            "workspace",
+            Style::default()
+                .fg(BRAND_WORDMARK)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " x".to_string(),
+            Style::default()
+                .fg(BRAND_ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" · dashboard".to_string(), theme.dim_style()),
         Span::raw(" ".repeat(6)),
         Span::styled("group: ".to_string(), Style::default().fg(theme.path)),
@@ -181,7 +198,7 @@ mod tests {
         let theme = Theme::wsx();
         let line = top_chrome(GroupMode::Repo, 9, 14, 100, &theme);
         let t = text(&line);
-        assert!(t.starts_with("wsx · dashboard"), "{t:?}");
+        assert!(t.starts_with("▌ workspace x · dashboard"), "{t:?}");
         assert!(t.contains("group: "));
         assert!(t.contains("repo"));
         assert!(t.contains("attention"));

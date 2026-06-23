@@ -4,4 +4,4 @@ cargo build --release
 ./target/release/wsx              # launch TUI
 ```
 
-Press `n` to create your first workspace, then `enter` to attach. Claude Code spawns inside the worktree.
+Press `n` (or SHIFT + N for permissive) to create your first workspace, then `enter` to attach. Claude Code spawns inside the worktree.

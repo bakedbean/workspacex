@@ -1,9 +1,10 @@
-name: Docs
+name: Pages
 
 on:
   push:
     branches: [main]
     paths:
+      - "site/**"
       - "docs/book/**"
       - "README.md"
       - ".github/workflows/docs.yml"
@@ -36,10 +37,18 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build book
         run: mdbook build docs/book
+      - name: Assemble Pages site (landing at root, docs under /docs)
+        run: |
+          rm -rf _site
+          mkdir -p _site/docs
+          # Landing page (site/) at the root.
+          cp -R site/. _site/
+          # mdBook docs under /docs (matches book.toml site-url = /workspacex/docs/).
+          cp -R docs/book/book/. _site/docs/
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/book/book
+          path: _site
 
   deploy:
     needs: build

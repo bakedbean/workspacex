@@ -108,7 +108,7 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
 fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
     let lines = render_to_strings(GroupMode::Repo);
     let joined = lines.join("\n");
-    assert!(joined.contains("wsx · dashboard"), "{joined}");
+    assert!(joined.contains("workspace x · dashboard"), "{joined}");
     assert!(joined.contains("? 2 question"), "status strip: {joined}");
     // wsx header: name right-justified, path flush-right.
     assert!(

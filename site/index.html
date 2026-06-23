@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>workspacex · terminal-native multi-agent orchestration</title>
+<meta name="description" content="Terminal-based multi-agent orchestration with configurable external tooling, vim-like keyboard navigation, and powerful workflow patterns." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="tui.css" />
+<link rel="stylesheet" href="workspacex-site.css" />
+</head>
+<body>
+
+<!-- ── nav ─────────────────────────────────────────────────────────────── -->
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top"><span class="blink"></span>workspace<b>x</b></a>
+    <div class="nav-links">
+      <a href="#how">Quickstart</a>
+      <a href="#features">Features</a>
+      <a href="docs/">Docs</a>
+      <a class="btn btn-ghost" href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+        Star
+      </a>
+    </div>
+  </div>
+</nav>
+
+<span id="top"></span>
+
+<!-- ── hero ────────────────────────────────────────────────────────────── -->
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow reveal">Terminal-native · multi-agent</p>
+      <h1 class="reveal" data-d="1">Run a <span class="grad">fleet of agents</span><br />from one terminal.</h1>
+      <p class="lede reveal" data-d="2">Terminal-based multi-agent orchestration with configurable external tooling, vim-like keyboard navigation, and powerful workflow patterns.</p>
+      <div class="hero-cta reveal" data-d="3">
+        <a class="btn btn-primary" href="#how">Get started</a>
+        <a class="btn" href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          View on GitHub
+        </a>
+      </div>
+      <div class="cmd reveal mono" data-d="4">
+        <button class="copy-btn" data-copy="cargo build --release&#10;./target/release/wsx repo add /path/to/your/repo&#10;./target/release/wsx" aria-label="Copy install commands">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+        <div class="cmd-row"><span class="pfx">$</span><span class="txt">cargo build --release</span></div>
+        <div class="cmd-row"><span class="pfx">$</span><span class="txt">./target/release/wsx repo add /path/to/repo</span></div>
+        <div class="cmd-row"><span class="pfx">$</span><span class="txt">./target/release/wsx</span><span class="cmt"># launch TUI</span></div>
+      </div>
+    </div>
+
+    <!-- hero terminal: types quickstart, then reveals a live dashboard -->
+    <div class="hero-term reveal" data-d="2">
+      <div class="term">
+        <div class="term-bar">
+          <span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+          <span class="title">wsx — ~/work</span>
+        </div>
+        <div class="demo-type" id="demo-type"></div>
+        <div id="hero-dash">
+          <div class="tui">
+            <div style="display:flex;align-items:center;gap:14px;padding:7px 12px;border-bottom:1px solid var(--tui-rule);background:var(--tui-bg-alt);font-size:11px">
+              <span class="fg-q bold">? 2</span>
+              <span class="fg-s bold">! 1</span>
+              <span class="fg-w bold">… 1</span>
+              <span class="fg-t bold">⠋ 2</span>
+              <span class="fg-c bold">✓ 2</span>
+              <span class="fg-i">· 3</span>
+              <span class="fg-muted" style="margin-left:auto">9 repos · 12 ws</span>
+            </div>
+
+            <div style="display:flex;align-items:baseline;gap:8px;padding:9px 12px 3px">
+              <span class="fg-faint">▾</span><span class="bold">wsx</span>
+              <span class="fg-faint" style="font-size:11px">~/work/wsx</span>
+              <span style="flex:1;height:1px;background:var(--tui-rule)"></span>
+              <span class="fg-q bold" style="font-size:11px">? 1</span>
+              <span class="fg-s bold" style="font-size:11px">! 1</span>
+              <span class="fg-c" style="font-size:11px">✓ 1</span>
+            </div>
+            <div class="row" style="padding:2px 0"><span class="gutter fg-q"></span><span class="fg-faint" style="width:3ch;text-align:center">├</span><span class="fg-q" style="width:2ch;text-align:center">?</span><span class="bold" style="flex:0 0 19ch;margin-left:6px">repo-overview</span><span class="fg-faint" style="flex:0 0 16ch;overflow:hidden">⎇ repo-overview</span><span class="fg-t" style="flex:0 0 5ch">●2p</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis"><span class="fg-q">└ </span><span class="fg-dim">Should I proceed with the deep-dive…</span></span><span class="fg-faint" style="flex:0 0 6ch;text-align:right;padding-right:10px">29s</span></div>
+            <div class="row" style="padding:2px 0"><span class="gutter fg-s"></span><span class="fg-faint" style="width:3ch;text-align:center">├</span><span class="fg-s" style="width:2ch;text-align:center">!</span><span class="bold" style="flex:0 0 19ch;margin-left:6px">theme-tokens</span><span class="fg-faint" style="flex:0 0 16ch;overflow:hidden">⎇ theme-tokens</span><span class="fg-t" style="flex:0 0 5ch">●1p</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis"><span class="fg-s">└ </span><span class="fg-dim">Hit ambiguous dependency: ratatui…</span></span><span class="fg-faint" style="flex:0 0 6ch;text-align:right;padding-right:10px">17m</span></div>
+            <div class="row" style="padding:2px 0"><span class="gutter fg-w"></span><span class="fg-faint" style="width:3ch;text-align:center">├</span><span class="fg-w spinner" style="width:2ch;text-align:center"></span><span class="bold" style="flex:0 0 19ch;margin-left:6px">list-virtualization</span><span class="fg-faint" style="flex:0 0 16ch;overflow:hidden">⎇ list-virt</span><span class="fg-t" style="flex:0 0 5ch">●2p</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis"><span class="fg-w">└ </span><span class="fg-dim">Running cargo test --package wsx…</span></span><span class="fg-faint" style="flex:0 0 6ch;text-align:right;padding-right:10px">2m</span></div>
+
+            <div style="display:flex;align-items:baseline;gap:8px;padding:9px 12px 3px">
+              <span class="fg-faint">▾</span><span class="bold">ssk</span>
+              <span class="fg-faint" style="font-size:11px">~/ssk/ssk-web</span>
+              <span style="flex:1;height:1px;background:var(--tui-rule)"></span>
+              <span class="fg-t" style="font-size:11px">⠋ 1</span>
+              <span class="fg-c" style="font-size:11px">✓ 1</span>
+              <span class="fg-faint" style="font-size:11px">· 3</span>
+            </div>
+            <div class="row" style="padding:2px 0"><span class="gutter fg-t"></span><span class="fg-faint" style="width:3ch;text-align:center">├</span><span class="fg-t spinner" style="width:2ch;text-align:center"></span><span class="bold" style="flex:0 0 19ch;margin-left:6px">quiet-fennel</span><span class="fg-faint" style="flex:0 0 16ch;overflow:hidden">⎇ quiet-fennel</span><span class="fg-t" style="flex:0 0 5ch">●2p</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis"><span class="fg-t">└ </span><span class="fg-dim">Reading src/cli/dashboard.rs…</span></span><span class="fg-faint" style="flex:0 0 6ch;text-align:right;padding-right:10px">4s</span></div>
+            <div class="row" style="padding:2px 0"><span class="gutter fg-c"></span><span class="fg-faint" style="width:3ch;text-align:center">├</span><span class="fg-c" style="width:2ch;text-align:center">✓</span><span class="bold" style="flex:0 0 19ch;margin-left:6px">brave-cedar</span><span class="fg-faint" style="flex:0 0 16ch;overflow:hidden">⎇ brave-cedar</span><span class="fg-t" style="flex:0 0 5ch">●1p</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis"><span class="fg-c">└ </span><span class="fg-dim">Done. Tests pass (47 ok). PR #214.</span></span><span class="fg-faint" style="flex:0 0 6ch;text-align:right;padding-right:10px">8m</span></div>
+            <div class="row" style="padding:2px 0"><span class="gutter idle"></span><span class="fg-faint" style="width:3ch;text-align:center">├</span><span class="fg-i" style="width:2ch;text-align:center">·</span><span class="fg-dim" style="flex:0 0 19ch;margin-left:6px">wobbly-peony</span><span class="fg-faint" style="flex:0 0 16ch;overflow:hidden">⎇ wobbly-peony</span><span class="fg-faint" style="flex:0 0 5ch">·</span><span style="flex:1;min-width:0" class="fg-faint">—</span><span class="fg-faint" style="flex:0 0 6ch;text-align:right;padding-right:10px"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<hr class="divider" />
+
+<!-- ── how it works ────────────────────────────────────────────────────── -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <p class="kicker">Quickstart</p>
+      <h2>Three commands to a running fleet.</h2>
+      <p>No daemon, no config server. Build the binary, point it at your repos, and launch. workspacex discovers your worktrees and starts orchestrating.</p>
+    </div>
+    <div class="steps">
+      <div class="step reveal" data-d="1">
+        <span class="step-line"></span>
+        <h3>Build</h3>
+        <p>Compile the release binary. One static Rust executable, no runtime dependencies.</p>
+        <div class="scmd"><span class="pfx">$ </span>cargo build --release</div>
+      </div>
+      <div class="step reveal" data-d="2">
+        <span class="step-line"></span>
+        <h3>Add a repo</h3>
+        <p>Register any git repository. Existing worktrees are detected and tracked automatically.</p>
+        <div class="scmd"><span class="pfx">$ </span>wsx repo add /path/to/repo</div>
+      </div>
+      <div class="step reveal" data-d="3">
+        <h3>Launch</h3>
+        <p>Open the TUI. Spin up agent sessions, review, and orchestrate — all from the keyboard.</p>
+        <div class="scmd"><span class="pfx">$ </span>wsx</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ── features ────────────────────────────────────────────────────────── -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <p class="kicker">Capabilities</p>
+      <h2>Built for running many agents at once.</h2>
+      <p>Every session is an isolated worktree. workspacex gives you the connective tissue — communication, review, git, processes, and remote access — to drive them in parallel.</p>
+    </div>
+
+    <div class="feat-grid">
+      <div class="card col-3 reveal" data-d="1">
+        <div class="glyph g-blue mono">⇄</div>
+        <h3>Agent-to-agent CLI</h3>
+        <p>A built-in CLI lets agents talk to each other inside a workspace — hand off subtasks, ask questions, and coordinate without leaving the session.</p>
+      </div>
+      <div class="card col-3 reveal" data-d="2">
+        <div class="glyph g-violet mono">✓</div>
+        <h3>/agent-review skill</h3>
+        <p>The <span class="mono">wsx</span> and <span class="mono">agent-review</span> skills install during setup. Pin <span class="mono">/agent-review</span> to a workspace and kick off a max-effort review in a fresh session with the agent of your choice.</p>
+      </div>
+
+      <div class="card col-2 reveal" data-d="1">
+        <div class="glyph g-green mono">▤</div>
+        <h3>At-a-glance dashboard</h3>
+        <p>Original prompt, latest agent updates, git diffs, and workspace details — all in one scannable view.</p>
+      </div>
+      <div class="card col-2 reveal" data-d="2">
+        <div class="glyph g-amber mono">⎇</div>
+        <h3>Local-first git</h3>
+        <p>Opt into real-time diff counts and pull-request status, reflected on the dashboard and inside agent chats.</p>
+      </div>
+      <div class="card col-2 reveal" data-d="3">
+        <div class="glyph g-blue mono">⌘</div>
+        <h3>Keybind launchers</h3>
+        <p>Jump a workspace into your editor, a diff viewer, lazygit, and more — without lifting your hands from the keyboard.</p>
+      </div>
+
+      <div class="card col-3 reveal" data-d="1">
+        <div class="glyph g-red mono">⊞</div>
+        <h3>Process management</h3>
+        <p>View and manage every workspace process. Kick off a dev server straight from the dashboard or the agent chat view, and watch it from the same pane.</p>
+      </div>
+      <div class="card col-3 reveal" data-d="2">
+        <div class="glyph g-green mono">⇡</div>
+        <h3>Remote-first sessions</h3>
+        <p>Every Claude Code session starts remote-enabled. Save remote commands to launch tmux-connected sessions instantly — pair with Tailscale to reach your full dashboard and workspaces from anywhere.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ── screencast highlights ───────────────────────────────────────────── -->
+<section id="see">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <p class="kicker">In motion</p>
+      <h2>See it run.</h2>
+      <p>Two short walkthroughs of real workspacex sessions.</p>
+    </div>
+
+    <div class="cast reveal" style="margin-bottom: clamp(40px, 6vw, 72px)">
+      <div class="cast-copy">
+        <p class="tag">Screencast 01</p>
+        <h3>Orchestrating parallel agents</h3>
+        <p>Launch multiple sessions across worktrees, triage what needs attention from the dashboard, and drive each agent to done — all from the keyboard.</p>
+      </div>
+      <div class="term cast-frame">
+        <div class="term-bar">
+          <span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+          <span class="title">wsx — orchestration.mp4</span>
+        </div>
+        <div class="cast-media">
+          <video controls muted loop playsinline preload="metadata" data-src="assets/01-hero.mp4"></video>
+          <div class="cast-ph">
+            <span class="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+            <span>screencast coming soon</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cast flip reveal">
+      <div class="cast-copy">
+        <p class="tag">Screencast 02</p>
+        <h3>Review &amp; remote workflows</h3>
+        <p>Pin <span class="mono">/agent-review</span>, kick off a max-effort pass, and attach to a remote tmux session — reachable from anywhere over Tailscale.</p>
+      </div>
+      <div class="term cast-frame">
+        <div class="term-bar">
+          <span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+          <span class="title">wsx — review.mp4</span>
+        </div>
+        <div class="cast-media">
+          <video controls muted loop playsinline preload="metadata" data-src="assets/02-parallel.mp4"></video>
+          <div class="cast-ph">
+            <span class="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+            <span>screencast coming soon</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ── closing CTA ─────────────────────────────────────────────────────── -->
+<section id="cta">
+  <div class="wrap" style="text-align:center; max-width:720px;">
+    <h2 class="reveal">Your terminal, multiplied.</h2>
+    <p class="reveal" data-d="1" style="color:var(--fg-dim); font-size:18px; margin:0 auto 32px; max-width:48ch;">Clone the repo, build the binary, and put a fleet of agents to work in the next five minutes.</p>
+    <div class="hero-cta reveal" data-d="2" style="justify-content:center;">
+      <a class="btn btn-primary" href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+        Star on GitHub
+      </a>
+      <a class="btn" href="docs/">Read the docs</a>
+    </div>
+  </div>
+</section>
+
+<!-- ── footer ──────────────────────────────────────────────────────────── -->
+<footer>
+  <div class="wrap foot-inner">
+    <div class="foot-brand">
+      <a class="brand" href="#top"><span class="blink"></span>workspace<b>x</b></a>
+      <p>Terminal-native multi-agent orchestration for Claude Code. Local-first, remote-ready, keyboard-driven.</p>
+    </div>
+    <div class="foot-cols">
+      <div class="foot-col">
+        <h4>Product</h4>
+        <a href="#how">Quickstart</a>
+        <a href="#features">Features</a>
+        <a href="#see">Screencasts</a>
+      </div>
+      <div class="foot-col">
+        <h4>Resources</h4>
+        <a href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">GitHub</a>
+        <a href="docs/">Documentation</a>
+        <a href="https://github.com/bakedbean/workspacex/issues" target="_blank" rel="noopener">Issues</a>
+      </div>
+    </div>
+  </div>
+  <div class="wrap foot-bottom">
+    <span>© 2026 workspacex</span>
+    <span>workspace-x.com</span>
+  </div>
+</footer>
+
+<script src="workspacex-site.js"></script>
+</body>
+</html>

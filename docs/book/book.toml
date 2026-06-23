@@ -8,7 +8,7 @@ src = "src"
 [output.html]
 git-repository-url = "https://github.com/bakedbean/workspacex"
 edit-url-template = "https://github.com/bakedbean/workspacex/edit/main/docs/book/{path}"
-site-url = "/workspacex/docs/"
+site-url = "/docs/"
 default-theme = "navy"
 preferred-dark-theme = "navy"
 

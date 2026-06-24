@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://workspace-x.com/sitemap.xml

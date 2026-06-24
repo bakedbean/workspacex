@@ -112,8 +112,8 @@
   <div class="wrap">
     <div class="sec-head reveal">
       <p class="kicker">Quickstart</p>
-      <h2>Three commands to a running fleet.</h2>
-      <p>No daemon, no config server. Build the binary, point it at your repos, and launch. Spin up isolated worktrees in the app and start orchestrating.</p>
+      <h2>Four commands to a running fleet.</h2>
+      <p>No daemon, no config server. Build the binary, put it on your PATH, point it at your repos, and launch. Spin up isolated worktrees in the app and start orchestrating.</p>
     </div>
     <div class="steps">
       <div class="step reveal" data-d="1">
@@ -124,11 +124,17 @@
       </div>
       <div class="step reveal" data-d="2">
         <span class="step-line"></span>
+        <h3>Add to PATH</h3>
+        <p>Put the release executable on your PATH so you can call <span class="mono">wsx</span> from anywhere.</p>
+        <div class="scmd"><span class="pfx">$ </span>export PATH="$PWD/target/release:$PATH"</div>
+      </div>
+      <div class="step reveal" data-d="3">
+        <span class="step-line"></span>
         <h3>Add a repo</h3>
         <p>Register any git repository. Then create isolated worktrees for it right inside the app — one per agent session.</p>
         <div class="scmd"><span class="pfx">$ </span>wsx repo add /path/to/repo</div>
       </div>
-      <div class="step reveal" data-d="3">
+      <div class="step reveal" data-d="4">
         <h3>Launch</h3>
         <p>Open the TUI. Spin up agent sessions, review, and orchestrate — all from the keyboard.</p>
         <div class="scmd"><span class="pfx">$ </span>wsx</div>
@@ -272,7 +278,7 @@
   <div class="wrap foot-inner">
     <div class="foot-brand">
       <a class="brand" href="#top"><span class="blink"></span>workspace<b>x</b></a>
-      <p>Terminal-native multi-agent orchestration for Claude Code. Local-first, remote-ready, keyboard-driven.</p>
+      <p>Terminal-native multi-agent orchestration for Claude Code, Codex, Pi, and other coding agents. Local-first, remote-ready, keyboard-driven.</p>
     </div>
     <div class="foot-cols">
       <div class="foot-col">

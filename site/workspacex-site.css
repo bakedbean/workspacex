@@ -223,8 +223,9 @@ h2 {
 .divider { height: 1px; background: var(--rule); border: 0; max-width: var(--maxw); margin: 0 auto; }
 
 /* ── how it works ───────────────────────────────────────────────────────── */
-.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; counter-reset: step; }
-@media (max-width: 820px) { .steps { grid-template-columns: 1fr; } }
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; counter-reset: step; }
+@media (max-width: 1080px) { .steps { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .steps { grid-template-columns: 1fr; } }
 .step {
   background: var(--bg-1); border: 1px solid var(--rule); border-radius: 14px;
   padding: 26px 24px; position: relative; overflow: hidden;

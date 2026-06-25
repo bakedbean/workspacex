@@ -204,6 +204,11 @@
         <h3>Your subscription, no extra API costs</h3>
         <p>workspacex never wraps an agent CLI or calls model APIs itself. It loads each agent's own terminal UI in a PTY — Claude Code, Codex, and friends run exactly as they would in your terminal, on the subscription you already pay for. workspacex adds zero token usage and never incurs extra API charges of its own.</p>
       </div>
+      <div class="card col-6 reveal" data-d="1">
+        <div class="glyph g-amber mono">⧉</div>
+        <h3>Any agent, any workspace</h3>
+        <p>A workspace isn't locked to one tool. Drop Claude, Codex, Pi, and Hermes onto the same worktree from the agent picker and let them collaborate — one agent can review, hand a fix to another over the CLI, and verify the result, no matter which harness each one runs.</p>
+      </div>
       <div class="card col-3 reveal" data-d="1">
         <div class="glyph g-blue mono">⇄</div>
         <h3>Agent-to-agent CLI</h3>
@@ -259,19 +264,19 @@
     <div class="sec-head reveal">
       <p class="kicker">In motion</p>
       <h2>See it run.</h2>
-      <p>Two short walkthroughs of real workspacex sessions.</p>
+      <p>Two short walkthroughs of real workspacex sessions — heterogeneous agents and parallel worktrees.</p>
     </div>
 
     <div class="cast reveal" style="margin-bottom: clamp(40px, 6vw, 72px)">
       <div class="cast-copy">
         <p class="tag">Screencast 01</p>
-        <h3>Orchestrating parallel agents</h3>
-        <p>Launch multiple sessions across worktrees, triage what needs attention from the dashboard, and drive each agent to done — all from the keyboard.</p>
+        <h3>Mix different agents in one workspace</h3>
+        <p>Spin up a workspace, then add any agent harness alongside the first — Claude, Codex, Pi, or Hermes — all on the same worktree. Here Claude reviews the code, hands the fix to its Codex teammate over the <span class="mono">wsx agent send</span> CLI, and Codex commits and reports back. Two different agents, one workspace, no human in the loop.</p>
       </div>
       <div class="term cast-frame">
         <div class="term-bar">
           <span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
-          <span class="title">wsx — orchestration.mp4</span>
+          <span class="title">wsx — multi-agent.mp4</span>
         </div>
         <div class="cast-media">
           <video controls muted loop playsinline preload="metadata" data-src="assets/01-hero.mp4"></video>
@@ -286,13 +291,13 @@
     <div class="cast flip reveal">
       <div class="cast-copy">
         <p class="tag">Screencast 02</p>
-        <h3>Review &amp; remote workflows</h3>
-        <p>Pin <span class="mono">/agent-review</span>, kick off a max-effort pass, and attach to a remote tmux session — reachable from anywhere over Tailscale.</p>
+        <h3>Parallel agents across isolated worktrees</h3>
+        <p>Create isolated worktrees right from the dashboard, deploy an agent to fix and commit in each, and watch every workspace's edits and ± line counts update live in the detail bars.</p>
       </div>
       <div class="term cast-frame">
         <div class="term-bar">
           <span class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
-          <span class="title">wsx — review.mp4</span>
+          <span class="title">wsx — parallel.mp4</span>
         </div>
         <div class="cast-media">
           <video controls muted loop playsinline preload="metadata" data-src="assets/02-parallel.mp4"></video>
@@ -311,13 +316,15 @@
 <!-- ── closing CTA ─────────────────────────────────────────────────────── -->
 <section id="cta">
   <div class="wrap" style="text-align:center; max-width:720px;">
-    <h2 class="reveal">Your terminal, multiplied.</h2>
-    <p class="reveal" data-d="1" style="color:var(--fg-dim); font-size:18px; margin:0 auto 32px; max-width:48ch;">Clone the repo, build the binary, and put a fleet of agents to work in the next five minutes.</p>
-    <div class="hero-cta reveal" data-d="2" style="justify-content:center;">
+    <p class="kicker reveal">Open source · MIT</p>
+    <h2 class="reveal" data-d="1">Your terminal, multiplied.</h2>
+    <p class="reveal" data-d="2" style="color:var(--fg-dim); font-size:18px; margin:0 auto 32px; max-width:52ch;">workspacex is free and open source. Clone it, build the binary, and put a fleet of agents to work in five minutes — then fork it, file an issue, or send a PR.</p>
+    <div class="hero-cta reveal" data-d="3" style="justify-content:center;">
       <a class="btn btn-primary" href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
         Star on GitHub
       </a>
+      <a class="btn" href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">Contribute</a>
       <a class="btn" href="https://github.com/bakedbean/workspacex#readme" target="_blank" rel="noopener">Read the docs</a>
     </div>
   </div>
@@ -341,12 +348,13 @@
         <h4>Resources</h4>
         <a href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">GitHub</a>
         <a href="https://github.com/bakedbean/workspacex#readme" target="_blank" rel="noopener">Documentation</a>
+        <a href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">Contribute</a>
         <a href="https://github.com/bakedbean/workspacex/issues" target="_blank" rel="noopener">Issues</a>
       </div>
     </div>
   </div>
   <div class="wrap foot-bottom">
-    <span>© 2026 workspacex</span>
+    <span>© 2026 workspacex · MIT licensed</span>
     <span>workspace-x.com</span>
   </div>
 </footer>

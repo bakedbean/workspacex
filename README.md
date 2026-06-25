@@ -12,7 +12,7 @@ https://github.com/user-attachments/assets/30c68dc1-9954-4dc6-b1a1-a8559ea5d665
 
 ## 📖 Documentation
 
-**Full documentation: https://bakedbean.github.io/workspacex/**
+**Full documentation: https://bakedbean.github.io/workspacex/docs/**
 
 Searchable, navigable docs covering keybindings, configuration, the CLI,
 integrations, and more.
@@ -30,7 +30,7 @@ integrations, and more.
   inheritance.**
 
 See the
-[full feature list](https://bakedbean.github.io/workspacex/overview/key-features.html).
+[full feature list](https://bakedbean.github.io/workspacex/docs/overview/key-features.html).
 
 ## Quick start
 
@@ -42,13 +42,13 @@ cargo build --release
 
 Press `n` to create your first workspace, then `enter` to attach. Claude Code
 spawns inside the worktree. See the
-[Quick start guide](https://bakedbean.github.io/workspacex/overview/quick-start.html)
+[Quick start guide](https://bakedbean.github.io/workspacex/docs/overview/quick-start.html)
 for the full walkthrough and next steps.
 
 ## Development
 
 Build and test with `cargo build` / `cargo test`. See the
-[Development docs](https://bakedbean.github.io/workspacex/development/index.html).
+[Development docs](https://bakedbean.github.io/workspacex/docs/development/index.html).
 
 ## License
 

@@ -61,11 +61,32 @@ pub fn edit_in_editor(initial: &str, ext_hint: &str) -> Result<Option<String>> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("wsx-edit-{pid}-{nanos}.{ext_hint}"));
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("wsx-edit-{pid}-{nanos}.{ext_hint}"));
     std::fs::write(&path, initial)?;
 
-    let status = std::process::Command::new(&editor)
+    // If $EDITOR is a relative *path* (e.g. `./scripts/my-editor`), resolve it
+    // to absolute against the current cwd now — before the child's cwd is
+    // changed below — since spawning a relative program path under a different
+    // `current_dir` is platform-specific and ambiguous. A bare command name
+    // (no separator, e.g. `nvim`) is left untouched for PATH lookup.
+    let editor_program = {
+        let p = std::path::Path::new(&editor);
+        if p.is_relative() && p.components().count() > 1 {
+            std::fs::canonicalize(p)
+                .map(std::ffi::OsString::from)
+                .unwrap_or_else(|_| editor.clone().into())
+        } else {
+            editor.clone().into()
+        }
+    };
+
+    // Run the editor with its cwd at the tempfile's directory so editors that
+    // warn when the buffer lives outside the cwd (e.g. neovim's "File not in
+    // cwd. Change cwd to /tmp?") don't prompt before opening the file.
+    let status = std::process::Command::new(&editor_program)
         .arg(&path)
+        .current_dir(&dir)
         .status()
         .map_err(|e| Error::Io(std::io::Error::other(format!("spawn {editor}: {e}"))))?;
 
@@ -463,6 +484,47 @@ mod tests {
         env.set("EDITOR", false_path());
         let result = edit_in_editor("anything", "txt");
         assert!(result.unwrap().is_none());
+    }
+
+    /// The editor must be spawned with its working directory set to the temp
+    /// file's parent, so editors that warn when the buffer lives outside the
+    /// cwd (e.g. neovim's "File not in cwd. Change cwd to /tmp?") don't prompt.
+    #[cfg(unix)]
+    #[test]
+    fn edit_in_editor_runs_editor_with_cwd_at_tempfile_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut env = EnvGuard::new();
+        // Fake editor: overwrite the file it's given ($1) with its own cwd.
+        let script = std::env::temp_dir().join("wsx_test_pwd_editor.sh");
+        std::fs::write(&script, "#!/bin/sh\npwd > \"$1\"\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        env.set("EDITOR", &script);
+
+        let result = edit_in_editor("ignored", "txt").unwrap().unwrap();
+
+        let reported = std::fs::canonicalize(result.trim()).unwrap();
+        let want = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert_eq!(reported, want);
+    }
+
+    /// A relative-path `$EDITOR` (e.g. `./my-editor`) is resolved relative to
+    /// wsx's cwd, not the tempfile dir we hand the child. Setting the child's
+    /// cwd must not break finding such an editor.
+    #[cfg(unix)]
+    #[test]
+    fn edit_in_editor_resolves_relative_editor_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut env = EnvGuard::new();
+        // Drop a fake editor in the current dir under a unique relative name.
+        let rel = format!("./wsx-test-rel-editor-{}.sh", std::process::id());
+        std::fs::write(&rel, "#!/bin/sh\necho RAN > \"$1\"\n").unwrap();
+        std::fs::set_permissions(&rel, std::fs::Permissions::from_mode(0o755)).unwrap();
+        env.set("EDITOR", &rel);
+
+        let result = edit_in_editor("ignored", "txt");
+        let _ = std::fs::remove_file(&rel);
+
+        assert_eq!(result.unwrap().as_deref(), Some("RAN\n"));
     }
 
     #[test]

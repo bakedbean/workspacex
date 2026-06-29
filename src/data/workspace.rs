@@ -693,6 +693,61 @@ mod tests {
         assert!(!created.workspace.worktree_path.exists());
     }
 
+    /// Regression: a workspace whose directory exists on disk but is no longer
+    /// a registered git worktree (half-created or manually-deleted worktree)
+    /// must still archive cleanly. Previously `git worktree remove` errored
+    /// with "is not a working tree", aborting archival before the store row was
+    /// deleted, so the workspace could never be removed.
+    #[tokio::test]
+    async fn archive_removes_orphaned_worktree_dir() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("doomed"),
+            base.path(),
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let wt = created.workspace.worktree_path.clone();
+
+        // Corrupt into the orphaned state: deregister the worktree from git and
+        // wipe the dir, then recreate a bare directory at the same path.
+        git::remove_worktree(repo_dir.path(), &wt).await.unwrap();
+        std::fs::create_dir_all(wt.join("portal")).unwrap();
+        assert!(wt.exists());
+
+        archive(
+            &store,
+            &repo,
+            &created.workspace,
+            ArchiveOpts {
+                force_branch_delete: true,
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(store.workspaces(repo.id).unwrap().is_empty());
+        assert!(!wt.exists());
+    }
+
     #[test]
     fn slugify_basic() {
         assert_eq!(

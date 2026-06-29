@@ -400,9 +400,37 @@ pub async fn create_worktree(
 }
 
 pub async fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
-    let path_s = path.to_string_lossy();
-    run(repo, &["worktree", "remove", "--force", &path_s]).await?;
+    if is_registered_worktree(repo, path).await {
+        let path_s = path.to_string_lossy();
+        run(repo, &["worktree", "remove", "--force", &path_s]).await?;
+    } else if path.exists() {
+        // The directory exists but git never registered it as a worktree (a
+        // half-created or manually-deleted worktree). `git worktree remove`
+        // would fail with "is not a working tree", which would otherwise
+        // strand the workspace (archival aborts before deleting its row), so
+        // remove the orphaned directory directly and let archival finish.
+        tokio::fs::remove_dir_all(path).await.map_err(|e| {
+            Error::Git(format!(
+                "failed to remove orphaned worktree dir {}: {e}",
+                path.display()
+            ))
+        })?;
+    }
     Ok(())
+}
+
+/// Whether `path` is currently registered as a git worktree of `repo`.
+/// Compares canonicalized paths because `git worktree list` reports the
+/// canonical path (e.g. `/private/var/...` on macOS).
+async fn is_registered_worktree(repo: &Path, path: &Path) -> bool {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Ok(worktrees) = list_worktrees(repo).await else {
+        return false;
+    };
+    worktrees.iter().any(|w| {
+        let wp = std::fs::canonicalize(&w.path).unwrap_or_else(|_| w.path.clone());
+        wp == target
+    })
 }
 
 pub async fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeInfo>> {
@@ -592,6 +620,19 @@ mod worktree_tests {
         remove_worktree(repo.path(), &wt).await.unwrap();
         let listed = list_worktrees(repo.path()).await.unwrap();
         assert!(!listed.iter().any(|w| w.path == wt));
+    }
+
+    #[tokio::test]
+    async fn remove_worktree_handles_orphaned_dir() {
+        // A directory that exists on disk but was never registered as a git
+        // worktree (a half-created or manually-deleted worktree) must still be
+        // removable, not error with "is not a working tree".
+        let repo = init_repo();
+        let wt_root = TempDir::new().unwrap();
+        let orphan = wt_root.path().join("orphan");
+        std::fs::create_dir_all(orphan.join("portal")).unwrap();
+        remove_worktree(repo.path(), &orphan).await.unwrap();
+        assert!(!orphan.exists());
     }
 
     #[tokio::test]

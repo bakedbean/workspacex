@@ -400,7 +400,7 @@ pub async fn create_worktree(
 }
 
 pub async fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
-    if is_registered_worktree(repo, path).await {
+    if is_registered_worktree(repo, path).await? {
         let path_s = path.to_string_lossy();
         run(repo, &["worktree", "remove", "--force", &path_s]).await?;
     } else if path.exists() {
@@ -410,9 +410,9 @@ pub async fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
         // strand the workspace (archival aborts before deleting its row), so
         // remove the orphaned directory directly and let archival finish.
         tokio::fs::remove_dir_all(path).await.map_err(|e| {
-            Error::Git(format!(
-                "failed to remove orphaned worktree dir {}: {e}",
-                path.display()
+            Error::Io(std::io::Error::new(
+                e.kind(),
+                format!("removing orphaned worktree dir {}: {e}", path.display()),
             ))
         })?;
     }
@@ -422,15 +422,17 @@ pub async fn remove_worktree(repo: &Path, path: &Path) -> Result<()> {
 /// Whether `path` is currently registered as a git worktree of `repo`.
 /// Compares canonicalized paths because `git worktree list` reports the
 /// canonical path (e.g. `/private/var/...` on macOS).
-async fn is_registered_worktree(repo: &Path, path: &Path) -> bool {
+///
+/// Propagates `list_worktrees` failures rather than guessing: a broken repo,
+/// missing `git`, or transient error leaves registration *unknown*, and the
+/// caller must not treat "unknown" as "orphaned" and blindly delete the dir.
+async fn is_registered_worktree(repo: &Path, path: &Path) -> Result<bool> {
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let Ok(worktrees) = list_worktrees(repo).await else {
-        return false;
-    };
-    worktrees.iter().any(|w| {
+    let worktrees = list_worktrees(repo).await?;
+    Ok(worktrees.iter().any(|w| {
         let wp = std::fs::canonicalize(&w.path).unwrap_or_else(|_| w.path.clone());
         wp == target
-    })
+    }))
 }
 
 pub async fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeInfo>> {
@@ -633,6 +635,24 @@ mod worktree_tests {
         std::fs::create_dir_all(orphan.join("portal")).unwrap();
         remove_worktree(repo.path(), &orphan).await.unwrap();
         assert!(!orphan.exists());
+    }
+
+    #[tokio::test]
+    async fn remove_worktree_propagates_list_failure_without_deleting() {
+        // If `git worktree list` fails (here: the repo arg isn't a git repo),
+        // worktree-registration is unknown. We must surface the error rather
+        // than fall through and delete the directory — a transient git failure
+        // on a registered worktree must not turn into a blind `rm -rf`.
+        let not_a_repo = TempDir::new().unwrap();
+        let wt_root = TempDir::new().unwrap();
+        let dir = wt_root.path().join("present");
+        std::fs::create_dir_all(&dir).unwrap();
+        let res = remove_worktree(not_a_repo.path(), &dir).await;
+        assert!(
+            res.is_err(),
+            "expected error when worktree status is unknown"
+        );
+        assert!(dir.exists(), "must not delete dir when status is unknown");
     }
 
     #[tokio::test]

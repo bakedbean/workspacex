@@ -457,6 +457,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 .map(|v| v.len() as u32)
                 .unwrap_or(0);
 
+            // Model + token usage for the chip row's leftmost element, sourced
+            // from the same events the dashboard SESSION SUMMARY reads, so the
+            // chat-view chip and the detail bar stay in lockstep.
+            let model_tokens = app
+                .workspace_events
+                .get(&focused_id)
+                .and_then(crate::detail_modules::session_summary::format_chip_model_tokens);
+
             // Build agents list for the footer agents row. Only shown when
             // the focused workspace has more than its primary agent.
             let focused_agents_list: Vec<(
@@ -579,6 +587,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 procs,
                 diff,
                 pr,
+                model_tokens,
                 &focused_agents_list,
                 active_agent,
                 &app.theme,
@@ -652,6 +661,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     attention_line,
                     pinned,
                     0,
+                    None,
                     None,
                     None,
                     &[],

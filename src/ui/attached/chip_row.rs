@@ -56,6 +56,27 @@ fn procs_chip_parts(procs: u32, theme: &Theme) -> Option<(Vec<Span<'static>>, us
     Some((spans, width))
 }
 
+/// Build the combined `{model} {tokens}` element (e.g. `opus 4.8 45k/200k`)
+/// plus its column width, or `None` when there's no token data. Warn-colored
+/// (matching the detail bar) when `warn` is set, else dim. This is the
+/// leftmost / lowest-priority element in the flush-right block.
+fn model_tokens_chip_parts(
+    model_tokens: Option<(String, bool)>,
+    theme: &Theme,
+) -> Option<(Vec<Span<'static>>, usize)> {
+    let (text, warn) = model_tokens?;
+    if text.is_empty() {
+        return None;
+    }
+    let width = text.chars().count();
+    let style = if warn {
+        theme.warn_style()
+    } else {
+        theme.dim_style()
+    };
+    Some((vec![Span::styled(text, style)], width))
+}
+
 /// Screen rect where the right-justified PR chip lands within `area`: flush to
 /// the row's right edge. `None` when there's no chip or it can't fit the row at
 /// all. The caller additionally drops the chip when the pinned chips would
@@ -105,19 +126,23 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
 
 /// Render the pinned-command chip row, returning each chip's clickable rect.
 ///
-/// A right-justified info block — the running-process count (`● Np`), the
-/// `diff` count (`+A −R`), then the PR chip (`{glyph} #{n} {label}`, mirroring
-/// the dashboard detail header) — is painted flush to the row's right edge with
-/// the inline rule stopping short of it. Every element is optional: the procs
-/// count and diff each render on their own, and a zero procs / clean-or-absent
-/// diff renders nothing. On rows too narrow for the whole block, elements are
-/// dropped from the left (procs first, then diff) so the PR — the strongest
+/// A right-justified info block — the model + token usage (`{model} {n}/{w}`),
+/// the running-process count (`● Np`), the `diff` count (`+A −R`), then the PR
+/// chip (`{glyph} #{n} {label}`, mirroring the dashboard detail header) — is
+/// painted flush to the row's right edge with the inline rule stopping short of
+/// it. Every element is optional: each renders on its own, and absent token
+/// data, zero procs, or a clean-or-absent diff each render nothing. The
+/// model+tokens element shows whenever there's token data — the `{model}` label
+/// is dropped when the model is unknown, leaving just `{n}/{w}`. On rows too
+/// narrow for the whole block, elements are dropped from the left
+/// (model+tokens first, then procs, then diff) so the PR — the strongest
 /// signal — stays visible longest; the whole block drops when the pinned chips
 /// leave no room for it.
 ///
 /// The returned `Rect` is the PR chip's screen rect (for mouse hit-testing),
 /// or `None` when no PR chip was painted — the procs and diff counts are not
 /// clickable.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_chip_row(
     f: &mut Frame,
     area: Rect,
@@ -125,6 +150,7 @@ pub(crate) fn render_chip_row(
     procs: u32,
     diff: Option<crate::git::DiffStats>,
     pr: Option<(BranchLifecycle, u32)>,
+    model_tokens: Option<(String, bool)>,
     theme: &Theme,
 ) -> (Vec<Rect>, Option<Rect>) {
     let rects = layout_chip_row(area, pinned);
@@ -144,15 +170,15 @@ pub(crate) fn render_chip_row(
         used += label_with_lead.chars().count();
         spans.push(Span::styled(label_with_lead, label_style));
     }
-    // Right-justified info block: procs count (`● Np`), diff count (`+A −R`),
-    // then the PR chip, in that left-to-right order, flush to the row's right
-    // edge. The PR chip is the rightmost element; each present element is
-    // separated from its neighbour by one space. The inline rule below stops a
-    // 2-cell gap short of the whole block. When the row is too narrow for the
-    // whole block, elements are dropped from the LEFT (procs first, then diff)
-    // so the PR — the most important signal — stays visible longest; the block
-    // is dropped entirely when the pinned chips leave less than the 2-cell gap,
-    // so it never overlaps.
+    // Right-justified info block: model+tokens (`{model} {n}/{w}`), procs count
+    // (`● Np`), diff count (`+A −R`), then the PR chip, in that left-to-right
+    // order, flush to the row's right edge. The PR chip is the rightmost
+    // element; each present element is separated from its neighbour by one
+    // space. The inline rule below stops a 2-cell gap short of the whole block.
+    // When the row is too narrow for the whole block, elements are dropped from
+    // the LEFT (model+tokens first, then procs, then diff) so the PR — the most
+    // important signal — stays visible longest; the block is dropped entirely
+    // when the pinned chips leave less than the 2-cell gap, so it never overlaps.
     let width = area.width as usize;
     let pr_parts = pr_chip_parts(pr, theme);
     let pr_width = pr_parts
@@ -161,7 +187,10 @@ pub(crate) fn render_chip_row(
         .unwrap_or(0);
 
     // The optional elements in left-to-right order. Each is `(spans, width)`.
-    let mut elements: Vec<(Vec<Span<'static>>, usize)> = Vec::with_capacity(3);
+    let mut elements: Vec<(Vec<Span<'static>>, usize)> = Vec::with_capacity(4);
+    if let Some(parts) = model_tokens_chip_parts(model_tokens, theme) {
+        elements.push(parts);
+    }
     if let Some(parts) = procs_chip_parts(procs, theme) {
         elements.push(parts);
     }
@@ -339,6 +368,7 @@ mod tests {
                     0,
                     None,
                     Some((BranchLifecycle::PrOpen, 152)),
+                    None,
                     &theme,
                 );
                 pr_rect = r;
@@ -373,6 +403,7 @@ mod tests {
                     0,
                     None,
                     Some((BranchLifecycle::PrOpen, 152)),
+                    None,
                     &theme,
                 );
                 pr_rect = r;
@@ -403,6 +434,7 @@ mod tests {
                         removed: 3,
                     }),
                     Some((BranchLifecycle::PrOpen, 152)),
+                    None,
                     &theme,
                 );
                 pr_rect = r;
@@ -449,6 +481,7 @@ mod tests {
                         removed: 0,
                     }),
                     None,
+                    None,
                     &theme,
                 );
             })
@@ -485,6 +518,7 @@ mod tests {
                         removed: 0,
                     }),
                     None,
+                    None,
                     &theme,
                 );
             })
@@ -518,6 +552,7 @@ mod tests {
                         removed: 3,
                     }),
                     Some((BranchLifecycle::PrOpen, 152)),
+                    None,
                     &theme,
                 );
                 pr_rect = r;
@@ -548,7 +583,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                render_chip_row(f, area, &pinned, 2, None, None, &theme);
+                render_chip_row(f, area, &pinned, 2, None, None, None, &theme);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -573,7 +608,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                render_chip_row(f, area, &pinned, 0, None, None, &theme);
+                render_chip_row(f, area, &pinned, 0, None, None, None, &theme);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -603,6 +638,7 @@ mod tests {
                     9,
                     None,
                     Some((BranchLifecycle::PrOpen, 9)),
+                    None,
                     &theme,
                 );
                 pr_rect = r;
@@ -618,5 +654,151 @@ mod tests {
         // No procs dot survived anywhere on the row.
         let row: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert!(!row.contains("● 9p"), "procs should be dropped: {row:?}");
+    }
+
+    #[test]
+    fn render_chip_row_paints_model_tokens_leftmost() {
+        // The combined model+token element sits leftmost in the flush-right
+        // block: model+tokens, then procs, then diff, then the PR chip.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut pr_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                let (_chips, r) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    3,
+                    Some(crate::git::DiffStats {
+                        added: 12,
+                        removed: 3,
+                    }),
+                    Some((BranchLifecycle::PrOpen, 152)),
+                    Some(("opus 4.8 45k/200k".to_string(), false)),
+                    &theme,
+                );
+                pr_rect = r;
+            })
+            .unwrap();
+        let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
+        let buf = terminal.backend().buffer();
+        let block = "opus 4.8 45k/200k ● 3p +12 −3 ⏺ #152 open";
+        let block_w = block.chars().count() as u16;
+        let start = rect.x + rect.width - block_w;
+        let mut painted = String::new();
+        for x in start..start + block_w {
+            painted.push_str(buf[(x, 0)].symbol());
+        }
+        assert_eq!(painted, block);
+        assert_eq!(rect.x + rect.width, 80, "PR chip stays flush-right");
+    }
+
+    #[test]
+    fn render_chip_row_shows_model_tokens_without_others() {
+        // Before any procs/diff/PR, the model+token element still shows on its
+        // own, flush to the right edge.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    0,
+                    None,
+                    None,
+                    Some(("opus 4.8 45k/200k".to_string(), false)),
+                    &theme,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let text = "opus 4.8 45k/200k";
+        let w = text.chars().count() as u16;
+        let start = 80 - w;
+        let mut painted = String::new();
+        for x in start..start + w {
+            painted.push_str(buf[(x, 0)].symbol());
+        }
+        assert_eq!(painted, text);
+    }
+
+    #[test]
+    fn render_chip_row_drops_model_tokens_first_when_narrow() {
+        // On a row too narrow for the whole block, the model+token element is
+        // dropped before the PR chip (it is leftmost / lowest priority).
+        let theme = Theme::wsx();
+        // "⏺ #9 open" = 9 cells; + "  " rule gap → 11. " 1 pr " chip = 6 cells.
+        // Width 20 fits chip + gap + PR but not a leading model+token element.
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(20, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut pr_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 20, 1);
+                let (_chips, r) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    0,
+                    None,
+                    Some((BranchLifecycle::PrOpen, 9)),
+                    Some(("opus 4.8 45k/200k".to_string(), false)),
+                    &theme,
+                );
+                pr_rect = r;
+            })
+            .unwrap();
+        let rect = pr_rect.expect("PR chip kept when model+tokens is dropped");
+        let buf = terminal.backend().buffer();
+        let mut pr_painted = String::new();
+        for x in rect.x..rect.x + rect.width {
+            pr_painted.push_str(buf[(x, 0)].symbol());
+        }
+        assert_eq!(pr_painted, "⏺ #9 open");
+        let row: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert!(
+            !row.contains("opus"),
+            "model+tokens should be dropped: {row:?}"
+        );
+    }
+
+    #[test]
+    fn render_chip_row_model_tokens_warn_style() {
+        // When the warn flag is set, the element paints in the theme warn color.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    0,
+                    None,
+                    None,
+                    Some(("opus 4.8 190k/200k".to_string(), true)),
+                    &theme,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        // The first painted cell of the element carries the warn foreground.
+        let text = "opus 4.8 190k/200k";
+        let w = text.chars().count() as u16;
+        let start = 80 - w;
+        assert_eq!(buf[(start, 0)].fg, theme.warn_style().fg.unwrap());
     }
 }

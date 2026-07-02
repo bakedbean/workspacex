@@ -188,6 +188,42 @@ fn resolve_window(context_tokens: u64, model_id: Option<&str>) -> Option<u64> {
     })
 }
 
+/// A short display label for a model id: the Claude family word plus its
+/// version, e.g. `claude-opus-4-8[1m]` → `opus 4.8`, `claude-sonnet-5` →
+/// `sonnet 5`. The version is the run of short (1-2 digit) numeric segments
+/// right after the family, so a trailing date segment like `20251001` is
+/// ignored. Unknown / non-Claude ids fall back to the id with any leading
+/// `claude-` stripped, truncated to 12 chars.
+pub(crate) fn short_model_label(model_id: &str) -> String {
+    // Drop a trailing bracketed variant tag like "[1m]".
+    let base = model_id.split('[').next().unwrap_or(model_id);
+    let segments: Vec<&str> = base.split('-').collect();
+    let family_pos = segments
+        .iter()
+        .position(|s| matches!(*s, "opus" | "sonnet" | "haiku"));
+    match family_pos {
+        Some(i) => {
+            let family = segments[i];
+            let is_short_numeric =
+                |s: &str| !s.is_empty() && s.len() <= 2 && s.bytes().all(|b| b.is_ascii_digit());
+            let version: Vec<&str> = segments[i + 1..]
+                .iter()
+                .copied()
+                .take_while(|s| is_short_numeric(s))
+                .collect();
+            if version.is_empty() {
+                family.to_string()
+            } else {
+                format!("{} {}", family, version.join("."))
+            }
+        }
+        None => {
+            let cleaned = base.strip_prefix("claude-").unwrap_or(base);
+            cleaned.chars().take(12).collect()
+        }
+    }
+}
+
 /// Build the detail bar's context-fill line and whether it should render in
 /// the warn color. None when there's no token data yet (omit the line).
 fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
@@ -210,6 +246,32 @@ fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
             n >= 150_000,
         )),
     }
+}
+
+/// The chat view's compact model + token-usage chip: `{label} {used}/{window}`
+/// when the window is resolvable (e.g. `opus 4.8 45k/200k`), else
+/// `{label} {used}` (raw tokens). The model label is omitted when `model_id`
+/// is absent. Returns `(text, warn)`; `warn` mirrors the detail bar
+/// (`format_context_line`): fill ≥ 85% of a known window, or raw tokens
+/// ≥ 150k when the window is unknown. `None` when there's no token data.
+pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<(String, bool)> {
+    let n = evt.context_tokens.filter(|&n| n > 0)?;
+    let label = evt.model_id.as_deref().map(short_model_label);
+    let (tokens_text, warn) = match resolve_window(n, evt.model_id.as_deref()) {
+        Some(w) => {
+            let pct = (n.saturating_mul(100) / w).min(999);
+            (
+                format!("{}/{}", abbreviate_tokens(n), abbreviate_tokens(w)),
+                pct >= 85,
+            )
+        }
+        None => (abbreviate_tokens(n), n >= 150_000),
+    };
+    let text = match label {
+        Some(l) => format!("{l} {tokens_text}"),
+        None => tokens_text,
+    };
+    Some((text, warn))
 }
 
 /// Render the most-recently-edited files as up to 3 basenames, joined
@@ -626,5 +688,112 @@ mod tests {
             !text.contains("context:"),
             "expected no context line without token data:\n{text}"
         );
+    }
+
+    #[test]
+    fn short_model_label_parses_family_and_version() {
+        assert_eq!(short_model_label("claude-opus-4-8"), "opus 4.8");
+        assert_eq!(short_model_label("claude-sonnet-5"), "sonnet 5");
+        assert_eq!(short_model_label("claude-haiku-4-5"), "haiku 4.5");
+    }
+
+    #[test]
+    fn short_model_label_strips_bracketed_variant() {
+        assert_eq!(short_model_label("claude-opus-4-8[1m]"), "opus 4.8");
+    }
+
+    #[test]
+    fn short_model_label_ignores_trailing_date_segment() {
+        // The date segment (>2 digits) is not part of the version.
+        assert_eq!(short_model_label("claude-haiku-4-5-20251001"), "haiku 4.5");
+    }
+
+    #[test]
+    fn short_model_label_falls_back_for_unknown_ids() {
+        // No known family word: strip a leading "claude-" and truncate to 12.
+        assert_eq!(short_model_label("gpt-5-codex"), "gpt-5-codex");
+        assert_eq!(
+            short_model_label("some-really-long-unknown-model-id"),
+            "some-really-"
+        );
+    }
+
+    #[test]
+    fn short_model_label_family_without_version() {
+        assert_eq!(short_model_label("claude-opus"), "opus");
+    }
+
+    #[test]
+    fn format_chip_model_tokens_known_window() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(45_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(text, "opus 4.8 45k/200k");
+        assert!(!warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_warns_past_85_percent() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(190_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(text, "opus 4.8 190k/200k");
+        assert!(warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_unknown_window_shows_raw_tokens() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(77_000),
+            model_id: Some("gpt-5-codex".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(text, "gpt-5-codex 77k");
+        assert!(!warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_unknown_window_warns_past_150k() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(160_000),
+            model_id: Some("gpt-5-codex".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (_text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
+        assert!(warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_none_when_no_tokens() {
+        let evt = WorkspaceEvents {
+            context_tokens: None,
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        assert!(format_chip_model_tokens(&evt).is_none());
+        let zero = WorkspaceEvents {
+            context_tokens: Some(0),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        assert!(format_chip_model_tokens(&zero).is_none());
+    }
+
+    #[test]
+    fn format_chip_model_tokens_tokens_only_when_no_model() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(45_000),
+            model_id: None,
+            ..WorkspaceEvents::default()
+        };
+        let (text, _warn) = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(text, "45k");
     }
 }

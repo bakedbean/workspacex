@@ -447,6 +447,16 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // same 10s diff poll as the agent makes commits.
             let diff = app.workspace_diff.get(&focused_id).copied();
 
+            // Running-process count for the focused workspace, drawn leftmost in
+            // the chip row's flush-right block. Same `app.workspace_processes`
+            // map the dashboard row/detail bar count, so the chip-row `● Np`
+            // matches them and refreshes on the same process-rescan tick.
+            let procs = app
+                .workspace_processes
+                .get(&focused_id)
+                .map(|v| v.len() as u32)
+                .unwrap_or(0);
+
             // Build agents list for the footer agents row. Only shown when
             // the focused workspace has more than its primary agent.
             let focused_agents_list: Vec<(
@@ -566,6 +576,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 focused_agent,
                 attention_line,
                 &pinned,
+                procs,
                 diff,
                 pr,
                 &focused_agents_list,
@@ -640,6 +651,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     None,
                     attention_line,
                     pinned,
+                    0,
                     None,
                     None,
                     &[],

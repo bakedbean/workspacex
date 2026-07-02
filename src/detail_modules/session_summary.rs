@@ -254,7 +254,6 @@ fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
 /// is absent. Returns `(text, warn)`; `warn` mirrors the detail bar
 /// (`format_context_line`): fill ≥ 85% of a known window, or raw tokens
 /// ≥ 150k when the window is unknown. `None` when there's no token data.
-#[allow(dead_code)]
 pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<(String, bool)> {
     let n = evt.context_tokens.filter(|&n| n > 0)?;
     let label = evt.model_id.as_deref().map(short_model_label);

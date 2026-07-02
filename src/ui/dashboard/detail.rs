@@ -165,7 +165,7 @@ pub fn render(
     // strip and row (above/elsewhere), so the chip row here carries pinned
     // commands only — no right-justified procs, diff, or PR chip.
     let chip_rects = if let Some(area) = chip_area {
-        crate::ui::attached::render_chip_row(f, area, inputs.pinned, 0, None, None, theme).0
+        crate::ui::attached::render_chip_row(f, area, inputs.pinned, 0, None, None, None, theme).0
     } else {
         Vec::new()
     };

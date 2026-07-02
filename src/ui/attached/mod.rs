@@ -86,6 +86,7 @@ pub fn render_panes(
     agent: Option<AgentKind>,
     attention_line: Option<Line<'static>>,
     pinned: &[PinnedCommand],
+    procs: u32,
     diff: Option<crate::git::DiffStats>,
     pr: Option<(BranchLifecycle, u32)>,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
@@ -144,7 +145,7 @@ pub fn render_panes(
         width: chip_area.width.saturating_sub(hint_w + 2),
         height: 1,
     };
-    let (chip_rects, pr_link_rect) = render_chip_row(f, chips_area, pinned, diff, pr, theme);
+    let (chip_rects, pr_link_rect) = render_chip_row(f, chips_area, pinned, procs, diff, pr, theme);
 
     let agent_chip_rects: Vec<(AgentInstanceId, Rect)> = if agents.is_empty() {
         Vec::new()
@@ -428,6 +429,7 @@ mod tests {
                 None,
                 None,
                 &[],
+                0,
                 None,
                 None,
                 &[],

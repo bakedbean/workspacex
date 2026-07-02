@@ -1,6 +1,7 @@
 //! Extracted from ui/attached.rs.
 
 use super::*;
+use crate::ui::dashboard::status::Status;
 
 /// Build the right-justified PR chip's display text and style for the chip
 /// row, mirroring the dashboard detail header (`{glyph} #{n} {label}`).
@@ -37,6 +38,21 @@ fn diff_chip_parts(
         Span::styled(" ".to_string(), theme.dim_style()),
         Span::styled(removed_text, theme.err_style()),
     ];
+    Some((spans, width))
+}
+
+/// Build the `● Np` running-process count span plus its column width, or
+/// `None` when the workspace has no running processes. Colour matches the
+/// dashboard row / detail bar: the `Thinking` status colour when live, and a
+/// zero count is hidden entirely (like the dashboard row's faint dot collapses
+/// and the diff cell hides at zero), keeping the flush-right block compact.
+fn procs_chip_parts(procs: u32, theme: &Theme) -> Option<(Vec<Span<'static>>, usize)> {
+    if procs == 0 {
+        return None;
+    }
+    let text = format!("● {procs}p");
+    let width = text.chars().count();
+    let spans = vec![Span::styled(text, theme.status_style(Status::Thinking))];
     Some((spans, width))
 }
 
@@ -89,20 +105,24 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
 
 /// Render the pinned-command chip row, returning each chip's clickable rect.
 ///
-/// A right-justified info block — the `diff` count (`+A −R`) followed by the
-/// PR chip (`{glyph} #{n} {label}`, mirroring the dashboard detail header) —
-/// is painted flush to the row's right edge with the inline rule stopping
-/// short of it. Either element is optional: the diff renders even without a
-/// PR (flush-right on its own), and a clean/absent diff renders nothing. On
-/// rows too narrow for both, the diff is dropped before the PR, and the whole
-/// block is dropped when the pinned chips leave no room for it.
+/// A right-justified info block — the running-process count (`● Np`), the
+/// `diff` count (`+A −R`), then the PR chip (`{glyph} #{n} {label}`, mirroring
+/// the dashboard detail header) — is painted flush to the row's right edge with
+/// the inline rule stopping short of it. Every element is optional: the procs
+/// count and diff each render on their own, and a zero procs / clean-or-absent
+/// diff renders nothing. On rows too narrow for the whole block, elements are
+/// dropped from the left (procs first, then diff) so the PR — the strongest
+/// signal — stays visible longest; the whole block drops when the pinned chips
+/// leave no room for it.
 ///
 /// The returned `Rect` is the PR chip's screen rect (for mouse hit-testing),
-/// or `None` when no PR chip was painted — the diff count is not clickable.
+/// or `None` when no PR chip was painted — the procs and diff counts are not
+/// clickable.
 pub(crate) fn render_chip_row(
     f: &mut Frame,
     area: Rect,
     pinned: &[PinnedCommand],
+    procs: u32,
     diff: Option<crate::git::DiffStats>,
     pr: Option<(BranchLifecycle, u32)>,
     theme: &Theme,
@@ -124,35 +144,51 @@ pub(crate) fn render_chip_row(
         used += label_with_lead.chars().count();
         spans.push(Span::styled(label_with_lead, label_style));
     }
-    // Right-justified info block: the diff count (`+A −R`) then the PR chip,
-    // in that left-to-right order, flush to the row's right edge. The PR chip
-    // is the rightmost element; the diff sits one space to its left. The
-    // inline rule below stops a 2-cell gap short of the whole block. When the
-    // row is too narrow for both, the diff is dropped before the PR — the PR
-    // is the more important signal — and the block is dropped entirely when
-    // the pinned chips leave less than the 2-cell gap, so it never overlaps.
+    // Right-justified info block: procs count (`● Np`), diff count (`+A −R`),
+    // then the PR chip, in that left-to-right order, flush to the row's right
+    // edge. The PR chip is the rightmost element; each present element is
+    // separated from its neighbour by one space. The inline rule below stops a
+    // 2-cell gap short of the whole block. When the row is too narrow for the
+    // whole block, elements are dropped from the LEFT (procs first, then diff)
+    // so the PR — the most important signal — stays visible longest; the block
+    // is dropped entirely when the pinned chips leave less than the 2-cell gap,
+    // so it never overlaps.
     let width = area.width as usize;
     let pr_parts = pr_chip_parts(pr, theme);
     let pr_width = pr_parts
         .as_ref()
         .map(|(text, _)| text.chars().count())
         .unwrap_or(0);
-    let diff_parts = diff_chip_parts(diff, theme);
-    let diff_width = diff_parts.as_ref().map(|(_, w)| *w).unwrap_or(0);
-    // One space separates the diff from the PR chip when both are present.
-    let inner_gap = if diff_width > 0 && pr_width > 0 { 1 } else { 0 };
-    let full_width = diff_width + inner_gap + pr_width;
 
-    // Pick the widest block that still leaves the 2-cell rule gap. Preferring
-    // the PR-only fallback keeps the PR visible on narrow rows.
-    let (block_width, show_diff) = if full_width > 0 && used + 2 + full_width <= width {
-        (full_width, diff_width > 0)
-    } else if pr_width > 0 && used + 2 + pr_width <= width {
-        (pr_width, false)
-    } else {
-        (0, false)
+    // The optional elements in left-to-right order. Each is `(spans, width)`.
+    let mut elements: Vec<(Vec<Span<'static>>, usize)> = Vec::with_capacity(3);
+    if let Some(parts) = procs_chip_parts(procs, theme) {
+        elements.push(parts);
+    }
+    if let Some(parts) = diff_chip_parts(diff, theme) {
+        elements.push(parts);
+    }
+    if let Some((text, style)) = pr_parts {
+        elements.push((vec![Span::styled(text, style)], pr_width));
+    }
+
+    // Width of the elements from `start` onward, joined by single-space gaps.
+    let block_width_from = |els: &[(Vec<Span<'static>>, usize)]| -> usize {
+        if els.is_empty() {
+            0
+        } else {
+            els.iter().map(|(_, w)| w).sum::<usize>() + (els.len() - 1)
+        }
     };
-    // The PR chip is rightmost, so its click rect is flush-right at `pr_width`.
+    // Drop leftmost elements until the block plus its 2-cell rule gap fits.
+    let mut start = 0;
+    while start < elements.len() && used + 2 + block_width_from(&elements[start..]) > width {
+        start += 1;
+    }
+    let block_width = block_width_from(&elements[start..]);
+    // The PR chip, when present, is the rightmost element and is only dropped
+    // once the whole block collapses — so its flush-right click rect is live
+    // exactly when a non-empty block remains.
     let pr_rect = if pr_width > 0 && block_width > 0 {
         pr_chip_rect(area, pr_width as u16)
     } else {
@@ -180,21 +216,18 @@ pub(crate) fn render_chip_row(
         }
     }
 
-    // Pad out to the block's flush-right start, then paint diff (if kept) and
-    // the PR chip in order.
+    // Pad out to the block's flush-right start, then paint the kept elements
+    // (procs, diff, PR) left-to-right, one space between adjacent ones.
     if block_width > 0 {
         let pad = width.saturating_sub(used + block_width);
         if pad > 0 {
             spans.push(Span::raw(" ".repeat(pad)));
         }
-        if show_diff && let Some((diff_spans, _)) = diff_parts {
-            spans.extend(diff_spans);
-            if pr_width > 0 {
+        for (i, (el_spans, _)) in elements.into_iter().skip(start).enumerate() {
+            if i > 0 {
                 spans.push(Span::raw(" ".to_string()));
             }
-        }
-        if let Some((text, style)) = pr_parts {
-            spans.push(Span::styled(text, style));
+            spans.extend(el_spans);
         }
     }
 
@@ -303,6 +336,7 @@ mod tests {
                     f,
                     area,
                     &pinned,
+                    0,
                     None,
                     Some((BranchLifecycle::PrOpen, 152)),
                     &theme,
@@ -336,6 +370,7 @@ mod tests {
                     f,
                     area,
                     &pinned,
+                    0,
                     None,
                     Some((BranchLifecycle::PrOpen, 152)),
                     &theme,
@@ -362,6 +397,7 @@ mod tests {
                     f,
                     area,
                     &pinned,
+                    0,
                     Some(crate::git::DiffStats {
                         added: 12,
                         removed: 3,
@@ -407,6 +443,7 @@ mod tests {
                     f,
                     area,
                     &pinned,
+                    0,
                     Some(crate::git::DiffStats {
                         added: 5,
                         removed: 0,
@@ -442,6 +479,7 @@ mod tests {
                     f,
                     area,
                     &pinned,
+                    0,
                     Some(crate::git::DiffStats {
                         added: 0,
                         removed: 0,
@@ -455,5 +493,130 @@ mod tests {
         // The far-right cell holds a rule dash or blank, never a digit/sign.
         let sym = buf[(79, 0)].symbol().to_string();
         assert!(sym == "─" || sym == " ", "got {sym:?}");
+    }
+
+    #[test]
+    fn render_chip_row_paints_procs_left_of_diff_and_pr() {
+        // The running-process count (`● Np`, dashboard "Thinking" colour) sits
+        // leftmost in the flush-right block: procs, then diff, then the PR chip,
+        // each separated by one space.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut pr_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                let (_chips, r) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    3,
+                    Some(crate::git::DiffStats {
+                        added: 12,
+                        removed: 3,
+                    }),
+                    Some((BranchLifecycle::PrOpen, 152)),
+                    &theme,
+                );
+                pr_rect = r;
+            })
+            .unwrap();
+        let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
+        let buf = terminal.backend().buffer();
+        // Whole block reads `● 3p +12 −3 ⏺ #152 open`, flush to the right edge.
+        let block = "● 3p +12 −3 ⏺ #152 open";
+        let block_w = block.chars().count() as u16;
+        let start = rect.x + rect.width - block_w;
+        let mut painted = String::new();
+        for x in start..start + block_w {
+            painted.push_str(buf[(x, 0)].symbol());
+        }
+        assert_eq!(painted, block);
+        assert_eq!(rect.x + rect.width, 80, "PR chip stays flush-right");
+    }
+
+    #[test]
+    fn render_chip_row_shows_procs_without_diff_or_pr() {
+        // Before any diff or PR, the procs count still shows on its own, flush
+        // to the right edge — the chip row surfaces workspace liveness early.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                render_chip_row(f, area, &pinned, 2, None, None, &theme);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let text = "● 2p";
+        let w = text.chars().count() as u16;
+        let start = 80 - w;
+        let mut painted = String::new();
+        for x in start..start + w {
+            painted.push_str(buf[(x, 0)].symbol());
+        }
+        assert_eq!(painted, text);
+    }
+
+    #[test]
+    fn render_chip_row_omits_zero_procs() {
+        // Zero running processes shows nothing — like the diff cell, the block
+        // stays empty rather than painting a `● 0p`.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                render_chip_row(f, area, &pinned, 0, None, None, &theme);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        // The far-right cell holds a rule dash or blank, never the procs dot.
+        let sym = buf[(79, 0)].symbol().to_string();
+        assert!(sym == "─" || sym == " ", "got {sym:?}");
+    }
+
+    #[test]
+    fn render_chip_row_drops_procs_before_pr_when_narrow() {
+        // On a row too narrow for the whole block, procs is dropped first so the
+        // PR chip — the strongest signal — stays visible.
+        let theme = Theme::wsx();
+        // "⏺ #9 open" is 9 cells; add the "  " rule gap → 11. A ` 1 pr ` chip is
+        // 6 cells. Width 20 fits the chip + gap + PR but not a leading `● 9p `.
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(20, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut pr_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 20, 1);
+                let (_chips, r) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    9,
+                    None,
+                    Some((BranchLifecycle::PrOpen, 9)),
+                    &theme,
+                );
+                pr_rect = r;
+            })
+            .unwrap();
+        let rect = pr_rect.expect("PR chip kept when procs is dropped");
+        let buf = terminal.backend().buffer();
+        let mut pr_painted = String::new();
+        for x in rect.x..rect.x + rect.width {
+            pr_painted.push_str(buf[(x, 0)].symbol());
+        }
+        assert_eq!(pr_painted, "⏺ #9 open");
+        // No procs dot survived anywhere on the row.
+        let row: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert!(!row.contains("● 9p"), "procs should be dropped: {row:?}");
     }
 }

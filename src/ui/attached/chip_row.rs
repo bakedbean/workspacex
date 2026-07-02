@@ -126,13 +126,14 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
 
 /// Render the pinned-command chip row, returning each chip's clickable rect.
 ///
-/// A right-justified info block — the running-process count (`● Np`), the
-/// `diff` count (`+A −R`), then the PR chip (`{glyph} #{n} {label}`, mirroring
-/// the dashboard detail header) — is painted flush to the row's right edge with
-/// the inline rule stopping short of it. Every element is optional: the procs
-/// count and diff each render on their own, and a zero procs / clean-or-absent
-/// diff renders nothing. On rows too narrow for the whole block, elements are
-/// dropped from the left (procs first, then diff) so the PR — the strongest
+/// A right-justified info block — the model + token usage (`{model} {n}/{w}`),
+/// the running-process count (`● Np`), the `diff` count (`+A −R`), then the PR
+/// chip (`{glyph} #{n} {label}`, mirroring the dashboard detail header) — is
+/// painted flush to the row's right edge with the inline rule stopping short of
+/// it. Every element is optional: each renders on its own, and absent model /
+/// token data, zero procs, or a clean-or-absent diff each render nothing. On
+/// rows too narrow for the whole block, elements are dropped from the left
+/// (model+tokens first, then procs, then diff) so the PR — the strongest
 /// signal — stays visible longest; the whole block drops when the pinned chips
 /// leave no room for it.
 ///
@@ -167,15 +168,15 @@ pub(crate) fn render_chip_row(
         used += label_with_lead.chars().count();
         spans.push(Span::styled(label_with_lead, label_style));
     }
-    // Right-justified info block: procs count (`● Np`), diff count (`+A −R`),
-    // then the PR chip, in that left-to-right order, flush to the row's right
-    // edge. The PR chip is the rightmost element; each present element is
-    // separated from its neighbour by one space. The inline rule below stops a
-    // 2-cell gap short of the whole block. When the row is too narrow for the
-    // whole block, elements are dropped from the LEFT (procs first, then diff)
-    // so the PR — the most important signal — stays visible longest; the block
-    // is dropped entirely when the pinned chips leave less than the 2-cell gap,
-    // so it never overlaps.
+    // Right-justified info block: model+tokens (`{model} {n}/{w}`), procs count
+    // (`● Np`), diff count (`+A −R`), then the PR chip, in that left-to-right
+    // order, flush to the row's right edge. The PR chip is the rightmost
+    // element; each present element is separated from its neighbour by one
+    // space. The inline rule below stops a 2-cell gap short of the whole block.
+    // When the row is too narrow for the whole block, elements are dropped from
+    // the LEFT (model+tokens first, then procs, then diff) so the PR — the most
+    // important signal — stays visible longest; the block is dropped entirely
+    // when the pinned chips leave less than the 2-cell gap, so it never overlaps.
     let width = area.width as usize;
     let pr_parts = pr_chip_parts(pr, theme);
     let pr_width = pr_parts

@@ -130,9 +130,11 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
 /// the running-process count (`● Np`), the `diff` count (`+A −R`), then the PR
 /// chip (`{glyph} #{n} {label}`, mirroring the dashboard detail header) — is
 /// painted flush to the row's right edge with the inline rule stopping short of
-/// it. Every element is optional: each renders on its own, and absent model /
-/// token data, zero procs, or a clean-or-absent diff each render nothing. On
-/// rows too narrow for the whole block, elements are dropped from the left
+/// it. Every element is optional: each renders on its own, and absent token
+/// data, zero procs, or a clean-or-absent diff each render nothing. The
+/// model+tokens element shows whenever there's token data — the `{model}` label
+/// is dropped when the model is unknown, leaving just `{n}/{w}`. On rows too
+/// narrow for the whole block, elements are dropped from the left
 /// (model+tokens first, then procs, then diff) so the PR — the strongest
 /// signal — stays visible longest; the whole block drops when the pinned chips
 /// leave no room for it.

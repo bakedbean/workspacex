@@ -44,6 +44,11 @@ pub struct PanesDrawOutput {
     /// when the focused workspace has no PR (or the chip didn't fit). Consumed
     /// by the input handler to open the PR in the browser on click.
     pub pr_link_rect: Option<Rect>,
+    /// Clickable rect of the running-process count (`● Np`) on the chip row, or
+    /// `None` when the focused workspace has no running processes (or the count
+    /// was dropped on a narrow row). Consumed by the input handler to open the
+    /// process-list modal on click.
+    pub procs_link_rect: Option<Rect>,
     /// `(session, terminal content rect)` for each rendered pane.
     pub pane_rects: Vec<(Arc<Session>, Rect)>,
     /// `(instance id, clickable rect)` for each agent pill in the footer
@@ -146,7 +151,7 @@ pub fn render_panes(
         width: chip_area.width.saturating_sub(hint_w + 2),
         height: 1,
     };
-    let (chip_rects, pr_link_rect) =
+    let (chip_rects, pr_link_rect, procs_link_rect) =
         render_chip_row(f, chips_area, pinned, procs, diff, pr, model_tokens, theme);
 
     let agent_chip_rects: Vec<(AgentInstanceId, Rect)> = if agents.is_empty() {
@@ -161,6 +166,7 @@ pub fn render_panes(
     PanesDrawOutput {
         chip_rects,
         pr_link_rect,
+        procs_link_rect,
         pane_rects,
         agent_chip_rects,
         footer_hint_rects,

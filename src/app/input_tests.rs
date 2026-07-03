@@ -2066,6 +2066,74 @@ mod pm_state_tests {
         );
     }
 
+    /// Clicking the chip-row running-process count (`● Np`) opens the
+    /// ProcessList modal for the focused workspace, mirroring `K` on it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_procs_count_opens_process_list() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        // The chip-row procs count reports a clickable rect during draw.
+        app.procs_link_rect = Some((
+            ws_id,
+            ratatui::layout::Rect {
+                x: 60,
+                y: 30,
+                width: 4,
+                height: 1,
+            },
+        ));
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 61,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        assert!(
+            matches!(app.modal, Some(Modal::ProcessList { workspace_id, .. }) if workspace_id == ws_id),
+            "clicking the procs count should open ProcessList for that workspace; got {:?}",
+            app.modal
+        );
+    }
+
+    /// A click that misses the procs-count rect must not open the modal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_outside_procs_count_does_not_open_process_list() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.procs_link_rect = Some((
+            ws_id,
+            ratatui::layout::Rect {
+                x: 60,
+                y: 30,
+                width: 4,
+                height: 1,
+            },
+        ));
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10, // outside the procs rect
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        assert!(
+            !matches!(app.modal, Some(Modal::ProcessList { .. })),
+            "click off the procs count must not open ProcessList; got {:?}",
+            app.modal
+        );
+    }
+
     /// Clicking a dashboard footer hint fires the corresponding key, exactly
     /// as if it had been pressed. `/` enters filter mode.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

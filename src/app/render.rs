@@ -33,6 +33,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.attached_pane_rects.clear();
     app.agent_chip_rects.clear();
     app.pr_link_rect = None;
+    app.procs_link_rect = None;
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();
     app.usage_window_option_rects.clear();
@@ -594,6 +595,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             );
             app.chip_rects = out.chip_rects;
             app.pr_link_rect = out.pr_link_rect.map(|r| (focused_id, r));
+            app.procs_link_rect = out.procs_link_rect.map(|r| (focused_id, r));
             app.attention_rects = attention_rects;
             app.attached_pane_rects = out.pane_rects;
             app.agent_chip_rects = out.agent_chip_rects;

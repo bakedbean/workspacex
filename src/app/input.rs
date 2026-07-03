@@ -2083,6 +2083,20 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
             }) {
                 // Clicking the PR chip opens the PR in the browser.
                 open_pr_for_workspace(app, ws_id);
+            } else if let Some((ws_id, _)) = app.procs_link_rect.filter(|(_, r)| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                // Clicking the running-process count opens the process-list
+                // modal for that workspace, mirroring `K` on it.
+                app.modal = Some(Modal::ProcessList {
+                    workspace_id: ws_id,
+                    selected: 0,
+                    input: None,
+                    notice: None,
+                });
             } else if app.modal.is_none()
                 && app.usage_graph_rect.is_some_and(|r| {
                     m.column >= r.x

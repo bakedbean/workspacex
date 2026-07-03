@@ -139,9 +139,11 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
 /// signal — stays visible longest; the whole block drops when the pinned chips
 /// leave no room for it.
 ///
-/// The returned `Rect` is the PR chip's screen rect (for mouse hit-testing),
-/// or `None` when no PR chip was painted — the procs and diff counts are not
-/// clickable.
+/// Returns `(chip_rects, pr_rect, procs_rect)`: the pinned-chip click rects,
+/// the PR chip's screen rect (`None` when no PR chip was painted), and the
+/// procs count's screen rect (`None` when no `● Np` was painted). Both the PR
+/// chip and the procs count are clickable for mouse hit-testing; the diff count
+/// is not.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_chip_row(
     f: &mut Frame,
@@ -152,7 +154,7 @@ pub(crate) fn render_chip_row(
     pr: Option<(BranchLifecycle, u32)>,
     model_tokens: Option<(String, bool)>,
     theme: &Theme,
-) -> (Vec<Rect>, Option<Rect>) {
+) -> (Vec<Rect>, Option<Rect>, Option<Rect>) {
     let rects = layout_chip_row(area, pinned);
     let label_style = Style::default().fg(theme.path);
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 5 + 2);
@@ -187,11 +189,15 @@ pub(crate) fn render_chip_row(
         .unwrap_or(0);
 
     // The optional elements in left-to-right order. Each is `(spans, width)`.
+    // `procs_idx` records where the procs count landed so its click rect can be
+    // recovered once the flush-right layout (and any narrow-row drops) is known.
     let mut elements: Vec<(Vec<Span<'static>>, usize)> = Vec::with_capacity(4);
+    let mut procs_idx: Option<usize> = None;
     if let Some(parts) = model_tokens_chip_parts(model_tokens, theme) {
         elements.push(parts);
     }
     if let Some(parts) = procs_chip_parts(procs, theme) {
+        procs_idx = Some(elements.len());
         elements.push(parts);
     }
     if let Some(parts) = diff_chip_parts(diff, theme) {
@@ -223,6 +229,23 @@ pub(crate) fn render_chip_row(
     } else {
         None
     };
+    // The procs count's click rect: `None` when it wasn't painted (no procs, or
+    // dropped from the left on a narrow row). The block is flush-right, so it
+    // starts at column `width - block_width`; the procs element sits after the
+    // kept elements to its left, each contributing its width plus a 1-cell gap.
+    let procs_rect = procs_idx.and_then(|pidx| {
+        if pidx < start || block_width == 0 {
+            return None;
+        }
+        let offset: usize = elements[start..pidx].iter().map(|(_, w)| w + 1).sum();
+        let x = area.x as usize + (width - block_width) + offset;
+        Some(Rect {
+            x: x as u16,
+            y: area.y,
+            width: elements[pidx].1 as u16,
+            height: 1,
+        })
+    });
 
     // Inline rule filler matching the V5 dashboard repo-header style:
     // 2 spaces (or 0 when there are no chips), then `─` runs to the right edge
@@ -261,7 +284,7 @@ pub(crate) fn render_chip_row(
     }
 
     f.render_widget(Paragraph::new(Line::from(spans)), area);
-    (rects, pr_rect)
+    (rects, pr_rect, procs_rect)
 }
 
 #[cfg(test)]
@@ -361,7 +384,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r) = render_chip_row(
+                let (_chips, r, _procs) = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -396,7 +419,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 16, 1);
-                let (_chips, r) = render_chip_row(
+                let (_chips, r, _procs) = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -424,7 +447,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r) = render_chip_row(
+                let (_chips, r, _procs) = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -542,7 +565,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r) = render_chip_row(
+                let (_chips, r, _procs) = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -598,6 +621,73 @@ mod tests {
     }
 
     #[test]
+    fn render_chip_row_returns_procs_click_rect_at_its_paint() {
+        // The procs count (`● Np`) must be clickable: `render_chip_row` returns
+        // its screen rect, and the painted `● Np` fills exactly that rect so a
+        // click lands on the visible glyphs. Here procs sits leftmost in the
+        // block `● 3p +12 −3 ⏺ #152 open`, flush-right in an 80-wide row.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut procs_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                let (_chips, _pr, p) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    3,
+                    Some(crate::git::DiffStats {
+                        added: 12,
+                        removed: 3,
+                    }),
+                    Some((BranchLifecycle::PrOpen, 152)),
+                    None,
+                    &theme,
+                );
+                procs_rect = p;
+            })
+            .unwrap();
+        let rect = procs_rect.expect("procs count present and fits an 80-wide row");
+        let buf = terminal.backend().buffer();
+        let mut painted = String::new();
+        for x in rect.x..rect.x + rect.width {
+            painted.push_str(buf[(x, rect.y)].symbol());
+        }
+        assert_eq!(painted, "● 3p");
+    }
+
+    #[test]
+    fn render_chip_row_returns_no_procs_rect_when_dropped() {
+        // When the row is too narrow to keep the procs count, its click rect is
+        // `None` — no phantom hit target survives after the element is dropped.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(20, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut procs_rect = Some(Rect::new(0, 0, 0, 0));
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 20, 1);
+                let (_chips, _pr, p) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    9,
+                    None,
+                    Some((BranchLifecycle::PrOpen, 9)),
+                    None,
+                    &theme,
+                );
+                procs_rect = p;
+            })
+            .unwrap();
+        assert!(procs_rect.is_none());
+    }
+
+    #[test]
     fn render_chip_row_omits_zero_procs() {
         // Zero running processes shows nothing — like the diff cell, the block
         // stays empty rather than painting a `● 0p`.
@@ -631,7 +721,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 20, 1);
-                let (_chips, r) = render_chip_row(
+                let (_chips, r, _procs) = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -668,7 +758,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r) = render_chip_row(
+                let (_chips, r, _procs) = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -745,7 +835,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 20, 1);
-                let (_chips, r) = render_chip_row(
+                let (_chips, r, _procs) = render_chip_row(
                     f,
                     area,
                     &pinned,

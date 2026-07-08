@@ -59,7 +59,7 @@ lab=user@lab.example.com
 
 On the dashboard, press `H` (capital, mnemonic *hosts*) to open a picker over these configured hosts, sorted by name. If no hosts are configured, an error modal points you at `wsx config edit shared_hosts`.
 
-Selecting a host spawns a background fetch via `ssh <dest> sh -lc 'wsx shared list --json'` (login shell so wsx is found on the host's PATH). Results render as a list titled "shared workspaces on `<host>`", showing one row per agent instance:
+Selecting a host spawns a background fetch via `ssh <dest> "sh -lc 'wsx shared list --json'"` (one pre-quoted remote command, so ssh's argv join preserves it; login shell so wsx is found on the host's PATH). Results render as a list titled "shared workspaces on `<host>`", showing one row per agent instance:
 
 ```
 repo/workspace  branch  label  ●|✗

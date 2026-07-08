@@ -27,7 +27,7 @@ Each agent instance in a shared workspace gets a deterministic tmux session name
 
 **Dashboard indicator:**
 
-Shared workspaces are marked on the dashboard with a badge just left of the branch name — the tmux logo when nerd fonts are enabled, a hollow `◇` otherwise (the filled `◆` is the *detached* status glyph; same vocabulary). Direct workspaces show no badge.
+Shared workspaces are marked on the dashboard with a badge just left of the branch name — the tmux logo when nerd fonts are enabled, a hollow `◇` otherwise (the filled `◆` is the *detached* status glyph; same vocabulary). The badge is **green** while the workspace's tmux session is alive (attached in this wsx, or detached-but-running on the server) and dim when the workspace is shared but no live session backs it yet. Direct workspaces show no badge.
 
 **The `◆ detached` status:**
 

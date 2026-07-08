@@ -1900,15 +1900,30 @@ pub(crate) fn toggle_workspace_shared(
         // Eager spawn: respawn running instances inside tmux AND start any
         // stopped ones, so the share is immediately alive (green badge,
         // reachable from the remote picker) — see the doc comment.
+        //
+        // Best-effort across instances: the shared flag is already flipped,
+        // and each instance's spawn is independent, so one failure (PTY or
+        // store error — a missing agent binary is NOT an error here, it
+        // surfaces via the AgentMissing modal and continues) must not leave
+        // the remaining instances stopped. Attempt every instance, then
+        // surface the first error.
+        let mut first_err = None;
         for inst in &all_instances {
             app.sessions.remove(inst.id);
-            if inst.is_primary {
-                ensure_workspace_session(app, ws_id)?;
+            let result = if inst.is_primary {
+                ensure_workspace_session(app, ws_id)
             } else {
-                ensure_instance_session(app, inst.id, false)?;
+                ensure_instance_session(app, inst.id, false)
+            };
+            if let Err(e) = result {
+                tracing::warn!(error = %e, "failed to spawn an agent instance while sharing");
+                first_err.get_or_insert(e);
             }
         }
-        return Ok(());
+        return match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        };
     }
     // Unsharing: restart only instances that were actually running.
     for inst in &running {

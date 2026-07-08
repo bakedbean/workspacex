@@ -116,12 +116,94 @@ const MAX_ACTIVITY_HOURS: u64 = 720;
 
 /// Result of a completed `fetch_shared_list` background fetch against a
 /// remote wsx host, stashed on `App` so `Modal::RemoteWorkspaceList`
-/// rendering (Task 6) has something to draw from.
+/// rendering has something to draw from.
 #[derive(Debug, Clone)]
 pub struct RemoteList {
     pub host_name: String,
     pub dest: String,
     pub records: Vec<crate::commands::shared::SharedWorkspaceRecord>,
+}
+
+/// One attachable row of the remote list: workspace context + one agent
+/// session. Multiple agent instances on the same workspace flatten into
+/// separate rows here — the shared helper both `Modal::RemoteWorkspaceList`'s
+/// key handler (input.rs) and its renderer (ui/modal/remote_workspace_list.rs)
+/// build rows from, so selection indices and rendered rows always agree.
+pub(crate) struct RemoteRow<'a> {
+    pub workspace: &'a str,
+    pub repo: &'a str,
+    pub branch: &'a str,
+    pub label: &'a str,
+    pub tmux_session: Option<&'a str>,
+    pub alive: bool,
+}
+
+/// Flatten `list.records` into one `RemoteRow` per agent instance, in
+/// record/agent order. Empty `records`, or records with no agents, simply
+/// contribute no rows.
+pub(crate) fn remote_rows(list: &RemoteList) -> Vec<RemoteRow<'_>> {
+    let mut out = Vec::new();
+    for rec in &list.records {
+        for agent in &rec.agents {
+            out.push(RemoteRow {
+                workspace: &rec.workspace,
+                repo: &rec.repo,
+                branch: &rec.branch,
+                label: &agent.label,
+                tmux_session: agent.tmux_session.as_deref(),
+                alive: agent.alive,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod remote_rows_tests {
+    use super::*;
+    use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+
+    #[test]
+    fn remote_rows_flatten_agents_and_mark_dead() {
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "d".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                agents: vec![
+                    SharedAgentRecord {
+                        label: "claude".into(),
+                        agent: "claude".into(),
+                        tmux_session: Some("wsx-r-w".into()),
+                        alive: true,
+                    },
+                    SharedAgentRecord {
+                        label: "codex#2".into(),
+                        agent: "codex".into(),
+                        tmux_session: None,
+                        alive: false,
+                    },
+                ],
+            }],
+        };
+        let rows = remote_rows(&list);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].alive && rows[0].tmux_session.is_some());
+        assert!(!rows[1].alive);
+    }
+
+    #[test]
+    fn remote_rows_empty_records_yields_no_rows() {
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "d".into(),
+            records: vec![],
+        };
+        assert!(remote_rows(&list).is_empty());
+    }
 }
 
 pub struct App {
@@ -1859,7 +1941,10 @@ pub(crate) async fn reconcile_remote_list(
                 dest,
                 records,
             });
-            g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList { selected: 0 });
+            g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
+                selected: 0,
+                notice: None,
+            });
         }
         Err(e) => {
             g.modal = Some(crate::ui::modal::Modal::Error {

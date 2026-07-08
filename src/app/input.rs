@@ -1843,12 +1843,88 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        // Temporary handler: reconcile_remote_list (Task 4) can open this
-        // modal, but its real navigation/actions land in Task 6. Esc closes
-        // it; every other key is swallowed so the enum stays total.
-        Modal::RemoteWorkspaceList { .. } => {
-            if k.code == KeyCode::Esc {
-                app.modal = None;
+        Modal::RemoteWorkspaceList {
+            mut selected,
+            notice,
+        } => {
+            let row_count = app
+                .remote_list
+                .as_ref()
+                .map(|l| crate::app::remote_rows(l).len())
+                .unwrap_or(0);
+            match k.code {
+                // Ephemeral contract: the listing only exists for this
+                // modal's lifetime. Esc discards both the modal and the
+                // fetched data so nothing stale lingers on `App` for the
+                // next `H` fetch to trip over.
+                KeyCode::Esc => {
+                    app.modal = None;
+                    app.remote_list = None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    selected = selected.saturating_sub(1);
+                    app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if row_count > 0 {
+                        selected = (selected + 1).min(row_count - 1);
+                    }
+                    app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                }
+                KeyCode::Enter => {
+                    let target_row = app
+                        .remote_list
+                        .as_ref()
+                        .map(crate::app::remote_rows)
+                        .and_then(|rows| {
+                            rows.get(selected)
+                                .map(|r| (r.alive, r.tmux_session.is_some()))
+                        });
+                    let new_notice = match target_row {
+                        // Task 7 delivers `attach_remote`; this placeholder
+                        // ships for exactly one commit (this one) and Task 7
+                        // replaces it immediately.
+                        Some((true, true)) => Some("attach lands in the next commit".to_string()),
+                        Some(_) => Some("no live session to attach to".to_string()),
+                        None => notice,
+                    };
+                    app.modal = Some(Modal::RemoteWorkspaceList {
+                        selected,
+                        notice: new_notice,
+                    });
+                }
+                KeyCode::Char('r') => {
+                    // Re-run Task 5's Enter-in-picker flow for the same host:
+                    // same gen allocation / RemoteListLoading / reconcile
+                    // path, just triggered from inside the list instead of
+                    // the host picker.
+                    if let Some(list) = &app.remote_list {
+                        let host_name = list.host_name.clone();
+                        let dest = list.dest.clone();
+                        let fetch_gen = app.alloc_remote_gen();
+                        app.modal = Some(Modal::RemoteListLoading {
+                            host_name: host_name.clone(),
+                        });
+                        let shared_clone = shared.clone();
+                        tokio::spawn(async move {
+                            let result =
+                                crate::commands::shared_hosts::fetch_shared_list(&dest).await;
+                            crate::app::reconcile_remote_list(
+                                shared_clone,
+                                fetch_gen,
+                                host_name,
+                                dest,
+                                result,
+                            )
+                            .await;
+                        });
+                    } else {
+                        app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                    }
+                }
+                _ => {
+                    app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                }
             }
         }
         Modal::RemoteHostPicker { hosts, selected } => match k.code {

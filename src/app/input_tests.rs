@@ -4267,6 +4267,103 @@ mod pm_state_tests {
         );
     }
 
+    fn two_row_remote_list() -> crate::app::RemoteList {
+        use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+        crate::app::RemoteList {
+            host_name: "mini".into(),
+            dest: "eben@mini".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                agents: vec![
+                    SharedAgentRecord {
+                        label: "claude".into(),
+                        agent: "claude".into(),
+                        tmux_session: Some("wsx-r-w".into()),
+                        alive: true,
+                    },
+                    SharedAgentRecord {
+                        label: "codex#2".into(),
+                        agent: "codex".into(),
+                        tmux_session: None,
+                        alive: false,
+                    },
+                ],
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_workspace_list_j_moves_selection_and_enter_on_dead_row_notices() {
+        let store = Store::open_in_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        app.remote_list = Some(two_row_remote_list());
+        app.modal = Some(Modal::RemoteWorkspaceList {
+            selected: 0,
+            notice: None,
+        });
+        let shared_app = Arc::new(Mutex::new(
+            App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
+        ));
+
+        // j moves selection from row 0 (alive) to row 1 (dead).
+        let j = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('j'),
+            crossterm::event::KeyModifiers::NONE,
+        );
+        handle_key_modal(&mut app, &shared_app, j).await.unwrap();
+        match &app.modal {
+            Some(Modal::RemoteWorkspaceList { selected, .. }) => assert_eq!(*selected, 1),
+            other => panic!("expected RemoteWorkspaceList, got {other:?}"),
+        }
+
+        // Enter on the dead row keeps the modal open with a notice rather
+        // than trying to attach.
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::empty(),
+        );
+        handle_key_modal(&mut app, &shared_app, enter)
+            .await
+            .unwrap();
+        match &app.modal {
+            Some(Modal::RemoteWorkspaceList { selected, notice }) => {
+                assert_eq!(*selected, 1, "selection should be unchanged by Enter");
+                assert!(notice.is_some(), "expected a notice on dead-row Enter");
+            }
+            other => panic!("expected RemoteWorkspaceList to stay open, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_workspace_list_esc_closes_modal_and_clears_remote_list() {
+        let store = Store::open_in_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        app.remote_list = Some(two_row_remote_list());
+        app.modal = Some(Modal::RemoteWorkspaceList {
+            selected: 0,
+            notice: None,
+        });
+        let shared_app = Arc::new(Mutex::new(
+            App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
+        ));
+
+        let esc = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::empty(),
+        );
+        handle_key_modal(&mut app, &shared_app, esc).await.unwrap();
+        assert!(app.modal.is_none(), "Esc should close the modal");
+        assert!(
+            app.remote_list.is_none(),
+            "Esc should clear app.remote_list (ephemeral contract)"
+        );
+    }
+
     #[tokio::test]
     async fn ctrl_s_in_new_workspace_modal_toggles_shared() {
         use crate::ui::modal::Modal;

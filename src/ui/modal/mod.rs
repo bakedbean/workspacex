@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 mod agents_panel;
 mod archive;
 mod process_list;
+mod remote_workspace_list;
 mod repo_settings;
 mod updates_panel;
 mod usage_picker;
@@ -21,6 +22,7 @@ use archive::render_archive_steps;
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
 pub use process_list::render_process_list;
+pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
 pub use updates_panel::{ordered_workspaces_for_panel, render_updates_panel};
 pub use usage_picker::render_usage_window_picker;
@@ -119,12 +121,14 @@ pub enum Modal {
     /// selected workspace. Carries no state — dismissed without side effects.
     WorkspaceActions,
     /// Browse the tmux-shared workspace listing fetched from a remote wsx
-    /// host (`App::remote_list`). Landed here as a bare variant so
-    /// `reconcile_remote_list` (Task 4) can open it; the real keybindings
-    /// and list rendering come in Task 6. For now Esc closes it and it
-    /// renders a placeholder via the generic `render()` below.
+    /// host (`App::remote_list`), opened by `reconcile_remote_list`. Rows are
+    /// flattened per agent instance via `crate::app::remote_rows`; `selected`
+    /// indexes into that flattened list. `notice` surfaces inline feedback
+    /// (e.g. "no live session to attach to") the way `ProcessList::notice`
+    /// does, without needing a separate modal round-trip.
     RemoteWorkspaceList {
         selected: usize,
+        notice: Option<String>,
     },
     /// `H`-key picker over the configured shared hosts (`shared_hosts`
     /// setting), sorted by name. Self-contained snapshot like
@@ -188,10 +192,10 @@ fn panel_frame<'a>(
 }
 
 pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme) {
-    // UpdatesPanel and ProcessList are rendered by their dedicated
-    // helpers directly from `draw()` because they need live App state.
-    // This function should never be called with those variants; guard
-    // defensively.
+    // UpdatesPanel, ProcessList, and RemoteWorkspaceList are rendered by
+    // their dedicated helpers directly from `draw()` because they need live
+    // App state. This function should never be called with those variants;
+    // guard defensively.
     if matches!(
         modal,
         Modal::UpdatesPanel { .. }
@@ -199,6 +203,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             | Modal::RepoSettings { .. }
             | Modal::AgentsPanel { .. }
             | Modal::UsageWindowPicker { .. }
+            | Modal::RemoteWorkspaceList { .. }
     ) {
         return;
     }
@@ -321,15 +326,11 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
              ?/Esc  close"
                 .to_string(),
         ),
-        // Placeholder body: the real list rendering (from `app.remote_list`)
-        // lands in Task 6. Rendered here (rather than skipped via the
-        // early-return guard above) so the modal is never blank in the
-        // interim — `render.rs`'s modal dispatch already falls through to
-        // this generic `render()` for any variant it doesn't special-case.
-        Modal::RemoteWorkspaceList { .. } => (
-            "remote workspaces",
-            "loading remote list…\n\n[esc] close".to_string(),
-        ),
+        // RemoteWorkspaceList is handled by the early-return above; this arm
+        // is unreachable but required for exhaustiveness.
+        Modal::RemoteWorkspaceList { .. } => {
+            unreachable!("RemoteWorkspaceList must not reach render()")
+        }
         Modal::RemoteHostPicker { hosts, selected } => {
             let list = hosts
                 .iter()

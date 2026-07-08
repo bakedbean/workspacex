@@ -753,6 +753,18 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &app.theme,
                 );
             }
+            crate::ui::modal::Modal::RemoteWorkspaceList { selected, notice } => {
+                if let Some(list) = &app.remote_list {
+                    crate::ui::modal::render_remote_workspace_list(
+                        f,
+                        area,
+                        list,
+                        *selected,
+                        notice.as_deref(),
+                        &app.theme,
+                    );
+                }
+            }
             crate::ui::modal::Modal::RepoSettings { repo_id, selected } => {
                 if let Some(repo) = app.repos.iter().find(|r| r.id == *repo_id) {
                     let repo_name = repo.name.clone();

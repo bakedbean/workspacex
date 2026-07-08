@@ -444,26 +444,35 @@ mod tests {
     #[test]
     fn shared_badge_is_green_when_active_and_dim_otherwise() {
         let theme = Theme::wsx();
-        let badge_style = |inputs: &RowInputs| {
-            let line = render(inputs, ColumnWidths::default(), 0, &theme, 120);
-            line.spans
-                .iter()
-                .find(|s| s.content.as_ref() == "◇ ")
-                .expect("shared badge span present")
-                .style
-        };
-        let mut inputs = base();
-        inputs.shared = true;
-        // No live tmux session yet: dim.
-        assert_eq!(badge_style(&inputs).fg, theme.dim_style().fg);
-        // Live session (attached client or detached-alive): the complete
-        // green — "the agent is alive in tmux right now".
-        inputs.shared_active = true;
-        assert_eq!(
-            badge_style(&inputs).fg,
-            theme.status_style(Status::Complete).fg,
-            "active shared badge must use the complete green"
-        );
+        // Both font modes: the badge glyph differs (tmux logo vs ◇) but the
+        // liveness coloring must behave identically in each.
+        for (nerd_fonts, badge_text) in [(false, "◇ "), (true, "\u{ebc8} ")] {
+            let badge_style = |inputs: &RowInputs| {
+                let line = render(inputs, ColumnWidths::default(), 0, &theme, 120);
+                line.spans
+                    .iter()
+                    .find(|s| s.content.as_ref() == badge_text)
+                    .unwrap_or_else(|| panic!("badge span present (nerd_fonts={nerd_fonts})"))
+                    .style
+            };
+            let mut inputs = base();
+            inputs.shared = true;
+            inputs.nerd_fonts = nerd_fonts;
+            // No live tmux session yet: dim.
+            assert_eq!(
+                badge_style(&inputs).fg,
+                theme.dim_style().fg,
+                "inactive badge must be dim (nerd_fonts={nerd_fonts})"
+            );
+            // Live session (attached client or detached-alive): the complete
+            // green — "the agent is alive in tmux right now".
+            inputs.shared_active = true;
+            assert_eq!(
+                badge_style(&inputs).fg,
+                theme.status_style(Status::Complete).fg,
+                "active badge must use the complete green (nerd_fonts={nerd_fonts})"
+            );
+        }
     }
 
     #[test]

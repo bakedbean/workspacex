@@ -1,7 +1,7 @@
 # tmux-Shared Workspaces — Design
 
 **Date:** 2026-07-08
-**Status:** Approved for planning
+**Status:** Phase 1 shipped (#222); Phase 2 implemented
 
 ## Problem
 
@@ -128,8 +128,11 @@ fields — so machines on different wsx versions degrade gracefully.
 **Browsing.** `H` on the dashboard (unbound today; mnemonic *hosts*, pairing
 with `S` for shared-create) opens a "shared hosts" picker listing
 `shared_hosts` entries.
-Selecting a host runs `ssh <dest> sh -lc 'wsx shared list --json'` on a
-background thread (login shell so PATH resolves wsx). Results render with the
+Selecting a host runs `ssh <dest> "sh -lc 'wsx shared list --json'"` on a
+background thread (login shell so PATH resolves wsx). The remote command is
+double-quoted so it stays a single argument: ssh joins the remote-command words
+with spaces before the host login shell re-parses them, so an unquoted
+`sh -lc 'wsx shared list --json'` would degrade to a bare `wsx`. Results render with the
 same visual language as local workspaces plus a host badge. The list is
 ephemeral: fetched on open, refreshable, never written to the local DB — no
 sync or cache-invalidation problem exists.

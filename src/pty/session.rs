@@ -1,11 +1,7 @@
 #![allow(clippy::collapsible_if, clippy::arc_with_non_send_sync)]
 
 use crate::error::{Error, Result};
-use portable_pty::{MasterPty, PtySize, native_pty_system};
-// The command builders moved to `pty::command`, but this file's test module
-// still names `CommandBuilder` when inspecting their output.
-#[cfg(test)]
-use portable_pty::CommandBuilder;
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -426,16 +422,6 @@ pub fn spawn_session(
     identity: Option<SpawnIdentity>,
     tmux: Option<&str>,
 ) -> Result<Session> {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            cols,
-            rows,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
-
     let mut child_cmd = match agent {
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
         AgentKind::Pi => build_pi_command(cwd, &mode, remote),
@@ -452,6 +438,45 @@ pub fn spawn_session(
         child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
         child_cmd.env("WSX_AGENT_INSTANCE_ID", id.instance_id.to_string());
     }
+    let reportable = resolved_binary(agent);
+    spawn_command_session(child_cmd, cols, rows, agent, reportable, tmux)
+}
+
+/// Agent-agnostic spawn path: opens a PTY, optionally wraps the command in
+/// tmux, spawns it, and wires up the parser / reader thread / writer task into
+/// a [`Session`]. `spawn_session` builds a per-agent command and delegates
+/// here; other callers (e.g. remote `ssh -t … tmux attach`) can pass an
+/// arbitrary [`CommandBuilder`] directly.
+///
+/// `agent` is inert plumbing: it only tags the returned `Session`, driving
+/// render/paste quirks via [`submit_writes`]. Remote sessions never paste
+/// through `submit_writes`, so such callers pass a benign default
+/// (`AgentKind::Claude`).
+///
+/// `reportable_binary` is the binary name surfaced in an
+/// [`Error::AgentBinaryMissing`] when the spawn fails because the command is
+/// not found. It is decoupled from `agent` on purpose: `spawn_session` passes
+/// the resolved agent binary, while the remote attach passes `ssh` (the binary
+/// it actually execs), so a missing *local* `ssh` isn't misreported as the
+/// agent it would eventually reach.
+pub fn spawn_command_session(
+    child_cmd: CommandBuilder,
+    cols: u16,
+    rows: u16,
+    agent: AgentKind,
+    reportable_binary: String,
+    tmux: Option<&str>,
+) -> Result<Session> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            cols,
+            rows,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
+
     let child_cmd = match tmux {
         Some(name) => {
             if !crate::pty::tmux::is_available() {
@@ -464,7 +489,7 @@ pub fn spawn_session(
     };
     let mut child = pair.slave.spawn_command(child_cmd).map_err(|e| {
         if is_binary_not_found(&e) {
-            Error::AgentBinaryMissing(resolved_binary(agent))
+            Error::AgentBinaryMissing(reportable_binary)
         } else {
             Error::Pty(format!("spawn: {e}"))
         }
@@ -694,6 +719,34 @@ mod tests {
                 .args(["kill-server"])
                 .output();
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_command_session_runs_arbitrary_command_through_pty() {
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "printf remote-hello; sleep 5"]);
+        cmd.cwd("/tmp");
+        let session =
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+                .unwrap();
+        let mut seen = false;
+        for _ in 0..50 {
+            if session
+                .parser
+                .lock()
+                .unwrap()
+                .screen()
+                .contents()
+                .contains("remote-hello")
+            {
+                seen = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        session.kill();
+        assert!(seen, "PTY must deliver the command's output");
+        assert!(session.tmux_session.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1307,6 +1360,28 @@ mod tests {
                 assert_eq!(binary, "/nonexistent/wsx-test-bin-does-not-exist");
             }
             other => panic!("expected AgentBinaryMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spawn_command_session_reports_the_passed_binary_name_on_missing_command() {
+        // `attach_remote` runs ssh via this path and passes `ssh_bin()`, so a
+        // missing *local* ssh must report "ssh", not the agent it would reach.
+        // Drive that decoupling directly: a nonexistent command with an explicit
+        // reportable name must surface that exact name in AgentBinaryMissing.
+        let cmd = CommandBuilder::new("/no/such/dir/ssh-test-bin-missing");
+        let result =
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "ssh-test-bin".into(), None);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("spawn should fail when the command is missing"),
+        };
+        match err {
+            Error::AgentBinaryMissing(binary) => assert_eq!(
+                binary, "ssh-test-bin",
+                "must report the reportable_binary, not the AgentKind default"
+            ),
+            other => panic!("expected AgentBinaryMissing(\"ssh-test-bin\"), got {other:?}"),
         }
     }
 

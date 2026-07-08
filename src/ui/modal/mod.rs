@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 mod agents_panel;
 mod archive;
 mod process_list;
+mod remote_workspace_list;
 mod repo_settings;
 mod updates_panel;
 mod usage_picker;
@@ -21,6 +22,7 @@ use archive::render_archive_steps;
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
 pub use process_list::render_process_list;
+pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
 pub use updates_panel::{ordered_workspaces_for_panel, render_updates_panel};
 pub use usage_picker::render_usage_window_picker;
@@ -118,6 +120,31 @@ pub enum Modal {
     /// (edit/term/diff/lazygit/chronox) — the ones that act only on a
     /// selected workspace. Carries no state — dismissed without side effects.
     WorkspaceActions,
+    /// Browse the tmux-shared workspace listing fetched from a remote wsx
+    /// host (`App::remote_list`), opened by `reconcile_remote_list`. Rows are
+    /// flattened per agent instance via `crate::app::remote_rows`; `selected`
+    /// indexes into that flattened list. `notice` surfaces inline feedback
+    /// (e.g. "no live session to attach to") the way `ProcessList::notice`
+    /// does, without needing a separate modal round-trip.
+    RemoteWorkspaceList {
+        selected: usize,
+        notice: Option<String>,
+    },
+    /// `H`-key picker over the configured shared hosts (`shared_hosts`
+    /// setting), sorted by name. Self-contained snapshot like
+    /// `AgentPicker` — `(name, dest)` pairs plus a cursor. Enter allocates
+    /// a remote-fetch generation and swaps to `RemoteListLoading`.
+    RemoteHostPicker {
+        hosts: Vec<(String, String)>,
+        selected: usize,
+    },
+    /// Shown while the background `fetch_shared_list` task for `host_name`
+    /// is in flight. Esc closes it and clears `pending_remote_gen`, so the
+    /// eventual (stale) reconcile no-ops via its gen guard instead of
+    /// reopening a modal the user backed out of.
+    RemoteListLoading {
+        host_name: String,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -165,10 +192,10 @@ fn panel_frame<'a>(
 }
 
 pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme) {
-    // UpdatesPanel and ProcessList are rendered by their dedicated
-    // helpers directly from `draw()` because they need live App state.
-    // This function should never be called with those variants; guard
-    // defensively.
+    // UpdatesPanel, ProcessList, and RemoteWorkspaceList are rendered by
+    // their dedicated helpers directly from `draw()` because they need live
+    // App state. This function should never be called with those variants;
+    // guard defensively.
     if matches!(
         modal,
         Modal::UpdatesPanel { .. }
@@ -176,6 +203,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             | Modal::RepoSettings { .. }
             | Modal::AgentsPanel { .. }
             | Modal::UsageWindowPicker { .. }
+            | Modal::RemoteWorkspaceList { .. }
     ) {
         return;
     }
@@ -297,6 +325,33 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
              c   chronox\n\n  \
              ?/Esc  close"
                 .to_string(),
+        ),
+        // RemoteWorkspaceList is handled by the early-return above; this arm
+        // is unreachable but required for exhaustiveness.
+        Modal::RemoteWorkspaceList { .. } => {
+            unreachable!("RemoteWorkspaceList must not reach render()")
+        }
+        Modal::RemoteHostPicker { hosts, selected } => {
+            let list = hosts
+                .iter()
+                .enumerate()
+                .map(|(i, (name, dest))| {
+                    let marker = if i == *selected { ">" } else { " " };
+                    format!("{marker}  {name}  {dest}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                "pick a shared host",
+                format!(
+                    "Choose a host to browse shared workspaces:\n\n{list}\n\n\
+                     \u{2191}\u{2193} move   Enter fetch   Esc cancel"
+                ),
+            )
+        }
+        Modal::RemoteListLoading { host_name } => (
+            "remote workspaces",
+            format!("fetching shared workspaces from {host_name}…\n\n[esc] cancel"),
         ),
         Modal::AgentPicker {
             selected, current, ..

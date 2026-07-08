@@ -155,6 +155,7 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
             .focused_target()
             .and_then(|target| app.sessions.get(target.instance)),
         View::AttachedPm => app.pm.clone(),
+        View::AttachedRemote => app.remote.clone(),
         View::Dashboard
             if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
         {
@@ -581,6 +582,24 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     shared: true,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
+            }
+        }
+        (KeyCode::Char('H'), _) => {
+            // Capital H opens a picker over the configured shared hosts
+            // (`wsx config edit shared_hosts`), sorted by name. No workspace
+            // or repo selection is required — the fetch that follows (Enter
+            // in the picker) targets a remote host, not the local tree.
+            let hosts: Vec<(String, String)> = crate::commands::shared_hosts::list(&app.store)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|h| (h.name, h.dest))
+                .collect();
+            if hosts.is_empty() {
+                app.modal = Some(Modal::Error {
+                    message: "no shared hosts configured — add name=ssh-dest lines via `wsx config edit shared_hosts`".into(),
+                });
+            } else {
+                app.modal = Some(Modal::RemoteHostPicker { hosts, selected: 0 });
             }
         }
         (KeyCode::Char('e'), _) => {
@@ -1137,6 +1156,60 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
                 return dispatch_pm_leader_action(app, k).await;
             }
         }
+    }
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
+        app.leader_selected = 0;
+        return Ok(());
+    }
+    let bytes = encode_key(k);
+    if !bytes.is_empty() {
+        session.scroll_to_live();
+        let _ = session.writer.send(bytes).await;
+    }
+    Ok(())
+}
+/// Full-screen remote-attach key handler. Mirrors `handle_key_attached_pm` but
+/// with no leader menu: `Ctrl-x d` detaches (severing only the local ssh
+/// client), everything else is forwarded verbatim to the remote agent's PTY.
+/// If the ssh child has already exited (e.g. tmux printed `can't find session`
+/// for a stale name, then the client quit), any key bounces to the dashboard
+/// with an error modal instead of writing into a dead PTY.
+async fn handle_key_attached_remote(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    let session = match app.remote.clone() {
+        Some(s) => s,
+        None => {
+            app.leader_pending = false;
+            app.view = View::Dashboard;
+            return Ok(());
+        }
+    };
+    // Dead ssh client (stale session name, remote tmux gone, network drop):
+    // surface it and return to the dashboard on the next keypress.
+    if matches!(
+        *session.status.read().unwrap(),
+        crate::pty::session::SessionStatus::Exited { .. }
+    ) {
+        let label = app
+            .remote_target
+            .as_ref()
+            .map(|t| format!("{}/{}", t.host_name, t.tmux))
+            .unwrap_or_default();
+        app.leader_pending = false;
+        crate::app::detach_remote(app);
+        app.modal = Some(crate::ui::modal::Modal::Error {
+            message: format!("remote session ended: {label}"),
+        });
+        return Ok(());
+    }
+    if app.leader_pending {
+        app.leader_pending = false;
+        if k.code == KeyCode::Char('d') {
+            crate::app::detach_remote(app);
+            return Ok(());
+        }
+        // Any other key after the leader is a no-op (no remote leader menu).
+        return Ok(());
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
@@ -1825,6 +1898,151 @@ async fn handle_key_modal(
             }
             _ => {}
         },
+        Modal::RemoteWorkspaceList {
+            mut selected,
+            notice,
+        } => {
+            let row_count = app
+                .remote_list
+                .as_ref()
+                .map(|l| crate::app::remote_rows(l).len())
+                .unwrap_or(0);
+            match k.code {
+                // Ephemeral contract: the listing only exists for this
+                // modal's lifetime. Esc discards both the modal and the
+                // fetched data so nothing stale lingers on `App` for the
+                // next `H` fetch to trip over.
+                KeyCode::Esc => {
+                    app.modal = None;
+                    app.remote_list = None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    selected = selected.saturating_sub(1);
+                    app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if row_count > 0 {
+                        selected = (selected + 1).min(row_count - 1);
+                    }
+                    app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                }
+                KeyCode::Enter => {
+                    // Resolve the selected row's tmux session (only alive rows
+                    // carry one) and the host from `remote_list`, then attach
+                    // over ssh. The remote list is left intact so a later
+                    // detach lands back on the same modal-less dashboard.
+                    let target = app.remote_list.as_ref().and_then(|list| {
+                        let rows = crate::app::remote_rows(list);
+                        rows.get(selected).and_then(|r| {
+                            r.alive.then_some(r.tmux_session).flatten().map(|tmux| {
+                                crate::app::RemoteTarget {
+                                    host_name: list.host_name.clone(),
+                                    dest: list.dest.clone(),
+                                    tmux: tmux.to_string(),
+                                }
+                            })
+                        })
+                    });
+                    match target {
+                        Some(target) => {
+                            if let Err(e) = crate::app::attach_remote(app, target, 80, 24) {
+                                app.modal = Some(Modal::RemoteWorkspaceList {
+                                    selected,
+                                    notice: Some(format!("attach failed: {e}")),
+                                });
+                            }
+                            // On success `attach_remote` set the view + cleared
+                            // the modal; nothing more to do here.
+                        }
+                        None => {
+                            app.modal = Some(Modal::RemoteWorkspaceList {
+                                selected,
+                                notice: Some("no live session to attach to".to_string()),
+                            });
+                        }
+                    }
+                }
+                KeyCode::Char('r') => {
+                    // Re-run Task 5's Enter-in-picker flow for the same host:
+                    // same gen allocation / RemoteListLoading / reconcile
+                    // path, just triggered from inside the list instead of
+                    // the host picker.
+                    if let Some(list) = &app.remote_list {
+                        let host_name = list.host_name.clone();
+                        let dest = list.dest.clone();
+                        let fetch_gen = app.alloc_remote_gen();
+                        app.modal = Some(Modal::RemoteListLoading {
+                            host_name: host_name.clone(),
+                        });
+                        let shared_clone = shared.clone();
+                        tokio::spawn(async move {
+                            let result =
+                                crate::commands::shared_hosts::fetch_shared_list(&dest).await;
+                            crate::app::reconcile_remote_list(
+                                shared_clone,
+                                fetch_gen,
+                                host_name,
+                                dest,
+                                result,
+                            )
+                            .await;
+                        });
+                    } else {
+                        app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                    }
+                }
+                _ => {
+                    app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                }
+            }
+        }
+        Modal::RemoteHostPicker { hosts, selected } => match k.code {
+            KeyCode::Esc => {
+                app.modal = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let new_sel = selected.saturating_sub(1);
+                app.modal = Some(Modal::RemoteHostPicker {
+                    hosts,
+                    selected: new_sel,
+                });
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let new_sel = (selected + 1).min(hosts.len().saturating_sub(1));
+                app.modal = Some(Modal::RemoteHostPicker {
+                    hosts,
+                    selected: new_sel,
+                });
+            }
+            KeyCode::Enter => {
+                // `hosts` is only ever populated by the `H` dashboard arm,
+                // which refuses to open this modal when the list is empty
+                // (it opens Modal::Error instead) — so indexing here can't
+                // panic.
+                let (name, dest) = hosts[selected].clone();
+                let fetch_gen = app.alloc_remote_gen();
+                app.modal = Some(Modal::RemoteListLoading {
+                    host_name: name.clone(),
+                });
+                let shared_clone = shared.clone();
+                tokio::spawn(async move {
+                    let result = crate::commands::shared_hosts::fetch_shared_list(&dest).await;
+                    crate::app::reconcile_remote_list(shared_clone, fetch_gen, name, dest, result)
+                        .await;
+                });
+            }
+            _ => {}
+        },
+        Modal::RemoteListLoading { .. } => {
+            if k.code == KeyCode::Esc {
+                // Close immediately and drop the pending generation so the
+                // in-flight fetch's eventual reconcile is a no-op (its gen
+                // guard checks `pending_remote_gen == Some(my_gen)`) rather
+                // than reopening a modal after the user has backed out.
+                app.modal = None;
+                app.pending_remote_gen = None;
+            }
+        }
     }
     Ok(())
 }
@@ -2020,6 +2238,11 @@ async fn route_footer_key(app: &mut App, k: crossterm::event::KeyEvent) {
                 tracing::warn!(error = %e, "footer-hint pm dispatch failed");
             }
         }
+        View::AttachedRemote => {
+            if let Err(e) = handle_key_attached_remote(app, k).await {
+                tracing::warn!(error = %e, "footer-hint remote dispatch failed");
+            }
+        }
     }
 }
 
@@ -2075,7 +2298,9 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
     ) && matches!(
         app.view,
-        crate::ui::View::Attached(_) | crate::ui::View::AttachedPm
+        crate::ui::View::Attached(_)
+            | crate::ui::View::AttachedPm
+            | crate::ui::View::AttachedRemote
     ) && !m.modifiers.contains(KeyModifiers::SHIFT)
     {
         if let Some((session, rect)) = pane_under_cursor(app, m.column, m.row) {
@@ -2224,6 +2449,7 @@ async fn dispatch_key(
                 handle_key_attached(app, id, k).await?
             }
             View::AttachedPm => handle_key_attached_pm(app, k).await?,
+            View::AttachedRemote => handle_key_attached_remote(app, k).await?,
         }
     }
     Ok(())

@@ -114,6 +114,164 @@ pub enum StoppedKind {
 /// purely a view over already-collected data rather than affecting retention.
 const MAX_ACTIVITY_HOURS: u64 = 720;
 
+/// Result of a completed `fetch_shared_list` background fetch against a
+/// remote wsx host, stashed on `App` so `Modal::RemoteWorkspaceList`
+/// rendering has something to draw from.
+#[derive(Debug, Clone)]
+pub struct RemoteList {
+    pub host_name: String,
+    pub dest: String,
+    pub records: Vec<crate::commands::shared::SharedWorkspaceRecord>,
+}
+
+/// A resolved remote attach target: the display name of the host, its ssh
+/// destination, and the remote tmux session name to attach to. Built from a
+/// selected `RemoteRow` + its `RemoteList` when the user presses Enter on an
+/// alive row, and consumed by `attach_remote`.
+#[derive(Debug, Clone)]
+pub struct RemoteTarget {
+    pub host_name: String,
+    pub dest: String,
+    pub tmux: String,
+}
+
+/// One attachable row of the remote list: workspace context + one agent
+/// session. Multiple agent instances on the same workspace flatten into
+/// separate rows here — the shared helper both `Modal::RemoteWorkspaceList`'s
+/// key handler (input.rs) and its renderer (ui/modal/remote_workspace_list.rs)
+/// build rows from, so selection indices and rendered rows always agree.
+pub(crate) struct RemoteRow<'a> {
+    pub workspace: &'a str,
+    pub repo: &'a str,
+    pub branch: &'a str,
+    pub label: &'a str,
+    pub tmux_session: Option<&'a str>,
+    pub alive: bool,
+}
+
+/// Flatten `list.records` into one `RemoteRow` per agent instance, in
+/// record/agent order. Empty `records`, or records with no agents, simply
+/// contribute no rows.
+pub(crate) fn remote_rows(list: &RemoteList) -> Vec<RemoteRow<'_>> {
+    let mut out = Vec::new();
+    for rec in &list.records {
+        for agent in &rec.agents {
+            out.push(RemoteRow {
+                workspace: &rec.workspace,
+                repo: &rec.repo,
+                branch: &rec.branch,
+                label: &agent.label,
+                tmux_session: agent.tmux_session.as_deref(),
+                alive: agent.alive,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod remote_rows_tests {
+    use super::*;
+    use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+
+    #[test]
+    fn remote_rows_flatten_agents_and_mark_dead() {
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "d".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                agents: vec![
+                    SharedAgentRecord {
+                        label: "claude".into(),
+                        agent: "claude".into(),
+                        tmux_session: Some("wsx-r-w".into()),
+                        alive: true,
+                    },
+                    SharedAgentRecord {
+                        label: "codex#2".into(),
+                        agent: "codex".into(),
+                        tmux_session: None,
+                        alive: false,
+                    },
+                ],
+            }],
+        };
+        let rows = remote_rows(&list);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].alive && rows[0].tmux_session.is_some());
+        assert!(!rows[1].alive);
+    }
+
+    #[test]
+    fn remote_rows_empty_records_yields_no_rows() {
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "d".into(),
+            records: vec![],
+        };
+        assert!(remote_rows(&list).is_empty());
+    }
+}
+
+/// Spawn `ssh -t <dest> -- tmux attach -t =<tmux>` through the PTY plumbing and
+/// enter `View::AttachedRemote`. The `Session`'s `tmux_session` is `None` on
+/// purpose: `kill()`/`Drop` sever only the local ssh client; the remote agent
+/// persists in the remote tmux server (the Phase 1 persistence contract, one
+/// hop away). The `agent` param on `spawn_command_session` is inert plumbing
+/// here — `AgentKind::Claude` is passed only to satisfy the signature.
+pub(crate) fn attach_remote(
+    app: &mut App,
+    target: RemoteTarget,
+    cols: u16,
+    rows: u16,
+) -> Result<()> {
+    let mut cmd = portable_pty::CommandBuilder::new(crate::commands::shared_hosts::ssh_bin());
+    cmd.args([
+        "-t",
+        &target.dest,
+        "--",
+        "tmux",
+        "attach",
+        "-t",
+        &format!("={}", target.tmux),
+    ]);
+    let session = crate::pty::session::spawn_command_session(
+        cmd,
+        cols,
+        rows,
+        crate::pty::session::AgentKind::Claude,
+        // Report `ssh` (not the agent) if the local ssh binary is missing.
+        crate::commands::shared_hosts::ssh_bin(),
+        None,
+    )?;
+    app.remote = Some(std::sync::Arc::new(session));
+    app.remote_target = Some(target);
+    app.modal = None;
+    app.view = crate::ui::View::AttachedRemote;
+    Ok(())
+}
+
+/// Detach from the remote workspace: kill the local ssh client, clear
+/// `remote`/`remote_target`, and return to the dashboard. Only the ssh client
+/// dies — the remote agent survives in its tmux server. (On quit, `App` drop
+/// runs `Session::Drop`, which likewise kills only the client; nothing extra is
+/// needed to honor the persistence contract.) The remote *list* is left intact
+/// so a detach lands back in the same modal-less dashboard the attach came
+/// from without re-fetching. Detach does not touch the fetched list; Esc on the
+/// list modal is what discards the fetched data (see the Esc arm in
+/// `app::input`).
+pub(crate) fn detach_remote(app: &mut App) {
+    if let Some(session) = app.remote.take() {
+        session.kill();
+    }
+    app.remote_target = None;
+    app.view = crate::ui::View::Dashboard;
+}
+
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
@@ -133,6 +291,23 @@ pub struct App {
     /// Generation id of the currently in-flight workspace archive, if any.
     /// Used by the reconcile step to detect stale completions.
     pub pending_archive_gen: Option<u64>,
+    /// Most recently fetched remote (tmux-shared) workspace listing, if any
+    /// fetch has completed. Consumed by `Modal::RemoteWorkspaceList`
+    /// rendering (Task 6).
+    pub remote_list: Option<RemoteList>,
+    /// The live ssh-attach session while in `View::AttachedRemote`, else None.
+    /// The child is a local `ssh -t … tmux attach` client; its `tmux_session`
+    /// is deliberately None so `kill()`/`Drop` sever only that client, never
+    /// the remote agent (the Phase 1 persistence contract, one ssh hop away).
+    pub remote: Option<std::sync::Arc<crate::pty::session::Session>>,
+    /// The target backing `app.remote`, kept for the `AttachedRemote` header
+    /// label and the "session ended" error message. Cleared alongside `remote`.
+    pub remote_target: Option<RemoteTarget>,
+    /// Monotonic counter handed out to in-flight remote-list fetch tasks.
+    pub next_remote_gen: u64,
+    /// Generation id of the currently in-flight remote-list fetch, if any.
+    /// Used by the reconcile step to detect stale completions.
+    pub pending_remote_gen: Option<u64>,
     pub dashboard: DashboardState,
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::data::store::RepoId, Workspace)>,
@@ -367,6 +542,11 @@ impl App {
             pending_create_gen: None,
             next_archive_gen: 0,
             pending_archive_gen: None,
+            remote_list: None,
+            remote: None,
+            remote_target: None,
+            next_remote_gen: 0,
+            pending_remote_gen: None,
             chip_rects: Vec::new(),
             attention_rects: Vec::new(),
             detail_scroll_offsets: [0; 4],
@@ -517,6 +697,14 @@ impl App {
         let g = self.next_archive_gen;
         self.next_archive_gen = self.next_archive_gen.wrapping_add(1);
         self.pending_archive_gen = Some(g);
+        g
+    }
+
+    /// Allocate a fresh generation id for a new remote-list fetch task.
+    pub fn alloc_remote_gen(&mut self) -> u64 {
+        let g = self.next_remote_gen;
+        self.next_remote_gen = self.next_remote_gen.wrapping_add(1);
+        self.pending_remote_gen = Some(g);
         g
     }
 
@@ -1801,6 +1989,47 @@ pub(crate) async fn reconcile_archive_result(
     }
 }
 
+/// Reconcile the outcome of a spawned `fetch_shared_list` task (Task 5).
+/// Locks the app briefly; if `pending_remote_gen` no longer matches
+/// `my_gen` — the user backed out or kicked off a newer fetch — the result
+/// is discarded entirely (including a successful one), so a slow stale
+/// fetch can never clobber a newer listing or reopen a modal the user has
+/// moved past. Otherwise clears `pending_remote_gen` and, on success,
+/// stores the listing and opens `Modal::RemoteWorkspaceList`; on failure
+/// surfaces `Modal::Error` with the fetch's error text.
+pub(crate) async fn reconcile_remote_list(
+    app: SharedApp,
+    my_gen: u64,
+    host_name: String,
+    dest: String,
+    result: Result<Vec<crate::commands::shared::SharedWorkspaceRecord>>,
+) {
+    let mut g = app.lock().await;
+    if g.pending_remote_gen != Some(my_gen) {
+        // Stale — leave pending_remote_gen, remote_list, and modal alone.
+        return;
+    }
+    g.pending_remote_gen = None;
+    match result {
+        Ok(records) => {
+            g.remote_list = Some(RemoteList {
+                host_name,
+                dest,
+                records,
+            });
+            g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
+                selected: 0,
+                notice: None,
+            });
+        }
+        Err(e) => {
+            g.modal = Some(crate::ui::modal::Modal::Error {
+                message: e.to_string(),
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod reconcile_archive_tests {
     use super::*;
@@ -1899,6 +2128,130 @@ mod reconcile_archive_tests {
             g.pending_archive_gen,
             Some(99),
             "stale reconcile must not clear pending_archive_gen"
+        );
+    }
+}
+
+#[cfg(test)]
+mod reconcile_remote_tests {
+    use super::*;
+    use crate::commands::shared::SharedWorkspaceRecord;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::Mutex;
+
+    fn make_app() -> (App, TempDir) {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        (app, tmp)
+    }
+
+    #[tokio::test]
+    async fn reconcile_remote_list_stores_records_and_discards_stale_gens() {
+        let (app, _tmp) = make_app();
+        let shared = Arc::new(Mutex::new(app));
+        let (g1, g2) = {
+            let mut app = shared.lock().await;
+            (app.alloc_remote_gen(), app.alloc_remote_gen()) // g2 supersedes g1
+        };
+        let rec = SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: "w".into(),
+            branch: "b".into(),
+            worktree_path: "/x".into(),
+            agents: vec![],
+        };
+        // Stale gen: ignored entirely.
+        reconcile_remote_list(
+            shared.clone(),
+            g1,
+            "mini".into(),
+            "host".into(),
+            Ok(vec![rec.clone()]),
+        )
+        .await;
+        assert!(shared.lock().await.remote_list.is_none());
+        // Current gen: stored + list modal opened.
+        reconcile_remote_list(
+            shared.clone(),
+            g2,
+            "mini".into(),
+            "host".into(),
+            Ok(vec![rec]),
+        )
+        .await;
+        {
+            let app = shared.lock().await;
+            assert_eq!(app.remote_list.as_ref().unwrap().records.len(), 1);
+            assert!(matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::RemoteWorkspaceList { .. })
+            ));
+            assert!(app.pending_remote_gen.is_none());
+        }
+        // Error path: error modal with the message.
+        let g3 = shared.lock().await.alloc_remote_gen();
+        reconcile_remote_list(
+            shared.clone(),
+            g3,
+            "mini".into(),
+            "host".into(),
+            Err(crate::error::Error::UserInput("ssh mini: refused".into())),
+        )
+        .await;
+        match &shared.lock().await.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert!(message.contains("refused"))
+            }
+            other => panic!("expected error modal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reconcile_remote_list_skips_all_mutation_when_gen_mismatch() {
+        let (mut app, _tmp) = make_app();
+        // Simulate: a different modal is already showing (e.g. an Error
+        // popped by another flow) and pending_remote_gen advanced past
+        // the value our stale task carries.
+        app.modal = Some(crate::ui::modal::Modal::Error {
+            message: "untouched".into(),
+        });
+        app.pending_remote_gen = Some(99);
+        let shared = Arc::new(Mutex::new(app));
+        let rec = SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: "w".into(),
+            branch: "b".into(),
+            worktree_path: "/x".into(),
+            agents: vec![],
+        };
+        reconcile_remote_list(
+            shared.clone(),
+            7, // stale — does not match pending_remote_gen
+            "mini".into(),
+            "host".into(),
+            Ok(vec![rec]),
+        )
+        .await;
+        let g = shared.lock().await;
+        match &g.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert_eq!(
+                    message, "untouched",
+                    "stale reconcile must not overwrite modal"
+                );
+            }
+            other => panic!("expected the pre-existing Error modal to survive, got {other:?}"),
+        }
+        assert_eq!(
+            g.pending_remote_gen,
+            Some(99),
+            "stale reconcile must not clear pending_remote_gen"
+        );
+        assert!(
+            g.remote_list.is_none(),
+            "stale reconcile must not store a remote_list"
         );
     }
 }

@@ -48,6 +48,42 @@ wsx shared list --json
 
 Without `--json`, prints one tab-separated line per agent instance: repo, workspace, tmux session name, and `alive`/`(dead)`/`-`. With `--json`, prints the same data as structured records (repo, workspace, branch, worktree path, and each agent's label/kind/session name/liveness) — useful for scripting against.
 
+**Browsing another machine:**
+
+To browse and attach to shared workspaces running on a remote machine, configure a list of ssh destinations under `wsx config edit shared_hosts`. The setting stores one entry per line as `name=ssh-destination`, e.g.:
+
+```
+mini=eben@ebenmini.local
+lab=user@lab.example.com
+```
+
+On the dashboard, press `H` (capital, mnemonic *hosts*) to open a picker over these configured hosts, sorted by name. If no hosts are configured, an error modal points you at `wsx config edit shared_hosts`.
+
+Selecting a host spawns a background fetch via `ssh <dest> "sh -lc 'wsx shared list --json'"` (one pre-quoted remote command, so ssh's argv join preserves it; login shell so wsx is found on the host's PATH). Results render as a list titled "shared workspaces on `<host>`", showing one row per agent instance:
+
+```
+repo/workspace  branch  label  ●|✗
+```
+
+The marker (`●` for alive, `✗` for dead/stale) indicates whether the remote tmux session still exists. Navigate with `j`/`k` (or `↑`/`↓`), select a live row with `Enter` to attach, `r` to re-fetch the list, and `Esc` to close. The list is ephemeral — nothing is written to the local database, so there's no sync or cache-invalidation problem.
+
+Attaching spawns `ssh -t <dest> -- tmux attach -t =<name>` as a PTY session. You interact with the remote agent as if it were local; the tmux session ID (prefixed with `=`) ensures the correct agent is targeted, even if multiple agents sanitize to similar names.
+
+**Detaching and persistence:**
+
+`Ctrl-x d` detaches from the remote session, severing only the local ssh client. The remote agent keeps running in its tmux server — quitting wsx has the same effect. Reattaching resumes the exact session with its full history intact. Detaching lands back on the dashboard; the fetched list is ephemeral and never persisted, and pressing `H` again reopens the host picker with a fresh fetch.
+
+**Failure modes:**
+
+Fetching fails if the host is unreachable, ssh authentication fails, wsx is missing on the host's login-shell PATH, or a row's tmux session has since died (stale). All fetch errors surface in an error modal carrying ssh's stderr; dead rows show the `✗` marker and cannot be attached to (attempting to attach shows a notice "no live session to attach to").
+
+**Requirements:**
+
+- SSH key access to the remote host (password prompts are not supported for the background list fetch — use key-based auth via `ssh-agent` or key files; the attach itself runs in a real terminal but key auth is strongly recommended for a smooth flow).
+- wsx installed on the host and reachable in the login shell's PATH (e.g., `ssh <host> "sh -lc 'which wsx'"` should succeed — the outer double quotes keep `sh -lc '…'` a single argument, so ssh's space-join back into the host login shell preserves the inner quoting).
+- Workspaces created as shared on the host (either via `wsx workspace create <repo> --shared` or by converting an existing one with `T`).
+- A local `ssh` binary (no local tmux needed for remote attach).
+
 **v1 limitation — scrollback:**
 
 Reattaching (in wsx or via a bare `tmux attach`) only repaints the tmux session's *current visible screen* — wsx's own scrollback buffer (see [Mouse, scrollback, and text selection](../daily-use/mouse-scrollback-selection.md)) resets with each new client and doesn't carry history across a detach/reattach. tmux's own scrollback for the session is unaffected and still reachable in-session via its usual copy-mode (`Ctrl-b [` with tmux's default prefix). A richer remote-scrollback view is planned for a later phase.

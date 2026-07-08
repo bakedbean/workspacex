@@ -1401,6 +1401,9 @@ mod tests {
         };
         let mut env = EnvGuard::new();
         env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
+        // The tmux client refuses to start without a usable TERM, and CI
+        // runners (GitHub ubuntu-latest) leave it unset or "dumb".
+        env.set("TERM", "xterm-256color");
         // WSX_CLAUDE_BIN must point at a real script: `/bin/sh` would receive the
         // claude CLI args and reject them. Write a wrapper that ignores args and
         // sleeps so the tmux window keeps a live child.
@@ -1477,6 +1480,9 @@ mod tests {
         };
         let mut env = EnvGuard::new();
         env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
+        // The tmux client refuses to start without a usable TERM, and CI
+        // runners (GitHub ubuntu-latest) leave it unset or "dumb".
+        env.set("TERM", "xterm-256color");
         // Heartbeat script (instead of a bare `sleep`) so we can prove the
         // *reattached* client actually receives bytes from the still-running
         // agent, not just that the tmux session survives. Bounded to ~120

@@ -64,6 +64,10 @@ pub enum Modal {
         /// purely for the confirmation message; the actual restart in
         /// `toggle_workspace_shared` re-checks liveness at commit time.
         running_count: usize,
+        /// Instances WITHOUT a running session at modal-open time. Sharing
+        /// eagerly starts these inside tmux (see `toggle_workspace_shared`),
+        /// and the confirmation message must say so.
+        stopped_count: usize,
     },
     SetupRunning {
         cancel: tokio_util::sync::CancellationToken,
@@ -242,6 +246,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             name,
             to_shared,
             running_count,
+            stopped_count,
             ..
         } => {
             let dest = if *to_shared {
@@ -249,16 +254,32 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             } else {
                 "direct (not tmux)"
             };
-            let restart_note = match running_count {
-                0 => "No running sessions to restart.".to_string(),
-                1 => format!(
-                    "This restarts 1 running session {} tmux (conversation resumes via --continue).",
-                    if *to_shared { "inside" } else { "outside" }
-                ),
-                n => format!(
-                    "This restarts {n} running session(s) {} tmux (conversation resumes via --continue).",
-                    if *to_shared { "inside" } else { "outside" }
-                ),
+            let restart_note = if *to_shared {
+                // Sharing eagerly puts EVERY agent inside tmux: running
+                // sessions restart wrapped in tmux, stopped ones spawn.
+                let mut parts = Vec::new();
+                if *running_count > 0 {
+                    parts.push(format!(
+                        "Restarts {running_count} running session(s) inside tmux (conversation resumes via --continue)."
+                    ));
+                }
+                if *stopped_count > 0 {
+                    parts.push(format!(
+                        "Starts {stopped_count} stopped agent(s) inside tmux."
+                    ));
+                }
+                if parts.is_empty() {
+                    "All agents will run inside tmux.".to_string()
+                } else {
+                    parts.join("\n")
+                }
+            } else {
+                match running_count {
+                    0 => "No running sessions to restart.".to_string(),
+                    n => format!(
+                        "This restarts {n} running session(s) outside tmux (conversation resumes via --continue)."
+                    ),
+                }
             };
             (
                 "toggle sharing",
@@ -470,6 +491,53 @@ mod tests {
             "missing line:\n{text}"
         );
         assert!(text.contains("[esc] cancel"), "missing footer:\n{text}");
+    }
+
+    /// Sharing eagerly starts stopped agents (see `toggle_workspace_shared`),
+    /// so the confirmation must say so — a bare "No running sessions to
+    /// restart." would read as "nothing will happen", which is exactly the
+    /// expectation mismatch that made shares of stopped workspaces look
+    /// like failures.
+    #[test]
+    fn confirm_share_to_shared_mentions_starting_stopped_agents() {
+        let modal = Modal::ConfirmShare {
+            workspace_id: crate::data::store::WorkspaceId(1),
+            name: "w".into(),
+            to_shared: true,
+            running_count: 1,
+            stopped_count: 2,
+        };
+        let text = render_to_text(&modal);
+        assert!(
+            text.contains("Restarts 1 running session(s)"),
+            "missing running-restart note:\n{text}"
+        );
+        assert!(
+            text.contains("Starts 2 stopped agent(s)"),
+            "missing stopped-start note:\n{text}"
+        );
+    }
+
+    /// Unsharing keeps the old semantics: only running sessions restart,
+    /// stopped agents stay stopped — the copy must not promise spawns.
+    #[test]
+    fn confirm_share_to_direct_keeps_no_running_sessions_note() {
+        let modal = Modal::ConfirmShare {
+            workspace_id: crate::data::store::WorkspaceId(1),
+            name: "w".into(),
+            to_shared: false,
+            running_count: 0,
+            stopped_count: 2,
+        };
+        let text = render_to_text(&modal);
+        assert!(
+            text.contains("No running sessions to restart."),
+            "missing no-op note:\n{text}"
+        );
+        assert!(
+            !text.contains("stopped agent"),
+            "unshare must not promise to start stopped agents:\n{text}"
+        );
     }
 
     #[test]

@@ -138,6 +138,7 @@ pub(crate) mod tests_helpers {
             created_at: 0,
             yolo: false,
             agent: crate::pty::session::AgentKind::Claude,
+            shared: false,
         }));
         let theme: &'static Theme = Box::leak(Box::new(Theme::default()));
         DetailContext {

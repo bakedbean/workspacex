@@ -74,6 +74,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/tmp/r/w"),
                 yolo: false,
                 agent: AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();

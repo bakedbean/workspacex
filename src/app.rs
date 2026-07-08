@@ -1692,6 +1692,7 @@ mod added_spawn_tests {
                 worktree_path: std::path::Path::new("/tmp/r/feat"),
                 yolo: false,
                 agent: AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
@@ -1966,6 +1967,7 @@ mod selection_helper_tests {
                 worktree_path: std::path::Path::new("/tmp/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();

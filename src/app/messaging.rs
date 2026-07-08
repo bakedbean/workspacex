@@ -153,6 +153,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/tmp/r/w"),
                 yolo: false,
                 agent: AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         // Primary claude (ordinal 1 -> bare label "claude") is the sender;

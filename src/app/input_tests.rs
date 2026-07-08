@@ -218,6 +218,7 @@ mod pm_state_tests {
                     worktree_path: std::path::Path::new(path),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
                 })
                 .unwrap();
             store
@@ -295,6 +296,7 @@ mod pm_state_tests {
                     worktree_path: std::path::Path::new(path),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
                 })
                 .unwrap();
             store
@@ -409,6 +411,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -461,6 +464,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-split-1"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let second_id = store
@@ -471,6 +475,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-split-2"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -591,6 +596,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-close-1"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let second_id = store
@@ -601,6 +607,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-close-2"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -705,6 +712,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-detach-refresh"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -792,6 +800,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-esc-refresh"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -862,6 +871,7 @@ mod pm_state_tests {
                     worktree_path: &std::path::PathBuf::from(format!("/tmp/wsx-arrow-{name}")),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
                 })
                 .unwrap();
             store
@@ -938,6 +948,7 @@ mod pm_state_tests {
                 worktree_path: &std::path::PathBuf::from("/tmp/wsx-nav-a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1021,6 +1032,7 @@ mod pm_state_tests {
                 worktree_path: &std::path::PathBuf::from("/tmp/wsx-nav-esc-a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1116,6 +1128,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1132,6 +1145,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/beta-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1194,6 +1208,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1301,6 +1316,7 @@ mod pm_state_tests {
                         worktree_path: std::path::Path::new(&worktree),
                         yolo: false,
                         agent: crate::pty::session::AgentKind::Claude,
+                        shared: false,
                     })
                     .unwrap();
                 store
@@ -1388,6 +1404,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/attached"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1401,6 +1418,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/other"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1480,6 +1498,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/only"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1697,6 +1716,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Codex,
+                shared: false,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -2658,6 +2678,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         app.refresh().unwrap();
@@ -3031,6 +3052,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -3081,6 +3103,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -3119,6 +3142,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/wt/hermes-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Hermes,
+                shared: false,
             })
             .unwrap();
         store
@@ -3161,6 +3185,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -3357,6 +3382,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         app.store
@@ -3487,6 +3513,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/ws-alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         app.store
@@ -4227,6 +4254,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -4313,6 +4341,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/ws"),
                 yolo: false,
                 agent: AgentKind::Hermes,
+                shared: false,
             })
             .unwrap();
         store
@@ -4538,6 +4567,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: AgentKind::Hermes,
+                shared: false,
             })
             .unwrap();
         store
@@ -4735,6 +4765,7 @@ mod ctrl_x_shift_d_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-esc-1"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let second_id = store
@@ -4745,6 +4776,7 @@ mod ctrl_x_shift_d_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-esc-2"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -4863,6 +4895,7 @@ mod restore_layout_tests {
                 worktree_path: std::path::Path::new(&format!("/tmp/wsx-{slug}-1")),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let second_id = store
@@ -4873,6 +4906,7 @@ mod restore_layout_tests {
                 worktree_path: std::path::Path::new(&format!("/tmp/wsx-{slug}-2")),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -5072,6 +5106,7 @@ mod detail_bar_focus_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -5247,6 +5282,7 @@ mod detail_bar_focus_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -5373,6 +5409,7 @@ mod leader_view_transition_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
@@ -5471,6 +5508,7 @@ mod attached_wheel_forwarding {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {

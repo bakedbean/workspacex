@@ -817,6 +817,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/tmp/r/ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store

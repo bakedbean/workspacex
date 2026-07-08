@@ -213,6 +213,7 @@ mod store_tests {
                 worktree_path: std::path::Path::new("/tmp/r/w1"),
                 yolo: false,
                 agent: AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
@@ -349,6 +350,7 @@ mod store_tests {
                 worktree_path: std::path::Path::new("/tmp/r/w"),
                 yolo: false,
                 agent: AgentKind::Hermes,
+                shared: false,
             })
             .unwrap();
         store.add_primary_agent(ws, AgentKind::Hermes, 1).unwrap();

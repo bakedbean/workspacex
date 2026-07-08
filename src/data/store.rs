@@ -120,6 +120,7 @@ pub struct Workspace {
     pub created_at: i64,
     pub yolo: bool,
     pub agent: AgentKind,
+    pub shared: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +131,7 @@ pub struct NewWorkspace<'a> {
     pub worktree_path: &'a Path,
     pub yolo: bool,
     pub agent: AgentKind,
+    pub shared: bool,
 }
 
 pub struct Store {
@@ -165,9 +167,9 @@ impl Store {
         let now = now_ms();
         let agent_str = w.agent.store_value();
         self.conn.execute(
-            "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent)
-             VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5, ?6, ?7)",
-            rusqlite::params![w.repo_id.0, w.name, w.branch, w.worktree_path.to_string_lossy(), now, w.yolo as i64, agent_str],
+            "INSERT INTO workspaces (repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared)
+             VALUES (?1, ?2, ?3, ?4, 'Pending', 'NotRun', ?5, ?6, ?7, ?8)",
+            rusqlite::params![w.repo_id.0, w.name, w.branch, w.worktree_path.to_string_lossy(), now, w.yolo as i64, agent_str, w.shared as i64],
         )?;
         Ok(WorkspaceId(self.conn.last_insert_rowid()))
     }
@@ -236,6 +238,14 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_workspace_shared(&self, id: WorkspaceId, shared: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workspaces SET shared = ?1 WHERE id = ?2",
+            rusqlite::params![shared as i64, id.0],
+        )?;
+        Ok(())
+    }
+
     pub fn set_workspace_state(&self, id: WorkspaceId, state: WorkspaceState) -> Result<()> {
         self.conn.execute(
             "UPDATE workspaces SET state = ?1 WHERE id = ?2",
@@ -254,7 +264,7 @@ impl Store {
 
     pub fn workspaces(&self, repo_id: RepoId) -> Result<Vec<Workspace>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared
              FROM workspaces WHERE repo_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([repo_id.0], row_to_workspace)?;
@@ -287,7 +297,7 @@ impl Store {
         let r = self
             .conn
             .query_row(
-                "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
+                "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared
                  FROM workspaces WHERE id = ?1",
                 [id.0],
                 row_to_workspace,
@@ -299,7 +309,7 @@ impl Store {
     /// All workspaces across every repo (used by `resolve_current_workspace`).
     pub fn all_workspaces(&self) -> Result<Vec<Workspace>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared
              FROM workspaces ORDER BY id",
         )?;
         let rows = stmt.query_map([], row_to_workspace)?;
@@ -332,6 +342,7 @@ fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {
         created_at: r.get(7)?,
         yolo: r.get::<_, i64>(8)? != 0,
         agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
+        shared: r.get::<_, i64>(10)? != 0,
     })
 }
 
@@ -431,6 +442,7 @@ mod tests {
                 worktree_path: Path::new("/wts/fix-bug"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
 
@@ -450,6 +462,37 @@ mod tests {
 
         store.delete_workspace(id).unwrap();
         assert!(store.workspaces(repo).unwrap().is_empty());
+    }
+
+    #[test]
+    fn workspace_shared_flag_roundtrips_and_flips() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(Path::new("/tmp/r"), "r", "wsx").unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "wsx/w",
+                worktree_path: Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        assert!(store.workspace_by_id(id).unwrap().unwrap().shared);
+        store.set_workspace_shared(id, false).unwrap();
+        assert!(!store.workspace_by_id(id).unwrap().unwrap().shared);
+    }
+
+    #[test]
+    fn migrate_v16_is_idempotent() {
+        let store = Store::open_in_memory().unwrap();
+        store.migrate_for_test().unwrap(); // second run must not error
+        let v: i64 = store
+            .conn()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(v >= 16);
     }
 
     #[test]
@@ -797,6 +840,7 @@ mod tests {
                 worktree_path: Path::new("/wts/tame"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -807,6 +851,7 @@ mod tests {
                 worktree_path: Path::new("/wts/wild"),
                 yolo: true,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let ws = store.workspaces(repo).unwrap();
@@ -829,6 +874,7 @@ mod tests {
                 worktree_path: Path::new("/wts/stuck"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         // Backdate the row to look stale.
@@ -901,6 +947,7 @@ mod tests {
                 worktree_path: Path::new("/tmp/demo/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store.set_setup_status(id, SetupStatus::Cancelled).unwrap();
@@ -923,6 +970,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let mut tree = SplitTree::Leaf(lt(id));
@@ -963,6 +1011,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -987,6 +1036,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let single = SplitTree::Leaf(lt(id));
@@ -1012,6 +1062,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1049,6 +1100,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let b = store
@@ -1059,6 +1111,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/r/b"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         // a: single-leaf layout (should NOT appear).
@@ -1087,6 +1140,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         // Plant a corrupt row directly.
@@ -1126,6 +1180,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/ws"),
                 yolo: false,
                 agent: AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store.set_workspace_agent(id, AgentKind::Hermes).unwrap();
@@ -1152,6 +1207,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/tmp/r/w"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1187,6 +1243,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/tmp/r/w"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1284,7 +1341,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 15);
+        assert_eq!(v, 16);
     }
 
     #[test]
@@ -1443,6 +1500,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/tmp/r/w"),
                 yolo: false,
                 agent: AgentKind::Claude,
+                shared: false,
             })
             .unwrap(); // returns WorkspaceId
 
@@ -1484,6 +1542,7 @@ mod tests {
                 worktree_path: std::path::Path::new("/tmp/r/w"),
                 yolo: false,
                 agent: AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store

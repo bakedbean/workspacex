@@ -118,6 +118,14 @@ impl Store {
             self.conn().execute_batch(SCHEMA_V15_WORKSPACE_STATUS)?;
             self.conn().execute("PRAGMA user_version = 15", [])?;
         }
+        if v < 16 {
+            self.add_column_if_missing(
+                "workspaces",
+                "shared",
+                "shared INTEGER NOT NULL DEFAULT 0",
+            )?;
+            self.conn().execute("PRAGMA user_version = 16", [])?;
+        }
         Ok(())
     }
 

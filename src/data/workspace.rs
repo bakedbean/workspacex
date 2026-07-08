@@ -82,6 +82,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         worktree_path: &worktree_path,
         yolo,
         agent,
+        shared: false,
     })?;
 
     // Seed the primary agent instance so the roster is authoritative from birth.
@@ -245,6 +246,7 @@ pub async fn create_with_app(
             worktree_path: &worktree_path,
             yolo,
             agent,
+            shared: false,
         })?;
         // Seed the primary agent instance so the roster is authoritative from birth.
         g.store
@@ -450,6 +452,7 @@ pub fn import_existing(
         worktree_path: &info.path,
         yolo: false,
         agent,
+        shared: false,
     })?;
     store.add_primary_agent(id, agent, crate::data::store::now_ms())?;
     store.set_workspace_state(id, WorkspaceState::Ready)?;

@@ -711,10 +711,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
                 && let Some((_, ws)) = app.workspaces.iter().find(|(_, w)| w.id == id)
             {
-                let running_count = app
-                    .store
-                    .workspace_agents(id)?
-                    .into_iter()
+                let agents = app.store.workspace_agents(id)?;
+                let running_count = agents
+                    .iter()
                     .filter(|inst| {
                         app.sessions.get(inst.id).is_some_and(|s| {
                             matches!(
@@ -729,6 +728,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     name: ws.name.clone(),
                     to_shared: !ws.shared,
                     running_count,
+                    stopped_count: agents.len() - running_count,
                 });
             }
         }

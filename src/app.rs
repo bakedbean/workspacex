@@ -1836,17 +1836,23 @@ pub(crate) fn ensure_instance_session(
     Ok(AttachReady::Ok)
 }
 
-/// Flip a workspace's `shared` flag and restart any currently-running
-/// instances so they respawn with (or without) tmux per the new flag.
+/// Flip a workspace's `shared` flag and respawn instances per the new flag.
 /// `build_spawn_info`/`build_added_spawn_info` already select
 /// `SpawnMode::Continue` whenever `has_prior_session_for` finds a prior
-/// session, so the respawn resumes the conversation via `--continue` for
-/// free — this function just needs to kill the old backend and re-ensure.
+/// session, so respawns resume the conversation via `--continue` for free —
+/// this function just needs to kill any old backend and re-ensure.
 ///
-/// Instances with no running session are left untouched (no spurious
-/// spawns). The was-running set is snapshotted *before* flipping the flag
-/// and calling `app.refresh()`, so the borrow of `app.store`/`app.sessions`
-/// used to compute it is long gone by the time we mutate `app` below.
+/// Sharing spawns eagerly: EVERY instance ends up running inside tmux, not
+/// just the ones that happened to be running at toggle time. A stopped agent
+/// that only got the flag flip would leave the workspace shared-but-dead —
+/// red badge, hidden from the remote picker, nothing to attach to remotely —
+/// until the user happened to attach locally.
+///
+/// Unsharing restarts only instances that were actually running (no spurious
+/// spawns of stopped agents). The was-running set is snapshotted *before*
+/// flipping the flag and calling `app.refresh()`, so the borrow of
+/// `app.store`/`app.sessions` used to compute it is long gone by the time we
+/// mutate `app` below.
 pub(crate) fn toggle_workspace_shared(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
@@ -1885,12 +1891,41 @@ pub(crate) fn toggle_workspace_shared(
         .collect();
     app.store.set_workspace_shared(ws_id, to_shared)?;
     app.refresh()?; // reload app.workspaces so spawn sees the new flag
-    // Restart only instances that were actually running. `sessions.remove`
-    // calls `kill_backend` in both directions: for a direct child it SIGKILLs
-    // the agent; for a tmux-backed session (unsharing) it also kills the
-    // tmux server session — there's no way to move a live process out of
-    // tmux, so losing in-flight output and resuming via `--continue` is the
-    // intended design here.
+    // `sessions.remove` calls `kill_backend` in both directions: for a direct
+    // child it SIGKILLs the agent; for a tmux-backed session (unsharing) it
+    // also kills the tmux server session — there's no way to move a live
+    // process out of tmux, so losing in-flight output and resuming via
+    // `--continue` is the intended design here.
+    if to_shared {
+        // Eager spawn: respawn running instances inside tmux AND start any
+        // stopped ones, so the share is immediately alive (green badge,
+        // reachable from the remote picker) — see the doc comment.
+        //
+        // Best-effort across instances: the shared flag is already flipped,
+        // and each instance's spawn is independent, so one failure (PTY or
+        // store error — a missing agent binary is NOT an error here, it
+        // surfaces via the AgentMissing modal and continues) must not leave
+        // the remaining instances stopped. Attempt every instance, then
+        // surface the first error.
+        let mut first_err = None;
+        for inst in &all_instances {
+            app.sessions.remove(inst.id);
+            let result = if inst.is_primary {
+                ensure_workspace_session(app, ws_id)
+            } else {
+                ensure_instance_session(app, inst.id, false)
+            };
+            if let Err(e) = result {
+                tracing::warn!(error = %e, "failed to spawn an agent instance while sharing");
+                first_err.get_or_insert(e);
+            }
+        }
+        return match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        };
+    }
+    // Unsharing: restart only instances that were actually running.
     for inst in &running {
         app.sessions.remove(inst.id);
         if inst.is_primary {
@@ -1907,18 +1942,16 @@ pub(crate) fn toggle_workspace_shared(
     // a later archive doesn't try to kill a name that no longer addresses
     // anything. (CLI unshare is intentionally left alone: it flag-flips only,
     // keeping refs so archive can still clean up.)
-    if !to_shared {
-        let running_ids: std::collections::HashSet<_> = running.iter().map(|i| i.id).collect();
-        for inst in &all_instances {
-            let Some(name) = &inst.session_ref else {
-                continue;
-            };
-            if !running_ids.contains(&inst.id) {
-                crate::pty::tmux::kill_session(name);
-            }
-            if let Err(e) = app.store.clear_instance_session_ref(inst.id) {
-                tracing::warn!(error = %e, "failed to clear session_ref on unshare");
-            }
+    let running_ids: std::collections::HashSet<_> = running.iter().map(|i| i.id).collect();
+    for inst in &all_instances {
+        let Some(name) = &inst.session_ref else {
+            continue;
+        };
+        if !running_ids.contains(&inst.id) {
+            crate::pty::tmux::kill_session(name);
+        }
+        if let Err(e) = app.store.clear_instance_session_ref(inst.id) {
+            tracing::warn!(error = %e, "failed to clear session_ref on unshare");
         }
     }
     Ok(())

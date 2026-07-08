@@ -12,6 +12,7 @@ pub enum Status {
     Waiting,
     Thinking,
     Complete,
+    Detached,
     Idle,
 }
 
@@ -20,11 +21,12 @@ impl Status {
     /// within-section workspace ordering.
     pub fn priority(self) -> u8 {
         match self {
-            Status::Stalled => 5,
-            Status::Question => 4,
-            Status::Waiting => 3,
-            Status::Thinking => 2,
-            Status::Complete => 1,
+            Status::Stalled => 6,
+            Status::Question => 5,
+            Status::Waiting => 4,
+            Status::Thinking => 3,
+            Status::Complete => 2,
+            Status::Detached => 1,
             Status::Idle => 0,
         }
     }
@@ -39,6 +41,7 @@ impl Status {
             Status::Waiting => '…',
             Status::Thinking => '⠋',
             Status::Complete => '✓',
+            Status::Detached => '◆',
             Status::Idle => '·',
         }
     }
@@ -51,6 +54,7 @@ impl Status {
             Status::Waiting => "waiting",
             Status::Thinking => "thinking",
             Status::Complete => "complete",
+            Status::Detached => "detached",
             Status::Idle => "idle",
         }
     }
@@ -281,7 +285,17 @@ mod tests {
         assert!(Status::Question.priority() > Status::Waiting.priority());
         assert!(Status::Waiting.priority() > Status::Thinking.priority());
         assert!(Status::Thinking.priority() > Status::Complete.priority());
-        assert!(Status::Complete.priority() > Status::Idle.priority());
+        assert!(Status::Complete.priority() > Status::Detached.priority());
+        assert!(Status::Detached.priority() > Status::Idle.priority());
+    }
+
+    #[test]
+    fn detached_sits_between_idle_and_complete() {
+        assert!(Status::Detached.priority() > Status::Idle.priority());
+        assert!(Status::Complete.priority() > Status::Detached.priority());
+        assert_eq!(Status::Detached.glyph(), '◆');
+        assert_eq!(Status::Detached.label(), "detached");
+        assert!(!Status::Detached.is_live());
     }
 
     #[test]

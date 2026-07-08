@@ -3277,6 +3277,99 @@ mod pm_state_tests {
         s.kill_backend();
     }
 
+    /// After a wsx restart, a shared workspace's tmux session can outlive
+    /// the wsx client that spawned it — no `Session` in `app.sessions`, but
+    /// the server-side session is still alive. `classify_status` should
+    /// surface that as `Status::Detached` rather than the classifier's
+    /// default `Idle`, while a direct workspace (which never touches tmux)
+    /// stays plain `Idle`. Uses a fake `WSX_TMUX_BIN` recorder that exits 0
+    /// for every invocation, so `has-session` reads "alive" without a real
+    /// tmux server.
+    #[test]
+    fn shared_workspace_with_dead_client_but_live_tmux_is_detached() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::ui::dashboard::status::Status;
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        let script = tmpdir.path().join("fake-tmux.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_TMUX_BIN", script.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+
+        let shared_path = tmpdir.path().join("shared-w");
+        std::fs::create_dir_all(&shared_path).unwrap();
+        let shared_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "shared-w",
+                branch: "r/shared-w",
+                worktree_path: &shared_path,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(shared_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(
+                shared_id,
+                crate::pty::session::AgentKind::Claude,
+                crate::data::store::now_ms(),
+            )
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-shared-w")
+            .unwrap();
+
+        let direct_path = tmpdir.path().join("direct-w");
+        std::fs::create_dir_all(&direct_path).unwrap();
+        let direct_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "direct-w",
+                branch: "r/direct-w",
+                worktree_path: &direct_path,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(direct_id, WorkspaceState::Ready)
+            .unwrap();
+
+        // `App::new` -> `refresh()` -> `refresh_shared_detached()` runs its
+        // first sweep unthrottled (`shared_detached_polled_ms` starts at 0),
+        // so the sweep has already populated `shared_detached` by the time
+        // `App::new` returns.
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        let shared_ws = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == shared_id)
+            .map(|(_, w)| w.clone())
+            .unwrap();
+        let direct_ws = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == direct_id)
+            .map(|(_, w)| w.clone())
+            .unwrap();
+
+        assert_eq!(app.classify_status(&shared_ws), Status::Detached);
+        assert_eq!(app.classify_status(&direct_ws), Status::Idle);
+    }
+
     /// Test helper: create an App with N repos registered in the store
     /// and loaded into app.repos. Uses a unique tmpdir per call so paths
     /// don't collide.

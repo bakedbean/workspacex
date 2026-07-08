@@ -80,6 +80,7 @@ pub fn status_strip(counts: StatusCounts, theme: &Theme) -> Line<'static> {
         (Status::Waiting, counts.waiting),
         (Status::Thinking, counts.thinking),
         (Status::Complete, counts.complete),
+        (Status::Detached, counts.detached),
         (Status::Idle, counts.idle),
     ];
     for (i, (status, n)) in cells.iter().enumerate() {
@@ -206,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn status_strip_includes_all_six_cells_with_zero_counts() {
+    fn status_strip_includes_all_seven_cells_with_zero_counts() {
         let theme = Theme::wsx();
         let counts = StatusCounts {
             question: 2,
@@ -214,6 +215,7 @@ mod tests {
             waiting: 2,
             thinking: 2,
             complete: 3,
+            detached: 5,
             idle: 4,
         };
         let line = status_strip(counts, &theme);
@@ -223,6 +225,7 @@ mod tests {
         assert!(t.contains("… 2 waiting"));
         assert!(t.contains("⠋ 2 thinking"));
         assert!(t.contains("✓ 3 complete"));
+        assert!(t.contains("◆ 5 detached"));
         assert!(t.contains("· 4 idle"));
     }
 

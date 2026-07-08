@@ -57,7 +57,7 @@ mini=eben@ebenmini.local
 lab=user@lab.example.com
 ```
 
-On the dashboard, press `H` (capital, mnemonic *hosts*) to open a picker over these configured hosts, sorted by name. If no hosts are configured, an error modal will prompt: `wsx config edit shared_hosts`.
+On the dashboard, press `H` (capital, mnemonic *hosts*) to open a picker over these configured hosts, sorted by name. If no hosts are configured, an error modal points you at `wsx config edit shared_hosts`.
 
 Selecting a host spawns a background fetch via `ssh <dest> sh -lc 'wsx shared list --json'` (login shell so wsx is found on the host's PATH). Results render as a list titled "shared workspaces on `<host>`", showing one row per agent instance:
 
@@ -71,7 +71,7 @@ Attaching spawns `ssh -t <dest> -- tmux attach -t =<name>` as a PTY session. You
 
 **Detaching and persistence:**
 
-`Ctrl-x d` detaches from the remote session, severing only the local ssh client. The remote agent keeps running in its tmux server — quitting wsx has the same effect. Reattaching resumes the exact session with its full history intact. Back on the dashboard, the ephemeral list is discarded; re-opening the remote list via `H` re-fetches a fresh view.
+`Ctrl-x d` detaches from the remote session, severing only the local ssh client. The remote agent keeps running in its tmux server — quitting wsx has the same effect. Reattaching resumes the exact session with its full history intact. Detaching lands back on the dashboard; the fetched list is ephemeral and never persisted, and pressing `H` again reopens the host picker with a fresh fetch.
 
 **Failure modes:**
 
@@ -79,7 +79,7 @@ Fetching fails if the host is unreachable, ssh authentication fails, wsx is miss
 
 **Requirements:**
 
-- SSH key access to the remote host (password auth not supported; use `ssh-agent` or key forwarding).
+- SSH key access to the remote host (password prompts are not supported for the background list fetch — use key-based auth via `ssh-agent` or key files; the attach itself runs in a real terminal but key auth is strongly recommended for a smooth flow).
 - wsx installed on the host and reachable in the login shell's PATH (e.g., `ssh <host> sh -lc 'which wsx'` should succeed).
 - Workspaces created as shared on the host (either via `wsx workspace create <repo> --shared` or by converting an existing one with `T`).
 - A local `ssh` binary (no local tmux needed for remote attach).

@@ -104,11 +104,12 @@ pub fn visible_instances(view: &View) -> HashSet<AgentInstanceId> {
 
 /// Whether the backgrounded sweep should also resize the PM session. PM is
 /// render-synced on the dashboard (`pm_pane::resize_session`) and in
-/// `AttachedPm` (`resize_pane`), but while attached to an *agent* no render path
-/// touches it — so it goes stale there and the sweep must cover it. Resizing it
-/// in any other view would ping-pong against those render paths.
+/// `AttachedPm` (`resize_pane`), but while attached to an *agent* or a *remote*
+/// workspace no render path touches it — so it goes stale in those full-screen
+/// attach views and the sweep must cover them. Resizing it in any other view
+/// would ping-pong against those render paths.
 pub fn should_sync_pm(view: &View) -> bool {
-    matches!(view, View::Attached(_))
+    matches!(view, View::Attached(_) | View::AttachedRemote)
 }
 
 #[cfg(test)]
@@ -192,6 +193,12 @@ mod tests {
         assert!(
             should_sync_pm(&View::Attached(state)),
             "PM is backgrounded while attached to an agent"
+        );
+        // Attached to a remote workspace: same full-screen attach with no PM
+        // render path, so the sweep must keep PM sized here too.
+        assert!(
+            should_sync_pm(&View::AttachedRemote),
+            "PM is backgrounded while remote-attached"
         );
     }
 

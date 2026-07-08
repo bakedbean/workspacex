@@ -149,6 +149,10 @@ marked dead. No retry loops.
 - **tmux missing:** error modal at shared-spawn time; not a startup dependency.
 - **Name safety:** sanitize derived names; `session_ref` stores the sanitized
   value so lookups never re-derive.
+- **Name collisions:** distinct workspaces can sanitize to the same base name
+  (repo `a` + ws `b-c` vs repo `a-b` + ws `c`). At derivation time, if another
+  instance already claims the derived name, wsx appends the workspace id
+  (`wsx-a-b-c-42`) so `-A` never attaches to the wrong agent/worktree.
 - **Scrollback:** attaching to an existing tmux session repaints only the
   visible screen, so local scrollback starts at attach time. Accepted for v1;
   tmux copy-mode history remains available in-session.

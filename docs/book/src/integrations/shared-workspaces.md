@@ -1,5 +1,7 @@
 A shared workspace runs its agent inside a `tmux new-session -A` instead of a plain PTY child. The agent lives in the tmux server, not in wsx's process tree — quitting wsx (or losing your ssh connection) doesn't kill it. Next time wsx starts, it reattaches to the same tmux session automatically.
 
+Shared workspaces require **tmux ≥ 3.2** (for the `-e` flag on `new-session`, used to forward wsx's environment into a pre-existing tmux server).
+
 **Create shared:**
 
 ```
@@ -21,7 +23,7 @@ Alternatively, press `T` (capital) on a selected workspace row to open a confirm
 
 **Session naming:**
 
-Each agent instance in a shared workspace gets a deterministic tmux session name: `wsx-<repo>-<workspace>` for the primary agent, or `wsx-<repo>-<workspace>-<agent><ordinal>` for additional instances (e.g. `wsx-myrepo-fix-bug-codex2`). Characters outside `[A-Za-z0-9_-]` in the repo/workspace name are replaced with `-`, since tmux rejects `.` and `:` in session names.
+Each agent instance in a shared workspace gets a deterministic tmux session name: `wsx-<repo>-<workspace>` for the primary agent, or `wsx-<repo>-<workspace>-<agent><ordinal>` for additional instances (e.g. `wsx-myrepo-fix-bug-codex2`). Characters outside `[A-Za-z0-9_-]` in the repo/workspace name are replaced with `-`, since tmux rejects `.` and `:` in session names. If two workspaces sanitize to the same name (e.g. repo `a` + workspace `b-c` vs repo `a-b` + workspace `c`), wsx appends the workspace id to disambiguate, so `-A` never attaches to the wrong agent. The name is derived once, stored in `session_ref`, and reused verbatim afterwards — it is never re-derived, so renaming a workspace does not orphan its running agent.
 
 **The `◆ detached` status:**
 

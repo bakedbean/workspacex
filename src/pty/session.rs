@@ -1,11 +1,7 @@
 #![allow(clippy::collapsible_if, clippy::arc_with_non_send_sync)]
 
 use crate::error::{Error, Result};
-use portable_pty::{MasterPty, PtySize, native_pty_system};
-// The command builders moved to `pty::command`, but this file's test module
-// still names `CommandBuilder` when inspecting their output.
-#[cfg(test)]
-use portable_pty::CommandBuilder;
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -426,16 +422,6 @@ pub fn spawn_session(
     identity: Option<SpawnIdentity>,
     tmux: Option<&str>,
 ) -> Result<Session> {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            cols,
-            rows,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
-
     let mut child_cmd = match agent {
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
         AgentKind::Pi => build_pi_command(cwd, &mode, remote),
@@ -452,6 +438,37 @@ pub fn spawn_session(
         child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
         child_cmd.env("WSX_AGENT_INSTANCE_ID", id.instance_id.to_string());
     }
+    spawn_command_session(child_cmd, cols, rows, agent, tmux)
+}
+
+/// Agent-agnostic spawn path: opens a PTY, optionally wraps the command in
+/// tmux, spawns it, and wires up the parser / reader thread / writer task into
+/// a [`Session`]. `spawn_session` builds a per-agent command and delegates
+/// here; other callers (e.g. remote `ssh -t … tmux attach`) can pass an
+/// arbitrary [`CommandBuilder`] directly.
+///
+/// `agent` is inert plumbing: it only tags the returned `Session` (driving
+/// render/paste quirks via [`submit_writes`]) and picks the binary-name env var
+/// reported on a binary-not-found spawn failure. Remote sessions never paste
+/// through `submit_writes`, so such callers pass a benign default
+/// (`AgentKind::Claude`).
+pub fn spawn_command_session(
+    child_cmd: CommandBuilder,
+    cols: u16,
+    rows: u16,
+    agent: AgentKind,
+    tmux: Option<&str>,
+) -> Result<Session> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            cols,
+            rows,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
+
     let child_cmd = match tmux {
         Some(name) => {
             if !crate::pty::tmux::is_available() {
@@ -694,6 +711,32 @@ mod tests {
                 .args(["kill-server"])
                 .output();
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_command_session_runs_arbitrary_command_through_pty() {
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "printf remote-hello; sleep 5"]);
+        cmd.cwd("/tmp");
+        let session = spawn_command_session(cmd, 80, 24, AgentKind::Claude, None).unwrap();
+        let mut seen = false;
+        for _ in 0..50 {
+            if session
+                .parser
+                .lock()
+                .unwrap()
+                .screen()
+                .contents()
+                .contains("remote-hello")
+            {
+                seen = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        session.kill();
+        assert!(seen, "PTY must deliver the command's output");
+        assert!(session.tmux_session.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1574,10 +1574,10 @@ pub(crate) fn toggle_workspace_shared(
         .find(|(_, w)| w.id == ws_id)
         .map(|(_, w)| w.clone())
         .ok_or_else(|| crate::error::Error::UserInput("workspace not found".into()))?;
-    let running: Vec<_> = app
-        .store
-        .workspace_agents(ws_id)?
-        .into_iter()
+    let to_shared = !ws.shared;
+    let all_instances = app.store.workspace_agents(ws_id)?;
+    let running: Vec<_> = all_instances
+        .iter()
         .filter(|inst| {
             app.sessions.get(inst.id).is_some_and(|s| {
                 matches!(
@@ -1586,8 +1586,9 @@ pub(crate) fn toggle_workspace_shared(
                 )
             })
         })
+        .cloned()
         .collect();
-    app.store.set_workspace_shared(ws_id, !ws.shared)?;
+    app.store.set_workspace_shared(ws_id, to_shared)?;
     app.refresh()?; // reload app.workspaces so spawn sees the new flag
     // Restart only instances that were actually running. `sessions.remove`
     // calls `kill_backend` in both directions: for a direct child it SIGKILLs
@@ -1595,12 +1596,34 @@ pub(crate) fn toggle_workspace_shared(
     // tmux server session — there's no way to move a live process out of
     // tmux, so losing in-flight output and resuming via `--continue` is the
     // intended design here.
-    for inst in running {
+    for inst in &running {
         app.sessions.remove(inst.id);
         if inst.is_primary {
             ensure_workspace_session(app, ws_id)?;
         } else {
             ensure_instance_session(app, inst.id, false)?;
+        }
+    }
+    // When unsharing, no instance should keep a tmux `session_ref`. Running
+    // instances were respawned direct above (their tmux session died inside
+    // `sessions.remove`), but their stored ref is now stale. Non-running
+    // instances were never touched — a detached-but-alive tmux session would
+    // be orphaned, so kill it directly first. Then clear the ref either way so
+    // a later archive doesn't try to kill a name that no longer addresses
+    // anything. (CLI unshare is intentionally left alone: it flag-flips only,
+    // keeping refs so archive can still clean up.)
+    if !to_shared {
+        let running_ids: std::collections::HashSet<_> = running.iter().map(|i| i.id).collect();
+        for inst in &all_instances {
+            let Some(name) = &inst.session_ref else {
+                continue;
+            };
+            if !running_ids.contains(&inst.id) {
+                crate::pty::tmux::kill_session(name);
+            }
+            if let Err(e) = app.store.clear_instance_session_ref(inst.id) {
+                tracing::warn!(error = %e, "failed to clear session_ref on unshare");
+            }
         }
     }
     Ok(())

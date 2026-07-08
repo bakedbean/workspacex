@@ -333,14 +333,15 @@ pub struct ArchiveOpts {
     pub force_branch_delete: bool,
 }
 
-/// Kill the tmux sessions backing a shared workspace's agent instances.
-/// Direct workspaces are a no-op. Instances without a session_ref never
-/// spawned in tmux; nothing to kill. Best-effort: a dead server or already
-/// -killed session must not block archiving.
-pub(crate) fn kill_shared_tmux_sessions(store: &Store, ws: &Workspace) {
-    if !ws.shared {
-        return;
-    }
+/// Kill the tmux sessions backing a workspace's agent instances, keyed off the
+/// stored `session_ref` rather than the `shared` flag. Any instance with a
+/// `session_ref` is killed; instances without one never spawned in tmux and
+/// are skipped. The `shared` flag is deliberately NOT consulted: a workspace
+/// that was unshared via the CLI (which flag-flips without restarting sessions)
+/// keeps a live tmux agent, and gating on `shared` here would leak it on
+/// archive. Best-effort: a dead server or already-killed session must not block
+/// archiving.
+pub(crate) fn kill_tmux_sessions_for(store: &Store, ws: &Workspace) {
     if let Ok(instances) = store.workspace_agents(ws.id) {
         for inst in instances {
             if let Some(name) = &inst.session_ref {
@@ -357,6 +358,10 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     opts: ArchiveOpts,
     on_archive_line: F,
 ) -> Result<SetupResult> {
+    // Kill any live tmux agent FIRST, before the archive script or worktree
+    // removal run — a detached agent still writing to the worktree would
+    // otherwise dirty it mid-archive.
+    kill_tmux_sessions_for(store, ws);
     let archive_result = setup::run_archive(
         repo.archive_script.as_deref(),
         &repo.path,
@@ -369,7 +374,6 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
         git::remove_worktree(&repo.path, &ws.worktree_path).await?;
     }
     let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
-    kill_shared_tmux_sessions(store, ws);
     store.delete_workspace(ws.id)?;
     if crate::agent::mcp::enabled(store)
         && let Err(e) = crate::agent::mcp::remove_worktree_entry(&ws.worktree_path)
@@ -402,6 +406,14 @@ pub async fn archive_with_app(
     ws: Workspace,
     opts: ArchiveOpts,
 ) -> Result<SetupResult> {
+    // --- Phase 0 (short, locked): kill any live tmux agent BEFORE anything
+    //     else runs, so a detached agent can't dirty the worktree while the
+    //     archive script / worktree removal proceed. ---
+    {
+        let g = app.lock().await;
+        kill_tmux_sessions_for(&g.store, &ws);
+    }
+
     // --- Phase 1 (unlocked, async): run the archive script if any. ---
     let archive_result = setup::run_archive(
         repo.archive_script.as_deref(),
@@ -430,7 +442,6 @@ pub async fn archive_with_app(
     // --- Phase 4 (short, locked): delete the store row + clean up MCP. ---
     {
         let g = app.lock().await;
-        kill_shared_tmux_sessions(&g.store, &ws);
         g.store.delete_workspace(ws.id)?;
         if crate::agent::mcp::enabled(&g.store)
             && let Err(e) = crate::agent::mcp::remove_worktree_entry(&ws.worktree_path)
@@ -1479,7 +1490,7 @@ mod tests {
             .unwrap();
 
         let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
-        kill_shared_tmux_sessions(&store, &ws);
+        kill_tmux_sessions_for(&store, &ws);
 
         let calls = std::fs::read_to_string(&log).unwrap();
         assert!(
@@ -1488,8 +1499,66 @@ mod tests {
         );
     }
 
-    /// A direct (non-shared) workspace never spawned in tmux, so archiving
-    /// it must not issue any tmux calls at all.
+    /// I1 regression: a workspace that was UNSHARED (shared = false) but still
+    /// carries a stale `session_ref` from its shared past — e.g. after a CLI
+    /// `wsx workspace unshare`, which flag-flips without restarting sessions —
+    /// must still have its live tmux agent killed on archive. Keying off the
+    /// stored ref rather than the `shared` flag is exactly what closes this
+    /// leak.
+    #[tokio::test]
+    async fn archive_kills_tmux_session_of_unshared_workspace_with_stale_ref() {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false, // unshared, but the ref lingers
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+
+        let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
+        kill_tmux_sessions_for(&store, &ws);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("kill-session -t =wsx-r-w"),
+            "unshared workspace with a stale ref must still be killed, got: {calls:?}"
+        );
+    }
+
+    /// A truly direct workspace never spawned in tmux (its instances carry no
+    /// `session_ref`), so archiving it must not issue any tmux calls at all.
     #[tokio::test]
     async fn archive_does_not_touch_tmux_for_direct_workspace() {
         use crate::data::store::{NewWorkspace, WorkspaceState};
@@ -1525,15 +1594,14 @@ mod tests {
         store
             .set_workspace_state(ws_id, WorkspaceState::Ready)
             .unwrap();
-        let primary = store
-            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
-            .unwrap();
+        // True direct workspace: primary has NO session_ref (never spawned in
+        // tmux), so there is nothing to kill.
         store
-            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
             .unwrap();
 
         let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
-        kill_shared_tmux_sessions(&store, &ws);
+        kill_tmux_sessions_for(&store, &ws);
 
         assert!(
             !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),

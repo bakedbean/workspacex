@@ -3412,6 +3412,75 @@ mod pm_state_tests {
         );
     }
 
+    /// I1: unsharing a workspace via the TUI must not leave a detached tmux
+    /// agent orphaned. A shared workspace with a non-running (detached-but-
+    /// alive) instance holds a `session_ref`; toggling it to unshared must
+    /// kill that tmux session directly and clear the ref, so a later archive
+    /// has nothing left to leak. Uses a fake `WSX_TMUX_BIN` recorder so no
+    /// real tmux server is needed; the instance is never running, so no agent
+    /// respawn is triggered.
+    #[tokio::test]
+    async fn toggle_unshare_kills_detached_tmux_and_clears_ref() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        crate::app::toggle_workspace_shared(&mut app, ws_id).unwrap();
+
+        // Flag flipped to unshared.
+        let ws = app.store.workspace_by_id(ws_id).unwrap().unwrap();
+        assert!(!ws.shared, "toggle should flip shared -> false");
+        // The detached tmux session was killed.
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("kill-session -t =wsx-r-w"),
+            "detached tmux session must be killed on unshare, got: {calls:?}"
+        );
+        // The stale ref is cleared.
+        let reloaded = app.store.workspace_agents(ws_id).unwrap();
+        assert_eq!(
+            reloaded[0].session_ref, None,
+            "session_ref must be cleared on unshare"
+        );
+    }
+
     /// After a wsx restart, a shared workspace's tmux session can outlive
     /// the wsx client that spawned it — no `Session` in `app.sessions`, but
     /// the server-side session is still alive. `classify_status` should

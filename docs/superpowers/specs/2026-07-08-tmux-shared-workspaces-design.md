@@ -137,11 +137,14 @@ same visual language as local workspaces plus a host badge. The list is
 ephemeral: fetched on open, refreshable, never written to the local DB — no
 sync or cache-invalidation problem exists.
 
-**Attach.** Selecting a remote workspace spawns `ssh -t <dest> -- "tmux attach
--t '=<session>'"` through the normal PTY/vt100 plumbing — the remote command is
-one pre-quoted argument (ssh space-joins remote argv, and zsh login shells
-expand unquoted `=word` as a command-path lookup) — to wsx it is just a session
-whose child happens to be ssh. Detach/quit kills the ssh client; the agent
+**Attach.** Selecting a remote workspace spawns `ssh -t <dest> -- "sh -lc
+\"tmux attach -t '=<session>'\""` through the normal PTY/vt100 plumbing — the
+remote command is one pre-quoted argument (ssh space-joins remote argv),
+routed through a login `sh` so tmux resolves under the same PATH rules as the
+list fetch (sshd otherwise uses a non-login zsh that reads only ~/.zshenv),
+with the `=` target single-quoted (zsh expands unquoted `=word` as a
+command-path lookup) — to wsx it is just a session whose child happens to be
+ssh. Detach/quit kills the ssh client; the agent
 keeps running on the host. Multiple agent instances appear as separate
 attachable entries.
 

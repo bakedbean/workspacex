@@ -15,7 +15,9 @@ wsx workspace share <repo> <slug>
 wsx workspace unshare <repo> <slug>
 ```
 
-Or press `T` (capital) on a selected workspace row to open a confirmation modal that toggles it. Converting either direction restarts any currently-running agent sessions in that workspace — there's no way to move a live process in or out of tmux — but conversation history isn't lost: the restart resumes via `--continue`, so the agent picks the conversation back up. Non-running instances just flip the flag with nothing to restart. `T` is a no-op on a repo header; sharing is per-workspace.
+These CLI commands flip the shared flag. Running sessions keep their current backend (shared or non-shared) until restarted manually — the command prints a note saying so. New or restarted sessions will pick up the new backend.
+
+Alternatively, press `T` (capital) on a selected workspace row to open a confirmation modal. This immediately restarts any currently-running agent sessions in that workspace — there's no way to move a live process in or out of tmux — but conversation history isn't lost: the restart resumes via `--continue`, so the agent picks the conversation back up. Non-running instances just flip the flag with nothing to restart. `T` is a no-op on a repo header; sharing is per-workspace.
 
 **Session naming:**
 

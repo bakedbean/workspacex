@@ -138,10 +138,12 @@ ephemeral: fetched on open, refreshable, never written to the local DB — no
 sync or cache-invalidation problem exists.
 
 **Attach.** Selecting a remote workspace spawns `ssh -t <dest> -- "sh -lc
-\"tmux attach -t '=<session>'\""` through the normal PTY/vt100 plumbing — the
-remote command is one pre-quoted argument (ssh space-joins remote argv),
+\"tmux -u attach -t '=<session>'\""` through the normal PTY/vt100 plumbing —
+the remote command is one pre-quoted argument (ssh space-joins remote argv),
 routed through a login `sh` so tmux resolves under the same PATH rules as the
 list fetch (sshd otherwise uses a non-login zsh that reads only ~/.zshenv),
+with `-u` forcing UTF-8 (the ssh context carries no locale; without it tmux
+degrades Unicode line-drawing to literal ACS `q`s),
 with the `=` target single-quoted (zsh expands unquoted `=word` as a
 command-path lookup) — to wsx it is just a session whose child happens to be
 ssh. Detach/quit kills the ssh client; the agent

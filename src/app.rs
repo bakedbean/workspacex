@@ -1839,6 +1839,7 @@ pub(crate) async fn reconcile_archive_result(
 /// moved past. Otherwise clears `pending_remote_gen` and, on success,
 /// stores the listing and opens `Modal::RemoteWorkspaceList`; on failure
 /// surfaces `Modal::Error` with the fetch's error text.
+#[allow(dead_code)] // Task 5 wires the H-key fetch that consumes this; remove with that change.
 pub(crate) async fn reconcile_remote_list(
     app: SharedApp,
     my_gen: u64,
@@ -2045,6 +2046,53 @@ mod reconcile_remote_tests {
             }
             other => panic!("expected error modal, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn reconcile_remote_list_skips_all_mutation_when_gen_mismatch() {
+        let (mut app, _tmp) = make_app();
+        // Simulate: a different modal is already showing (e.g. an Error
+        // popped by another flow) and pending_remote_gen advanced past
+        // the value our stale task carries.
+        app.modal = Some(crate::ui::modal::Modal::Error {
+            message: "untouched".into(),
+        });
+        app.pending_remote_gen = Some(99);
+        let shared = Arc::new(Mutex::new(app));
+        let rec = SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: "w".into(),
+            branch: "b".into(),
+            worktree_path: "/x".into(),
+            agents: vec![],
+        };
+        reconcile_remote_list(
+            shared.clone(),
+            7, // stale — does not match pending_remote_gen
+            "mini".into(),
+            "host".into(),
+            Ok(vec![rec]),
+        )
+        .await;
+        let g = shared.lock().await;
+        match &g.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert_eq!(
+                    message, "untouched",
+                    "stale reconcile must not overwrite modal"
+                );
+            }
+            other => panic!("expected the pre-existing Error modal to survive, got {other:?}"),
+        }
+        assert_eq!(
+            g.pending_remote_gen,
+            Some(99),
+            "stale reconcile must not clear pending_remote_gen"
+        );
+        assert!(
+            g.remote_list.is_none(),
+            "stale reconcile must not store a remote_list"
+        );
     }
 }
 

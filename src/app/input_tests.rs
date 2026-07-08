@@ -4264,11 +4264,14 @@ mod pm_state_tests {
         // tmux isn't on that PATH ("zsh:1: command not found: tmux" on a real
         // host). `sh -l` reads ~/.profile, the one documented PATH
         // requirement shared with the fetch. The tmux =target stays
-        // single-quoted (zsh =word expansion; see #226).
+        // single-quoted (zsh =word expansion; see #226). `-u` forces UTF-8:
+        // the ssh/sh -l context has no locale (LC_CTYPE=C on real hosts), and
+        // without it tmux downgrades Unicode line-drawing to ACS/ASCII —
+        // rendering pane borders as rows of literal q's.
         let args = std::fs::read_to_string(&log).unwrap();
         assert!(
-            args.contains("-t eben@mini -- sh -lc \"tmux attach -t '=wsx-r-w'\""),
-            "remote command must run tmux via a login shell with the =target quoted: {args}"
+            args.contains("-t eben@mini -- sh -lc \"tmux -u attach -t '=wsx-r-w'\""),
+            "remote command must run tmux -u via a login shell with the =target quoted: {args}"
         );
         assert!(
             !args.contains("-t =wsx-r-w"),

@@ -217,8 +217,8 @@ mod remote_rows_tests {
     }
 }
 
-/// Spawn `ssh -t <dest> -- "sh -lc \"tmux attach -t '=<tmux>'\""` through the
-/// PTY plumbing and enter `View::AttachedRemote`. The `Session`'s
+/// Spawn `ssh -t <dest> -- "sh -lc \"tmux -u attach -t '=<session>'\""`
+/// through the PTY plumbing and enter `View::AttachedRemote`. The `Session`'s
 /// `tmux_session` is `None` on purpose: `kill()`/`Drop` sever only the local
 /// ssh client; the remote agent persists in the remote tmux server (the
 /// Phase 1 persistence contract, one hop away). The `agent` param on
@@ -236,6 +236,10 @@ mod remote_rows_tests {
 ///   host's `sh -l` PATH" the single documented requirement for both legs.
 /// - The tmux target stays single-quoted: zsh expands an unquoted `=word`
 ///   into "path of the command `word`" (`zsh:1: wsx-<name> not found`).
+/// - `tmux -u` forces UTF-8: the ssh/`sh -l` context carries no locale
+///   (LC_CTYPE=C on real hosts), and without `-u` tmux downgrades Unicode
+///   line-drawing to ACS/ASCII — pane borders render as rows of literal
+///   `q`s in the attached view.
 ///
 /// Session names are sanitized to `[A-Za-z0-9_-]` (see
 /// `pty::tmux::session_name`), so the nested quoting is safe — and that
@@ -265,7 +269,7 @@ pub(crate) fn attach_remote(
         "-t",
         &target.dest,
         "--",
-        &format!("sh -lc \"tmux attach -t '={}'\"", target.tmux),
+        &format!("sh -lc \"tmux -u attach -t '={}'\"", target.tmux),
     ]);
     let session = crate::pty::session::spawn_command_session(
         cmd,

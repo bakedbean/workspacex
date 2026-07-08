@@ -67,7 +67,7 @@ repo/workspace  branch  label  ●|✗
 
 The marker (`●` for alive, `✗` for dead/stale) indicates whether the remote tmux session still exists. Navigate with `j`/`k` (or `↑`/`↓`), select a live row with `Enter` to attach, `r` to re-fetch the list, and `Esc` to close. The list is ephemeral — nothing is written to the local database, so there's no sync or cache-invalidation problem.
 
-Attaching spawns `ssh -t <dest> -- "sh -lc \"tmux attach -t '=<name>'\""` as a PTY session — the remote command is one pre-quoted argument routed through a login `sh` (the same PATH rules as the list fetch; sshd otherwise hands the command to a non-login zsh that reads only `~/.zshenv`, where homebrew's tmux often isn't on PATH), and the `=` target is single-quoted so zsh can't expand it as a command path. You interact with the remote agent as if it were local; the exact-match `=` prefix ensures the correct agent is targeted, even if multiple agents sanitize to similar names.
+Attaching spawns `ssh -t <dest> -- "sh -lc \"tmux -u attach -t '=<name>'\""` as a PTY session — the remote command is one pre-quoted argument routed through a login `sh` (the same PATH rules as the list fetch; sshd otherwise hands the command to a non-login zsh that reads only `~/.zshenv`, where homebrew's tmux often isn't on PATH), the `=` target is single-quoted so zsh can't expand it as a command path, and `-u` forces UTF-8 (the ssh context has no locale, and without it tmux degrades box-drawing characters to rows of literal `q`s). You interact with the remote agent as if it were local; the exact-match `=` prefix ensures the correct agent is targeted, even if multiple agents sanitize to similar names.
 
 **Detaching and persistence:**
 

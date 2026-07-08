@@ -3554,6 +3554,75 @@ mod pm_state_tests {
         );
     }
 
+    /// Toggling a workspace to shared must eagerly spawn agents that are NOT
+    /// currently running — not just restart running ones. A stopped agent
+    /// previously got a flag flip only: no tmux session existed until the
+    /// user happened to attach locally, so the workspace showed up
+    /// shared-but-dead (red badge, hidden from the remote picker) and the
+    /// share looked like it failed. Uses a fake `WSX_TMUX_BIN` recorder, so
+    /// the "agent" is the recorder script itself — no real tmux needed.
+    #[tokio::test]
+    async fn toggle_to_shared_spawns_stopped_instances_into_tmux() {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+        env.set("WSX_CLAUDE_BIN", crate::test_support::cat_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false, // starts direct; toggle flips -> shared
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(
+            app.sessions.get(primary.id).is_none(),
+            "precondition: the agent is not running"
+        );
+
+        crate::app::toggle_workspace_shared(&mut app, ws_id).unwrap();
+
+        let ws = app.store.workspace_by_id(ws_id).unwrap().unwrap();
+        assert!(ws.shared, "toggle should flip shared -> true");
+        assert!(
+            app.sessions.get(primary.id).is_some(),
+            "a stopped agent must be spawned into tmux when sharing"
+        );
+        let reloaded = app.store.workspace_agents(ws_id).unwrap();
+        assert_eq!(
+            reloaded[0].session_ref.as_deref(),
+            Some("wsx-r-w"),
+            "the eager shared spawn must persist the tmux session_ref"
+        );
+    }
+
     /// After a wsx restart, a shared workspace's tmux session can outlive
     /// the wsx client that spawned it — no `Session` in `app.sessions`, but
     /// the server-side session is still alive. `classify_status` should

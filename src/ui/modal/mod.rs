@@ -126,6 +126,21 @@ pub enum Modal {
     RemoteWorkspaceList {
         selected: usize,
     },
+    /// `H`-key picker over the configured shared hosts (`shared_hosts`
+    /// setting), sorted by name. Self-contained snapshot like
+    /// `AgentPicker` — `(name, dest)` pairs plus a cursor. Enter allocates
+    /// a remote-fetch generation and swaps to `RemoteListLoading`.
+    RemoteHostPicker {
+        hosts: Vec<(String, String)>,
+        selected: usize,
+    },
+    /// Shown while the background `fetch_shared_list` task for `host_name`
+    /// is in flight. Esc closes it and clears `pending_remote_gen`, so the
+    /// eventual (stale) reconcile no-ops via its gen guard instead of
+    /// reopening a modal the user backed out of.
+    RemoteListLoading {
+        host_name: String,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -314,6 +329,28 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         Modal::RemoteWorkspaceList { .. } => (
             "remote workspaces",
             "loading remote list…\n\n[esc] close".to_string(),
+        ),
+        Modal::RemoteHostPicker { hosts, selected } => {
+            let list = hosts
+                .iter()
+                .enumerate()
+                .map(|(i, (name, dest))| {
+                    let marker = if i == *selected { ">" } else { " " };
+                    format!("{marker}  {name}  {dest}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                "pick a shared host",
+                format!(
+                    "Choose a host to browse shared workspaces:\n\n{list}\n\n\
+                     \u{2191}\u{2193} move   Enter fetch   Esc cancel"
+                ),
+            )
+        }
+        Modal::RemoteListLoading { host_name } => (
+            "remote workspaces",
+            format!("fetching shared workspaces from {host_name}…\n\n[esc] cancel"),
         ),
         Modal::AgentPicker {
             selected, current, ..

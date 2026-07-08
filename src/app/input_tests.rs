@@ -4099,6 +4099,175 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
+    async fn capital_h_opens_host_picker_with_configured_hosts() {
+        // Capital H opens a picker over the configured shared hosts,
+        // sorted by name (shared_hosts::list already sorts; the picker
+        // just snapshots that order). No workspace selection required.
+        let (mut app, _) = make_app_with_n_repos(0);
+        app.store
+            .set_setting("shared_hosts", "mini=eben@mini\nlab=eben@lab")
+            .unwrap();
+        press(&mut app, 'H', KeyModifiers::SHIFT).await;
+        match &app.modal {
+            Some(Modal::RemoteHostPicker { hosts, selected }) => {
+                assert_eq!(hosts.len(), 2);
+                assert_eq!(hosts[0].0, "lab", "expected sorted by name: {hosts:?}");
+                assert_eq!(hosts[1].0, "mini");
+                assert_eq!(*selected, 0);
+            }
+            other => panic!("expected host picker, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn capital_h_with_no_hosts_explains_config_edit() {
+        let (mut app, _) = make_app_with_n_repos(0);
+        press(&mut app, 'H', KeyModifiers::SHIFT).await;
+        match &app.modal {
+            Some(Modal::Error { message }) => {
+                assert!(
+                    message.contains("config edit shared_hosts"),
+                    "expected hint to name the setting command: {message}"
+                );
+            }
+            other => panic!("expected error modal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn enter_in_host_picker_fetches_and_populates_remote_list() {
+        // Full round trip without real ssh: WSX_SSH_BIN points at a fake
+        // script that emits a valid one-workspace shared-list JSON array
+        // (mirrors shared_hosts::tests::fetch_shared_list_parses_fake_ssh_output_and_surfaces_stderr).
+        let mut env = EnvGuard::new();
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fake-ssh-ok.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho '[{\"repo\":\"r\",\"workspace\":\"w\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"agents\":[]}]'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_SSH_BIN", script.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        store.set_setting("shared_hosts", "mini=eben@mini").unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            let h = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('H'),
+                crossterm::event::KeyModifiers::SHIFT,
+            );
+            handle_event(&mut g, &app, CtEvent::Key(h)).await.unwrap();
+            assert!(
+                matches!(g.modal, Some(Modal::RemoteHostPicker { .. })),
+                "expected host picker after H, got {:?}",
+                g.modal
+            );
+            let enter = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
+            // Immediately after Enter, modal should be RemoteListLoading and
+            // a fetch generation should be pending.
+            assert!(
+                matches!(g.modal, Some(Modal::RemoteListLoading { .. })),
+                "expected loading modal immediately after Enter; got {:?}",
+                g.modal
+            );
+            assert!(g.pending_remote_gen.is_some());
+        }
+        // Wait for the spawned fetch + reconcile to finish.
+        wait_until(&app, "remote fetch to finish (list populated)", |g| {
+            g.remote_list.is_some() && g.pending_remote_gen.is_none()
+        })
+        .await;
+        let g = app.lock().await;
+        let list = g.remote_list.as_ref().expect("remote_list populated");
+        assert_eq!(list.host_name, "mini");
+        assert_eq!(list.records.len(), 1);
+        assert_eq!(list.records[0].workspace, "w");
+        assert!(
+            matches!(g.modal, Some(Modal::RemoteWorkspaceList { .. })),
+            "expected the fetch to open RemoteWorkspaceList; got {:?}",
+            g.modal
+        );
+    }
+
+    #[tokio::test]
+    async fn esc_during_remote_list_loading_clears_pending_gen_and_stale_fetch_no_ops() {
+        // Esc while RemoteListLoading is up must close the modal AND clear
+        // pending_remote_gen so the in-flight fetch's reconcile becomes a
+        // no-op via its gen guard, instead of reopening a modal (or an
+        // error) the user has already backed out of.
+        let mut env = EnvGuard::new();
+        let dir = tempfile::tempdir().unwrap();
+        // Deliberately slow so Esc can land before the fetch completes.
+        let script = dir.path().join("fake-ssh-slow.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 2\necho '[]'\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_SSH_BIN", script.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        store.set_setting("shared_hosts", "mini=eben@mini").unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            let h = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('H'),
+                crossterm::event::KeyModifiers::SHIFT,
+            );
+            handle_event(&mut g, &app, CtEvent::Key(h)).await.unwrap();
+            let enter = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(enter))
+                .await
+                .unwrap();
+            assert!(matches!(g.modal, Some(Modal::RemoteListLoading { .. })));
+            let esc = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::empty(),
+            );
+            handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
+            assert!(
+                g.modal.is_none(),
+                "Esc should close the loading modal immediately"
+            );
+            assert!(
+                g.pending_remote_gen.is_none(),
+                "Esc should clear pending_remote_gen so the late reconcile no-ops"
+            );
+        }
+        // Let the slow fetch finish and reconcile run; it must not resurrect
+        // any modal or repopulate remote_list.
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+        let g = app.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "stale reconcile must not reopen a modal; got {:?}",
+            g.modal
+        );
+        assert!(
+            g.remote_list.is_none(),
+            "stale reconcile must not populate remote_list"
+        );
+    }
+
+    #[tokio::test]
     async fn ctrl_s_in_new_workspace_modal_toggles_shared() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;

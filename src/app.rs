@@ -1839,7 +1839,6 @@ pub(crate) async fn reconcile_archive_result(
 /// moved past. Otherwise clears `pending_remote_gen` and, on success,
 /// stores the listing and opens `Modal::RemoteWorkspaceList`; on failure
 /// surfaces `Modal::Error` with the fetch's error text.
-#[allow(dead_code)] // Task 5 wires the H-key fetch that consumes this; remove with that change.
 pub(crate) async fn reconcile_remote_list(
     app: SharedApp,
     my_gen: u64,

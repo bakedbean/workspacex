@@ -583,6 +583,24 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 });
             }
         }
+        (KeyCode::Char('H'), _) => {
+            // Capital H opens a picker over the configured shared hosts
+            // (`wsx config edit shared_hosts`), sorted by name. No workspace
+            // or repo selection is required — the fetch that follows (Enter
+            // in the picker) targets a remote host, not the local tree.
+            let hosts: Vec<(String, String)> = crate::commands::shared_hosts::list(&app.store)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|h| (h.name, h.dest))
+                .collect();
+            if hosts.is_empty() {
+                app.modal = Some(Modal::Error {
+                    message: "no shared hosts configured — add name=ssh-dest lines via `wsx config edit shared_hosts`".into(),
+                });
+            } else {
+                app.modal = Some(Modal::RemoteHostPicker { hosts, selected: 0 });
+            }
+        }
         (KeyCode::Char('e'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
                 && let Some(path) = app.workspace_path(id)
@@ -1831,6 +1849,53 @@ async fn handle_key_modal(
         Modal::RemoteWorkspaceList { .. } => {
             if k.code == KeyCode::Esc {
                 app.modal = None;
+            }
+        }
+        Modal::RemoteHostPicker { hosts, selected } => match k.code {
+            KeyCode::Esc => {
+                app.modal = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let new_sel = selected.saturating_sub(1);
+                app.modal = Some(Modal::RemoteHostPicker {
+                    hosts,
+                    selected: new_sel,
+                });
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let new_sel = (selected + 1).min(hosts.len().saturating_sub(1));
+                app.modal = Some(Modal::RemoteHostPicker {
+                    hosts,
+                    selected: new_sel,
+                });
+            }
+            KeyCode::Enter => {
+                // `hosts` is only ever populated by the `H` dashboard arm,
+                // which refuses to open this modal when the list is empty
+                // (it opens Modal::Error instead) — so indexing here can't
+                // panic.
+                let (name, dest) = hosts[selected].clone();
+                let fetch_gen = app.alloc_remote_gen();
+                app.modal = Some(Modal::RemoteListLoading {
+                    host_name: name.clone(),
+                });
+                let shared_clone = shared.clone();
+                tokio::spawn(async move {
+                    let result = crate::commands::shared_hosts::fetch_shared_list(&dest).await;
+                    crate::app::reconcile_remote_list(shared_clone, fetch_gen, name, dest, result)
+                        .await;
+                });
+            }
+            _ => {}
+        },
+        Modal::RemoteListLoading { .. } => {
+            if k.code == KeyCode::Esc {
+                // Close immediately and drop the pending generation so the
+                // in-flight fetch's eventual reconcile is a no-op (its gen
+                // guard checks `pending_remote_gen == Some(my_gen)`) rather
+                // than reopening a modal after the user has backed out.
+                app.modal = None;
+                app.pending_remote_gen = None;
             }
         }
     }

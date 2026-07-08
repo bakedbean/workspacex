@@ -83,6 +83,10 @@ pub struct RowInputs {
     /// tmux server and survive wsx quitting. Renders a badge before the
     /// branch glyph.
     pub shared: bool,
+    /// The shared workspace's tmux session is currently alive (a client is
+    /// attached in this wsx, or it survives detached on the server).
+    /// Colors the shared badge green; dim means shared-but-no-live-session.
+    pub shared_active: bool,
     pub has_multi_pane_layout: bool,
     pub lifecycle: Option<BranchLifecycle>,
     pub nerd_fonts: bool,
@@ -180,7 +184,9 @@ pub fn render(
     // nf-cod-terminal_tmux when nerd fonts are on, hollow diamond otherwise
     // (the filled ◆ is the *detached* status glyph — same vocabulary).
     // Unlike the layout glyph this renders in BOTH font modes: shared-ness
-    // matters on machines without nerd fonts too.
+    // matters on machines without nerd fonts too. Green while the tmux
+    // session is alive (attached here or detached on the server), dim when
+    // the workspace is shared but no live session backs it yet.
     let shared_badge_width = if inputs.shared { 2 } else { 0 };
     if inputs.shared {
         let badge = if inputs.nerd_fonts {
@@ -188,7 +194,12 @@ pub fn render(
         } else {
             "◇ "
         };
-        spans.push(Span::styled(badge.to_string(), theme.dim_style()));
+        let badge_style = if inputs.shared_active {
+            theme.status_style(Status::Complete)
+        } else {
+            theme.dim_style()
+        };
+        spans.push(Span::styled(badge.to_string(), badge_style));
     }
     let branch_glyph = if inputs.nerd_fonts {
         match inputs.lifecycle {
@@ -372,6 +383,7 @@ mod tests {
             yolo: false,
             setup_failed: false,
             shared: false,
+            shared_active: false,
             has_multi_pane_layout: false,
             lifecycle: None,
             nerd_fonts: false,
@@ -427,6 +439,40 @@ mod tests {
             text.contains("\u{ebc8} \u{e0a0} bakedbean/repo-overview"),
             "nerd-font shared badge must be the tmux logo: {text:?}"
         );
+    }
+
+    #[test]
+    fn shared_badge_is_green_when_active_and_dim_otherwise() {
+        let theme = Theme::wsx();
+        // Both font modes: the badge glyph differs (tmux logo vs ◇) but the
+        // liveness coloring must behave identically in each.
+        for (nerd_fonts, badge_text) in [(false, "◇ "), (true, "\u{ebc8} ")] {
+            let badge_style = |inputs: &RowInputs| {
+                let line = render(inputs, ColumnWidths::default(), 0, &theme, 120);
+                line.spans
+                    .iter()
+                    .find(|s| s.content.as_ref() == badge_text)
+                    .unwrap_or_else(|| panic!("badge span present (nerd_fonts={nerd_fonts})"))
+                    .style
+            };
+            let mut inputs = base();
+            inputs.shared = true;
+            inputs.nerd_fonts = nerd_fonts;
+            // No live tmux session yet: dim.
+            assert_eq!(
+                badge_style(&inputs).fg,
+                theme.dim_style().fg,
+                "inactive badge must be dim (nerd_fonts={nerd_fonts})"
+            );
+            // Live session (attached client or detached-alive): the complete
+            // green — "the agent is alive in tmux right now".
+            inputs.shared_active = true;
+            assert_eq!(
+                badge_style(&inputs).fg,
+                theme.status_style(Status::Complete).fg,
+                "active badge must use the complete green (nerd_fonts={nerd_fonts})"
+            );
+        }
     }
 
     #[test]

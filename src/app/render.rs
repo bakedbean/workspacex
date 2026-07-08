@@ -94,6 +94,18 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         now.saturating_sub(last) / 1000
                     });
                     let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
+                    // Badge liveness: a running client in this wsx (the tmux
+                    // attach client) or a detached-but-alive server session
+                    // (from the throttled has-session sweep) both mean the
+                    // agent is alive in tmux right now.
+                    let session_running = session.as_ref().is_some_and(|s| {
+                        matches!(
+                            *s.status.read().unwrap(),
+                            crate::pty::session::SessionStatus::Running { .. }
+                        )
+                    });
+                    let shared_active =
+                        ws.shared && (session_running || app.shared_detached.contains(&ws.id));
                     let row = crate::ui::dashboard::row::RowInputs {
                         agent: ws.agent,
                         status,
@@ -118,6 +130,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         yolo: ws.yolo,
                         setup_failed,
                         shared: ws.shared,
+                        shared_active,
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         nerd_fonts,
                         workspace_id: ws.id,

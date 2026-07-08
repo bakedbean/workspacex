@@ -3419,6 +3419,79 @@ mod pm_state_tests {
     /// has nothing left to leak. Uses a fake `WSX_TMUX_BIN` recorder so no
     /// real tmux server is needed; the instance is never running, so no agent
     /// respawn is triggered.
+    /// I2: toggling a direct workspace to shared while tmux is unavailable
+    /// must NOT flip the flag or kill any running agent. Instead it raises the
+    /// AgentMissing modal and returns. Points WSX_TMUX_BIN at a nonexistent
+    /// path so `is_available()` reports false without depending on the host.
+    #[tokio::test]
+    async fn toggle_to_shared_without_tmux_is_a_noop_with_modal() {
+        use crate::data::store::NewWorkspace;
+        use crate::ui::modal::Modal;
+
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
+        env.set("WSX_TMUX_BIN", "/nonexistent/wsx-no-tmux-here");
+
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "share-me",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Codex,
+                shared: false, // starts direct; toggle proposes -> shared
+            })
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let inst = test_primary_instance(&app, ws_id);
+        app.sessions
+            .spawn(
+                inst,
+                ws_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Codex,
+                None,
+            )
+            .unwrap();
+        app.refresh().unwrap();
+        let old_session = app.sessions.get(inst).expect("session should be running");
+
+        crate::app::toggle_workspace_shared(&mut app, ws_id).unwrap();
+
+        // Flag NOT flipped.
+        let ws = app.store.workspace_by_id(ws_id).unwrap().unwrap();
+        assert!(!ws.shared, "flag must stay direct when tmux is missing");
+        // Modal surfaced.
+        match &app.modal {
+            Some(Modal::AgentMissing { ws_id: mid, .. }) => assert_eq!(*mid, ws_id),
+            other => panic!("expected AgentMissing modal, got {other:?}"),
+        }
+        // Running session untouched (same Arc).
+        let now_session = app.sessions.get(inst).expect("session must survive");
+        assert!(
+            Arc::ptr_eq(&old_session, &now_session),
+            "the running agent must not be killed when tmux is missing"
+        );
+    }
+
     #[tokio::test]
     async fn toggle_unshare_kills_detached_tmux_and_clears_ref() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};

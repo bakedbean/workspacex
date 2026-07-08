@@ -1575,6 +1575,18 @@ pub(crate) fn toggle_workspace_shared(
         .map(|(_, w)| w.clone())
         .ok_or_else(|| crate::error::Error::UserInput("workspace not found".into()))?;
     let to_shared = !ws.shared;
+    // Guard: sharing spawns agents inside tmux. If tmux is absent, bail BEFORE
+    // flipping the flag or killing any running direct agent — otherwise we'd
+    // tear down live sessions only to discover we can't respawn them shared.
+    // Surface the same AgentMissing modal the spawn path uses.
+    if to_shared && !crate::pty::tmux::is_available() {
+        app.modal = Some(crate::ui::modal::Modal::AgentMissing {
+            ws_id,
+            agent: ws.agent,
+            binary: crate::pty::tmux::tmux_bin(),
+        });
+        return Ok(());
+    }
     let all_instances = app.store.workspace_agents(ws_id)?;
     let running: Vec<_> = all_instances
         .iter()

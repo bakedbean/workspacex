@@ -84,8 +84,9 @@ pub struct RowInputs {
     /// branch glyph.
     pub shared: bool,
     /// The shared workspace's tmux session is currently alive (a client is
-    /// attached in this wsx, or it survives detached on the server).
-    /// Colors the shared badge green; dim means shared-but-no-live-session.
+    /// attached in this wsx, or it survives detached on the server). Colors
+    /// the shared badge green; red means shared-but-no-live-session (the
+    /// session died or was never started).
     pub shared_active: bool,
     pub has_multi_pane_layout: bool,
     pub lifecycle: Option<BranchLifecycle>,
@@ -185,8 +186,10 @@ pub fn render(
     // (the filled ◆ is the *detached* status glyph — same vocabulary).
     // Unlike the layout glyph this renders in BOTH font modes: shared-ness
     // matters on machines without nerd fonts too. Green while the tmux
-    // session is alive (attached here or detached on the server), dim when
-    // the workspace is shared but no live session backs it yet.
+    // session is alive (attached here or detached on the server); red when
+    // the workspace is shared but no live session backs it — a "semi-failed"
+    // state where the session has exited (or was never started), so a remote
+    // peer browsing this host can't attach to it.
     let shared_badge_width = if inputs.shared { 2 } else { 0 };
     if inputs.shared {
         let badge = if inputs.nerd_fonts {
@@ -197,7 +200,7 @@ pub fn render(
         let badge_style = if inputs.shared_active {
             theme.status_style(Status::Complete)
         } else {
-            theme.dim_style()
+            theme.err_style()
         };
         spans.push(Span::styled(badge.to_string(), badge_style));
     }
@@ -442,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_badge_is_green_when_active_and_dim_otherwise() {
+    fn shared_badge_is_green_when_active_and_red_when_dead() {
         let theme = Theme::wsx();
         // Both font modes: the badge glyph differs (tmux logo vs ◇) but the
         // liveness coloring must behave identically in each.
@@ -458,11 +461,13 @@ mod tests {
             let mut inputs = base();
             inputs.shared = true;
             inputs.nerd_fonts = nerd_fonts;
-            // No live tmux session yet: dim.
+            // Shared but no live tmux session backs it — a "semi-failed" state
+            // (the session exited or was never started, so a remote peer can't
+            // attach): the error red, not idle gray.
             assert_eq!(
                 badge_style(&inputs).fg,
-                theme.dim_style().fg,
-                "inactive badge must be dim (nerd_fonts={nerd_fonts})"
+                theme.err_style().fg,
+                "dead shared badge must be red (nerd_fonts={nerd_fonts})"
             );
             // Live session (attached client or detached-alive): the complete
             // green — "the agent is alive in tmux right now".

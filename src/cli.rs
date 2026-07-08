@@ -38,6 +38,14 @@ pub static GROUPS: &[GroupInfo] = &[
                 usage: "archive <repo> <slug> [--keep-worktree] [--force-delete-branch]",
                 blurb: "Archive a workspace",
             },
+            CmdInfo {
+                usage: "share <repo> <slug>",
+                blurb: "Convert a workspace to tmux-shared",
+            },
+            CmdInfo {
+                usage: "unshare <repo> <slug>",
+                blurb: "Convert a workspace to direct (not tmux)",
+            },
         ],
     },
     GroupInfo {
@@ -355,6 +363,11 @@ pub enum CliAction {
         name: String,
         keep_worktree: bool,
         force_delete_branch: bool,
+    },
+    WorkspaceShare {
+        repo: String,
+        name: String,
+        shared: bool,
     },
     SetupInstallSkill,
     AgentList,
@@ -881,6 +894,36 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                 name,
                 keep_worktree,
                 force_delete_branch,
+            })
+        }
+        Some("share") => {
+            let repo = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace share <repo> <name>".into(),
+            })?;
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace share <repo> <name>".into(),
+            })?;
+            Ok(CliAction::WorkspaceShare {
+                repo,
+                name,
+                shared: true,
+            })
+        }
+        Some("unshare") => {
+            let repo = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace unshare <repo> <name>".into(),
+            })?;
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace unshare <repo> <name>".into(),
+            })?;
+            Ok(CliAction::WorkspaceShare {
+                repo,
+                name,
+                shared: false,
             })
         }
         other => Err(Error::Usage {
@@ -1455,6 +1498,27 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             };
             crate::data::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
             println!("archived workspace {}/{}", r.name, name);
+        }
+        CliAction::WorkspaceShare { repo, name, shared } => {
+            let r = lookup_repo(&store, &repo)?;
+            let w = lookup_workspace(&store, &r, &name)?;
+            if w.shared == shared {
+                println!(
+                    "workspace {}/{} already {}",
+                    r.name,
+                    name,
+                    if shared { "shared" } else { "unshared" }
+                );
+            } else {
+                store.set_workspace_shared(w.id, shared)?;
+                println!(
+                    "workspace {}/{} is now {}",
+                    r.name,
+                    name,
+                    if shared { "shared" } else { "unshared" }
+                );
+                println!("note: running sessions keep their current backend until restarted");
+            }
         }
         CliAction::AgentList => {
             let ws = resolve_current_workspace(&store)?;
@@ -2254,6 +2318,30 @@ mod tests {
             } => {
                 assert!(keep_worktree);
                 assert!(force_delete_branch);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_share() {
+        match parse(&["workspace", "share", "backend", "add-widgets"]).unwrap() {
+            CliAction::WorkspaceShare { repo, name, shared } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name, "add-widgets");
+                assert!(shared);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_unshare() {
+        match parse(&["workspace", "unshare", "backend", "add-widgets"]).unwrap() {
+            CliAction::WorkspaceShare { repo, name, shared } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name, "add-widgets");
+                assert!(!shared);
             }
             other => panic!("unexpected: {other:?}"),
         }

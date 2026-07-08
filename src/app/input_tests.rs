@@ -4309,6 +4309,123 @@ mod pm_state_tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn capital_t_opens_confirm_share_and_y_flips_shared_and_restarts_session() {
+        // T on a selected workspace opens ConfirmShare proposing the flip of
+        // the current `shared` flag; `y` commits it via
+        // `toggle_workspace_shared`, which restarts any running session so
+        // it respawns per the new flag (resuming via --continue).
+        //
+        // This exercises the *unshare* direction (shared: true -> false):
+        // the respawn after unsharing is a plain direct spawn (no tmux
+        // binary required), unlike the share direction, whose tmux-backed
+        // respawn is covered by the tmux-gated e2e in Task 10.
+        use crate::data::store::NewWorkspace;
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "share-toggle-test",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Codex,
+                shared: true,
+            })
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let inst = test_primary_instance(&app, ws_id);
+        app.sessions
+            .spawn(
+                inst,
+                ws_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Codex,
+                None,
+            )
+            .unwrap();
+        app.refresh().unwrap();
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.select_index(0);
+
+        let old_session = app.sessions.get(inst).expect("session should be running");
+
+        let shared_app = Arc::new(Mutex::new(app));
+
+        // Press Shift+T: should open ConfirmShare proposing to_shared: false
+        // (workspace starts shared: true).
+        {
+            let mut g = shared_app.lock().await;
+            let t = KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT);
+            handle_event(&mut g, &shared_app, CtEvent::Key(t))
+                .await
+                .unwrap();
+            match &g.modal {
+                Some(Modal::ConfirmShare {
+                    workspace_id,
+                    to_shared,
+                    ..
+                }) => {
+                    assert_eq!(*workspace_id, ws_id);
+                    assert!(
+                        !*to_shared,
+                        "workspace starts shared; T should propose to_shared: false"
+                    );
+                }
+                other => panic!("expected ConfirmShare modal, got {other:?}"),
+            }
+        }
+
+        // Press 'y': flips the store flag and restarts the running instance.
+        {
+            let mut g = shared_app.lock().await;
+            let y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+            handle_event(&mut g, &shared_app, CtEvent::Key(y))
+                .await
+                .unwrap();
+        }
+
+        let g = shared_app.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "y should dismiss ConfirmShare on success; got {:?}",
+            g.modal
+        );
+        let ws = g.store.workspace_by_id(ws_id).unwrap().unwrap();
+        assert!(!ws.shared, "y should flip store workspace.shared to false");
+        let new_session = g
+            .sessions
+            .get(inst)
+            .expect("instance should have a respawned session");
+        assert!(
+            !Arc::ptr_eq(&old_session, &new_session),
+            "the old session must be gone from app.sessions, replaced by a respawned one"
+        );
+    }
+
     #[tokio::test]
     async fn enter_during_setup_running_is_a_noop() {
         use crate::ui::modal::Modal;

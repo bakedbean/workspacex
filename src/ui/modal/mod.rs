@@ -52,6 +52,17 @@ pub enum Modal {
         workspace_id: crate::data::store::WorkspaceId,
         name: String,
     },
+    ConfirmShare {
+        workspace_id: crate::data::store::WorkspaceId,
+        name: String,
+        /// `true` = converting to tmux-shared, `false` = converting to direct.
+        to_shared: bool,
+        /// Snapshot of how many instances currently have a running session,
+        /// taken when the modal was opened (by `T`'s dashboard handler) —
+        /// purely for the confirmation message; the actual restart in
+        /// `toggle_workspace_shared` re-checks liveness at commit time.
+        running_count: usize,
+    },
     SetupRunning {
         cancel: tokio_util::sync::CancellationToken,
         progress: crate::data::progress::SharedProgress,
@@ -199,6 +210,35 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             "archive workspace",
             format!("archive '{name}'?\n\n[y] yes   [n]/[esc] cancel"),
         ),
+        Modal::ConfirmShare {
+            name,
+            to_shared,
+            running_count,
+            ..
+        } => {
+            let dest = if *to_shared {
+                "shared (tmux)"
+            } else {
+                "direct (not tmux)"
+            };
+            let restart_note = match running_count {
+                0 => "No running sessions to restart.".to_string(),
+                1 => format!(
+                    "This restarts 1 running session {} tmux (conversation resumes via --continue).",
+                    if *to_shared { "inside" } else { "outside" }
+                ),
+                n => format!(
+                    "This restarts {n} running session(s) {} tmux (conversation resumes via --continue).",
+                    if *to_shared { "inside" } else { "outside" }
+                ),
+            };
+            (
+                "toggle sharing",
+                format!(
+                    "switch '{name}' to {dest}?\n\n{restart_note}\n\n[y] yes   [n]/[esc] cancel"
+                ),
+            )
+        }
         Modal::SetupRunning {
             progress, started, ..
         } => {

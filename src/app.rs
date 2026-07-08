@@ -1533,6 +1533,59 @@ pub(crate) fn ensure_instance_session(
     Ok(AttachReady::Ok)
 }
 
+/// Flip a workspace's `shared` flag and restart any currently-running
+/// instances so they respawn with (or without) tmux per the new flag.
+/// `build_spawn_info`/`build_added_spawn_info` already select
+/// `SpawnMode::Continue` whenever `has_prior_session_for` finds a prior
+/// session, so the respawn resumes the conversation via `--continue` for
+/// free — this function just needs to kill the old backend and re-ensure.
+///
+/// Instances with no running session are left untouched (no spurious
+/// spawns). The was-running set is snapshotted *before* flipping the flag
+/// and calling `app.refresh()`, so the borrow of `app.store`/`app.sessions`
+/// used to compute it is long gone by the time we mutate `app` below.
+pub(crate) fn toggle_workspace_shared(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Result<()> {
+    let ws = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == ws_id)
+        .map(|(_, w)| w.clone())
+        .ok_or_else(|| crate::error::Error::UserInput("workspace not found".into()))?;
+    let running: Vec<_> = app
+        .store
+        .workspace_agents(ws_id)?
+        .into_iter()
+        .filter(|inst| {
+            app.sessions.get(inst.id).is_some_and(|s| {
+                matches!(
+                    *s.status.read().unwrap(),
+                    crate::pty::session::SessionStatus::Running { .. }
+                )
+            })
+        })
+        .collect();
+    app.store.set_workspace_shared(ws_id, !ws.shared)?;
+    app.refresh()?; // reload app.workspaces so spawn sees the new flag
+    // Restart only instances that were actually running. `sessions.remove`
+    // calls `kill_backend` in both directions: for a direct child it SIGKILLs
+    // the agent; for a tmux-backed session (unsharing) it also kills the
+    // tmux server session — there's no way to move a live process out of
+    // tmux, so losing in-flight output and resuming via `--continue` is the
+    // intended design here.
+    for inst in running {
+        app.sessions.remove(inst.id);
+        if inst.is_primary {
+            ensure_workspace_session(app, ws_id)?;
+        } else {
+            ensure_instance_session(app, inst.id, false)?;
+        }
+    }
+    Ok(())
+}
+
 /// Attach to a workspace: ensure a session, restore layout, and switch
 /// to attached view. Shared by the `Enter` / `i` / `l` key handlers.
 pub(crate) fn attach_workspace(

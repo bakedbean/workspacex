@@ -4447,7 +4447,10 @@ mod pm_state_tests {
         );
     }
 
-    fn two_row_remote_list() -> crate::app::RemoteList {
+    /// One workspace with a live `claude` agent and a dead `codex#2` agent.
+    /// After attach-only filtering this flattens to a single row (the live
+    /// one), so it doubles as a fixture for "dead rows are hidden".
+    fn mixed_liveness_remote_list() -> crate::app::RemoteList {
         use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
         crate::app::RemoteList {
             host_name: "mini".into(),
@@ -4475,12 +4478,35 @@ mod pm_state_tests {
         }
     }
 
+    /// One workspace whose only agent has a dead session — nothing attachable.
+    fn all_dead_remote_list() -> crate::app::RemoteList {
+        use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+        crate::app::RemoteList {
+            host_name: "mini".into(),
+            dest: "eben@mini".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                agents: vec![SharedAgentRecord {
+                    label: "claude".into(),
+                    agent: "claude".into(),
+                    tmux_session: None,
+                    alive: false,
+                }],
+            }],
+        }
+    }
+
     #[tokio::test]
-    async fn remote_workspace_list_j_moves_selection_and_enter_on_dead_row_notices() {
+    async fn remote_workspace_list_navigation_bounded_to_live_rows() {
+        // The dead `codex#2` agent is filtered out, leaving a single live row,
+        // so `j` cannot advance the selection past index 0.
         let store = Store::open_in_memory().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
-        app.remote_list = Some(two_row_remote_list());
+        app.remote_list = Some(mixed_liveness_remote_list());
         app.modal = Some(Modal::RemoteWorkspaceList {
             selected: 0,
             notice: None,
@@ -4489,19 +4515,37 @@ mod pm_state_tests {
             App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
         ));
 
-        // j moves selection from row 0 (alive) to row 1 (dead).
         let j = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Char('j'),
             crossterm::event::KeyModifiers::NONE,
         );
         handle_key_modal(&mut app, &shared_app, j).await.unwrap();
         match &app.modal {
-            Some(Modal::RemoteWorkspaceList { selected, .. }) => assert_eq!(*selected, 1),
+            Some(Modal::RemoteWorkspaceList { selected, .. }) => assert_eq!(
+                *selected, 0,
+                "only one live row exists, so j must not move past it"
+            ),
             other => panic!("expected RemoteWorkspaceList, got {other:?}"),
         }
+    }
 
-        // Enter on the dead row keeps the modal open with a notice rather
-        // than trying to attach.
+    #[tokio::test]
+    async fn remote_workspace_list_enter_with_no_live_rows_notices() {
+        // When every shared workspace on the host has a dead session there are
+        // no rows at all; Enter can't resolve a target, so the modal stays open
+        // with the "no live session" notice rather than attaching.
+        let store = Store::open_in_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        app.remote_list = Some(all_dead_remote_list());
+        app.modal = Some(Modal::RemoteWorkspaceList {
+            selected: 0,
+            notice: None,
+        });
+        let shared_app = Arc::new(Mutex::new(
+            App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
+        ));
+
         let enter = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Enter,
             crossterm::event::KeyModifiers::empty(),
@@ -4510,9 +4554,12 @@ mod pm_state_tests {
             .await
             .unwrap();
         match &app.modal {
-            Some(Modal::RemoteWorkspaceList { selected, notice }) => {
-                assert_eq!(*selected, 1, "selection should be unchanged by Enter");
-                assert!(notice.is_some(), "expected a notice on dead-row Enter");
+            Some(Modal::RemoteWorkspaceList { notice, .. }) => {
+                assert_eq!(
+                    notice.as_deref(),
+                    Some("no live session to attach to"),
+                    "expected the no-live-session notice"
+                );
             }
             other => panic!("expected RemoteWorkspaceList to stay open, got {other:?}"),
         }
@@ -4523,7 +4570,7 @@ mod pm_state_tests {
         let store = Store::open_in_memory().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
-        app.remote_list = Some(two_row_remote_list());
+        app.remote_list = Some(mixed_liveness_remote_list());
         app.modal = Some(Modal::RemoteWorkspaceList {
             selected: 0,
             notice: None,

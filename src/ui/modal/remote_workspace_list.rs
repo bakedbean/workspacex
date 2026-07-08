@@ -54,11 +54,17 @@ pub fn render_remote_workspace_list(
     };
 
     if rows.is_empty() {
-        f.render_widget(
-            Paragraph::new(format!("no shared workspaces on {}", list.host_name))
-                .style(theme.dim_style()),
-            body_area,
-        );
+        // Two distinct empty states: the host may have no shared workspaces at
+        // all, or it may have some whose tmux sessions are all offline (those
+        // rows are filtered out by `remote_rows`, which is attach-only). Say
+        // which so a workspace the user knows is shared not showing up reads as
+        // "session offline" rather than "wsx forgot it".
+        let msg = if list.records.is_empty() {
+            format!("no shared workspaces on {}", list.host_name)
+        } else {
+            format!("no live sessions on {}", list.host_name)
+        };
+        f.render_widget(Paragraph::new(msg).style(theme.dim_style()), body_area);
     } else {
         let mut lines: Vec<Line> = Vec::new();
         for (i, row) in rows.iter().enumerate() {
@@ -140,15 +146,52 @@ mod tests {
     }
 
     #[test]
-    fn shows_host_in_title_and_rows_per_agent() {
+    fn shows_host_and_only_live_agent_rows() {
+        // `list_with_rows` carries one live (`claude`) and one dead (`codex#2`)
+        // agent. The picker is attach-only, so only the live row is drawn.
         let list = list_with_rows();
         let text = render_to_string(&list, 0, None);
         assert!(text.contains("mini"), "host name missing:\n{text}");
         assert!(text.contains("r/w"), "repo/workspace missing:\n{text}");
         assert!(text.contains("claude"), "alive agent row missing:\n{text}");
-        assert!(text.contains("codex#2"), "dead agent row missing:\n{text}");
+        assert!(
+            !text.contains("codex#2"),
+            "dead agent row must be hidden:\n{text}"
+        );
         assert!(text.contains('\u{25CF}'), "alive marker missing:\n{text}");
-        assert!(text.contains('\u{2717}'), "dead marker missing:\n{text}");
+        assert!(
+            !text.contains('\u{2717}'),
+            "no dead marker should render when dead rows are hidden:\n{text}"
+        );
+    }
+
+    #[test]
+    fn all_dead_records_show_no_live_sessions_message() {
+        // The host has a shared workspace, but its only agent's session is
+        // dead. After attach-only filtering there are no rows — the message
+        // must explain the sessions are offline, not claim the host has no
+        // shared workspaces at all.
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "mini:".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                agents: vec![SharedAgentRecord {
+                    label: "claude".into(),
+                    agent: "claude".into(),
+                    tmux_session: None,
+                    alive: false,
+                }],
+            }],
+        };
+        let text = render_to_string(&list, 0, None);
+        assert!(
+            text.contains("no live sessions on mini"),
+            "offline-sessions message missing:\n{text}"
+        );
     }
 
     #[test]

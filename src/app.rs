@@ -149,19 +149,31 @@ pub(crate) struct RemoteRow<'a> {
     pub alive: bool,
 }
 
-/// Flatten `list.records` into one `RemoteRow` per agent instance, in
-/// record/agent order. Empty `records`, or records with no agents, simply
-/// contribute no rows.
+/// Flatten `list.records` into one `RemoteRow` per *attachable* agent
+/// instance, in record/agent order. The picker is attach-only: an agent
+/// contributes a row only when it is `alive` AND carries a `tmux_session`
+/// name — the same predicate the `Enter` handler needs to build a
+/// `RemoteTarget`. Dead-but-shared workspaces (whose remote tmux session has
+/// exited or was never started) are hidden rather than listed as rows that
+/// only ever answer Enter with "no live session to attach to". Empty
+/// `records`, records with no agents, and records whose agents are all dead
+/// all contribute no rows.
 pub(crate) fn remote_rows(list: &RemoteList) -> Vec<RemoteRow<'_>> {
     let mut out = Vec::new();
     for rec in &list.records {
         for agent in &rec.agents {
+            let Some(tmux_session) = agent.tmux_session.as_deref() else {
+                continue;
+            };
+            if !agent.alive {
+                continue;
+            }
             out.push(RemoteRow {
                 workspace: &rec.workspace,
                 repo: &rec.repo,
                 branch: &rec.branch,
                 label: &agent.label,
-                tmux_session: agent.tmux_session.as_deref(),
+                tmux_session: Some(tmux_session),
                 alive: agent.alive,
             });
         }
@@ -175,7 +187,11 @@ mod remote_rows_tests {
     use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
 
     #[test]
-    fn remote_rows_flatten_agents_and_mark_dead() {
+    fn remote_rows_flatten_agents_and_drop_dead() {
+        // A workspace with one live agent and one dead agent contributes only
+        // the live row: dead sessions have nothing to `ssh … tmux attach` to,
+        // so listing them just produces "no live session to attach to" on
+        // Enter. Filtering here keeps the picker attach-only.
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "d".into(),
@@ -201,9 +217,53 @@ mod remote_rows_tests {
             }],
         };
         let rows = remote_rows(&list);
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1, "the dead agent row must be filtered out");
+        assert_eq!(rows[0].label, "claude");
         assert!(rows[0].alive && rows[0].tmux_session.is_some());
-        assert!(!rows[1].alive);
+    }
+
+    #[test]
+    fn remote_rows_drop_alive_flag_without_session_name() {
+        // Defensive: a row claiming `alive` but carrying no tmux session name
+        // can't be attached, so it must not appear either.
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "d".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                agents: vec![SharedAgentRecord {
+                    label: "claude".into(),
+                    agent: "claude".into(),
+                    tmux_session: None,
+                    alive: true,
+                }],
+            }],
+        };
+        assert!(remote_rows(&list).is_empty());
+    }
+
+    #[test]
+    fn remote_rows_record_with_only_dead_agents_yields_no_rows() {
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "d".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                agents: vec![SharedAgentRecord {
+                    label: "claude".into(),
+                    agent: "claude".into(),
+                    tmux_session: None,
+                    alive: false,
+                }],
+            }],
+        };
+        assert!(remote_rows(&list).is_empty());
     }
 
     #[test]

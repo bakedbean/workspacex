@@ -261,7 +261,9 @@ pub(crate) fn attach_remote(
 /// runs `Session::Drop`, which likewise kills only the client; nothing extra is
 /// needed to honor the persistence contract.) The remote *list* is left intact
 /// so a detach lands back in the same modal-less dashboard the attach came
-/// from without re-fetching.
+/// from without re-fetching. Detach does not touch the fetched list; Esc on the
+/// list modal is what discards the fetched data (see the Esc arm in
+/// `app::input`).
 pub(crate) fn detach_remote(app: &mut App) {
     if let Some(session) = app.remote.take() {
         session.kill();

@@ -27,6 +27,13 @@ pub fn parse(text: &str) -> Vec<SharedHost> {
             if name.is_empty() || dest.is_empty() {
                 return None;
             }
+            // Reject a dest that begins with '-': ssh would parse it as an
+            // option (e.g. `-oProxyCommand=…`) rather than a destination, so
+            // dropping it here keeps a malformed/hostile config from smuggling
+            // ssh flags into the fetch/attach argv.
+            if dest.starts_with('-') {
+                return None;
+            }
             Some(SharedHost { name, dest })
         })
         .collect()
@@ -116,6 +123,16 @@ mod tests {
         assert_eq!(hosts[0].dest, "eben@ebenmini.local");
         // first '=' splits; the rest stays in dest
         assert_eq!(hosts[1].dest, "user@lab=box");
+    }
+
+    #[test]
+    fn parse_rejects_option_like_dest() {
+        // A dest starting with '-' would be read by ssh as an option, not a
+        // host, so such entries are dropped entirely.
+        let hosts = parse("evil=-oProxyCommand=touch pwned\nok=eben@mini");
+        assert_eq!(hosts.len(), 1, "the option-like dest must be dropped");
+        assert_eq!(hosts[0].name, "ok");
+        assert_eq!(hosts[0].dest, "eben@mini");
     }
 
     #[test]

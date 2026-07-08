@@ -79,6 +79,10 @@ pub struct RowInputs {
     pub selected: bool,
     pub yolo: bool,
     pub setup_failed: bool,
+    /// Workspace is tmux-backed ("shared"): its agent sessions live in a
+    /// tmux server and survive wsx quitting. Renders a badge before the
+    /// branch glyph.
+    pub shared: bool,
     pub has_multi_pane_layout: bool,
     pub lifecycle: Option<BranchLifecycle>,
     pub nerd_fonts: bool,
@@ -172,6 +176,20 @@ pub fn render(
     if inputs.has_multi_pane_layout && inputs.nerd_fonts {
         spans.push(Span::styled("\u{f0db} ".to_string(), theme.dim_style()));
     }
+    // Shared (tmux-backed) badge, immediately left of the branch glyph:
+    // nf-cod-terminal_tmux when nerd fonts are on, hollow diamond otherwise
+    // (the filled ◆ is the *detached* status glyph — same vocabulary).
+    // Unlike the layout glyph this renders in BOTH font modes: shared-ness
+    // matters on machines without nerd fonts too.
+    let shared_badge_width = if inputs.shared { 2 } else { 0 };
+    if inputs.shared {
+        let badge = if inputs.nerd_fonts {
+            "\u{ebc8} "
+        } else {
+            "◇ "
+        };
+        spans.push(Span::styled(badge.to_string(), theme.dim_style()));
+    }
     let branch_glyph = if inputs.nerd_fonts {
         match inputs.lifecycle {
             Some(BranchLifecycle::PrMerged) => "\u{f419}",
@@ -184,7 +202,9 @@ pub fn render(
         "⎇"
     };
     let branch_text = format!("{} {}", branch_glyph, inputs.branch);
-    let branch_target = branch_width.saturating_sub(layout_badge_width).max(1);
+    let branch_target = branch_width
+        .saturating_sub(layout_badge_width + shared_badge_width)
+        .max(1);
     let branch_padded = truncate_pad(&branch_text, branch_target);
     let branch_style = theme
         .lifecycle_style(inputs.lifecycle)
@@ -351,6 +371,7 @@ mod tests {
             selected: false,
             yolo: false,
             setup_failed: false,
+            shared: false,
             has_multi_pane_layout: false,
             lifecycle: None,
             nerd_fonts: false,
@@ -385,6 +406,50 @@ mod tests {
             gutter.style.fg,
             Some(theme.status_style(inputs.status).fg.unwrap()),
             "gutter keeps the status color even when selected"
+        );
+    }
+
+    #[test]
+    fn shared_badge_prefixes_branch_in_both_font_modes() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.shared = true;
+        // Plain Unicode: hollow diamond, then the ⎇ branch glyph.
+        let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        assert!(
+            text.contains("◇ ⎇ bakedbean/repo-overview"),
+            "shared badge must sit immediately left of the branch glyph: {text:?}"
+        );
+        // Nerd fonts: the tmux logo (nf-cod-terminal_tmux), then the branch glyph.
+        inputs.nerd_fonts = true;
+        let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        assert!(
+            text.contains("\u{ebc8} \u{e0a0} bakedbean/repo-overview"),
+            "nerd-font shared badge must be the tmux logo: {text:?}"
+        );
+    }
+
+    #[test]
+    fn unshared_row_has_no_shared_badge_and_widths_stay_aligned() {
+        let theme = Theme::wsx();
+        let unshared = line_text(&render(&base(), ColumnWidths::default(), 0, &theme, 120));
+        assert!(
+            !unshared.contains('◇') && !unshared.contains('\u{ebc8}'),
+            "no badge on direct workspaces: {unshared:?}"
+        );
+        // The badge consumes 2 cells of the branch column, so both rows
+        // must occupy the same display width and downstream columns
+        // (procs/diff/age) must start at the same offset.
+        let mut inputs = base();
+        inputs.shared = true;
+        let shared = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        // Compare CHAR positions, not byte offsets — ◇/⎇ are multibyte, so
+        // `str::find` would report a shift even when columns are aligned.
+        let procs_col = |s: &str| s.chars().position(|c| c == '●');
+        assert_eq!(
+            procs_col(&unshared),
+            procs_col(&shared),
+            "procs column must not shift when the shared badge renders:\n  {unshared:?}\n  {shared:?}"
         );
     }
 

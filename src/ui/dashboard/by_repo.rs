@@ -190,6 +190,7 @@ mod tests {
                 selected: i == 0,
                 yolo: false,
                 setup_failed: false,
+                shared: false,
                 lifecycle: None,
                 nerd_fonts: false,
                 workspace_id: crate::data::store::WorkspaceId(i as i64),

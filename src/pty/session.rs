@@ -1437,4 +1437,126 @@ mod tests {
         }
         assert!(gone, "kill_backend left the tmux session running");
     }
+
+    /// Pins the `-A` attach-not-duplicate contract: respawning against a
+    /// tmux session name that's already alive on the server must reattach
+    /// the new client to the existing agent, never spin up a second one.
+    /// Same TMUX_TMPDIR isolation as the survive/kill test above.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_session_respawn_reattaches_instead_of_duplicating() {
+        if !crate::pty::tmux::is_available() {
+            eprintln!("tmux not installed; skipping");
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
+        // Heartbeat script (instead of a bare `sleep`) so we can prove the
+        // *reattached* client actually receives bytes from the still-running
+        // agent, not just that the tmux session survives.
+        let script = tmpdir.path().join("fake-agent.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nwhile true; do echo beat; sleep 1; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_CLAUDE_BIN", script.to_str().unwrap());
+
+        let name = "wsx-test-reattach";
+        let mode = || SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+
+        let s1 = spawn_session(
+            tmpdir.path(),
+            80,
+            24,
+            mode(),
+            crate::agent::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
+            None,
+            Some(name),
+        )
+        .unwrap();
+        let mut alive = false;
+        for _ in 0..50 {
+            if crate::pty::tmux::has_session(name) {
+                alive = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(alive, "tmux session was never created");
+
+        // Kill only the client (quit-wsx semantics) — the agent keeps running
+        // in the tmux server, same as a user quitting wsx on a shared session.
+        s1.kill();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            crate::pty::tmux::has_session(name),
+            "agent died with the client"
+        );
+
+        // Respawn against the SAME session name: `-A` must attach to the
+        // still-running server session rather than creating a second one.
+        let s2 = spawn_session(
+            tmpdir.path(),
+            80,
+            24,
+            mode(),
+            crate::agent::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
+            None,
+            Some(name),
+        )
+        .unwrap();
+
+        // Poll: the reattached client's parser eventually receives bytes from
+        // the pre-existing agent (its heartbeat), proving it attached to the
+        // live server session instead of a fresh, silent one.
+        let mut saw_beat = false;
+        for _ in 0..50 {
+            let screen = s2.parser.lock().unwrap().screen().contents();
+            if screen.contains("beat") {
+                saw_beat = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(saw_beat, "reattached client never saw agent output");
+
+        // Exactly one tmux session named `name` exists — no duplicate was
+        // spun up by the second spawn. Scrub TMUX/TMUX_PANE like
+        // `tmux::tmux_cmd()` does, so this targets the isolated test server
+        // even if the test happens to run inside a tmux session itself.
+        let ls = std::process::Command::new(crate::pty::tmux::tmux_bin())
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .args(["ls", "-F", "#{session_name}"])
+            .output()
+            .unwrap();
+        let listing = String::from_utf8_lossy(&ls.stdout);
+        let matches = listing.lines().filter(|l| *l == name).count();
+        assert_eq!(
+            matches, 1,
+            "expected exactly one session {name:?}, got:\n{listing}"
+        );
+
+        s2.kill_backend();
+        let mut gone = false;
+        for _ in 0..50 {
+            if !crate::pty::tmux::has_session(name) {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(gone, "kill_backend left the tmux session running");
+    }
 }

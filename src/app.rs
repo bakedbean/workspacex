@@ -124,6 +124,17 @@ pub struct RemoteList {
     pub records: Vec<crate::commands::shared::SharedWorkspaceRecord>,
 }
 
+/// A resolved remote attach target: the display name of the host, its ssh
+/// destination, and the remote tmux session name to attach to. Built from a
+/// selected `RemoteRow` + its `RemoteList` when the user presses Enter on an
+/// alive row, and consumed by `attach_remote`.
+#[derive(Debug, Clone)]
+pub struct RemoteTarget {
+    pub host_name: String,
+    pub dest: String,
+    pub tmux: String,
+}
+
 /// One attachable row of the remote list: workspace context + one agent
 /// session. Multiple agent instances on the same workspace flatten into
 /// separate rows here — the shared helper both `Modal::RemoteWorkspaceList`'s
@@ -206,6 +217,57 @@ mod remote_rows_tests {
     }
 }
 
+/// Spawn `ssh -t <dest> -- tmux attach -t =<tmux>` through the PTY plumbing and
+/// enter `View::AttachedRemote`. The `Session`'s `tmux_session` is `None` on
+/// purpose: `kill()`/`Drop` sever only the local ssh client; the remote agent
+/// persists in the remote tmux server (the Phase 1 persistence contract, one
+/// hop away). The `agent` param on `spawn_command_session` is inert plumbing
+/// here — `AgentKind::Claude` is passed only to satisfy the signature.
+pub(crate) fn attach_remote(
+    app: &mut App,
+    target: RemoteTarget,
+    cols: u16,
+    rows: u16,
+) -> Result<()> {
+    let mut cmd = portable_pty::CommandBuilder::new(crate::commands::shared_hosts::ssh_bin());
+    cmd.args([
+        "-t",
+        &target.dest,
+        "--",
+        "tmux",
+        "attach",
+        "-t",
+        &format!("={}", target.tmux),
+    ]);
+    let session = crate::pty::session::spawn_command_session(
+        cmd,
+        cols,
+        rows,
+        crate::pty::session::AgentKind::Claude,
+        None,
+    )?;
+    app.remote = Some(std::sync::Arc::new(session));
+    app.remote_target = Some(target);
+    app.modal = None;
+    app.view = crate::ui::View::AttachedRemote;
+    Ok(())
+}
+
+/// Detach from the remote workspace: kill the local ssh client, clear
+/// `remote`/`remote_target`, and return to the dashboard. Only the ssh client
+/// dies — the remote agent survives in its tmux server. (On quit, `App` drop
+/// runs `Session::Drop`, which likewise kills only the client; nothing extra is
+/// needed to honor the persistence contract.) The remote *list* is left intact
+/// so a detach lands back in the same modal-less dashboard the attach came
+/// from without re-fetching.
+pub(crate) fn detach_remote(app: &mut App) {
+    if let Some(session) = app.remote.take() {
+        session.kill();
+    }
+    app.remote_target = None;
+    app.view = crate::ui::View::Dashboard;
+}
+
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
@@ -229,6 +291,14 @@ pub struct App {
     /// fetch has completed. Consumed by `Modal::RemoteWorkspaceList`
     /// rendering (Task 6).
     pub remote_list: Option<RemoteList>,
+    /// The live ssh-attach session while in `View::AttachedRemote`, else None.
+    /// The child is a local `ssh -t … tmux attach` client; its `tmux_session`
+    /// is deliberately None so `kill()`/`Drop` sever only that client, never
+    /// the remote agent (the Phase 1 persistence contract, one ssh hop away).
+    pub remote: Option<std::sync::Arc<crate::pty::session::Session>>,
+    /// The target backing `app.remote`, kept for the `AttachedRemote` header
+    /// label and the "session ended" error message. Cleared alongside `remote`.
+    pub remote_target: Option<RemoteTarget>,
     /// Monotonic counter handed out to in-flight remote-list fetch tasks.
     pub next_remote_gen: u64,
     /// Generation id of the currently in-flight remote-list fetch, if any.
@@ -469,6 +539,8 @@ impl App {
             next_archive_gen: 0,
             pending_archive_gen: None,
             remote_list: None,
+            remote: None,
+            remote_target: None,
             next_remote_gen: 0,
             pending_remote_gen: None,
             chip_rects: Vec::new(),

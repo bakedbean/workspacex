@@ -679,6 +679,53 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 app.view = crate::ui::View::Dashboard;
             }
         }
+        crate::ui::View::AttachedRemote => {
+            if let Some(session) = app.remote.as_ref() {
+                let label = app
+                    .remote_target
+                    .as_ref()
+                    .map(|t| format!("{}/{}", t.host_name, t.tmux))
+                    .unwrap_or_else(|| "remote".to_string());
+                // Remote panes carry no local attention/pinned state.
+                let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
+                let (info_area, separator_area, pane_area, chip_area, agents_area) =
+                    attached::layout_chrome(area, false);
+                attached::resize_pane(session, pane_area, false);
+                let specs = [crate::ui::attached::PaneSpec {
+                    session,
+                    label: &label,
+                    rect: pane_area,
+                    focused: true,
+                    agent: None,
+                }];
+                let out = attached::render_panes(
+                    f,
+                    &specs,
+                    &[],
+                    info_area,
+                    separator_area,
+                    chip_area,
+                    agents_area,
+                    &label,
+                    None,
+                    None,
+                    pinned,
+                    0,
+                    None,
+                    None,
+                    None,
+                    &[],
+                    None,
+                    &app.theme,
+                );
+                app.attached_pane_rects = out.pane_rects;
+                app.footer_hint_rects = out.footer_hint_rects;
+            } else {
+                // ssh client went away; bounce to dashboard on next event.
+                app.leader_pending = false;
+                app.view = crate::ui::View::Dashboard;
+            }
+        }
     }
     if let Some(m) = &app.modal {
         match m {

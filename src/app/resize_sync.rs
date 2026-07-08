@@ -98,7 +98,7 @@ pub fn projected_pane_size(cols: u16, rows: u16) -> (u16, u16) {
 pub fn visible_instances(view: &View) -> HashSet<AgentInstanceId> {
     match view {
         View::Attached(state) => state.leaves().into_iter().map(|t| t.instance).collect(),
-        View::Dashboard | View::AttachedPm => HashSet::new(),
+        View::Dashboard | View::AttachedPm | View::AttachedRemote => HashSet::new(),
     }
 }
 

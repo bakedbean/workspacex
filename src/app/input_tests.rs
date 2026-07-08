@@ -4202,6 +4202,137 @@ mod pm_state_tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_remote_spawns_ssh_and_detach_severs_client_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        // Fake ssh: prove argv shape, then stream a heartbeat like a remote attach.
+        let log = dir.path().join("ssh-args.log");
+        let fake = dir.path().join("fake-ssh.sh");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\necho \"$@\" > {}\nfor i in $(seq 1 60); do echo remote-beat; sleep 1; done\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_SSH_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+
+        crate::app::attach_remote(
+            &mut app,
+            crate::app::RemoteTarget {
+                host_name: "mini".into(),
+                dest: "eben@mini".into(),
+                tmux: "wsx-r-w".into(),
+            },
+            80,
+            24,
+        )
+        .unwrap();
+        assert!(matches!(app.view, crate::ui::View::AttachedRemote));
+        let session = app.remote.clone().unwrap();
+        // beats arrive through the PTY
+        let mut seen = false;
+        for _ in 0..50 {
+            if session
+                .parser
+                .lock()
+                .unwrap()
+                .screen()
+                .contents()
+                .contains("remote-beat")
+            {
+                seen = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(seen, "expected remote heartbeat through the PTY");
+        // argv shape: -t <dest> -- tmux attach -t =<name>
+        let args = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            args.contains("-t eben@mini -- tmux attach -t =wsx-r-w"),
+            "got: {args}"
+        );
+        assert!(
+            session.tmux_session.is_none(),
+            "remote sessions must never own a local tmux backend"
+        );
+
+        crate::app::detach_remote(&mut app);
+        assert!(app.remote.is_none() && matches!(app.view, crate::ui::View::Dashboard));
+        assert!(app.remote_target.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn key_in_attached_remote_after_ssh_exit_bounces_to_dashboard_with_error() {
+        // Fake ssh that exits immediately (e.g. stale tmux session name):
+        // pressing any key in AttachedRemote must return to the dashboard
+        // and raise an error modal naming the host/session.
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        let fake = dir.path().join("fake-ssh-exit.sh");
+        std::fs::write(&fake, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_SSH_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            crate::app::attach_remote(
+                &mut g,
+                crate::app::RemoteTarget {
+                    host_name: "mini".into(),
+                    dest: "eben@mini".into(),
+                    tmux: "wsx-r-w".into(),
+                },
+                80,
+                24,
+            )
+            .unwrap();
+            assert!(matches!(g.view, crate::ui::View::AttachedRemote));
+        }
+        // Wait for the child to actually exit so the status flips to Exited.
+        wait_until(&app, "ssh child to exit", |g| {
+            g.remote.as_ref().is_some_and(|s| {
+                matches!(
+                    *s.status.read().unwrap(),
+                    crate::pty::session::SessionStatus::Exited { .. }
+                )
+            })
+        })
+        .await;
+        let mut g = app.lock().await;
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::empty(),
+        );
+        handle_event(&mut g, &app, CtEvent::Key(key)).await.unwrap();
+        assert!(matches!(g.view, crate::ui::View::Dashboard));
+        assert!(g.remote.is_none() && g.remote_target.is_none());
+        match &g.modal {
+            Some(Modal::Error { message }) => {
+                assert!(
+                    message.contains("mini/wsx-r-w"),
+                    "error should name host/session: {message}"
+                );
+            }
+            other => panic!("expected error modal, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn esc_during_remote_list_loading_clears_pending_gen_and_stale_fetch_no_ops() {
         // Esc while RemoteListLoading is up must close the modal AND clear

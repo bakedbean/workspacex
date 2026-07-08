@@ -155,6 +155,7 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
             .focused_target()
             .and_then(|target| app.sessions.get(target.instance)),
         View::AttachedPm => app.pm.clone(),
+        View::AttachedRemote => app.remote.clone(),
         View::Dashboard
             if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
         {
@@ -1168,6 +1169,60 @@ async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) ->
     }
     Ok(())
 }
+/// Full-screen remote-attach key handler. Mirrors `handle_key_attached_pm` but
+/// with no leader menu: `Ctrl-x d` detaches (severing only the local ssh
+/// client), everything else is forwarded verbatim to the remote agent's PTY.
+/// If the ssh child has already exited (e.g. tmux printed `can't find session`
+/// for a stale name, then the client quit), any key bounces to the dashboard
+/// with an error modal instead of writing into a dead PTY.
+async fn handle_key_attached_remote(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
+    let session = match app.remote.clone() {
+        Some(s) => s,
+        None => {
+            app.leader_pending = false;
+            app.view = View::Dashboard;
+            return Ok(());
+        }
+    };
+    // Dead ssh client (stale session name, remote tmux gone, network drop):
+    // surface it and return to the dashboard on the next keypress.
+    if matches!(
+        *session.status.read().unwrap(),
+        crate::pty::session::SessionStatus::Exited { .. }
+    ) {
+        let label = app
+            .remote_target
+            .as_ref()
+            .map(|t| format!("{}/{}", t.host_name, t.tmux))
+            .unwrap_or_default();
+        app.leader_pending = false;
+        crate::app::detach_remote(app);
+        app.modal = Some(crate::ui::modal::Modal::Error {
+            message: format!("remote session ended: {label}"),
+        });
+        return Ok(());
+    }
+    if app.leader_pending {
+        app.leader_pending = false;
+        if k.code == KeyCode::Char('d') {
+            crate::app::detach_remote(app);
+            return Ok(());
+        }
+        // Any other key after the leader is a no-op (no remote leader menu).
+        return Ok(());
+    }
+    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
+        app.leader_pending = true;
+        app.leader_selected = 0;
+        return Ok(());
+    }
+    let bytes = encode_key(k);
+    if !bytes.is_empty() {
+        session.scroll_to_live();
+        let _ = session.writer.send(bytes).await;
+    }
+    Ok(())
+}
 /// Resolve the worktree for `workspace_id`, build a per-launch log path under the
 /// wsx log dir, and spawn `command` there as a background process. Returns a
 /// one-line notice (success with the log path, or an error) for the modal.
@@ -1872,26 +1927,40 @@ async fn handle_key_modal(
                     app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
                 }
                 KeyCode::Enter => {
-                    let target_row = app
-                        .remote_list
-                        .as_ref()
-                        .map(crate::app::remote_rows)
-                        .and_then(|rows| {
-                            rows.get(selected)
-                                .map(|r| (r.alive, r.tmux_session.is_some()))
-                        });
-                    let new_notice = match target_row {
-                        // Task 7 delivers `attach_remote`; this placeholder
-                        // ships for exactly one commit (this one) and Task 7
-                        // replaces it immediately.
-                        Some((true, true)) => Some("attach lands in the next commit".to_string()),
-                        Some(_) => Some("no live session to attach to".to_string()),
-                        None => notice,
-                    };
-                    app.modal = Some(Modal::RemoteWorkspaceList {
-                        selected,
-                        notice: new_notice,
+                    // Resolve the selected row's tmux session (only alive rows
+                    // carry one) and the host from `remote_list`, then attach
+                    // over ssh. The remote list is left intact so a later
+                    // detach lands back on the same modal-less dashboard.
+                    let target = app.remote_list.as_ref().and_then(|list| {
+                        let rows = crate::app::remote_rows(list);
+                        rows.get(selected).and_then(|r| {
+                            r.alive.then_some(r.tmux_session).flatten().map(|tmux| {
+                                crate::app::RemoteTarget {
+                                    host_name: list.host_name.clone(),
+                                    dest: list.dest.clone(),
+                                    tmux: tmux.to_string(),
+                                }
+                            })
+                        })
                     });
+                    match target {
+                        Some(target) => {
+                            if let Err(e) = crate::app::attach_remote(app, target, 80, 24) {
+                                app.modal = Some(Modal::RemoteWorkspaceList {
+                                    selected,
+                                    notice: Some(format!("attach failed: {e}")),
+                                });
+                            }
+                            // On success `attach_remote` set the view + cleared
+                            // the modal; nothing more to do here.
+                        }
+                        None => {
+                            app.modal = Some(Modal::RemoteWorkspaceList {
+                                selected,
+                                notice: Some("no live session to attach to".to_string()),
+                            });
+                        }
+                    }
                 }
                 KeyCode::Char('r') => {
                     // Re-run Task 5's Enter-in-picker flow for the same host:
@@ -2169,6 +2238,11 @@ async fn route_footer_key(app: &mut App, k: crossterm::event::KeyEvent) {
                 tracing::warn!(error = %e, "footer-hint pm dispatch failed");
             }
         }
+        View::AttachedRemote => {
+            if let Err(e) = handle_key_attached_remote(app, k).await {
+                tracing::warn!(error = %e, "footer-hint remote dispatch failed");
+            }
+        }
     }
 }
 
@@ -2224,7 +2298,9 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
     ) && matches!(
         app.view,
-        crate::ui::View::Attached(_) | crate::ui::View::AttachedPm
+        crate::ui::View::Attached(_)
+            | crate::ui::View::AttachedPm
+            | crate::ui::View::AttachedRemote
     ) && !m.modifiers.contains(KeyModifiers::SHIFT)
     {
         if let Some((session, rect)) = pane_under_cursor(app, m.column, m.row) {
@@ -2373,6 +2449,7 @@ async fn dispatch_key(
                 handle_key_attached(app, id, k).await?
             }
             View::AttachedPm => handle_key_attached_pm(app, k).await?,
+            View::AttachedRemote => handle_key_attached_remote(app, k).await?,
         }
     }
     Ok(())

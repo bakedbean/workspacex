@@ -331,6 +331,23 @@ pub struct ArchiveOpts {
     pub force_branch_delete: bool,
 }
 
+/// Kill the tmux sessions backing a shared workspace's agent instances.
+/// Direct workspaces are a no-op. Instances without a session_ref never
+/// spawned in tmux; nothing to kill. Best-effort: a dead server or already
+/// -killed session must not block archiving.
+pub(crate) fn kill_shared_tmux_sessions(store: &Store, ws: &Workspace) {
+    if !ws.shared {
+        return;
+    }
+    if let Ok(instances) = store.workspace_agents(ws.id) {
+        for inst in instances {
+            if let Some(name) = &inst.session_ref {
+                crate::pty::tmux::kill_session(name);
+            }
+        }
+    }
+}
+
 pub async fn archive<F: FnMut(SetupLine) + Send>(
     store: &Store,
     repo: &Repo,
@@ -350,6 +367,7 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
         git::remove_worktree(&repo.path, &ws.worktree_path).await?;
     }
     let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
+    kill_shared_tmux_sessions(store, ws);
     store.delete_workspace(ws.id)?;
     if crate::agent::mcp::enabled(store)
         && let Err(e) = crate::agent::mcp::remove_worktree_entry(&ws.worktree_path)
@@ -410,6 +428,7 @@ pub async fn archive_with_app(
     // --- Phase 4 (short, locked): delete the store row + clean up MCP. ---
     {
         let g = app.lock().await;
+        kill_shared_tmux_sessions(&g.store, &ws);
         g.store.delete_workspace(ws.id)?;
         if crate::agent::mcp::enabled(&g.store)
             && let Err(e) = crate::agent::mcp::remove_worktree_entry(&ws.worktree_path)
@@ -1393,6 +1412,115 @@ mod tests {
         assert_eq!(
             wt_head, prev_sha,
             "workspace should be at staging's commit, not main HEAD"
+        );
+    }
+
+    /// Archiving a shared workspace must kill the tmux session backing its
+    /// primary agent instance, or the session leaks in tmux forever. Fakes
+    /// tmux via `WSX_TMUX_BIN` pointing at a recorder script so no real
+    /// tmux server is needed.
+    #[tokio::test]
+    async fn archive_kills_tmux_sessions_of_shared_workspace() {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+
+        let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
+        kill_shared_tmux_sessions(&store, &ws);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("kill-session -t =wsx-r-w"),
+            "expected a kill-session call for wsx-r-w, got: {calls:?}"
+        );
+    }
+
+    /// A direct (non-shared) workspace never spawned in tmux, so archiving
+    /// it must not issue any tmux calls at all.
+    #[tokio::test]
+    async fn archive_does_not_touch_tmux_for_direct_workspace() {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+
+        let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
+        kill_shared_tmux_sessions(&store, &ws);
+
+        assert!(
+            !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),
+            "direct workspace archive must not call tmux"
         );
     }
 }

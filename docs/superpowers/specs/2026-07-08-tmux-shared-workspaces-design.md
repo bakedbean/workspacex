@@ -125,7 +125,9 @@ branch, agent kind(s), tmux session name(s), and per-session liveness from
 `tmux has-session`. The contract is additive JSON — readers ignore unknown
 fields — so machines on different wsx versions degrade gracefully.
 
-**Browsing.** A "shared hosts" picker in the TUI lists `shared_hosts` entries.
+**Browsing.** `H` on the dashboard (unbound today; mnemonic *hosts*, pairing
+with `S` for shared-create) opens a "shared hosts" picker listing
+`shared_hosts` entries.
 Selecting a host runs `ssh <dest> sh -lc 'wsx shared list --json'` on a
 background thread (login shell so PATH resolves wsx). Results render with the
 same visual language as local workspaces plus a host badge. The list is

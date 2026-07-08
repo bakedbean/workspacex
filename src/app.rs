@@ -217,22 +217,30 @@ mod remote_rows_tests {
     }
 }
 
-/// Spawn `ssh -t <dest> -- "tmux attach -t '=<tmux>'"` through the PTY plumbing
-/// and enter `View::AttachedRemote`. The `Session`'s `tmux_session` is `None` on
-/// purpose: `kill()`/`Drop` sever only the local ssh client; the remote agent
-/// persists in the remote tmux server (the Phase 1 persistence contract, one
-/// hop away). The `agent` param on `spawn_command_session` is inert plumbing
-/// here — `AgentKind::Claude` is passed only to satisfy the signature.
+/// Spawn `ssh -t <dest> -- "sh -lc \"tmux attach -t '=<tmux>'\""` through the
+/// PTY plumbing and enter `View::AttachedRemote`. The `Session`'s
+/// `tmux_session` is `None` on purpose: `kill()`/`Drop` sever only the local
+/// ssh client; the remote agent persists in the remote tmux server (the
+/// Phase 1 persistence contract, one hop away). The `agent` param on
+/// `spawn_command_session` is inert plumbing here — `AgentKind::Claude` is
+/// passed only to satisfy the signature.
 ///
-/// The remote command is ONE pre-quoted argument with the tmux target in
-/// single quotes: ssh space-joins remote argv and hands the string to the
-/// remote LOGIN shell, and zsh (macOS default) expands an unquoted `=word`
-/// into "path of the command `word`" — which made real attaches die with
-/// `zsh:1: wsx-<name> not found`. Session names are sanitized to
-/// `[A-Za-z0-9_-]` (see `pty::tmux::session_name`), so embedding in single
-/// quotes is safe — and that invariant is enforced here at the boundary,
-/// because `target.tmux` arrives from the REMOTE host's JSON, not from our
-/// own producer.
+/// Remote-command shape, learned the hard way on real hosts:
+/// - ONE pre-quoted ssh argument: ssh space-joins remote argv and hands the
+///   string to a shell on the host.
+/// - Routed through `sh -l`, matching the list fetch: sshd runs the user's
+///   default shell in non-login mode (`zsh -c` on macOS), which reads only
+///   ~/.zshenv —
+///   homebrew's tmux typically isn't on that PATH (`zsh:1: command not
+///   found: tmux`). `sh -l` reads ~/.profile, making "wsx and tmux on the
+///   host's `sh -l` PATH" the single documented requirement for both legs.
+/// - The tmux target stays single-quoted: zsh expands an unquoted `=word`
+///   into "path of the command `word`" (`zsh:1: wsx-<name> not found`).
+///
+/// Session names are sanitized to `[A-Za-z0-9_-]` (see
+/// `pty::tmux::session_name`), so the nested quoting is safe — and that
+/// invariant is enforced here at the boundary, because `target.tmux` arrives
+/// from the REMOTE host's JSON, not from our own producer.
 pub(crate) fn attach_remote(
     app: &mut App,
     target: RemoteTarget,
@@ -257,7 +265,7 @@ pub(crate) fn attach_remote(
         "-t",
         &target.dest,
         "--",
-        &format!("tmux attach -t '={}'", target.tmux),
+        &format!("sh -lc \"tmux attach -t '={}'\"", target.tmux),
     ]);
     let session = crate::pty::session::spawn_command_session(
         cmd,

@@ -67,7 +67,7 @@ repo/workspace  branch  label  ●|✗
 
 The marker (`●` for alive, `✗` for dead/stale) indicates whether the remote tmux session still exists. Navigate with `j`/`k` (or `↑`/`↓`), select a live row with `Enter` to attach, `r` to re-fetch the list, and `Esc` to close. The list is ephemeral — nothing is written to the local database, so there's no sync or cache-invalidation problem.
 
-Attaching spawns `ssh -t <dest> -- "tmux attach -t '=<name>'"` as a PTY session — the remote command is one pre-quoted argument, and the `=` target is single-quoted so the remote login shell (zsh expands unquoted `=word` into a command path) passes it to tmux literally. You interact with the remote agent as if it were local; the exact-match `=` prefix ensures the correct agent is targeted, even if multiple agents sanitize to similar names.
+Attaching spawns `ssh -t <dest> -- "sh -lc \"tmux attach -t '=<name>'\""` as a PTY session — the remote command is one pre-quoted argument routed through a login `sh` (the same PATH rules as the list fetch; sshd otherwise hands the command to a non-login zsh that reads only `~/.zshenv`, where homebrew's tmux often isn't on PATH), and the `=` target is single-quoted so zsh can't expand it as a command path. You interact with the remote agent as if it were local; the exact-match `=` prefix ensures the correct agent is targeted, even if multiple agents sanitize to similar names.
 
 **Detaching and persistence:**
 
@@ -80,7 +80,7 @@ Fetching fails if the host is unreachable, ssh authentication fails, wsx is miss
 **Requirements:**
 
 - SSH key access to the remote host (password prompts are not supported for the background list fetch — use key-based auth via `ssh-agent` or key files; the attach itself runs in a real terminal but key auth is strongly recommended for a smooth flow).
-- wsx installed on the host and reachable in the login shell's PATH (e.g., `ssh <host> "sh -lc 'which wsx'"` should succeed — the outer double quotes keep `sh -lc '…'` a single argument, so ssh's space-join back into the host login shell preserves the inner quoting).
+- wsx **and tmux** installed on the host and reachable via a login `sh`'s PATH (e.g., `ssh <host> "sh -lc 'which wsx tmux'"` should print both — the outer double quotes keep `sh -lc '…'` a single argument, so ssh's space-join back into the host shell preserves the inner quoting). macOS gotcha: PATH additions that live only in zsh config (`~/.zshrc`/`~/.zprofile`, including homebrew's `brew shellenv`) are invisible to `sh -l` — add them to `~/.profile` too.
 - Workspaces created as shared on the host (either via `wsx workspace create <repo> --shared` or by converting an existing one with `T`).
 - A local `ssh` binary (no local tmux needed for remote attach).
 

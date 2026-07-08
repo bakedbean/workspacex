@@ -4257,15 +4257,18 @@ mod pm_state_tests {
         assert!(seen, "expected remote heartbeat through the PTY");
         // argv shape: -t <dest> -- <ONE pre-quoted remote command>. The remote
         // command must be a single ssh argv element (it still contains
-        // multiple shell words) with the tmux target single-quoted: ssh
-        // space-joins remote argv and hands the string to the remote LOGIN
-        // shell, and zsh (macOS default) expands an unquoted `=word` into
-        // "path of command `word`" — which broke real attaches with
-        // "zsh:1: wsx-<...> not found". The inner quotes suppress that.
+        // multiple shell words), routed through `sh -l` like the list fetch:
+        // sshd hands the joined string to the user's default shell in
+        // non-login mode (`zsh -c`), which reads only ~/.zshenv — on stock
+        // macOS, homebrew's
+        // tmux isn't on that PATH ("zsh:1: command not found: tmux" on a real
+        // host). `sh -l` reads ~/.profile, the one documented PATH
+        // requirement shared with the fetch. The tmux =target stays
+        // single-quoted (zsh =word expansion; see #226).
         let args = std::fs::read_to_string(&log).unwrap();
         assert!(
-            args.contains("-t eben@mini -- tmux attach -t '=wsx-r-w'"),
-            "remote command must single-quote the =target: {args}"
+            args.contains("-t eben@mini -- sh -lc \"tmux attach -t '=wsx-r-w'\""),
+            "remote command must run tmux via a login shell with the =target quoted: {args}"
         );
         assert!(
             !args.contains("-t =wsx-r-w"),

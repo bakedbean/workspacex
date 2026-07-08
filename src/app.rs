@@ -217,27 +217,47 @@ mod remote_rows_tests {
     }
 }
 
-/// Spawn `ssh -t <dest> -- tmux attach -t =<tmux>` through the PTY plumbing and
-/// enter `View::AttachedRemote`. The `Session`'s `tmux_session` is `None` on
+/// Spawn `ssh -t <dest> -- "tmux attach -t '=<tmux>'"` through the PTY plumbing
+/// and enter `View::AttachedRemote`. The `Session`'s `tmux_session` is `None` on
 /// purpose: `kill()`/`Drop` sever only the local ssh client; the remote agent
 /// persists in the remote tmux server (the Phase 1 persistence contract, one
 /// hop away). The `agent` param on `spawn_command_session` is inert plumbing
 /// here — `AgentKind::Claude` is passed only to satisfy the signature.
+///
+/// The remote command is ONE pre-quoted argument with the tmux target in
+/// single quotes: ssh space-joins remote argv and hands the string to the
+/// remote LOGIN shell, and zsh (macOS default) expands an unquoted `=word`
+/// into "path of the command `word`" — which made real attaches die with
+/// `zsh:1: wsx-<name> not found`. Session names are sanitized to
+/// `[A-Za-z0-9_-]` (see `pty::tmux::session_name`), so embedding in single
+/// quotes is safe — and that invariant is enforced here at the boundary,
+/// because `target.tmux` arrives from the REMOTE host's JSON, not from our
+/// own producer.
 pub(crate) fn attach_remote(
     app: &mut App,
     target: RemoteTarget,
     cols: u16,
     rows: u16,
 ) -> Result<()> {
+    // The name is interpolated into a shell-parsed string below; reject
+    // anything outside the sanitized charset rather than trusting the wire.
+    if target.tmux.is_empty()
+        || !target
+            .tmux
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(crate::error::Error::UserInput(format!(
+            "invalid remote tmux session name: {:?}",
+            target.tmux
+        )));
+    }
     let mut cmd = portable_pty::CommandBuilder::new(crate::commands::shared_hosts::ssh_bin());
     cmd.args([
         "-t",
         &target.dest,
         "--",
-        "tmux",
-        "attach",
-        "-t",
-        &format!("={}", target.tmux),
+        &format!("tmux attach -t '={}'", target.tmux),
     ]);
     let session = crate::pty::session::spawn_command_session(
         cmd,

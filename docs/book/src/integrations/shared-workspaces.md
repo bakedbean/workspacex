@@ -67,7 +67,7 @@ repo/workspace  branch  label  ●|✗
 
 The marker (`●` for alive, `✗` for dead/stale) indicates whether the remote tmux session still exists. Navigate with `j`/`k` (or `↑`/`↓`), select a live row with `Enter` to attach, `r` to re-fetch the list, and `Esc` to close. The list is ephemeral — nothing is written to the local database, so there's no sync or cache-invalidation problem.
 
-Attaching spawns `ssh -t <dest> -- tmux attach -t =<name>` as a PTY session. You interact with the remote agent as if it were local; the tmux session ID (prefixed with `=`) ensures the correct agent is targeted, even if multiple agents sanitize to similar names.
+Attaching spawns `ssh -t <dest> -- "tmux attach -t '=<name>'"` as a PTY session — the remote command is one pre-quoted argument, and the `=` target is single-quoted so the remote login shell (zsh expands unquoted `=word` into a command path) passes it to tmux literally. You interact with the remote agent as if it were local; the exact-match `=` prefix ensures the correct agent is targeted, even if multiple agents sanitize to similar names.
 
 **Detaching and persistence:**
 

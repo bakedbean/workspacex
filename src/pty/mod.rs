@@ -5,6 +5,7 @@ mod command;
 pub mod render;
 pub mod session;
 mod session_detect;
+pub mod tmux;
 mod workspace_prep;
 pub use agent_kind::AgentKind;
 pub use session::{Session, SessionManager, SessionStatus};

@@ -438,7 +438,8 @@ pub fn spawn_session(
         child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
         child_cmd.env("WSX_AGENT_INSTANCE_ID", id.instance_id.to_string());
     }
-    spawn_command_session(child_cmd, cols, rows, agent, tmux)
+    let reportable = resolved_binary(agent);
+    spawn_command_session(child_cmd, cols, rows, agent, reportable, tmux)
 }
 
 /// Agent-agnostic spawn path: opens a PTY, optionally wraps the command in
@@ -447,16 +448,23 @@ pub fn spawn_session(
 /// here; other callers (e.g. remote `ssh -t … tmux attach`) can pass an
 /// arbitrary [`CommandBuilder`] directly.
 ///
-/// `agent` is inert plumbing: it only tags the returned `Session` (driving
-/// render/paste quirks via [`submit_writes`]) and picks the binary-name env var
-/// reported on a binary-not-found spawn failure. Remote sessions never paste
+/// `agent` is inert plumbing: it only tags the returned `Session`, driving
+/// render/paste quirks via [`submit_writes`]. Remote sessions never paste
 /// through `submit_writes`, so such callers pass a benign default
 /// (`AgentKind::Claude`).
+///
+/// `reportable_binary` is the binary name surfaced in an
+/// [`Error::AgentBinaryMissing`] when the spawn fails because the command is
+/// not found. It is decoupled from `agent` on purpose: `spawn_session` passes
+/// the resolved agent binary, while the remote attach passes `ssh` (the binary
+/// it actually execs), so a missing *local* `ssh` isn't misreported as the
+/// agent it would eventually reach.
 pub fn spawn_command_session(
     child_cmd: CommandBuilder,
     cols: u16,
     rows: u16,
     agent: AgentKind,
+    reportable_binary: String,
     tmux: Option<&str>,
 ) -> Result<Session> {
     let pty_system = native_pty_system();
@@ -481,7 +489,7 @@ pub fn spawn_command_session(
     };
     let mut child = pair.slave.spawn_command(child_cmd).map_err(|e| {
         if is_binary_not_found(&e) {
-            Error::AgentBinaryMissing(resolved_binary(agent))
+            Error::AgentBinaryMissing(reportable_binary)
         } else {
             Error::Pty(format!("spawn: {e}"))
         }
@@ -718,7 +726,9 @@ mod tests {
         let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
         cmd.args(["-c", "printf remote-hello; sleep 5"]);
         cmd.cwd("/tmp");
-        let session = spawn_command_session(cmd, 80, 24, AgentKind::Claude, None).unwrap();
+        let session =
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+                .unwrap();
         let mut seen = false;
         for _ in 0..50 {
             if session
@@ -1350,6 +1360,28 @@ mod tests {
                 assert_eq!(binary, "/nonexistent/wsx-test-bin-does-not-exist");
             }
             other => panic!("expected AgentBinaryMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spawn_command_session_reports_the_passed_binary_name_on_missing_command() {
+        // `attach_remote` runs ssh via this path and passes `ssh_bin()`, so a
+        // missing *local* ssh must report "ssh", not the agent it would reach.
+        // Drive that decoupling directly: a nonexistent command with an explicit
+        // reportable name must surface that exact name in AgentBinaryMissing.
+        let cmd = CommandBuilder::new("/no/such/dir/ssh-test-bin-missing");
+        let result =
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "ssh-test-bin".into(), None);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("spawn should fail when the command is missing"),
+        };
+        match err {
+            Error::AgentBinaryMissing(binary) => assert_eq!(
+                binary, "ssh-test-bin",
+                "must report the reportable_binary, not the AgentKind default"
+            ),
+            other => panic!("expected AgentBinaryMissing(\"ssh-test-bin\"), got {other:?}"),
         }
     }
 

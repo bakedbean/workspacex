@@ -244,6 +244,8 @@ pub(crate) fn attach_remote(
         cols,
         rows,
         crate::pty::session::AgentKind::Claude,
+        // Report `ssh` (not the agent) if the local ssh binary is missing.
+        crate::commands::shared_hosts::ssh_bin(),
         None,
     )?;
     app.remote = Some(std::sync::Arc::new(session));

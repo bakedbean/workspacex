@@ -117,6 +117,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             Some(SelectionTarget::Workspace(id)) if id == ws.id),
                         yolo: ws.yolo,
                         setup_failed,
+                        shared: ws.shared,
                         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                         nerd_fonts,
                         workspace_id: ws.id,

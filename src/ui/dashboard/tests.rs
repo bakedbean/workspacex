@@ -59,6 +59,7 @@ fn build_inputs<'a>(
                     selected: false,
                     yolo: false,
                     setup_failed: false,
+                    shared: false,
                     lifecycle: None,
                     nerd_fonts: false,
                     workspace_id: id,

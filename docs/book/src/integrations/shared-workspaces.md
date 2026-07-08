@@ -25,6 +25,10 @@ Alternatively, press `T` (capital) on a selected workspace row to open a confirm
 
 Each agent instance in a shared workspace gets a deterministic tmux session name: `wsx-<repo>-<workspace>` for the primary agent, or `wsx-<repo>-<workspace>-<agent><ordinal>` for additional instances (e.g. `wsx-myrepo-fix-bug-codex2`). Characters outside `[A-Za-z0-9_-]` in the repo/workspace name are replaced with `-`, since tmux rejects `.` and `:` in session names. If two workspaces sanitize to the same name (e.g. repo `a` + workspace `b-c` vs repo `a-b` + workspace `c`), wsx appends the workspace id to disambiguate, so `-A` never attaches to the wrong agent. The name is derived once, stored in `session_ref`, and reused verbatim afterwards — it is never re-derived, so renaming a workspace does not orphan its running agent.
 
+**Dashboard indicator:**
+
+Shared workspaces are marked on the dashboard with a badge just left of the branch name — the tmux logo when nerd fonts are enabled, a hollow `◇` otherwise (the filled `◆` is the *detached* status glyph; same vocabulary). Direct workspaces show no badge.
+
 **The `◆ detached` status:**
 
 When wsx starts up (or reconciles state), a shared workspace whose tmux session is confirmed alive on the server but has no client attached in the current wsx process shows `◆ detached` on the dashboard. This is the normal state right after a wsx restart, before you've attached to anything — the agent kept running the whole time. Attaching (`Enter` on the row) reattaches wsx's client to the live session; the agent and its history are exactly where you left them.

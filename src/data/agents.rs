@@ -161,6 +161,32 @@ impl Store {
         Ok(())
     }
 
+    /// Clear an instance's tmux `session_ref` back to NULL. Called when a
+    /// workspace is unshared via the TUI: after the direct respawn (or after
+    /// killing a detached-but-alive tmux session), the stored name no longer
+    /// addresses anything, so it must not linger and be reused.
+    pub fn clear_instance_session_ref(&self, id: AgentInstanceId) -> Result<()> {
+        self.conn().execute(
+            "UPDATE workspace_agents SET session_ref = NULL WHERE id = ?1",
+            [id.0],
+        )?;
+        Ok(())
+    }
+
+    /// Whether any *other* instance already claims `name` as its `session_ref`.
+    /// Used by the tmux-name derivation to disambiguate first-spawn collisions:
+    /// distinct workspaces can sanitize to the same base name (repo `a` + ws
+    /// `b-c` vs repo `a-b` + ws `c`), and without this check `tmux new-session
+    /// -A` would silently attach to the wrong agent/worktree.
+    pub fn session_ref_in_use(&self, name: &str, exclude: AgentInstanceId) -> Result<bool> {
+        let n: i64 = self.conn().query_row(
+            "SELECT COUNT(*) FROM workspace_agents WHERE session_ref = ?1 AND id != ?2",
+            rusqlite::params![name, exclude.0],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// Resolve a label like "claude" or "claude#2" to an instance id.
     pub fn resolve_instance_label(
         &self,
@@ -317,6 +343,42 @@ mod store_tests {
             .find(|i| i.id == added.id)
             .unwrap();
         assert_eq!(reloaded.session_ref.as_deref(), Some("sess-123"));
+    }
+
+    #[test]
+    fn clear_session_ref_resets_to_null() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let added = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        store.set_instance_session_ref(added.id, "sess-9").unwrap();
+        store.clear_instance_session_ref(added.id).unwrap();
+        let reloaded = store
+            .workspace_agents(ws)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.id == added.id)
+            .unwrap();
+        assert_eq!(reloaded.session_ref, None);
+        // Clearing a never-set / unknown id is a no-op, not an error.
+        store
+            .clear_instance_session_ref(AgentInstanceId(9999))
+            .unwrap();
+    }
+
+    #[test]
+    fn session_ref_in_use_detects_other_claimants_and_excludes_self() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let a = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let b = store.add_workspace_agent(ws, AgentKind::Claude).unwrap();
+        store.set_instance_session_ref(a.id, "wsx-r-w").unwrap();
+        // `b` derives the same name: `a` already owns it.
+        assert!(store.session_ref_in_use("wsx-r-w", b.id).unwrap());
+        // Excluding the owner itself reports "free" (so a re-spawn of `a`
+        // sees its own name as available, not a collision).
+        assert!(!store.session_ref_in_use("wsx-r-w", a.id).unwrap());
+        // A name nobody claims is free.
+        assert!(!store.session_ref_in_use("wsx-r-other", b.id).unwrap());
     }
 
     #[test]

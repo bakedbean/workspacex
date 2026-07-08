@@ -1259,9 +1259,20 @@ pub(crate) fn build_spawn_info(
 }
 
 /// The tmux session name for an instance of a *shared* workspace, or None
-/// for direct workspaces. Also the single place the name is derived; it is
-/// persisted to workspace_agents.session_ref at spawn so every later
-/// consumer (kill, archive, `wsx shared list`) reads the stored value.
+/// for direct workspaces.
+///
+/// `session_ref` is the source of truth for lookup/kill: once an instance has
+/// a stored name, that name is returned verbatim and NEVER re-derived. This
+/// matters because workspaces are renamed routinely (auto-rename), and a
+/// re-derived name would no longer match the live tmux session — `-A` would
+/// spin up a SECOND session and orphan the original agent forever.
+///
+/// A name is derived (and persisted after a successful spawn by the caller)
+/// only when `session_ref` is None. At derivation time, if another instance
+/// already claims the derived name (a sanitization collision — see
+/// `Store::session_ref_in_use`), the workspace id is appended so `-A` can't
+/// attach to the wrong agent. Combined with the stored-ref reuse above, the
+/// disambiguated name is then stable for the life of the instance.
 pub(crate) fn tmux_name_for(
     app: &App,
     ws_id: crate::data::store::WorkspaceId,
@@ -1271,14 +1282,23 @@ pub(crate) fn tmux_name_for(
     if !ws.shared {
         return None;
     }
+    // Stored name wins: never re-derive after creation.
+    if let Some(existing) = &instance.session_ref {
+        return Some(existing.clone());
+    }
     let repo = app.repos.iter().find(|r| r.id == *rid)?;
-    Some(crate::pty::tmux::session_name(
+    let derived = crate::pty::tmux::session_name(
         &repo.name,
         &ws.name,
         instance.agent,
         instance.ordinal,
         instance.is_primary,
-    ))
+    );
+    // Disambiguate a first-spawn collision with another instance's stored ref.
+    match app.store.session_ref_in_use(&derived, instance.id) {
+        Ok(true) => Some(format!("{derived}-{}", ws_id.0)),
+        _ => Some(derived),
+    }
 }
 
 /// Build spawn parameters for an *added* (non-primary) instance. Added agents

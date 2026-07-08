@@ -3277,6 +3277,141 @@ mod pm_state_tests {
         s.kill_backend();
     }
 
+    /// C1 regression: `session_ref` is the source of truth. After a workspace
+    /// is renamed, a fresh spawn must reuse the OLD stored tmux name rather
+    /// than re-deriving from the current name — otherwise `-A` would create a
+    /// second session and orphan the original agent. Mirrors the
+    /// `shared_workspace_attach_records_tmux_session_ref` tmux isolation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_spawn_reuses_stored_session_ref_after_rename() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        if !crate::pty::tmux::is_available() {
+            eprintln!("tmux not installed; skipping");
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
+        let script = tmpdir.path().join("fake-agent.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_CLAUDE_BIN", script.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "new-name",
+                branch: "r/new-name",
+                worktree_path: tmpdir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        // Seed the primary with a session_ref from an OLD name (pre-rename).
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-old-name")
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        attach_workspace(&mut app, ws_id).unwrap();
+        // The spawned session must use the OLD stored name, NOT "wsx-r-new-name".
+        let s = app.sessions.get(primary.id).unwrap();
+        assert_eq!(
+            s.tmux_session.as_deref(),
+            Some("wsx-r-old-name"),
+            "spawn re-derived the name from the renamed workspace instead of \
+             reusing the stored session_ref"
+        );
+        // The stored ref is unchanged.
+        let reloaded = app.store.workspace_agents(ws_id).unwrap();
+        assert_eq!(reloaded[0].session_ref.as_deref(), Some("wsx-r-old-name"));
+        s.kill_backend();
+    }
+
+    /// I3: two shared workspaces whose names sanitize to the same tmux base
+    /// name must not collide. When the second instance derives a name already
+    /// claimed by the first's stored `session_ref`, `tmux_name_for` appends the
+    /// workspace id. No tmux server needed — this is pure name derivation.
+    #[test]
+    fn tmux_name_for_disambiguates_sanitization_collision() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        // repo `a` + ws `b-c`  → wsx-a-b-c
+        // repo `a-b` + ws `c`  → wsx-a-b-c  (collision)
+        let repo1 = store
+            .add_repo(std::path::Path::new("/tmp/a"), "a", "")
+            .unwrap();
+        let repo2 = store
+            .add_repo(std::path::Path::new("/tmp/a-b"), "a-b", "")
+            .unwrap();
+        let ws1 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo1,
+                name: "b-c",
+                branch: "a/b-c",
+                worktree_path: std::path::Path::new("/tmp/a/b-c"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws1, WorkspaceState::Ready)
+            .unwrap();
+        let p1 = store
+            .add_primary_agent(ws1, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        // ws1 already occupies the colliding base name.
+        store.set_instance_session_ref(p1.id, "wsx-a-b-c").unwrap();
+
+        let ws2 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo2,
+                name: "c",
+                branch: "a-b/c",
+                worktree_path: std::path::Path::new("/tmp/a-b/c"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws2, WorkspaceState::Ready)
+            .unwrap();
+        let p2 = store
+            .add_primary_agent(ws2, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let inst2 = app.store.workspace_agents_by_id(p2.id).unwrap().unwrap();
+        let name = crate::app::tmux_name_for(&app, ws2, &inst2).unwrap();
+        assert_eq!(
+            name,
+            format!("wsx-a-b-c-{}", ws2.0),
+            "collision with ws1's stored name should append the workspace id"
+        );
+
+        // ws1 (which owns the base name) still derives the bare name.
+        let inst1 = app.store.workspace_agents_by_id(p1.id).unwrap().unwrap();
+        assert_eq!(
+            crate::app::tmux_name_for(&app, ws1, &inst1).unwrap(),
+            "wsx-a-b-c",
+            "the instance that owns the stored ref keeps the bare name"
+        );
+    }
+
     /// After a wsx restart, a shared workspace's tmux session can outlive
     /// the wsx client that spawned it — no `Session` in `app.sessions`, but
     /// the server-side session is still alive. `classify_status` should

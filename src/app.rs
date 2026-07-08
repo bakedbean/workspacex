@@ -1192,6 +1192,29 @@ pub(crate) fn build_spawn_info(
     Some((ws_id, worktree, mode, repo_path, agent))
 }
 
+/// The tmux session name for an instance of a *shared* workspace, or None
+/// for direct workspaces. Also the single place the name is derived; it is
+/// persisted to workspace_agents.session_ref at spawn so every later
+/// consumer (kill, archive, `wsx shared list`) reads the stored value.
+pub(crate) fn tmux_name_for(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+    instance: &crate::data::agents::AgentInstance,
+) -> Option<String> {
+    let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
+    if !ws.shared {
+        return None;
+    }
+    let repo = app.repos.iter().find(|r| r.id == *rid)?;
+    Some(crate::pty::tmux::session_name(
+        &repo.name,
+        &ws.name,
+        instance.agent,
+        instance.ordinal,
+        instance.is_primary,
+    ))
+}
+
 /// Build spawn parameters for an *added* (non-primary) instance. Added agents
 /// always spawn `Fresh` with an injected handoff note so they re-orient from
 /// the shared worktree + git diff (no session resume — see Task 8 scope).
@@ -1340,11 +1363,29 @@ pub(crate) fn ensure_workspace_session(
         // Resolve the primary agent instance for this workspace, defensively
         // seeding one for any row that somehow lacks a primary instance.
         let inst = resolve_primary_instance(app, id)?;
-        match app
-            .sessions
-            .spawn(inst, id, &path, 80, 24, mode, remote, agent, None)
-        {
-            Ok(_) => {}
+        let instance = app
+            .store
+            .workspace_agents_by_id(inst)?
+            .ok_or_else(|| crate::error::Error::Store(rusqlite::Error::QueryReturnedNoRows))?;
+        let tmux = tmux_name_for(app, id, &instance);
+        match app.sessions.spawn(
+            inst,
+            id,
+            &path,
+            80,
+            24,
+            mode,
+            remote,
+            agent,
+            tmux.as_deref(),
+        ) {
+            Ok(_) => {
+                if let Some(name) = &tmux {
+                    if let Err(e) = app.store.set_instance_session_ref(inst, name) {
+                        tracing::warn!(error = %e, "failed to persist tmux session_ref");
+                    }
+                }
+            }
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
                 app.modal = Some(crate::ui::modal::Modal::AgentMissing {
                     ws_id,
@@ -1391,6 +1432,7 @@ pub(crate) fn ensure_instance_session(
     if let Some((path, mode, repo_path)) = build_added_spawn_info(app, &instance) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
+        let tmux = tmux_name_for(app, ws_id, &instance);
         match app.sessions.spawn(
             inst,
             ws_id,
@@ -1400,9 +1442,15 @@ pub(crate) fn ensure_instance_session(
             mode,
             remote,
             instance.agent,
-            None,
+            tmux.as_deref(),
         ) {
-            Ok(_) => {}
+            Ok(_) => {
+                if let Some(name) = &tmux {
+                    if let Err(e) = app.store.set_instance_session_ref(inst, name) {
+                        tracing::warn!(error = %e, "failed to persist tmux session_ref");
+                    }
+                }
+            }
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
                 if surface_missing {
                     app.modal = Some(crate::ui::modal::Modal::AgentMissing {

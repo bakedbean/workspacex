@@ -3224,6 +3224,59 @@ mod pm_state_tests {
         }
     }
 
+    /// Shared workspaces spawn their primary instance inside a real tmux
+    /// server and persist the derived session name to `session_ref`, so
+    /// later consumers (kill, archive, `wsx shared list`) can reuse it
+    /// without re-deriving. Skips when tmux is absent; isolates via
+    /// TMUX_TMPDIR so the user's own tmux server is untouched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_workspace_attach_records_tmux_session_ref() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        if !crate::pty::tmux::is_available() {
+            eprintln!("tmux not installed; skipping");
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
+        // WSX_CLAUDE_BIN must point at a real script: `/bin/sh` would receive
+        // the claude CLI args and reject them. Write a wrapper that ignores
+        // args and sleeps so the tmux window keeps a live child.
+        let script = tmpdir.path().join("fake-agent.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_CLAUDE_BIN", script.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: tmpdir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        attach_workspace(&mut app, ws_id).unwrap();
+        let inst = app.store.workspace_agents(ws_id).unwrap();
+        assert_eq!(inst[0].session_ref.as_deref(), Some("wsx-r-w"));
+        let s = app.sessions.get(inst[0].id).unwrap();
+        assert_eq!(s.tmux_session.as_deref(), Some("wsx-r-w"));
+        // cleanup: kill backend so the private server dies
+        s.kill_backend();
+    }
+
     /// Test helper: create an App with N repos registered in the store
     /// and loaded into app.repos. Uses a unique tmpdir per call so paths
     /// don't collide.

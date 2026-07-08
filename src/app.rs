@@ -229,7 +229,8 @@ mod remote_rows_tests {
 /// - ONE pre-quoted ssh argument: ssh space-joins remote argv and hands the
 ///   string to a shell on the host.
 /// - Routed through `sh -l`, matching the list fetch: sshd runs the user's
-///   login shell NON-login (`zsh -c` on macOS), which reads only ~/.zshenv —
+///   default shell in non-login mode (`zsh -c` on macOS), which reads only
+///   ~/.zshenv —
 ///   homebrew's tmux typically isn't on that PATH (`zsh:1: command not
 ///   found: tmux`). `sh -l` reads ~/.profile, making "wsx and tmux on the
 ///   host's `sh -l` PATH" the single documented requirement for both legs.

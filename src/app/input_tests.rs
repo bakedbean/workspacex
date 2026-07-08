@@ -4258,8 +4258,9 @@ mod pm_state_tests {
         // argv shape: -t <dest> -- <ONE pre-quoted remote command>. The remote
         // command must be a single ssh argv element (it still contains
         // multiple shell words), routed through `sh -l` like the list fetch:
-        // sshd hands the joined string to the user's login shell NON-login
-        // (`zsh -c`), which reads only ~/.zshenv — on stock macOS, homebrew's
+        // sshd hands the joined string to the user's default shell in
+        // non-login mode (`zsh -c`), which reads only ~/.zshenv — on stock
+        // macOS, homebrew's
         // tmux isn't on that PATH ("zsh:1: command not found: tmux" on a real
         // host). `sh -l` reads ~/.profile, the one documented PATH
         // requirement shared with the fetch. The tmux =target stays

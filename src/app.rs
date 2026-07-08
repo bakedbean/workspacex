@@ -475,24 +475,27 @@ impl App {
             if !ws.shared {
                 continue;
             }
-            let has_client = self
-                .primary_instance(ws.id)
-                .and_then(|i| self.sessions.get(i))
-                .is_some_and(|s| {
+            // One roster fetch serves both checks. A client on ANY instance
+            // (not just the primary) means the workspace isn't detached —
+            // e.g. only a side-pane codex#2 is attached while the primary
+            // exited.
+            let instances = match self.store.workspace_agents(ws.id) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+            let has_client = instances.iter().any(|inst| {
+                self.sessions.get(inst.id).is_some_and(|s| {
                     matches!(
                         *s.status.read().unwrap(),
                         crate::pty::session::SessionStatus::Running { .. }
                     )
-                });
+                })
+            });
             if has_client {
                 continue;
             }
-            let alive = self
-                .store
-                .workspace_agents(ws.id)
-                .ok()
+            let alive = instances
                 .into_iter()
-                .flatten()
                 .filter_map(|i| i.session_ref)
                 .any(|name| crate::pty::tmux::has_session(&name));
             if alive {

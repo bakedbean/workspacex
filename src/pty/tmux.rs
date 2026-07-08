@@ -21,13 +21,47 @@ fn tmux_cmd() -> std::process::Command {
     cmd
 }
 
-/// `tmux -V` succeeds — used to gate shared spawns with a friendly error.
+/// `tmux -V` succeeds AND reports a version >= 3.2 (`new-session -e` floor) —
+/// used to gate shared spawns with a friendly error upfront instead of a
+/// cryptic in-PTY failure later.
 pub fn is_available() -> bool {
     tmux_cmd()
         .arg("-V")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| version_supported(&String::from_utf8_lossy(&o.stdout)))
+}
+
+/// Parse `tmux -V` output ("tmux 3.6b", "tmux next-3.4", "tmux master") and
+/// require >= 3.2. Unversioned dev builds ("master") and unparseable output
+/// fail OPEN: they are newer than any release, and refusing to run on them
+/// would be a worse failure mode than the late error this check prevents.
+fn version_supported(version_output: &str) -> bool {
+    let mut nums = Vec::with_capacity(2);
+    let mut cur: Option<u32> = None;
+    for c in version_output.chars() {
+        match (c.to_digit(10), cur) {
+            (Some(d), Some(n)) => cur = Some(n.saturating_mul(10) + d),
+            (Some(d), None) => cur = Some(d),
+            (None, Some(n)) => {
+                nums.push(n);
+                cur = None;
+                if nums.len() == 2 {
+                    break;
+                }
+            }
+            (None, None) => {}
+        }
+    }
+    if let (Some(n), true) = (cur, nums.len() < 2) {
+        nums.push(n);
+    }
+    match nums[..] {
+        [major, minor, ..] => (major, minor) >= (3, 2),
+        [major] => major >= 4,
+        [] => true, // "tmux master" etc. — fail open
+    }
 }
 
 /// Replace anything outside [A-Za-z0-9_-] with '-'. tmux rejects '.' and ':'
@@ -163,6 +197,22 @@ mod tests {
             session_name("workspacex", "big-fix", AgentKind::Codex, 2, false),
             "wsx-workspacex-big-fix-codex2"
         );
+    }
+
+    #[test]
+    fn version_floor_is_3_2_and_dev_builds_fail_open() {
+        // Released versions, with and without patch letters.
+        assert!(version_supported("tmux 3.6b\n"));
+        assert!(version_supported("tmux 3.2a\n"));
+        assert!(version_supported("tmux 3.2\n"));
+        assert!(!version_supported("tmux 3.1c\n"));
+        assert!(!version_supported("tmux 2.9\n"));
+        // Pre-release naming carries the target version.
+        assert!(version_supported("tmux next-3.4\n"));
+        assert!(!version_supported("tmux next-3.1\n"));
+        // Unversioned dev builds are newer than any release: fail open.
+        assert!(version_supported("tmux master\n"));
+        assert!(version_supported(""));
     }
 
     #[test]

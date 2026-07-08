@@ -3647,6 +3647,99 @@ mod pm_state_tests {
         assert_eq!(app.classify_status(&direct_ws), Status::Idle);
     }
 
+    /// A workspace whose only live wsx client belongs to a NON-primary
+    /// instance is not detached: someone is watching it. The sweep must
+    /// consider every instance's session, not just the primary's — with a
+    /// primary-only check, `has_client` reads false while the primary's
+    /// `session_ref` reads alive, and the workspace is wrongly marked `◆`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_workspace_with_running_added_instance_is_not_detached() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::ui::dashboard::status::Status;
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        let script = tmpdir.path().join("fake-tmux.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_TMUX_BIN", script.to_str().unwrap());
+        env.set("WSX_CODEX_BIN", cat_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_path = tmpdir.path().join("w");
+        std::fs::create_dir_all(&ws_path).unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: &ws_path,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(
+                ws_id,
+                crate::pty::session::AgentKind::Claude,
+                crate::data::store::now_ms(),
+            )
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+        let added = store
+            .add_workspace_agent(ws_id, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Live client on the ADDED instance only; the primary has none.
+        app.sessions
+            .spawn(
+                added.id,
+                ws_id,
+                &ws_path,
+                80,
+                24,
+                crate::pty::session::SpawnMode::Fresh {
+                    rename_ctx: None,
+                    custom_instructions: None,
+                    doctrine: None,
+                    additional_dirs: vec![],
+                    yolo: false,
+                },
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Codex,
+                None,
+            )
+            .unwrap();
+
+        // Force a fresh sweep now that the session exists (App::new's first
+        // sweep ran before the spawn).
+        app.shared_detached_polled_ms = 0;
+        app.refresh().unwrap();
+
+        let ws = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == ws_id)
+            .map(|(_, w)| w.clone())
+            .unwrap();
+        assert_ne!(
+            app.classify_status(&ws),
+            Status::Detached,
+            "a live client on a non-primary instance means someone is attached; not detached"
+        );
+    }
+
     /// Test helper: create an App with N repos registered in the store
     /// and loaded into app.repos. Uses a unique tmpdir per call so paths
     /// don't collide.

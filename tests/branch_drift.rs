@@ -43,6 +43,7 @@ async fn branch_rename_propagates_to_store() {
         Some("placeholder"),
         base.path(),
         false,
+        false,
         wsx::pty::session::AgentKind::Claude,
         tokio_util::sync::CancellationToken::new(),
         |_| {},

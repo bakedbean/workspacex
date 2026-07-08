@@ -3620,6 +3620,85 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
+    async fn capital_s_opens_new_workspace_modal_with_shared_true() {
+        // Capital S opens the NewWorkspace modal pre-set for a tmux-shared
+        // workspace, mirroring how capital N pre-sets yolo mode.
+        let (mut app, _) = make_app_with_n_repos(1);
+        app.select_index(0);
+        press(&mut app, 'S', KeyModifiers::SHIFT).await;
+        match app.modal {
+            Some(Modal::NewWorkspace { shared, yolo, .. }) => {
+                assert!(shared, "S should open the modal with shared: true");
+                assert!(!yolo, "S should not also enable yolo");
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ctrl_s_in_new_workspace_modal_toggles_shared() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        app.modal = Some(Modal::NewWorkspace {
+            repo_id,
+            name_buffer: "alpha".to_string(),
+            yolo: false,
+            shared: false,
+            agent: crate::pty::session::AgentKind::Claude,
+        });
+        let shared_app = Arc::new(Mutex::new(
+            App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
+        ));
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        handle_key_modal(&mut app, &shared_app, ctrl_s)
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::NewWorkspace { shared, .. }) => {
+                assert!(shared, "Ctrl-s should toggle shared from false to true");
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
+        // Toggling again flips it back — and plain chars (no Ctrl) still
+        // fall through to the name buffer rather than toggling.
+        handle_key_modal(&mut app, &shared_app, ctrl_s)
+            .await
+            .unwrap();
+        match &app.modal {
+            Some(Modal::NewWorkspace { shared, .. }) => {
+                assert!(!shared, "second Ctrl-s should toggle shared back to false");
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
+        let plain_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+        handle_key_modal(&mut app, &shared_app, plain_s)
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::NewWorkspace {
+                shared,
+                name_buffer,
+                ..
+            }) => {
+                assert!(!shared, "plain 's' must not toggle shared");
+                assert_eq!(
+                    name_buffer, "alphas",
+                    "plain 's' should append to the name buffer"
+                );
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn h_folds_focused_repo() {
         let (mut app, ids) = make_app_with_n_repos(2);
         app.select_index(0);
@@ -3840,6 +3919,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
             });
         }
@@ -3900,6 +3980,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
@@ -3964,6 +4045,7 @@ mod pm_state_tests {
             &repo,
             Some("doomed"),
             tmp.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -4070,6 +4152,7 @@ mod pm_state_tests {
             Some("doomed"),
             tmp.path(),
             false,
+            false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
             |_| {},
@@ -4156,6 +4239,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
@@ -4209,6 +4293,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
@@ -4257,6 +4342,7 @@ mod pm_state_tests {
             &repo,
             Some("feature"),
             tmp.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),

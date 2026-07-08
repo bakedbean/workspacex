@@ -19,7 +19,7 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Create, list, rename, and archive workspaces",
         commands: &[
             CmdInfo {
-                usage: "create <repo> [--name <slug>] [--yolo] [--agent <kind>]",
+                usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--agent <kind>]",
                 blurb: "Create a workspace (branch + worktree)",
             },
             CmdInfo {
@@ -335,6 +335,7 @@ pub enum CliAction {
         repo: String,
         name: Option<String>,
         yolo: bool,
+        shared: bool,
         agent: Option<String>,
     },
     WorkspaceList {
@@ -766,11 +767,12 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             let repo = it.next().ok_or_else(|| Error::Usage {
                 group: None,
                 msg:
-                    "workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex]"
+                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex]"
                         .into(),
             })?;
             let mut name: Option<String> = None;
             let mut yolo = false;
+            let mut shared = false;
             let mut agent: Option<String> = None;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
@@ -781,6 +783,7 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                         })?);
                     }
                     "--yolo" => yolo = true,
+                    "--shared" => shared = true,
                     "--agent" => {
                         agent = Some(it.next().ok_or_else(|| Error::Usage {
                             group: None,
@@ -810,6 +813,7 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                 repo,
                 name,
                 yolo,
+                shared,
                 agent,
             })
         }
@@ -1369,6 +1373,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             repo,
             name,
             yolo,
+            shared,
             agent,
         } => {
             let r = lookup_repo(&store, &repo)?;
@@ -1381,6 +1386,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 name.as_deref(),
                 &worktree_base,
                 yolo,
+                shared,
                 agent_kind,
                 tokio_util::sync::CancellationToken::new(),
                 |_| {},
@@ -2111,11 +2117,13 @@ mod tests {
                 repo,
                 name,
                 yolo,
+                shared,
                 agent: None,
             } => {
                 assert_eq!(repo, "backend");
                 assert!(name.is_none());
                 assert!(!yolo);
+                assert!(!shared);
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -2137,13 +2145,27 @@ mod tests {
                 repo,
                 name,
                 yolo,
+                shared,
                 agent: None,
             } => {
                 assert_eq!(repo, "backend");
                 assert_eq!(name.as_deref(), Some("add-widgets"));
                 assert!(yolo);
+                assert!(!shared);
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_create_with_shared() {
+        let a = parse(&["workspace", "create", "myrepo", "--shared"]).unwrap();
+        match a {
+            CliAction::WorkspaceCreate { repo, shared, .. } => {
+                assert_eq!(repo, "myrepo");
+                assert!(shared);
+            }
+            other => panic!("wrong action: {other:?}"),
         }
     }
 

@@ -45,6 +45,7 @@ pub enum Modal {
         repo_id: RepoId,
         name_buffer: String,
         yolo: bool,
+        shared: bool,
         agent: crate::pty::session::AgentKind,
     },
     ConfirmArchive {
@@ -173,10 +174,16 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         Modal::NewWorkspace {
             name_buffer,
             yolo,
+            shared,
             agent,
             ..
         } => {
             let agent_label = agent.display_name();
+            let shared_line = if *shared {
+                "shared (tmux): on — ^s toggles\n"
+            } else {
+                "shared (tmux): off — ^s toggles\n"
+            };
             (
                 if *yolo {
                     "new workspace (permissive)"
@@ -184,7 +191,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
                     "new workspace"
                 },
                 format!(
-                    "name: {name_buffer}\nagent: {agent_label}  [tab] toggle\n\n[enter] create   [esc] cancel"
+                    "name: {name_buffer}\nagent: {agent_label}  [tab] toggle\n{shared_line}\n[enter] create   [esc] cancel"
                 ),
             )
         }

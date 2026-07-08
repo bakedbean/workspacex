@@ -529,6 +529,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo: false,
+                    shared: false,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
             }
@@ -554,6 +555,30 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo,
+                    shared: false,
+                    agent: crate::pty::session::AgentKind::from_store(&app.store),
+                });
+            }
+        }
+        (KeyCode::Char('S'), _) => {
+            // Capital S opens the modal with shared: true (tmux-shared
+            // workspace, joinable by other users on the host via `tmux
+            // attach`). Mirrors the n/N pattern above.
+            let repo_id = match app.selected_target() {
+                Some(SelectionTarget::Repo(id)) => Some(id),
+                Some(SelectionTarget::Workspace(wid)) => app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == wid)
+                    .map(|(rid, _)| *rid),
+                None => app.repos.first().map(|r| r.id),
+            };
+            if let Some(id) = repo_id {
+                app.modal = Some(Modal::NewWorkspace {
+                    repo_id: id,
+                    name_buffer: String::new(),
+                    yolo: false,
+                    shared: true,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
             }
@@ -1132,6 +1157,7 @@ async fn handle_key_modal(
             repo_id,
             mut name_buffer,
             yolo,
+            shared: ws_shared,
             mut agent,
         } => match k.code {
             KeyCode::Esc => {
@@ -1148,6 +1174,16 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    shared: ws_shared,
+                    agent,
+                });
+            }
+            KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.modal = Some(Modal::NewWorkspace {
+                    repo_id,
+                    name_buffer,
+                    yolo,
+                    shared: !ws_shared,
                     agent,
                 });
             }
@@ -1175,6 +1211,7 @@ async fn handle_key_modal(
                         name,
                         base,
                         yolo,
+                        ws_shared,
                         agent,
                         progress,
                         cancel,
@@ -1189,6 +1226,7 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    shared: ws_shared,
                     agent,
                 });
             }
@@ -1198,6 +1236,7 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    shared: ws_shared,
                     agent,
                 });
             }

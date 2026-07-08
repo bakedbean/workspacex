@@ -76,7 +76,20 @@ pub async fn fetch_shared_list(
     dest: &str,
 ) -> crate::error::Result<Vec<crate::commands::shared::SharedWorkspaceRecord>> {
     let out = tokio::process::Command::new(ssh_bin())
-        .args([dest, "sh -lc 'wsx shared list --json'"])
+        // `-o BatchMode=yes` keeps this background fetch off /dev/tty: a missing
+        // key or unknown host fails fast to stderr (→ the error modal) instead
+        // of blocking on a password / host-key prompt no one can answer.
+        // `-o ConnectTimeout=10` bounds a hung TCP connect. Both apply to the
+        // fetch ONLY — the interactive attach in `app::attach_remote` omits
+        // BatchMode on purpose so it can still prompt in a real terminal.
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            dest,
+            "sh -lc 'wsx shared list --json'",
+        ])
         .output()
         .await
         .map_err(|e| crate::error::Error::UserInput(format!("ssh spawn failed: {e}")))?;
@@ -147,16 +160,19 @@ mod tests {
         // join. See `fetch_shared_list`'s doc comment.
         let argv = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = argv.lines().collect();
-        assert_eq!(lines[0], "mini", "dest is the first argument");
         assert_eq!(
-            lines[1], "sh -lc 'wsx shared list --json'",
-            "remote command must be ONE pre-quoted argument, got argv: {argv:?}"
-        );
-        assert_eq!(
-            lines.len(),
-            2,
-            "exactly dest + one remote-command arg; 'shared'/'list' must not \
-             appear as separate top-level words: {argv:?}"
+            lines,
+            vec![
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                "mini",
+                "sh -lc 'wsx shared list --json'",
+            ],
+            "argv must be the batch-mode options, then dest, then ONE pre-quoted \
+             remote-command arg; 'shared'/'list' must not appear as separate \
+             top-level words: {argv:?}"
         );
 
         let bad = dir.path().join("fake-ssh-bad.sh");
@@ -168,6 +184,40 @@ mod tests {
         assert!(
             err.contains("connection refused"),
             "stderr must reach the error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_passes_batchmode_and_connect_timeout() {
+        // Fake ssh scans its argv for both hardening options and fails with a
+        // recognizable message unless BOTH are present, proving the background
+        // fetch never blocks on a /dev/tty prompt and bounds a hung connect.
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        let script = dir.path().join("fake-ssh-optcheck.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\n\
+             have_batch=0; have_timeout=0\n\
+             for a in \"$@\"; do\n\
+             \t[ \"$a\" = 'BatchMode=yes' ] && have_batch=1\n\
+             \t[ \"$a\" = 'ConnectTimeout=10' ] && have_timeout=1\n\
+             done\n\
+             if [ \"$have_batch\" = 1 ] && [ \"$have_timeout\" = 1 ]; then\n\
+             \techo '[]'\n\
+             else\n\
+             \techo 'missing batchmode/connect-timeout hardening' >&2\n\
+             \texit 255\n\
+             fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_SSH_BIN", script.to_str().unwrap());
+        let recs = fetch_shared_list("mini").await.unwrap();
+        assert!(
+            recs.is_empty(),
+            "fetch should succeed (empty list) once both options are present"
         );
     }
 }

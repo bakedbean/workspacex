@@ -4255,11 +4255,20 @@ mod pm_state_tests {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         assert!(seen, "expected remote heartbeat through the PTY");
-        // argv shape: -t <dest> -- tmux attach -t =<name>
+        // argv shape: -t <dest> -- <ONE pre-quoted remote command>. The remote
+        // command must be a single word with the tmux target single-quoted:
+        // ssh space-joins remote argv and hands it to the remote LOGIN shell,
+        // and zsh (macOS default) expands an unquoted `=word` into "path of
+        // command `word`" — which broke real attaches with
+        // "zsh:1: wsx-<...> not found". The inner quotes suppress that.
         let args = std::fs::read_to_string(&log).unwrap();
         assert!(
-            args.contains("-t eben@mini -- tmux attach -t =wsx-r-w"),
-            "got: {args}"
+            args.contains("-t eben@mini -- tmux attach -t '=wsx-r-w'"),
+            "remote command must single-quote the =target: {args}"
+        );
+        assert!(
+            !args.contains("-t =wsx-r-w"),
+            "unquoted =target must not appear (zsh =-expansion hazard): {args}"
         );
         assert!(
             session.tmux_session.is_none(),

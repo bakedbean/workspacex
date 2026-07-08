@@ -1,7 +1,7 @@
 # tmux-Shared Workspaces — Design
 
 **Date:** 2026-07-08
-**Status:** Approved for planning
+**Status:** Phase 1 shipped (#222); Phase 2 implemented
 
 ## Problem
 

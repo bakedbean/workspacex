@@ -12,9 +12,18 @@ pub fn tmux_bin() -> String {
     std::env::var("WSX_TMUX_BIN").unwrap_or_else(|_| "tmux".to_string())
 }
 
+/// A `std::process::Command` for the tmux binary with TMUX/TMUX_PANE
+/// scrubbed, so invocations target the default server even when wsx
+/// itself runs inside a tmux session.
+fn tmux_cmd() -> std::process::Command {
+    let mut cmd = std::process::Command::new(tmux_bin());
+    cmd.env_remove("TMUX").env_remove("TMUX_PANE");
+    cmd
+}
+
 /// `tmux -V` succeeds — used to gate shared spawns with a friendly error.
 pub fn is_available() -> bool {
-    std::process::Command::new(tmux_bin())
+    tmux_cmd()
         .arg("-V")
         .output()
         .map(|o| o.status.success())
@@ -71,6 +80,11 @@ pub fn wrap_in_tmux(inner: &CommandBuilder, session_name: &str) -> CommandBuilde
             cmd.env(k, v);
         }
     }
+    // `CommandBuilder::new` pre-seeds its env map from the full process
+    // environment, so the skip above only prevents *re-adding* TMUX/TMUX_PANE
+    // — it doesn't remove the base-env copies. Scrub them explicitly.
+    cmd.env_remove("TMUX");
+    cmd.env_remove("TMUX_PANE");
     cmd.args(["new-session", "-A", "-s", session_name]);
     if let Some(cwd) = inner.get_cwd().and_then(|c| c.to_str()) {
         cmd.args(["-c", cwd]);
@@ -91,7 +105,7 @@ pub fn wrap_in_tmux(inner: &CommandBuilder, session_name: &str) -> CommandBuilde
 
 /// Exact-match (`=name`) session existence check.
 pub fn has_session(name: &str) -> bool {
-    std::process::Command::new(tmux_bin())
+    tmux_cmd()
         .args(["has-session", "-t", &format!("={name}")])
         .output()
         .map(|o| o.status.success())
@@ -100,7 +114,7 @@ pub fn has_session(name: &str) -> bool {
 
 /// Exact-match kill. Returns true when a session was actually killed.
 pub fn kill_session(name: &str) -> bool {
-    std::process::Command::new(tmux_bin())
+    tmux_cmd()
         .args(["kill-session", "-t", &format!("={name}")])
         .output()
         .map(|o| o.status.success())
@@ -114,7 +128,7 @@ pub fn kill_session(name: &str) -> bool {
 pub fn spawn_window_size_fixup(name: String) {
     std::thread::spawn(move || {
         for _ in 0..20 {
-            let ok = std::process::Command::new(tmux_bin())
+            let ok = tmux_cmd()
                 .args([
                     "set-option",
                     "-t",
@@ -137,6 +151,7 @@ pub fn spawn_window_size_fixup(name: String) {
 mod tests {
     use super::*;
     use crate::pty::AgentKind;
+    use crate::test_support::EnvGuard;
 
     #[test]
     fn session_name_primary_and_added() {
@@ -183,5 +198,24 @@ mod tests {
         // tail: -- <inner argv verbatim>
         let sep = argv.iter().position(|a| a == "--").unwrap();
         assert_eq!(argv[sep + 1..], ["claude", "--continue"]);
+    }
+
+    #[test]
+    fn wrap_scrubs_tmux_vars_from_actual_child_env() {
+        // Regression: `CommandBuilder::new()` pre-seeds its env map from the
+        // full process environment, so merely skipping TMUX/TMUX_PANE while
+        // forwarding process vars leaves the base-env copies intact. If the
+        // real process env has TMUX set (wsx running inside tmux, as in this
+        // test), the wrapped command must not carry it through regardless.
+        let mut env = EnvGuard::new();
+        env.set("TMUX", "/private/socket,123,0");
+        env.set("TMUX_PANE", "%42");
+
+        let mut inner = portable_pty::CommandBuilder::new("claude");
+        inner.cwd("/tmp/wt");
+        let wrapped = wrap_in_tmux(&inner, "wsx-r-w");
+
+        assert!(wrapped.get_env("TMUX").is_none());
+        assert!(wrapped.get_env("TMUX_PANE").is_none());
     }
 }

@@ -80,7 +80,7 @@ Fetching fails if the host is unreachable, ssh authentication fails, wsx is miss
 **Requirements:**
 
 - SSH key access to the remote host (password prompts are not supported for the background list fetch — use key-based auth via `ssh-agent` or key files; the attach itself runs in a real terminal but key auth is strongly recommended for a smooth flow).
-- wsx installed on the host and reachable in the login shell's PATH (e.g., `ssh <host> sh -lc 'which wsx'` should succeed).
+- wsx installed on the host and reachable in the login shell's PATH (e.g., `ssh <host> "sh -lc 'which wsx'"` should succeed — the outer double quotes keep `sh -lc '…'` a single argument, so ssh's space-join back into the host login shell preserves the inner quoting).
 - Workspaces created as shared on the host (either via `wsx workspace create <repo> --shared` or by converting an existing one with `T`).
 - A local `ssh` binary (no local tmux needed for remote attach).
 

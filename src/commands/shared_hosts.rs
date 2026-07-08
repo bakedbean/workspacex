@@ -59,14 +59,24 @@ pub fn parse_shared_list_output(
         .map_err(|e| crate::error::Error::UserInput(format!("bad shared-list JSON from host: {e}")))
 }
 
-/// Run `ssh <dest> sh -lc 'wsx shared list --json'` and parse the result.
+/// Run `ssh <dest> "sh -lc 'wsx shared list --json'"` and parse the result.
 /// Login shell so PATH resolves wsx on the host. Non-zero exit maps to a
 /// user-facing error carrying the captured stderr (spec: failure handling).
+///
+/// The remote command is ONE pre-quoted argument, not four words, because ssh
+/// joins the remote-command argv with single spaces and hands the result to the
+/// host's login shell as `$SHELL -c "<joined>"`. Passing
+/// `[dest, "sh", "-lc", "wsx shared list --json"]` would join to
+/// `sh -lc wsx shared list --json`, which the login shell re-parses as
+/// `sh -l -c wsx` with `shared`/`list`/`--json` as `$0`/`$1`/`$2` — running a
+/// BARE `wsx` (which tries to start the TUI). Keeping the inner
+/// `sh -lc 'wsx shared list --json'` as a single argument makes the quoting
+/// survive the join so the host runs `wsx shared list --json`.
 pub async fn fetch_shared_list(
     dest: &str,
 ) -> crate::error::Result<Vec<crate::commands::shared::SharedWorkspaceRecord>> {
     let out = tokio::process::Command::new(ssh_bin())
-        .args([dest, "sh", "-lc", "wsx shared list --json"])
+        .args([dest, "sh -lc 'wsx shared list --json'"])
         .output()
         .await
         .map_err(|e| crate::error::Error::UserInput(format!("ssh spawn failed: {e}")))?;
@@ -111,12 +121,43 @@ mod tests {
     async fn fetch_shared_list_parses_fake_ssh_output_and_surfaces_stderr() {
         let dir = tempfile::tempdir().unwrap();
         let mut env = crate::test_support::EnvGuard::new();
+        // Fake ssh logs its full argv so we can pin the wire shape: the remote
+        // command must survive ssh's space-join as ONE pre-quoted argument.
+        let log = dir.path().join("ssh-args.log");
         let ok = dir.path().join("fake-ssh-ok.sh");
-        std::fs::write(&ok, "#!/bin/sh\necho '[{\"repo\":\"r\",\"workspace\":\"w\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"agents\":[]}]'\n").unwrap();
+        std::fs::write(
+            &ok,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\necho '[{{\"repo\":\"r\",\"workspace\":\"w\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"agents\":[]}}]'\n",
+                log.display()
+            ),
+        )
+        .unwrap();
         std::fs::set_permissions(&ok, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         env.set("WSX_SSH_BIN", ok.to_str().unwrap());
         let recs = fetch_shared_list("mini").await.unwrap();
         assert_eq!(recs[0].workspace, "w");
+
+        // Pin the argv shape. `printf '%s\n' "$@"` prints one argument per line,
+        // so the remote command being a SINGLE argument means the whole
+        // `sh -lc 'wsx shared list --json'` string appears on one line verbatim.
+        // ssh joins remote-command words with spaces before handing them to the
+        // host login shell, so if this were four words the host would run a bare
+        // `wsx`; keeping it one pre-quoted arg preserves the quoting across the
+        // join. See `fetch_shared_list`'s doc comment.
+        let argv = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = argv.lines().collect();
+        assert_eq!(lines[0], "mini", "dest is the first argument");
+        assert_eq!(
+            lines[1], "sh -lc 'wsx shared list --json'",
+            "remote command must be ONE pre-quoted argument, got argv: {argv:?}"
+        );
+        assert_eq!(
+            lines.len(),
+            2,
+            "exactly dest + one remote-command arg; 'shared'/'list' must not \
+             appear as separate top-level words: {argv:?}"
+        );
 
         let bad = dir.path().join("fake-ssh-bad.sh");
         std::fs::write(&bad, "#!/bin/sh\necho 'connection refused' >&2\nexit 255\n").unwrap();

@@ -4256,10 +4256,11 @@ mod pm_state_tests {
         }
         assert!(seen, "expected remote heartbeat through the PTY");
         // argv shape: -t <dest> -- <ONE pre-quoted remote command>. The remote
-        // command must be a single word with the tmux target single-quoted:
-        // ssh space-joins remote argv and hands it to the remote LOGIN shell,
-        // and zsh (macOS default) expands an unquoted `=word` into "path of
-        // command `word`" — which broke real attaches with
+        // command must be a single ssh argv element (it still contains
+        // multiple shell words) with the tmux target single-quoted: ssh
+        // space-joins remote argv and hands the string to the remote LOGIN
+        // shell, and zsh (macOS default) expands an unquoted `=word` into
+        // "path of command `word`" — which broke real attaches with
         // "zsh:1: wsx-<...> not found". The inner quotes suppress that.
         let args = std::fs::read_to_string(&log).unwrap();
         assert!(
@@ -4278,6 +4279,39 @@ mod pm_state_tests {
         crate::app::detach_remote(&mut app);
         assert!(app.remote.is_none() && matches!(app.view, crate::ui::View::Dashboard));
         assert!(app.remote_target.is_none());
+    }
+
+    /// `target.tmux` arrives from the remote host's JSON and is interpolated
+    /// into a shell-parsed string; `attach_remote` must reject anything
+    /// outside the sanitized `[A-Za-z0-9_-]` charset at the boundary instead
+    /// of trusting the wire (a quote or whitespace would break the remote
+    /// quoting and could inject).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attach_remote_rejects_unsanitized_tmux_names() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        for hostile in ["wsx'; touch /tmp/pwned; echo '", "a b", "", "name\n"] {
+            let err = crate::app::attach_remote(
+                &mut app,
+                crate::app::RemoteTarget {
+                    host_name: "mini".into(),
+                    dest: "eben@mini".into(),
+                    tmux: hostile.into(),
+                },
+                80,
+                24,
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("invalid remote tmux session name"),
+                "hostile name {hostile:?} must be rejected, got: {err}"
+            );
+            assert!(app.remote.is_none(), "no session may spawn for {hostile:?}");
+            assert!(
+                matches!(app.view, crate::ui::View::Dashboard),
+                "view must be unchanged for {hostile:?}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

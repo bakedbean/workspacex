@@ -230,13 +230,28 @@ mod remote_rows_tests {
 /// into "path of the command `word`" — which made real attaches die with
 /// `zsh:1: wsx-<name> not found`. Session names are sanitized to
 /// `[A-Za-z0-9_-]` (see `pty::tmux::session_name`), so embedding in single
-/// quotes is safe.
+/// quotes is safe — and that invariant is enforced here at the boundary,
+/// because `target.tmux` arrives from the REMOTE host's JSON, not from our
+/// own producer.
 pub(crate) fn attach_remote(
     app: &mut App,
     target: RemoteTarget,
     cols: u16,
     rows: u16,
 ) -> Result<()> {
+    // The name is interpolated into a shell-parsed string below; reject
+    // anything outside the sanitized charset rather than trusting the wire.
+    if target.tmux.is_empty()
+        || !target
+            .tmux
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(crate::error::Error::UserInput(format!(
+            "invalid remote tmux session name: {:?}",
+            target.tmux
+        )));
+    }
     let mut cmd = portable_pty::CommandBuilder::new(crate::commands::shared_hosts::ssh_bin());
     cmd.args([
         "-t",

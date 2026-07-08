@@ -507,6 +507,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let second_mode = crate::pty::session::SpawnMode::Fresh {
@@ -527,6 +528,7 @@ mod pm_state_tests {
                 second_mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let first_target = test_target(&app, first_id);
@@ -636,6 +638,7 @@ mod pm_state_tests {
                     mode,
                     crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
+                    None,
                 )
                 .unwrap();
         }
@@ -737,6 +740,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let target = test_target(&app, id);
@@ -825,6 +829,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let target = test_target(&app, id);
@@ -899,6 +904,7 @@ mod pm_state_tests {
                     mode,
                     crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
+                    None,
                 )
                 .unwrap();
         }
@@ -972,6 +978,7 @@ mod pm_state_tests {
                 },
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let target = test_target(&app, id);
@@ -1056,6 +1063,7 @@ mod pm_state_tests {
                 },
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let target = test_target(&app, id);
@@ -1444,6 +1452,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(&app, attached_id)));
@@ -1523,6 +1532,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(&app, attached_id)));
@@ -1737,6 +1747,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Codex,
+                None,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(app, ws_id)));
@@ -4805,6 +4816,7 @@ mod ctrl_x_shift_d_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let second_mode = crate::pty::session::SpawnMode::Fresh {
@@ -4825,6 +4837,7 @@ mod ctrl_x_shift_d_tests {
                 second_mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
 
@@ -4935,6 +4948,7 @@ mod restore_layout_tests {
                     mode,
                     crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
+                    None,
                 )
                 .unwrap();
         }
@@ -5303,6 +5317,7 @@ mod detail_bar_focus_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
 
@@ -5529,6 +5544,7 @@ mod attached_wheel_forwarding {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(app, ws_id)));

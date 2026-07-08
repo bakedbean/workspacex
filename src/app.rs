@@ -1342,7 +1342,7 @@ pub(crate) fn ensure_workspace_session(
         let inst = resolve_primary_instance(app, id)?;
         match app
             .sessions
-            .spawn(inst, id, &path, 80, 24, mode, remote, agent)
+            .spawn(inst, id, &path, 80, 24, mode, remote, agent, None)
         {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
@@ -1391,10 +1391,17 @@ pub(crate) fn ensure_instance_session(
     if let Some((path, mode, repo_path)) = build_added_spawn_info(app, &instance) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
-        match app
-            .sessions
-            .spawn(inst, ws_id, &path, 80, 24, mode, remote, instance.agent)
-        {
+        match app.sessions.spawn(
+            inst,
+            ws_id,
+            &path,
+            80,
+            24,
+            mode,
+            remote,
+            instance.agent,
+            None,
+        ) {
             Ok(_) => {}
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
                 if surface_missing {

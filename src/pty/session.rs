@@ -108,6 +108,11 @@ pub struct Session {
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
     pub prompt: Arc<Mutex<PromptCapture>>,
+    /// When set, this session's child is a tmux attach client and the agent
+    /// lives in the tmux server under this session name. `kill()`/`Drop` kill
+    /// only the client (agent survives — the shared-workspace persistence
+    /// contract); `kill_backend()` also kills the server session.
+    pub tmux_session: Option<String>,
 }
 
 impl Session {
@@ -149,6 +154,15 @@ impl Session {
     /// Idempotent; safe to call multiple times.
     pub fn kill(&self) {
         let _ = self.killer.lock().unwrap().kill();
+    }
+
+    /// Kill the child (attach client) AND, for tmux-backed sessions, the tmux
+    /// session holding the agent. Explicit user intent — "kill this agent".
+    pub fn kill_backend(&self) {
+        self.kill();
+        if let Some(name) = &self.tmux_session {
+            crate::pty::tmux::kill_session(name);
+        }
     }
 
     pub fn scroll_up(&self, rows: usize) {
@@ -398,6 +412,10 @@ pub struct SpawnIdentity {
     pub instance_id: i64,
 }
 
+// Threading the tmux session name into the spawn path adds an eighth input
+// past clippy's default; bundling these into a params struct would not improve
+// clarity, matching the same allowance on `SessionManager::spawn`.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_session(
     cwd: &Path,
     cols: u16,
@@ -406,6 +424,7 @@ pub fn spawn_session(
     remote: crate::agent::remote_control::RemoteOpts,
     agent: AgentKind,
     identity: Option<SpawnIdentity>,
+    tmux: Option<&str>,
 ) -> Result<Session> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -433,6 +452,16 @@ pub fn spawn_session(
         child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
         child_cmd.env("WSX_AGENT_INSTANCE_ID", id.instance_id.to_string());
     }
+    let child_cmd = match tmux {
+        Some(name) => {
+            if !crate::pty::tmux::is_available() {
+                return Err(Error::AgentBinaryMissing(crate::pty::tmux::tmux_bin()));
+            }
+            crate::pty::tmux::spawn_window_size_fixup(name.to_string());
+            crate::pty::tmux::wrap_in_tmux(&child_cmd, name)
+        }
+        None => child_cmd,
+    };
     let mut child = pair.slave.spawn_command(child_cmd).map_err(|e| {
         if is_binary_not_found(&e) {
             Error::AgentBinaryMissing(resolved_binary(agent))
@@ -505,6 +534,7 @@ pub fn spawn_session(
         master: Mutex::new(pair.master),
         killer: Mutex::new(killer),
         prompt,
+        tmux_session: tmux.map(str::to_string),
     })
 }
 
@@ -544,6 +574,7 @@ impl SessionManager {
         mode: SpawnMode,
         remote: crate::agent::remote_control::RemoteOpts,
         agent: AgentKind,
+        tmux: Option<&str>,
     ) -> Result<Arc<Session>> {
         if let Some(s) = self.sessions.get(&id) {
             if matches!(*s.status.read().unwrap(), SessionStatus::Running { .. }) {
@@ -556,7 +587,7 @@ impl SessionManager {
             instance_id: id.0,
         });
         let session = Arc::new(spawn_session(
-            cwd, cols, rows, mode, remote, agent, identity,
+            cwd, cols, rows, mode, remote, agent, identity, tmux,
         )?);
         self.sessions.insert(id, session.clone());
         Ok(session)
@@ -568,7 +599,7 @@ impl SessionManager {
 
     pub fn remove(&mut self, id: crate::data::store::AgentInstanceId) {
         if let Some(s) = self.sessions.remove(&id) {
-            s.kill();
+            s.kill_backend();
         }
     }
 
@@ -615,7 +646,9 @@ impl SessionManager {
                 return Ok(existing.clone());
             }
         }
-        let session = Arc::new(spawn_session(cwd, cols, rows, mode, remote, agent, None)?);
+        let session = Arc::new(spawn_session(
+            cwd, cols, rows, mode, remote, agent, None, None,
+        )?);
         self.pm = Some(session.clone());
         Ok(session)
     }
@@ -665,6 +698,7 @@ mod tests {
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
             None,
+            None,
         )
         .unwrap();
         s.writer.send(b"hello\n".to_vec()).await.unwrap();
@@ -698,6 +732,7 @@ mod tests {
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
             None,
+            None,
         )
         .unwrap();
         s.resize(80, 0).unwrap();
@@ -728,6 +763,7 @@ mod tests {
                 fresh(),
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 AgentKind::Codex,
+                None,
             )
             .unwrap();
         let visible_session = sm
@@ -740,6 +776,7 @@ mod tests {
                 fresh(),
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 AgentKind::Codex,
+                None,
             )
             .unwrap();
 
@@ -816,6 +853,7 @@ mod tests {
                 },
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 AgentKind::Codex,
+                None,
             )
             .unwrap();
         // cat reads stdin forever — the spawn stays alive so we can verify
@@ -859,6 +897,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
+            None,
             None,
         )
         .unwrap();
@@ -924,6 +963,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
+            None,
             None,
         )
         .unwrap();
@@ -1017,6 +1057,7 @@ mod tests {
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
             None,
+            None,
         )
         .unwrap();
         // Do NOT send any input — cat stays silent, activity_ms never gets set.
@@ -1053,6 +1094,7 @@ mod tests {
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
+            None,
             None,
         )
         .expect("spawn_session for scrollback test")
@@ -1234,6 +1276,7 @@ mod tests {
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
             None,
+            None,
         );
         let err = match result {
             Err(e) => e,
@@ -1314,11 +1357,84 @@ mod tests {
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
             None,
+            None,
         )
         .unwrap();
         s.writer.send(b"hello-codex\n".to_vec()).await.unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("hello-codex"), "screen: {screen:?}");
+    }
+
+    /// Shared-session persistence semantics against a real, private tmux server.
+    /// Skips when tmux is absent. TMUX_TMPDIR isolation keeps the user's tmux
+    /// server untouched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_session_survives_client_kill_and_dies_on_kill_backend() {
+        if !crate::pty::tmux::is_available() {
+            eprintln!("tmux not installed; skipping");
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
+        // WSX_CLAUDE_BIN must point at a real script: `/bin/sh` would receive the
+        // claude CLI args and reject them. Write a wrapper that ignores args and
+        // sleeps so the tmux window keeps a live child.
+        let script = tmpdir.path().join("fake-agent.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_CLAUDE_BIN", script.to_str().unwrap());
+
+        let name = "wsx-test-shared";
+        let mode = SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let session = spawn_session(
+            tmpdir.path(),
+            80,
+            24,
+            mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+            AgentKind::Claude,
+            None,
+            Some(name),
+        )
+        .unwrap();
+        // Server-side session appears (client connect is async; poll briefly).
+        let mut alive = false;
+        for _ in 0..50 {
+            if crate::pty::tmux::has_session(name) {
+                alive = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(alive, "tmux session was never created");
+
+        // Kill the CLIENT (quit-wsx semantics): backend must survive.
+        session.kill();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            crate::pty::tmux::has_session(name),
+            "agent died with the client"
+        );
+
+        // kill_backend (explicit-kill semantics): backend must die.
+        session.kill_backend();
+        let mut gone = false;
+        for _ in 0..50 {
+            if !crate::pty::tmux::has_session(name) {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(gone, "kill_backend left the tmux session running");
     }
 }

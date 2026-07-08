@@ -676,6 +676,26 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    /// Kills a private tmux server on scope exit, so a mid-test panic (a failed
+    /// assert) can't leak a running server inside the isolated `TMUX_TMPDIR`.
+    /// Holds the tmpdir path directly and passes it explicitly, so it works
+    /// regardless of `EnvGuard`'s env-restoration order. Best-effort:
+    /// `kill-server` errors (e.g. no server ever started) are ignored.
+    struct TmuxServerGuard {
+        tmpdir: PathBuf,
+    }
+
+    impl Drop for TmuxServerGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(crate::pty::tmux::tmux_bin())
+                .env("TMUX_TMPDIR", &self.tmpdir)
+                .env_remove("TMUX")
+                .env_remove("TMUX_PANE")
+                .args(["kill-server"])
+                .output();
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawn_and_echo() {
         // Substitute the agent binary with a wrapper that ignores args and cats
@@ -1376,6 +1396,9 @@ mod tests {
             return;
         }
         let tmpdir = tempfile::tempdir().unwrap();
+        let _server_guard = TmuxServerGuard {
+            tmpdir: tmpdir.path().to_path_buf(),
+        };
         let mut env = EnvGuard::new();
         env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
         // WSX_CLAUDE_BIN must point at a real script: `/bin/sh` would receive the
@@ -1449,15 +1472,19 @@ mod tests {
             return;
         }
         let tmpdir = tempfile::tempdir().unwrap();
+        let _server_guard = TmuxServerGuard {
+            tmpdir: tmpdir.path().to_path_buf(),
+        };
         let mut env = EnvGuard::new();
         env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
         // Heartbeat script (instead of a bare `sleep`) so we can prove the
         // *reattached* client actually receives bytes from the still-running
-        // agent, not just that the tmux session survives.
+        // agent, not just that the tmux session survives. Bounded to ~120
+        // beats so a leaked child can't run forever if the guard is bypassed.
         let script = tmpdir.path().join("fake-agent.sh");
         std::fs::write(
             &script,
-            "#!/bin/sh\nwhile true; do echo beat; sleep 1; done\n",
+            "#!/bin/sh\nfor i in $(seq 1 120); do echo beat; sleep 1; done\n",
         )
         .unwrap();
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))

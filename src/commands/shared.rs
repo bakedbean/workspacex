@@ -7,7 +7,7 @@
 use crate::data::store::Store;
 use crate::error::Result;
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SharedAgentRecord {
     pub label: String,
     pub agent: String,
@@ -15,7 +15,7 @@ pub struct SharedAgentRecord {
     pub alive: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SharedWorkspaceRecord {
     pub repo: String,
     pub workspace: String,
@@ -189,5 +189,25 @@ mod tests {
             json.contains("\"tmux_session\":\"wsx-r-w\""),
             "json was: {json}"
         );
+    }
+
+    #[test]
+    fn records_roundtrip_serde_and_tolerate_unknown_fields() {
+        let json = r#"[{
+        "repo": "r", "workspace": "w", "branch": "wsx/w",
+        "worktree_path": "/tmp/r/w",
+        "future_field": "ignored",
+        "agents": [{"label": "claude", "agent": "claude",
+                    "tmux_session": "wsx-r-w", "alive": true,
+                    "another_future_field": 7}]
+    }]"#;
+        let recs: Vec<SharedWorkspaceRecord> = serde_json::from_str(json).unwrap();
+        assert_eq!(recs[0].workspace, "w");
+        assert_eq!(recs[0].agents[0].tmux_session.as_deref(), Some("wsx-r-w"));
+        assert!(recs[0].agents[0].alive);
+        // and what we serialize, we can deserialize
+        let back: Vec<SharedWorkspaceRecord> =
+            serde_json::from_str(&serde_json::to_string(&recs).unwrap()).unwrap();
+        assert_eq!(back[0].agents[0].label, "claude");
     }
 }

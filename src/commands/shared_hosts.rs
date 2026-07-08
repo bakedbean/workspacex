@@ -45,10 +45,39 @@ pub fn list(store: &Store) -> Result<Vec<SharedHost>> {
 /// last one wins (matches the order of the underlying blob).
 pub fn lookup(store: &Store, name: &str) -> Result<Option<SharedHost>> {
     let raw = store.get_setting("shared_hosts")?.unwrap_or_default();
-    Ok(parse(&raw)
-        .into_iter()
-        .rev()
-        .find(|h| h.name == name))
+    Ok(parse(&raw).into_iter().rev().find(|h| h.name == name))
+}
+
+pub fn ssh_bin() -> String {
+    std::env::var("WSX_SSH_BIN").unwrap_or_else(|_| "ssh".to_string())
+}
+
+pub fn parse_shared_list_output(
+    stdout: &str,
+) -> crate::error::Result<Vec<crate::commands::shared::SharedWorkspaceRecord>> {
+    serde_json::from_str(stdout)
+        .map_err(|e| crate::error::Error::UserInput(format!("bad shared-list JSON from host: {e}")))
+}
+
+/// Run `ssh <dest> sh -lc 'wsx shared list --json'` and parse the result.
+/// Login shell so PATH resolves wsx on the host. Non-zero exit maps to a
+/// user-facing error carrying the captured stderr (spec: failure handling).
+pub async fn fetch_shared_list(
+    dest: &str,
+) -> crate::error::Result<Vec<crate::commands::shared::SharedWorkspaceRecord>> {
+    let out = tokio::process::Command::new(ssh_bin())
+        .args([dest, "sh", "-lc", "wsx shared list --json"])
+        .output()
+        .await
+        .map_err(|e| crate::error::Error::UserInput(format!("ssh spawn failed: {e}")))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(crate::error::Error::UserInput(format!(
+            "ssh {dest}: {}",
+            stderr.trim()
+        )));
+    }
+    parse_shared_list_output(&String::from_utf8_lossy(&out.stdout))
 }
 
 #[cfg(test)]
@@ -76,5 +105,28 @@ mod tests {
         assert_eq!(hosts[0].name, "a");
         assert_eq!(lookup(&store, "a").unwrap().unwrap().dest, "host-a2");
         assert!(lookup(&store, "zz").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_shared_list_parses_fake_ssh_output_and_surfaces_stderr() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        let ok = dir.path().join("fake-ssh-ok.sh");
+        std::fs::write(&ok, "#!/bin/sh\necho '[{\"repo\":\"r\",\"workspace\":\"w\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"agents\":[]}]'\n").unwrap();
+        std::fs::set_permissions(&ok, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        env.set("WSX_SSH_BIN", ok.to_str().unwrap());
+        let recs = fetch_shared_list("mini").await.unwrap();
+        assert_eq!(recs[0].workspace, "w");
+
+        let bad = dir.path().join("fake-ssh-bad.sh");
+        std::fs::write(&bad, "#!/bin/sh\necho 'connection refused' >&2\nexit 255\n").unwrap();
+        std::fs::set_permissions(&bad, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_SSH_BIN", bad.to_str().unwrap());
+        let err = fetch_shared_list("mini").await.unwrap_err().to_string();
+        assert!(
+            err.contains("connection refused"),
+            "stderr must reach the error: {err}"
+        );
     }
 }

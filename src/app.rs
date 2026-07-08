@@ -114,6 +114,16 @@ pub enum StoppedKind {
 /// purely a view over already-collected data rather than affecting retention.
 const MAX_ACTIVITY_HOURS: u64 = 720;
 
+/// Result of a completed `fetch_shared_list` background fetch against a
+/// remote wsx host, stashed on `App` so `Modal::RemoteWorkspaceList`
+/// rendering (Task 6) has something to draw from.
+#[derive(Debug, Clone)]
+pub struct RemoteList {
+    pub host_name: String,
+    pub dest: String,
+    pub records: Vec<crate::commands::shared::SharedWorkspaceRecord>,
+}
+
 pub struct App {
     pub store: Store,
     pub sessions: SessionManager,
@@ -133,6 +143,15 @@ pub struct App {
     /// Generation id of the currently in-flight workspace archive, if any.
     /// Used by the reconcile step to detect stale completions.
     pub pending_archive_gen: Option<u64>,
+    /// Most recently fetched remote (tmux-shared) workspace listing, if any
+    /// fetch has completed. Consumed by `Modal::RemoteWorkspaceList`
+    /// rendering (Task 6).
+    pub remote_list: Option<RemoteList>,
+    /// Monotonic counter handed out to in-flight remote-list fetch tasks.
+    pub next_remote_gen: u64,
+    /// Generation id of the currently in-flight remote-list fetch, if any.
+    /// Used by the reconcile step to detect stale completions.
+    pub pending_remote_gen: Option<u64>,
     pub dashboard: DashboardState,
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::data::store::RepoId, Workspace)>,
@@ -367,6 +386,9 @@ impl App {
             pending_create_gen: None,
             next_archive_gen: 0,
             pending_archive_gen: None,
+            remote_list: None,
+            next_remote_gen: 0,
+            pending_remote_gen: None,
             chip_rects: Vec::new(),
             attention_rects: Vec::new(),
             detail_scroll_offsets: [0; 4],
@@ -517,6 +539,14 @@ impl App {
         let g = self.next_archive_gen;
         self.next_archive_gen = self.next_archive_gen.wrapping_add(1);
         self.pending_archive_gen = Some(g);
+        g
+    }
+
+    /// Allocate a fresh generation id for a new remote-list fetch task.
+    pub fn alloc_remote_gen(&mut self) -> u64 {
+        let g = self.next_remote_gen;
+        self.next_remote_gen = self.next_remote_gen.wrapping_add(1);
+        self.pending_remote_gen = Some(g);
         g
     }
 
@@ -1801,6 +1831,44 @@ pub(crate) async fn reconcile_archive_result(
     }
 }
 
+/// Reconcile the outcome of a spawned `fetch_shared_list` task (Task 5).
+/// Locks the app briefly; if `pending_remote_gen` no longer matches
+/// `my_gen` — the user backed out or kicked off a newer fetch — the result
+/// is discarded entirely (including a successful one), so a slow stale
+/// fetch can never clobber a newer listing or reopen a modal the user has
+/// moved past. Otherwise clears `pending_remote_gen` and, on success,
+/// stores the listing and opens `Modal::RemoteWorkspaceList`; on failure
+/// surfaces `Modal::Error` with the fetch's error text.
+pub(crate) async fn reconcile_remote_list(
+    app: SharedApp,
+    my_gen: u64,
+    host_name: String,
+    dest: String,
+    result: Result<Vec<crate::commands::shared::SharedWorkspaceRecord>>,
+) {
+    let mut g = app.lock().await;
+    if g.pending_remote_gen != Some(my_gen) {
+        // Stale — leave pending_remote_gen, remote_list, and modal alone.
+        return;
+    }
+    g.pending_remote_gen = None;
+    match result {
+        Ok(records) => {
+            g.remote_list = Some(RemoteList {
+                host_name,
+                dest,
+                records,
+            });
+            g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList { selected: 0 });
+        }
+        Err(e) => {
+            g.modal = Some(crate::ui::modal::Modal::Error {
+                message: e.to_string(),
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod reconcile_archive_tests {
     use super::*;
@@ -1900,6 +1968,83 @@ mod reconcile_archive_tests {
             Some(99),
             "stale reconcile must not clear pending_archive_gen"
         );
+    }
+}
+
+#[cfg(test)]
+mod reconcile_remote_tests {
+    use super::*;
+    use crate::commands::shared::SharedWorkspaceRecord;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::Mutex;
+
+    fn make_app() -> (App, TempDir) {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        (app, tmp)
+    }
+
+    #[tokio::test]
+    async fn reconcile_remote_list_stores_records_and_discards_stale_gens() {
+        let (app, _tmp) = make_app();
+        let shared = Arc::new(Mutex::new(app));
+        let (g1, g2) = {
+            let mut app = shared.lock().await;
+            (app.alloc_remote_gen(), app.alloc_remote_gen()) // g2 supersedes g1
+        };
+        let rec = SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: "w".into(),
+            branch: "b".into(),
+            worktree_path: "/x".into(),
+            agents: vec![],
+        };
+        // Stale gen: ignored entirely.
+        reconcile_remote_list(
+            shared.clone(),
+            g1,
+            "mini".into(),
+            "host".into(),
+            Ok(vec![rec.clone()]),
+        )
+        .await;
+        assert!(shared.lock().await.remote_list.is_none());
+        // Current gen: stored + list modal opened.
+        reconcile_remote_list(
+            shared.clone(),
+            g2,
+            "mini".into(),
+            "host".into(),
+            Ok(vec![rec]),
+        )
+        .await;
+        {
+            let app = shared.lock().await;
+            assert_eq!(app.remote_list.as_ref().unwrap().records.len(), 1);
+            assert!(matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::RemoteWorkspaceList { .. })
+            ));
+            assert!(app.pending_remote_gen.is_none());
+        }
+        // Error path: error modal with the message.
+        let g3 = shared.lock().await.alloc_remote_gen();
+        reconcile_remote_list(
+            shared.clone(),
+            g3,
+            "mini".into(),
+            "host".into(),
+            Err(crate::error::Error::UserInput("ssh mini: refused".into())),
+        )
+        .await;
+        match &shared.lock().await.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert!(message.contains("refused"))
+            }
+            other => panic!("expected error modal, got {other:?}"),
+        }
     }
 }
 

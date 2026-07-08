@@ -118,6 +118,14 @@ pub enum Modal {
     /// (edit/term/diff/lazygit/chronox) — the ones that act only on a
     /// selected workspace. Carries no state — dismissed without side effects.
     WorkspaceActions,
+    /// Browse the tmux-shared workspace listing fetched from a remote wsx
+    /// host (`App::remote_list`). Landed here as a bare variant so
+    /// `reconcile_remote_list` (Task 4) can open it; the real keybindings
+    /// and list rendering come in Task 6. For now Esc closes it and it
+    /// renders a placeholder via the generic `render()` below.
+    RemoteWorkspaceList {
+        selected: usize,
+    },
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -297,6 +305,15 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
              c   chronox\n\n  \
              ?/Esc  close"
                 .to_string(),
+        ),
+        // Placeholder body: the real list rendering (from `app.remote_list`)
+        // lands in Task 6. Rendered here (rather than skipped via the
+        // early-return guard above) so the modal is never blank in the
+        // interim — `render.rs`'s modal dispatch already falls through to
+        // this generic `render()` for any variant it doesn't special-case.
+        Modal::RemoteWorkspaceList { .. } => (
+            "remote workspaces",
+            "loading remote list…\n\n[esc] close".to_string(),
         ),
         Modal::AgentPicker {
             selected, current, ..

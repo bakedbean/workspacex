@@ -1825,6 +1825,14 @@ async fn handle_key_modal(
             }
             _ => {}
         },
+        // Temporary handler: reconcile_remote_list (Task 4) can open this
+        // modal, but its real navigation/actions land in Task 6. Esc closes
+        // it; every other key is swallowed so the enum stays total.
+        Modal::RemoteWorkspaceList { .. } => {
+            if k.code == KeyCode::Esc {
+                app.modal = None;
+            }
+        }
     }
     Ok(())
 }

@@ -457,6 +457,7 @@ fn known_setting_key(k: &str) -> bool {
             | "remote_control_sandbox"
             | "pinned_commands"
             | "remotes"
+            | "shared_hosts"
             | "dashboard_name_width"
             | "dashboard_branch_width"
             | "coding_agent"
@@ -2227,6 +2228,11 @@ mod tests {
     #[test]
     fn accepts_remotes_setting_key() {
         assert!(known_setting_key("remotes"));
+    }
+
+    #[test]
+    fn accepts_shared_hosts_setting_key() {
+        assert!(known_setting_key("shared_hosts"));
     }
 
     #[test]

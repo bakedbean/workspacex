@@ -9,3 +9,4 @@ pub mod external;
 pub mod pinned;
 pub mod remotes;
 pub mod shared;
+pub mod shared_hosts;

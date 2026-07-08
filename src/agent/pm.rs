@@ -338,6 +338,7 @@ mod tests {
                 worktree_path: &ready_with_session,
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -351,6 +352,7 @@ mod tests {
                 worktree_path: &ready_no_session,
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -364,6 +366,7 @@ mod tests {
                 worktree_path: &failed,
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store

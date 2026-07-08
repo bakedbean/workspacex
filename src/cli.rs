@@ -19,7 +19,7 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Create, list, rename, and archive workspaces",
         commands: &[
             CmdInfo {
-                usage: "create <repo> [--name <slug>] [--yolo] [--agent <kind>]",
+                usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--agent <kind>]",
                 blurb: "Create a workspace (branch + worktree)",
             },
             CmdInfo {
@@ -37,6 +37,14 @@ pub static GROUPS: &[GroupInfo] = &[
             CmdInfo {
                 usage: "archive <repo> <slug> [--keep-worktree] [--force-delete-branch]",
                 blurb: "Archive a workspace",
+            },
+            CmdInfo {
+                usage: "share <repo> <slug>",
+                blurb: "Convert a workspace to tmux-shared",
+            },
+            CmdInfo {
+                usage: "unshare <repo> <slug>",
+                blurb: "Convert a workspace to direct (not tmux)",
             },
         ],
     },
@@ -152,6 +160,14 @@ pub static GROUPS: &[GroupInfo] = &[
         commands: &[CmdInfo {
             usage: "[<name>]",
             blurb: "List remotes, or run the named remote shortcut",
+        }],
+    },
+    GroupInfo {
+        name: "shared",
+        blurb: "Inspect tmux-shared workspaces",
+        commands: &[CmdInfo {
+            usage: "list [--json]",
+            blurb: "List shared workspaces and their agent sessions",
         }],
     },
     GroupInfo {
@@ -331,10 +347,14 @@ pub enum CliAction {
     RemoteRun {
         name: String,
     },
+    SharedList {
+        json: bool,
+    },
     WorkspaceCreate {
         repo: String,
         name: Option<String>,
         yolo: bool,
+        shared: bool,
         agent: Option<String>,
     },
     WorkspaceList {
@@ -354,6 +374,11 @@ pub enum CliAction {
         name: String,
         keep_worktree: bool,
         force_delete_branch: bool,
+    },
+    WorkspaceShare {
+        repo: String,
+        name: String,
+        shared: bool,
     },
     SetupInstallSkill,
     AgentList,
@@ -483,6 +508,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         "repo" => parse_repo(&mut it).map_err(|e| tag_group(e, group)),
         "config" => parse_config(&mut it).map_err(|e| tag_group(e, group)),
         "remote" => parse_remote(&mut it).map_err(|e| tag_group(e, group)),
+        "shared" => parse_shared(&mut it).map_err(|e| tag_group(e, group)),
         "workspace" => parse_workspace(&mut it).map_err(|e| tag_group(e, group)),
         "agent" => parse_agent(&mut it).map_err(|e| tag_group(e, group)),
         "setup" => parse_setup(&mut it).map_err(|e| tag_group(e, group)),
@@ -760,17 +786,45 @@ fn parse_remote(it: &mut Args) -> Result<CliAction> {
     }
 }
 
+fn parse_shared(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("list") => {
+            let mut json = false;
+            for arg in &mut *it {
+                match arg.as_str() {
+                    "--json" => json = true,
+                    other => {
+                        return Err(Error::Usage {
+                            group: None,
+                            msg: format!("unknown arg: {other}"),
+                        });
+                    }
+                }
+            }
+            Ok(CliAction::SharedList { json })
+        }
+        other => Err(Error::Usage {
+            group: None,
+            msg: match other {
+                Some(cmd) => format!("unknown shared command: {cmd}"),
+                None => "missing shared command".into(),
+            },
+        }),
+    }
+}
+
 fn parse_workspace(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
         Some("create") => {
             let repo = it.next().ok_or_else(|| Error::Usage {
                 group: None,
                 msg:
-                    "workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex]"
+                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex]"
                         .into(),
             })?;
             let mut name: Option<String> = None;
             let mut yolo = false;
+            let mut shared = false;
             let mut agent: Option<String> = None;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
@@ -781,6 +835,7 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                         })?);
                     }
                     "--yolo" => yolo = true,
+                    "--shared" => shared = true,
                     "--agent" => {
                         agent = Some(it.next().ok_or_else(|| Error::Usage {
                             group: None,
@@ -810,6 +865,7 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                 repo,
                 name,
                 yolo,
+                shared,
                 agent,
             })
         }
@@ -877,6 +933,36 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                 name,
                 keep_worktree,
                 force_delete_branch,
+            })
+        }
+        Some("share") => {
+            let repo = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace share <repo> <name>".into(),
+            })?;
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace share <repo> <name>".into(),
+            })?;
+            Ok(CliAction::WorkspaceShare {
+                repo,
+                name,
+                shared: true,
+            })
+        }
+        Some("unshare") => {
+            let repo = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace unshare <repo> <name>".into(),
+            })?;
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "workspace unshare <repo> <name>".into(),
+            })?;
+            Ok(CliAction::WorkspaceShare {
+                repo,
+                name,
+                shared: false,
             })
         }
         other => Err(Error::Usage {
@@ -1365,10 +1451,38 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             // exec only returns on failure.
             return Err(Error::UserInput(format!("exec sh: {err}")));
         }
+        CliAction::SharedList { json } => {
+            let records = crate::commands::shared::shared_list_records(
+                &store,
+                crate::pty::tmux::has_session,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&records)?);
+            } else if records.is_empty() {
+                println!("no shared workspaces");
+            } else {
+                for rec in &records {
+                    if rec.agents.is_empty() {
+                        println!("{}\t{}\t(no agents)\t-", rec.repo, rec.workspace);
+                        continue;
+                    }
+                    for agent in &rec.agents {
+                        let session = agent.tmux_session.as_deref().unwrap_or("-");
+                        let alive = match (agent.alive, &agent.tmux_session) {
+                            (true, _) => "alive",
+                            (false, Some(_)) => "(dead)",
+                            (false, None) => "-",
+                        };
+                        println!("{}\t{}\t{}\t{}", rec.repo, rec.workspace, session, alive);
+                    }
+                }
+            }
+        }
         CliAction::WorkspaceCreate {
             repo,
             name,
             yolo,
+            shared,
             agent,
         } => {
             let r = lookup_repo(&store, &repo)?;
@@ -1381,6 +1495,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 name.as_deref(),
                 &worktree_base,
                 yolo,
+                shared,
                 agent_kind,
                 tokio_util::sync::CancellationToken::new(),
                 |_| {},
@@ -1449,6 +1564,27 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             };
             crate::data::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
             println!("archived workspace {}/{}", r.name, name);
+        }
+        CliAction::WorkspaceShare { repo, name, shared } => {
+            let r = lookup_repo(&store, &repo)?;
+            let w = lookup_workspace(&store, &r, &name)?;
+            if w.shared == shared {
+                println!(
+                    "workspace {}/{} already {}",
+                    r.name,
+                    name,
+                    if shared { "shared" } else { "unshared" }
+                );
+            } else {
+                store.set_workspace_shared(w.id, shared)?;
+                println!(
+                    "workspace {}/{} is now {}",
+                    r.name,
+                    name,
+                    if shared { "shared" } else { "unshared" }
+                );
+                println!("note: running sessions keep their current backend until restarted");
+            }
         }
         CliAction::AgentList => {
             let ws = resolve_current_workspace(&store)?;
@@ -2094,6 +2230,33 @@ mod tests {
     }
 
     #[test]
+    fn parses_shared_list_json() {
+        match parse(&["shared", "list", "--json"]).unwrap() {
+            CliAction::SharedList { json } => assert!(json),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_shared_list_without_json() {
+        match parse(&["shared", "list"]).unwrap() {
+            CliAction::SharedList { json } => assert!(!json),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_shared_list_rejects_unknown_arg() {
+        assert!(parse(&["shared", "list", "--bogus"]).is_err());
+    }
+
+    #[test]
+    fn parses_shared_rejects_unknown_subcommand() {
+        assert!(parse(&["shared", "bogus"]).is_err());
+        assert!(parse(&["shared"]).is_err());
+    }
+
+    #[test]
     fn parses_repo_set_base_branch_literal() {
         match parse(&["repo", "set-base-branch", "demo", "origin/main"]).unwrap() {
             CliAction::RepoSetBaseBranch { name, value } => {
@@ -2111,11 +2274,13 @@ mod tests {
                 repo,
                 name,
                 yolo,
+                shared,
                 agent: None,
             } => {
                 assert_eq!(repo, "backend");
                 assert!(name.is_none());
                 assert!(!yolo);
+                assert!(!shared);
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -2137,13 +2302,27 @@ mod tests {
                 repo,
                 name,
                 yolo,
+                shared,
                 agent: None,
             } => {
                 assert_eq!(repo, "backend");
                 assert_eq!(name.as_deref(), Some("add-widgets"));
                 assert!(yolo);
+                assert!(!shared);
             }
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_create_with_shared() {
+        let a = parse(&["workspace", "create", "myrepo", "--shared"]).unwrap();
+        match a {
+            CliAction::WorkspaceCreate { repo, shared, .. } => {
+                assert_eq!(repo, "myrepo");
+                assert!(shared);
+            }
+            other => panic!("wrong action: {other:?}"),
         }
     }
 
@@ -2232,6 +2411,30 @@ mod tests {
             } => {
                 assert!(keep_worktree);
                 assert!(force_delete_branch);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_share() {
+        match parse(&["workspace", "share", "backend", "add-widgets"]).unwrap() {
+            CliAction::WorkspaceShare { repo, name, shared } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name, "add-widgets");
+                assert!(shared);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_workspace_unshare() {
+        match parse(&["workspace", "unshare", "backend", "add-widgets"]).unwrap() {
+            CliAction::WorkspaceShare { repo, name, shared } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name, "add-widgets");
+                assert!(!shared);
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -2410,6 +2613,7 @@ mod tests {
             "repo",
             "config",
             "remote",
+            "shared",
             "setup",
             "status",
         ];

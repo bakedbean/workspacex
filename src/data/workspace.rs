@@ -46,6 +46,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     name: Option<&str>,
     worktree_base: &Path,
     yolo: bool,
+    shared: bool,
     agent: AgentKind,
     cancel: tokio_util::sync::CancellationToken,
     on_setup_line: F,
@@ -82,6 +83,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         worktree_path: &worktree_path,
         yolo,
         agent,
+        shared,
     })?;
 
     // Seed the primary agent instance so the roster is authoritative from birth.
@@ -199,6 +201,7 @@ pub async fn create_with_app(
     name: Option<String>,
     worktree_base: PathBuf,
     yolo: bool,
+    shared: bool,
     agent: AgentKind,
     progress: SharedProgress,
     cancel: tokio_util::sync::CancellationToken,
@@ -245,6 +248,7 @@ pub async fn create_with_app(
             worktree_path: &worktree_path,
             yolo,
             agent,
+            shared,
         })?;
         // Seed the primary agent instance so the roster is authoritative from birth.
         g.store
@@ -329,6 +333,24 @@ pub struct ArchiveOpts {
     pub force_branch_delete: bool,
 }
 
+/// Kill the tmux sessions backing a workspace's agent instances, keyed off the
+/// stored `session_ref` rather than the `shared` flag. Any instance with a
+/// `session_ref` is killed; instances without one never spawned in tmux and
+/// are skipped. The `shared` flag is deliberately NOT consulted: a workspace
+/// that was unshared via the CLI (which flag-flips without restarting sessions)
+/// keeps a live tmux agent, and gating on `shared` here would leak it on
+/// archive. Best-effort: a dead server or already-killed session must not block
+/// archiving.
+pub(crate) fn kill_tmux_sessions_for(store: &Store, ws: &Workspace) {
+    if let Ok(instances) = store.workspace_agents(ws.id) {
+        for inst in instances {
+            if let Some(name) = &inst.session_ref {
+                crate::pty::tmux::kill_session(name);
+            }
+        }
+    }
+}
+
 pub async fn archive<F: FnMut(SetupLine) + Send>(
     store: &Store,
     repo: &Repo,
@@ -336,6 +358,10 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     opts: ArchiveOpts,
     on_archive_line: F,
 ) -> Result<SetupResult> {
+    // Kill any live tmux agent FIRST, before the archive script or worktree
+    // removal run — a detached agent still writing to the worktree would
+    // otherwise dirty it mid-archive.
+    kill_tmux_sessions_for(store, ws);
     let archive_result = setup::run_archive(
         repo.archive_script.as_deref(),
         &repo.path,
@@ -380,6 +406,14 @@ pub async fn archive_with_app(
     ws: Workspace,
     opts: ArchiveOpts,
 ) -> Result<SetupResult> {
+    // --- Phase 0 (short, locked): kill any live tmux agent BEFORE anything
+    //     else runs, so a detached agent can't dirty the worktree while the
+    //     archive script / worktree removal proceed. ---
+    {
+        let g = app.lock().await;
+        kill_tmux_sessions_for(&g.store, &ws);
+    }
+
     // --- Phase 1 (unlocked, async): run the archive script if any. ---
     let archive_result = setup::run_archive(
         repo.archive_script.as_deref(),
@@ -450,6 +484,7 @@ pub fn import_existing(
         worktree_path: &info.path,
         yolo: false,
         agent,
+        shared: false,
     })?;
     store.add_primary_agent(id, agent, crate::data::store::now_ms())?;
     store.set_workspace_state(id, WorkspaceState::Ready)?;
@@ -547,6 +582,7 @@ mod tests {
             Some("alpha"),
             base.path(),
             false,
+            false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
             |_| {},
@@ -582,6 +618,7 @@ mod tests {
             Some("wild"),
             base.path(),
             true,
+            false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
             |_| {},
@@ -610,6 +647,7 @@ mod tests {
             &repo,
             None,
             base.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -641,6 +679,7 @@ mod tests {
             Some("a"),
             base.path(),
             false,
+            false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
             |_| {},
@@ -670,6 +709,7 @@ mod tests {
             &repo,
             Some("doomed"),
             base.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -717,6 +757,7 @@ mod tests {
             &repo,
             Some("doomed"),
             base.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -781,6 +822,7 @@ mod tests {
             &repo,
             Some("alpha"),
             base.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -868,6 +910,7 @@ mod tests {
             Some("a"),
             base.path(),
             false,
+            false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
             |_| {},
@@ -907,6 +950,7 @@ mod tests {
             &repo,
             Some("doomed"),
             base.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -950,6 +994,7 @@ mod tests {
             &repo,
             Some("doomed"),
             base.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -1022,6 +1067,7 @@ mod tests {
             Some("doomed"),
             base.path(),
             false,
+            false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
             |_| {},
@@ -1084,6 +1130,7 @@ mod tests {
             Some("alpha"),
             base.path(),
             false,
+            false,
             crate::pty::session::AgentKind::Claude,
             cancel,
             |_| {},
@@ -1125,6 +1172,7 @@ mod tests {
             &repo,
             Some("alpha"),
             base.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             cancel,
@@ -1169,6 +1217,7 @@ mod tests {
             repo,
             Some("alpha".to_string()),
             base.path().to_path_buf(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             progress,
@@ -1374,6 +1423,7 @@ mod tests {
             Some("from-staging"),
             wt_root.path(),
             false,
+            false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
             |_| {},
@@ -1390,6 +1440,172 @@ mod tests {
         assert_eq!(
             wt_head, prev_sha,
             "workspace should be at staging's commit, not main HEAD"
+        );
+    }
+
+    /// Archiving a shared workspace must kill the tmux session backing its
+    /// primary agent instance, or the session leaks in tmux forever. Fakes
+    /// tmux via `WSX_TMUX_BIN` pointing at a recorder script so no real
+    /// tmux server is needed.
+    #[tokio::test]
+    async fn archive_kills_tmux_sessions_of_shared_workspace() {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+
+        let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
+        kill_tmux_sessions_for(&store, &ws);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("kill-session -t =wsx-r-w"),
+            "expected a kill-session call for wsx-r-w, got: {calls:?}"
+        );
+    }
+
+    /// I1 regression: a workspace that was UNSHARED (shared = false) but still
+    /// carries a stale `session_ref` from its shared past — e.g. after a CLI
+    /// `wsx workspace unshare`, which flag-flips without restarting sessions —
+    /// must still have its live tmux agent killed on archive. Keying off the
+    /// stored ref rather than the `shared` flag is exactly what closes this
+    /// leak.
+    #[tokio::test]
+    async fn archive_kills_tmux_session_of_unshared_workspace_with_stale_ref() {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false, // unshared, but the ref lingers
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+
+        let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
+        kill_tmux_sessions_for(&store, &ws);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("kill-session -t =wsx-r-w"),
+            "unshared workspace with a stale ref must still be killed, got: {calls:?}"
+        );
+    }
+
+    /// A truly direct workspace never spawned in tmux (its instances carry no
+    /// `session_ref`), so archiving it must not issue any tmux calls at all.
+    #[tokio::test]
+    async fn archive_does_not_touch_tmux_for_direct_workspace() {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        // True direct workspace: primary has NO session_ref (never spawned in
+        // tmux), so there is nothing to kill.
+        store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+
+        let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
+        kill_tmux_sessions_for(&store, &ws);
+
+        assert!(
+            !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),
+            "direct workspace archive must not call tmux"
         );
     }
 }

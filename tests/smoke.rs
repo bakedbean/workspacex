@@ -46,6 +46,7 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
         Some("alpha"),
         base.path(),
         false,
+        false,
         wsx::pty::session::AgentKind::Claude,
         tokio_util::sync::CancellationToken::new(),
         |_| {},

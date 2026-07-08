@@ -23,3 +23,5 @@ Workspaces — and the claude sessions running inside them — keep running whil
 - **Tailscale** (or any VPN) makes the host reachable from anywhere by a stable name without port-forwarding.
 
 **Saving the invocation**: once you've settled on a working `ssh … tmux attach …` command, save it as a named remote so reconnecting is just `wsx remote <name>`. See [Named remote shortcuts](named-remote-shortcuts.md).
+
+This page covers running the whole wsx TUI over ssh + tmux. For per-workspace sharing — an individual agent session that survives wsx quitting and can be attached to directly, independent of wsx itself — see [Shared workspaces](shared-workspaces.md).

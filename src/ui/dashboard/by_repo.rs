@@ -89,6 +89,7 @@ fn header_line(
             (Status::Waiting, view.counts.waiting, false),
             (Status::Thinking, view.counts.thinking, false),
             (Status::Complete, view.counts.complete, false),
+            (Status::Detached, view.counts.detached, false),
             (Status::Idle, view.counts.idle, false),
         ];
         let mut first = true;

@@ -529,6 +529,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo: false,
+                    shared: false,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
             }
@@ -554,6 +555,30 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     repo_id: id,
                     name_buffer: String::new(),
                     yolo,
+                    shared: false,
+                    agent: crate::pty::session::AgentKind::from_store(&app.store),
+                });
+            }
+        }
+        (KeyCode::Char('S'), _) => {
+            // Capital S opens the modal with shared: true (tmux-shared
+            // workspace, joinable by other users on the host via `tmux
+            // attach`). Mirrors the n/N pattern above.
+            let repo_id = match app.selected_target() {
+                Some(SelectionTarget::Repo(id)) => Some(id),
+                Some(SelectionTarget::Workspace(wid)) => app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == wid)
+                    .map(|(rid, _)| *rid),
+                None => app.repos.first().map(|r| r.id),
+            };
+            if let Some(id) = repo_id {
+                app.modal = Some(Modal::NewWorkspace {
+                    repo_id: id,
+                    name_buffer: String::new(),
+                    yolo: false,
+                    shared: true,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
                 });
             }
@@ -659,6 +684,34 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 }
             }
             // 'd' on a Repo header is intentionally a no-op.
+        }
+        (KeyCode::Char('T'), _) => {
+            // Shift+T toggles a workspace between direct and tmux-shared,
+            // via a confirmation modal (running sessions restart via
+            // --continue). No-op on a Repo header — sharing is per-workspace.
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
+                && let Some((_, ws)) = app.workspaces.iter().find(|(_, w)| w.id == id)
+            {
+                let running_count = app
+                    .store
+                    .workspace_agents(id)?
+                    .into_iter()
+                    .filter(|inst| {
+                        app.sessions.get(inst.id).is_some_and(|s| {
+                            matches!(
+                                *s.status.read().unwrap(),
+                                crate::pty::session::SessionStatus::Running { .. }
+                            )
+                        })
+                    })
+                    .count();
+                app.modal = Some(Modal::ConfirmShare {
+                    workspace_id: id,
+                    name: ws.name.clone(),
+                    to_shared: !ws.shared,
+                    running_count,
+                });
+            }
         }
         (KeyCode::Char('r'), _)
             if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::Dashboard) =>
@@ -1132,6 +1185,7 @@ async fn handle_key_modal(
             repo_id,
             mut name_buffer,
             yolo,
+            shared: ws_shared,
             mut agent,
         } => match k.code {
             KeyCode::Esc => {
@@ -1148,6 +1202,16 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    shared: ws_shared,
+                    agent,
+                });
+            }
+            KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.modal = Some(Modal::NewWorkspace {
+                    repo_id,
+                    name_buffer,
+                    yolo,
+                    shared: !ws_shared,
                     agent,
                 });
             }
@@ -1175,6 +1239,7 @@ async fn handle_key_modal(
                         name,
                         base,
                         yolo,
+                        ws_shared,
                         agent,
                         progress,
                         cancel,
@@ -1189,6 +1254,7 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    shared: ws_shared,
                     agent,
                 });
             }
@@ -1198,6 +1264,7 @@ async fn handle_key_modal(
                     repo_id,
                     name_buffer,
                     yolo,
+                    shared: ws_shared,
                     agent,
                 });
             }
@@ -1249,6 +1316,25 @@ async fn handle_key_modal(
                     .await;
                     crate::app::reconcile_archive_result(shared_clone, archive_gen, result).await;
                 });
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.modal = None;
+            }
+            _ => {}
+        },
+        Modal::ConfirmShare { workspace_id, .. } => match k.code {
+            KeyCode::Char('y') => {
+                if let Err(e) = crate::app::toggle_workspace_shared(app, workspace_id) {
+                    app.modal = Some(Modal::Error {
+                        message: e.to_string(),
+                    });
+                } else if !matches!(app.modal, Some(Modal::AgentMissing { .. })) {
+                    // Only clear the modal if toggle_workspace_shared didn't
+                    // leave an AgentMissing modal up for the user (mirrors the
+                    // UpdatesPanel Enter handler's rule above) — otherwise
+                    // we'd wipe that modal right back off.
+                    app.modal = None;
+                }
             }
             KeyCode::Char('n') | KeyCode::Esc => {
                 app.modal = None;

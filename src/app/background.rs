@@ -453,6 +453,7 @@ mod external_change_polling_tests {
                 worktree_path: std::path::Path::new("/wt/from-cli"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
 

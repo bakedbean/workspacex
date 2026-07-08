@@ -218,6 +218,7 @@ mod pm_state_tests {
                     worktree_path: std::path::Path::new(path),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
                 })
                 .unwrap();
             store
@@ -295,6 +296,7 @@ mod pm_state_tests {
                     worktree_path: std::path::Path::new(path),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
                 })
                 .unwrap();
             store
@@ -409,6 +411,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -461,6 +464,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-split-1"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let second_id = store
@@ -471,6 +475,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-split-2"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -502,6 +507,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let second_mode = crate::pty::session::SpawnMode::Fresh {
@@ -522,6 +528,7 @@ mod pm_state_tests {
                 second_mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let first_target = test_target(&app, first_id);
@@ -591,6 +598,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-close-1"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let second_id = store
@@ -601,6 +609,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-close-2"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -629,6 +638,7 @@ mod pm_state_tests {
                     mode,
                     crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
+                    None,
                 )
                 .unwrap();
         }
@@ -705,6 +715,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-detach-refresh"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -729,6 +740,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let target = test_target(&app, id);
@@ -792,6 +804,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-esc-refresh"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -816,6 +829,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let target = test_target(&app, id);
@@ -862,6 +876,7 @@ mod pm_state_tests {
                     worktree_path: &std::path::PathBuf::from(format!("/tmp/wsx-arrow-{name}")),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
                 })
                 .unwrap();
             store
@@ -889,6 +904,7 @@ mod pm_state_tests {
                     mode,
                     crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
+                    None,
                 )
                 .unwrap();
         }
@@ -938,6 +954,7 @@ mod pm_state_tests {
                 worktree_path: &std::path::PathBuf::from("/tmp/wsx-nav-a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -961,6 +978,7 @@ mod pm_state_tests {
                 },
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let target = test_target(&app, id);
@@ -1021,6 +1039,7 @@ mod pm_state_tests {
                 worktree_path: &std::path::PathBuf::from("/tmp/wsx-nav-esc-a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1044,6 +1063,7 @@ mod pm_state_tests {
                 },
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let target = test_target(&app, id);
@@ -1116,6 +1136,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1132,6 +1153,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/beta-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1194,6 +1216,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1301,6 +1324,7 @@ mod pm_state_tests {
                         worktree_path: std::path::Path::new(&worktree),
                         yolo: false,
                         agent: crate::pty::session::AgentKind::Claude,
+                        shared: false,
                     })
                     .unwrap();
                 store
@@ -1388,6 +1412,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/attached"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1401,6 +1426,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/other"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1426,6 +1452,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(&app, attached_id)));
@@ -1480,6 +1507,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/only"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -1504,6 +1532,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(&app, attached_id)));
@@ -1697,6 +1726,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Codex,
+                shared: false,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -1717,6 +1747,7 @@ mod pm_state_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Codex,
+                None,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(app, ws_id)));
@@ -2658,6 +2689,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         app.refresh().unwrap();
@@ -3031,6 +3063,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -3081,6 +3114,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -3119,6 +3153,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/wt/hermes-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Hermes,
+                shared: false,
             })
             .unwrap();
         store
@@ -3161,6 +3196,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/wt/test-ws"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -3186,6 +3222,522 @@ mod pm_state_tests {
             }
             other => panic!("expected Fresh mode; got {other:?}"),
         }
+    }
+
+    /// Shared workspaces spawn their primary instance inside a real tmux
+    /// server and persist the derived session name to `session_ref`, so
+    /// later consumers (kill, archive, `wsx shared list`) can reuse it
+    /// without re-deriving. Skips when tmux is absent; isolates via
+    /// TMUX_TMPDIR so the user's own tmux server is untouched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_workspace_attach_records_tmux_session_ref() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        if !crate::pty::tmux::is_available() {
+            eprintln!("tmux not installed; skipping");
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
+        // WSX_CLAUDE_BIN must point at a real script: `/bin/sh` would receive
+        // the claude CLI args and reject them. Write a wrapper that ignores
+        // args and sleeps so the tmux window keeps a live child.
+        let script = tmpdir.path().join("fake-agent.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_CLAUDE_BIN", script.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: tmpdir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        attach_workspace(&mut app, ws_id).unwrap();
+        let inst = app.store.workspace_agents(ws_id).unwrap();
+        assert_eq!(inst[0].session_ref.as_deref(), Some("wsx-r-w"));
+        let s = app.sessions.get(inst[0].id).unwrap();
+        assert_eq!(s.tmux_session.as_deref(), Some("wsx-r-w"));
+        // cleanup: kill backend so the private server dies
+        s.kill_backend();
+    }
+
+    /// C1 regression: `session_ref` is the source of truth. After a workspace
+    /// is renamed, a fresh spawn must reuse the OLD stored tmux name rather
+    /// than re-deriving from the current name — otherwise `-A` would create a
+    /// second session and orphan the original agent. Mirrors the
+    /// `shared_workspace_attach_records_tmux_session_ref` tmux isolation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_spawn_reuses_stored_session_ref_after_rename() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        if !crate::pty::tmux::is_available() {
+            eprintln!("tmux not installed; skipping");
+            return;
+        }
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
+        let script = tmpdir.path().join("fake-agent.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_CLAUDE_BIN", script.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "new-name",
+                branch: "r/new-name",
+                worktree_path: tmpdir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        // Seed the primary with a session_ref from an OLD name (pre-rename).
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-old-name")
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        attach_workspace(&mut app, ws_id).unwrap();
+        // The spawned session must use the OLD stored name, NOT "wsx-r-new-name".
+        let s = app.sessions.get(primary.id).unwrap();
+        assert_eq!(
+            s.tmux_session.as_deref(),
+            Some("wsx-r-old-name"),
+            "spawn re-derived the name from the renamed workspace instead of \
+             reusing the stored session_ref"
+        );
+        // The stored ref is unchanged.
+        let reloaded = app.store.workspace_agents(ws_id).unwrap();
+        assert_eq!(reloaded[0].session_ref.as_deref(), Some("wsx-r-old-name"));
+        s.kill_backend();
+    }
+
+    /// I3: two shared workspaces whose names sanitize to the same tmux base
+    /// name must not collide. When the second instance derives a name already
+    /// claimed by the first's stored `session_ref`, `tmux_name_for` appends the
+    /// workspace id. No tmux server needed — this is pure name derivation.
+    #[test]
+    fn tmux_name_for_disambiguates_sanitization_collision() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        // repo `a` + ws `b-c`  → wsx-a-b-c
+        // repo `a-b` + ws `c`  → wsx-a-b-c  (collision)
+        let repo1 = store
+            .add_repo(std::path::Path::new("/tmp/a"), "a", "")
+            .unwrap();
+        let repo2 = store
+            .add_repo(std::path::Path::new("/tmp/a-b"), "a-b", "")
+            .unwrap();
+        let ws1 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo1,
+                name: "b-c",
+                branch: "a/b-c",
+                worktree_path: std::path::Path::new("/tmp/a/b-c"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws1, WorkspaceState::Ready)
+            .unwrap();
+        let p1 = store
+            .add_primary_agent(ws1, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        // ws1 already occupies the colliding base name.
+        store.set_instance_session_ref(p1.id, "wsx-a-b-c").unwrap();
+
+        let ws2 = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo2,
+                name: "c",
+                branch: "a-b/c",
+                worktree_path: std::path::Path::new("/tmp/a-b/c"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws2, WorkspaceState::Ready)
+            .unwrap();
+        let p2 = store
+            .add_primary_agent(ws2, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let inst2 = app.store.workspace_agents_by_id(p2.id).unwrap().unwrap();
+        let name = crate::app::tmux_name_for(&app, ws2, &inst2).unwrap();
+        assert_eq!(
+            name,
+            format!("wsx-a-b-c-{}", ws2.0),
+            "collision with ws1's stored name should append the workspace id"
+        );
+
+        // ws1 (which owns the base name) still derives the bare name.
+        let inst1 = app.store.workspace_agents_by_id(p1.id).unwrap().unwrap();
+        assert_eq!(
+            crate::app::tmux_name_for(&app, ws1, &inst1).unwrap(),
+            "wsx-a-b-c",
+            "the instance that owns the stored ref keeps the bare name"
+        );
+    }
+
+    /// I1: unsharing a workspace via the TUI must not leave a detached tmux
+    /// agent orphaned. A shared workspace with a non-running (detached-but-
+    /// alive) instance holds a `session_ref`; toggling it to unshared must
+    /// kill that tmux session directly and clear the ref, so a later archive
+    /// has nothing left to leak. Uses a fake `WSX_TMUX_BIN` recorder so no
+    /// real tmux server is needed; the instance is never running, so no agent
+    /// respawn is triggered.
+    /// I2: toggling a direct workspace to shared while tmux is unavailable
+    /// must NOT flip the flag or kill any running agent. Instead it raises the
+    /// AgentMissing modal and returns. Points WSX_TMUX_BIN at a nonexistent
+    /// path so `is_available()` reports false without depending on the host.
+    #[tokio::test]
+    async fn toggle_to_shared_without_tmux_is_a_noop_with_modal() {
+        use crate::data::store::NewWorkspace;
+        use crate::ui::modal::Modal;
+
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
+        env.set("WSX_TMUX_BIN", "/nonexistent/wsx-no-tmux-here");
+
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "share-me",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Codex,
+                shared: false, // starts direct; toggle proposes -> shared
+            })
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let inst = test_primary_instance(&app, ws_id);
+        app.sessions
+            .spawn(
+                inst,
+                ws_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Codex,
+                None,
+            )
+            .unwrap();
+        app.refresh().unwrap();
+        let old_session = app.sessions.get(inst).expect("session should be running");
+
+        crate::app::toggle_workspace_shared(&mut app, ws_id).unwrap();
+
+        // Flag NOT flipped.
+        let ws = app.store.workspace_by_id(ws_id).unwrap().unwrap();
+        assert!(!ws.shared, "flag must stay direct when tmux is missing");
+        // Modal surfaced.
+        match &app.modal {
+            Some(Modal::AgentMissing { ws_id: mid, .. }) => assert_eq!(*mid, ws_id),
+            other => panic!("expected AgentMissing modal, got {other:?}"),
+        }
+        // Running session untouched (same Arc).
+        let now_session = app.sessions.get(inst).expect("session must survive");
+        assert!(
+            Arc::ptr_eq(&old_session, &now_session),
+            "the running agent must not be killed when tmux is missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn toggle_unshare_kills_detached_tmux_and_clears_ref() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        crate::app::toggle_workspace_shared(&mut app, ws_id).unwrap();
+
+        // Flag flipped to unshared.
+        let ws = app.store.workspace_by_id(ws_id).unwrap().unwrap();
+        assert!(!ws.shared, "toggle should flip shared -> false");
+        // The detached tmux session was killed.
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("kill-session -t =wsx-r-w"),
+            "detached tmux session must be killed on unshare, got: {calls:?}"
+        );
+        // The stale ref is cleared.
+        let reloaded = app.store.workspace_agents(ws_id).unwrap();
+        assert_eq!(
+            reloaded[0].session_ref, None,
+            "session_ref must be cleared on unshare"
+        );
+    }
+
+    /// After a wsx restart, a shared workspace's tmux session can outlive
+    /// the wsx client that spawned it — no `Session` in `app.sessions`, but
+    /// the server-side session is still alive. `classify_status` should
+    /// surface that as `Status::Detached` rather than the classifier's
+    /// default `Idle`, while a direct workspace (which never touches tmux)
+    /// stays plain `Idle`. Uses a fake `WSX_TMUX_BIN` recorder that exits 0
+    /// for every invocation, so `has-session` reads "alive" without a real
+    /// tmux server.
+    #[test]
+    fn shared_workspace_with_dead_client_but_live_tmux_is_detached() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::ui::dashboard::status::Status;
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        let script = tmpdir.path().join("fake-tmux.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_TMUX_BIN", script.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+
+        let shared_path = tmpdir.path().join("shared-w");
+        std::fs::create_dir_all(&shared_path).unwrap();
+        let shared_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "shared-w",
+                branch: "r/shared-w",
+                worktree_path: &shared_path,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(shared_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(
+                shared_id,
+                crate::pty::session::AgentKind::Claude,
+                crate::data::store::now_ms(),
+            )
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-shared-w")
+            .unwrap();
+
+        let direct_path = tmpdir.path().join("direct-w");
+        std::fs::create_dir_all(&direct_path).unwrap();
+        let direct_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "direct-w",
+                branch: "r/direct-w",
+                worktree_path: &direct_path,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(direct_id, WorkspaceState::Ready)
+            .unwrap();
+
+        // `App::new` -> `refresh()` -> `refresh_shared_detached()` runs its
+        // first sweep unthrottled (`shared_detached_polled_ms` starts at 0),
+        // so the sweep has already populated `shared_detached` by the time
+        // `App::new` returns.
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        let shared_ws = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == shared_id)
+            .map(|(_, w)| w.clone())
+            .unwrap();
+        let direct_ws = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == direct_id)
+            .map(|(_, w)| w.clone())
+            .unwrap();
+
+        assert_eq!(app.classify_status(&shared_ws), Status::Detached);
+        assert_eq!(app.classify_status(&direct_ws), Status::Idle);
+    }
+
+    /// A workspace whose only live wsx client belongs to a NON-primary
+    /// instance is not detached: someone is watching it. The sweep must
+    /// consider every instance's session, not just the primary's — with a
+    /// primary-only check, `has_client` reads false while the primary's
+    /// `session_ref` reads alive, and the workspace is wrongly marked `◆`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_workspace_with_running_added_instance_is_not_detached() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::ui::dashboard::status::Status;
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        let script = tmpdir.path().join("fake-tmux.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_TMUX_BIN", script.to_str().unwrap());
+        env.set("WSX_CODEX_BIN", cat_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_path = tmpdir.path().join("w");
+        std::fs::create_dir_all(&ws_path).unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: &ws_path,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(
+                ws_id,
+                crate::pty::session::AgentKind::Claude,
+                crate::data::store::now_ms(),
+            )
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+        let added = store
+            .add_workspace_agent(ws_id, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Live client on the ADDED instance only; the primary has none.
+        app.sessions
+            .spawn(
+                added.id,
+                ws_id,
+                &ws_path,
+                80,
+                24,
+                crate::pty::session::SpawnMode::Fresh {
+                    rename_ctx: None,
+                    custom_instructions: None,
+                    doctrine: None,
+                    additional_dirs: vec![],
+                    yolo: false,
+                },
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Codex,
+                None,
+            )
+            .unwrap();
+
+        // Force a fresh sweep now that the session exists (App::new's first
+        // sweep ran before the spawn).
+        app.shared_detached_polled_ms = 0;
+        app.refresh().unwrap();
+
+        let ws = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == ws_id)
+            .map(|(_, w)| w.clone())
+            .unwrap();
+        assert_ne!(
+            app.classify_status(&ws),
+            Status::Detached,
+            "a live client on a non-primary instance means someone is attached; not detached"
+        );
     }
 
     /// Test helper: create an App with N repos registered in the store
@@ -3357,6 +3909,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         app.store
@@ -3487,6 +4040,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/ws-alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         app.store
@@ -3526,6 +4080,85 @@ mod pm_state_tests {
             "i on a repo row should open NewWorkspace like Enter; got {:?}",
             app.modal
         );
+    }
+
+    #[tokio::test]
+    async fn capital_s_opens_new_workspace_modal_with_shared_true() {
+        // Capital S opens the NewWorkspace modal pre-set for a tmux-shared
+        // workspace, mirroring how capital N pre-sets yolo mode.
+        let (mut app, _) = make_app_with_n_repos(1);
+        app.select_index(0);
+        press(&mut app, 'S', KeyModifiers::SHIFT).await;
+        match app.modal {
+            Some(Modal::NewWorkspace { shared, yolo, .. }) => {
+                assert!(shared, "S should open the modal with shared: true");
+                assert!(!yolo, "S should not also enable yolo");
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ctrl_s_in_new_workspace_modal_toggles_shared() {
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+        app.modal = Some(Modal::NewWorkspace {
+            repo_id,
+            name_buffer: "alpha".to_string(),
+            yolo: false,
+            shared: false,
+            agent: crate::pty::session::AgentKind::Claude,
+        });
+        let shared_app = Arc::new(Mutex::new(
+            App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
+        ));
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        handle_key_modal(&mut app, &shared_app, ctrl_s)
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::NewWorkspace { shared, .. }) => {
+                assert!(shared, "Ctrl-s should toggle shared from false to true");
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
+        // Toggling again flips it back — and plain chars (no Ctrl) still
+        // fall through to the name buffer rather than toggling.
+        handle_key_modal(&mut app, &shared_app, ctrl_s)
+            .await
+            .unwrap();
+        match &app.modal {
+            Some(Modal::NewWorkspace { shared, .. }) => {
+                assert!(!shared, "second Ctrl-s should toggle shared back to false");
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
+        let plain_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+        handle_key_modal(&mut app, &shared_app, plain_s)
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::NewWorkspace {
+                shared,
+                name_buffer,
+                ..
+            }) => {
+                assert!(!shared, "plain 's' must not toggle shared");
+                assert_eq!(
+                    name_buffer, "alphas",
+                    "plain 's' should append to the name buffer"
+                );
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -3749,6 +4382,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
             });
         }
@@ -3809,6 +4443,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
@@ -3873,6 +4508,7 @@ mod pm_state_tests {
             &repo,
             Some("doomed"),
             tmp.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -3979,6 +4615,7 @@ mod pm_state_tests {
             Some("doomed"),
             tmp.path(),
             false,
+            false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
             |_| {},
@@ -4042,6 +4679,123 @@ mod pm_state_tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn capital_t_opens_confirm_share_and_y_flips_shared_and_restarts_session() {
+        // T on a selected workspace opens ConfirmShare proposing the flip of
+        // the current `shared` flag; `y` commits it via
+        // `toggle_workspace_shared`, which restarts any running session so
+        // it respawns per the new flag (resuming via --continue).
+        //
+        // This exercises the *unshare* direction (shared: true -> false):
+        // the respawn after unsharing is a plain direct spawn (no tmux
+        // binary required), unlike the share direction, whose tmux-backed
+        // respawn is covered by the tmux-gated e2e in Task 10.
+        use crate::data::store::NewWorkspace;
+        use crate::ui::modal::Modal;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let repo_id = app
+            .store
+            .add_repo(std::path::Path::new("."), "scratch", "test")
+            .unwrap();
+        let ws_id = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "share-toggle-test",
+                branch: "main",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Codex,
+                shared: true,
+            })
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        let inst = test_primary_instance(&app, ws_id);
+        app.sessions
+            .spawn(
+                inst,
+                ws_id,
+                std::path::Path::new("."),
+                80,
+                24,
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Codex,
+                None,
+            )
+            .unwrap();
+        app.refresh().unwrap();
+        app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+        app.select_index(0);
+
+        let old_session = app.sessions.get(inst).expect("session should be running");
+
+        let shared_app = Arc::new(Mutex::new(app));
+
+        // Press Shift+T: should open ConfirmShare proposing to_shared: false
+        // (workspace starts shared: true).
+        {
+            let mut g = shared_app.lock().await;
+            let t = KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT);
+            handle_event(&mut g, &shared_app, CtEvent::Key(t))
+                .await
+                .unwrap();
+            match &g.modal {
+                Some(Modal::ConfirmShare {
+                    workspace_id,
+                    to_shared,
+                    ..
+                }) => {
+                    assert_eq!(*workspace_id, ws_id);
+                    assert!(
+                        !*to_shared,
+                        "workspace starts shared; T should propose to_shared: false"
+                    );
+                }
+                other => panic!("expected ConfirmShare modal, got {other:?}"),
+            }
+        }
+
+        // Press 'y': flips the store flag and restarts the running instance.
+        {
+            let mut g = shared_app.lock().await;
+            let y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+            handle_event(&mut g, &shared_app, CtEvent::Key(y))
+                .await
+                .unwrap();
+        }
+
+        let g = shared_app.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "y should dismiss ConfirmShare on success; got {:?}",
+            g.modal
+        );
+        let ws = g.store.workspace_by_id(ws_id).unwrap().unwrap();
+        assert!(!ws.shared, "y should flip store workspace.shared to false");
+        let new_session = g
+            .sessions
+            .get(inst)
+            .expect("instance should have a respawned session");
+        assert!(
+            !Arc::ptr_eq(&old_session, &new_session),
+            "the old session must be gone from app.sessions, replaced by a respawned one"
+        );
+    }
+
     #[tokio::test]
     async fn enter_during_setup_running_is_a_noop() {
         use crate::ui::modal::Modal;
@@ -4065,6 +4819,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
@@ -4118,6 +4873,7 @@ mod pm_state_tests {
                 repo_id,
                 name_buffer: "alpha".to_string(),
                 yolo: false,
+                shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
             });
             let enter = crossterm::event::KeyEvent::new(
@@ -4166,6 +4922,7 @@ mod pm_state_tests {
             &repo,
             Some("feature"),
             tmp.path(),
+            false,
             false,
             crate::pty::session::AgentKind::Claude,
             tokio_util::sync::CancellationToken::new(),
@@ -4227,6 +4984,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -4313,6 +5071,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/ws"),
                 yolo: false,
                 agent: AgentKind::Hermes,
+                shared: false,
             })
             .unwrap();
         store
@@ -4538,6 +5297,7 @@ mod pm_state_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: AgentKind::Hermes,
+                shared: false,
             })
             .unwrap();
         store
@@ -4735,6 +5495,7 @@ mod ctrl_x_shift_d_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-esc-1"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let second_id = store
@@ -4745,6 +5506,7 @@ mod ctrl_x_shift_d_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-esc-2"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -4773,6 +5535,7 @@ mod ctrl_x_shift_d_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         let second_mode = crate::pty::session::SpawnMode::Fresh {
@@ -4793,6 +5556,7 @@ mod ctrl_x_shift_d_tests {
                 second_mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
 
@@ -4863,6 +5627,7 @@ mod restore_layout_tests {
                 worktree_path: std::path::Path::new(&format!("/tmp/wsx-{slug}-1")),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let second_id = store
@@ -4873,6 +5638,7 @@ mod restore_layout_tests {
                 worktree_path: std::path::Path::new(&format!("/tmp/wsx-{slug}-2")),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -4901,6 +5667,7 @@ mod restore_layout_tests {
                     mode,
                     crate::agent::remote_control::RemoteOpts::disabled(),
                     crate::pty::session::AgentKind::Claude,
+                    None,
                 )
                 .unwrap();
         }
@@ -5072,6 +5839,7 @@ mod detail_bar_focus_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store
@@ -5247,6 +6015,7 @@ mod detail_bar_focus_tests {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -5267,6 +6036,7 @@ mod detail_bar_focus_tests {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
 
@@ -5373,6 +6143,7 @@ mod leader_view_transition_tests {
                 worktree_path: std::path::Path::new("/tmp/wsx-test/alpha"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
@@ -5471,6 +6242,7 @@ mod attached_wheel_forwarding {
                 worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let mode = crate::pty::session::SpawnMode::Fresh {
@@ -5491,6 +6263,7 @@ mod attached_wheel_forwarding {
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 crate::pty::session::AgentKind::Claude,
+                None,
             )
             .unwrap();
         app.view = crate::ui::View::Attached(AttachedState::single(test_target(app, ws_id)));

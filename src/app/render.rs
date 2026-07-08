@@ -1001,6 +1001,7 @@ mod layout_indicator_cache_tests {
                 worktree_path: std::path::Path::new("/tmp/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let ta = crate::ui::split::AttachTarget {
@@ -1052,6 +1053,7 @@ mod selection_anchoring_tests {
                     worktree_path: Path::new(wt),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
                 })
                 .unwrap()
         };

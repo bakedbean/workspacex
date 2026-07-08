@@ -357,6 +357,9 @@ impl Theme {
             Waiting => self.waiting,
             Thinking => self.thinking,
             Complete => self.complete,
+            // A live-but-unwatched agent deserves attention-neutral warmth,
+            // not idle gray — reuse the `waiting` color.
+            Detached => self.waiting,
             Idle => self.idle,
         };
         Style::default().fg(fg)
@@ -433,6 +436,7 @@ mod tests {
         assert_eq!(t.status_style(Status::Waiting).fg, Some(t.waiting));
         assert_eq!(t.status_style(Status::Thinking).fg, Some(t.thinking));
         assert_eq!(t.status_style(Status::Complete).fg, Some(t.complete));
+        assert_eq!(t.status_style(Status::Detached).fg, Some(t.waiting));
         assert_eq!(t.status_style(Status::Idle).fg, Some(t.idle));
     }
 

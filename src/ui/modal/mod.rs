@@ -45,11 +45,23 @@ pub enum Modal {
         repo_id: RepoId,
         name_buffer: String,
         yolo: bool,
+        shared: bool,
         agent: crate::pty::session::AgentKind,
     },
     ConfirmArchive {
         workspace_id: crate::data::store::WorkspaceId,
         name: String,
+    },
+    ConfirmShare {
+        workspace_id: crate::data::store::WorkspaceId,
+        name: String,
+        /// `true` = converting to tmux-shared, `false` = converting to direct.
+        to_shared: bool,
+        /// Snapshot of how many instances currently have a running session,
+        /// taken when the modal was opened (by `T`'s dashboard handler) —
+        /// purely for the confirmation message; the actual restart in
+        /// `toggle_workspace_shared` re-checks liveness at commit time.
+        running_count: usize,
     },
     SetupRunning {
         cancel: tokio_util::sync::CancellationToken,
@@ -173,10 +185,16 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
         Modal::NewWorkspace {
             name_buffer,
             yolo,
+            shared,
             agent,
             ..
         } => {
             let agent_label = agent.display_name();
+            let shared_line = if *shared {
+                "shared (tmux): on — ^s toggles\n"
+            } else {
+                "shared (tmux): off — ^s toggles\n"
+            };
             (
                 if *yolo {
                     "new workspace (permissive)"
@@ -184,7 +202,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
                     "new workspace"
                 },
                 format!(
-                    "name: {name_buffer}\nagent: {agent_label}  [tab] toggle\n\n[enter] create   [esc] cancel"
+                    "name: {name_buffer}\nagent: {agent_label}  [tab] toggle\n{shared_line}\n[enter] create   [esc] cancel"
                 ),
             )
         }
@@ -192,6 +210,35 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             "archive workspace",
             format!("archive '{name}'?\n\n[y] yes   [n]/[esc] cancel"),
         ),
+        Modal::ConfirmShare {
+            name,
+            to_shared,
+            running_count,
+            ..
+        } => {
+            let dest = if *to_shared {
+                "shared (tmux)"
+            } else {
+                "direct (not tmux)"
+            };
+            let restart_note = match running_count {
+                0 => "No running sessions to restart.".to_string(),
+                1 => format!(
+                    "This restarts 1 running session {} tmux (conversation resumes via --continue).",
+                    if *to_shared { "inside" } else { "outside" }
+                ),
+                n => format!(
+                    "This restarts {n} running session(s) {} tmux (conversation resumes via --continue).",
+                    if *to_shared { "inside" } else { "outside" }
+                ),
+            };
+            (
+                "toggle sharing",
+                format!(
+                    "switch '{name}' to {dest}?\n\n{restart_note}\n\n[y] yes   [n]/[esc] cancel"
+                ),
+            )
+        }
         Modal::SetupRunning {
             progress, started, ..
         } => {

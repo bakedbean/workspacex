@@ -304,6 +304,12 @@ pub struct App {
     /// Drained by `run_loop` after each handled event.
     pub pending_workspace_refresh: std::collections::HashSet<crate::data::store::WorkspaceId>,
     pub registry: crate::detail_modules::Registry,
+    /// Workspaces whose shared tmux session is alive on the server while wsx
+    /// holds no client for it (e.g. right after a wsx restart). Refreshed by
+    /// `refresh_shared_detached`, throttled — `tmux has-session` is a subprocess.
+    pub shared_detached: std::collections::HashSet<crate::data::store::WorkspaceId>,
+    /// Epoch-ms of the last `refresh_shared_detached` sweep (throttle key).
+    pub shared_detached_polled_ms: u64,
 }
 
 impl App {
@@ -376,6 +382,8 @@ impl App {
             started_at: std::time::Instant::now(),
             last_data_version: 0,
             registry,
+            shared_detached: std::collections::HashSet::new(),
+            shared_detached_polled_ms: 0,
         };
         // Sweep stale Pending rows from previous runs.
         let _ = app
@@ -425,6 +433,9 @@ impl App {
                 self.workspaces.push((r.id, w));
             }
         }
+        // Needs `self.workspaces` populated above (it iterates shared
+        // workspaces) — must run after the rebuild, not before.
+        self.refresh_shared_detached();
         // Rebuild selection targets: repos in order, each followed by its workspaces.
         self.selectable.clear();
         for repo in &self.repos {
@@ -446,6 +457,51 @@ impl App {
             .collect();
         self.pushed_status = self.store.all_workspace_status().unwrap_or_default();
         Ok(())
+    }
+
+    /// Sweep for shared workspaces whose tmux session is alive on the
+    /// server while wsx holds no client for it (e.g. right after a wsx
+    /// restart). Populates `shared_detached`, consumed by `classify_status`.
+    /// Throttled to one sweep per 10s — `tmux has-session` is a subprocess,
+    /// so this must not run on every tick.
+    fn refresh_shared_detached(&mut self) {
+        let now = crate::time::now_ms_u64();
+        if now.saturating_sub(self.shared_detached_polled_ms) < 10_000 {
+            return;
+        }
+        self.shared_detached_polled_ms = now;
+        self.shared_detached.clear();
+        for (_, ws) in &self.workspaces {
+            if !ws.shared {
+                continue;
+            }
+            // One roster fetch serves both checks. A client on ANY instance
+            // (not just the primary) means the workspace isn't detached —
+            // e.g. only a side-pane codex#2 is attached while the primary
+            // exited.
+            let instances = match self.store.workspace_agents(ws.id) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+            let has_client = instances.iter().any(|inst| {
+                self.sessions.get(inst.id).is_some_and(|s| {
+                    matches!(
+                        *s.status.read().unwrap(),
+                        crate::pty::session::SessionStatus::Running { .. }
+                    )
+                })
+            });
+            if has_client {
+                continue;
+            }
+            let alive = instances
+                .into_iter()
+                .filter_map(|i| i.session_ref)
+                .any(|name| crate::pty::tmux::has_session(&name));
+            if alive {
+                self.shared_detached.insert(ws.id);
+            }
+        }
     }
 
     /// Allocate a fresh generation id for a new workspace-creation task.
@@ -650,7 +706,7 @@ impl App {
             .map(|e| e.last_log_activity_ms)
             .unwrap_or(0);
         let reported = fresh_reported_state(self.pushed_status.get(&ws.id), last_log_activity);
-        crate::ui::dashboard::status::Status::classify(
+        let status = crate::ui::dashboard::status::Status::classify(
             awaiting,
             stopped_kind,
             stalled,
@@ -659,7 +715,20 @@ impl App {
             user_has_prompted,
             has_prior,
             reported,
-        )
+        );
+        // A shared workspace's tmux session can outlive its wsx client
+        // (e.g. across a wsx restart). The classifier above has no client
+        // to see, so it reads Idle; the `shared_detached` sweep (see
+        // `refresh_shared_detached`) independently confirms the tmux
+        // session is still alive on the server and we surface that here —
+        // but only when the classifier landed on Idle, so it never masks
+        // a higher-priority state like Question or Stalled.
+        if status == crate::ui::dashboard::status::Status::Idle
+            && self.shared_detached.contains(&ws.id)
+        {
+            return crate::ui::dashboard::status::Status::Detached;
+        }
+        status
     }
 
     /// The freshness-gated agent-pushed status for a workspace, or `None` when
@@ -1192,6 +1261,49 @@ pub(crate) fn build_spawn_info(
     Some((ws_id, worktree, mode, repo_path, agent))
 }
 
+/// The tmux session name for an instance of a *shared* workspace, or None
+/// for direct workspaces.
+///
+/// `session_ref` is the source of truth for lookup/kill: once an instance has
+/// a stored name, that name is returned verbatim and NEVER re-derived. This
+/// matters because workspaces are renamed routinely (auto-rename), and a
+/// re-derived name would no longer match the live tmux session — `-A` would
+/// spin up a SECOND session and orphan the original agent forever.
+///
+/// A name is derived (and persisted after a successful spawn by the caller)
+/// only when `session_ref` is None. At derivation time, if another instance
+/// already claims the derived name (a sanitization collision — see
+/// `Store::session_ref_in_use`), the workspace id is appended so `-A` can't
+/// attach to the wrong agent. Combined with the stored-ref reuse above, the
+/// disambiguated name is then stable for the life of the instance.
+pub(crate) fn tmux_name_for(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+    instance: &crate::data::agents::AgentInstance,
+) -> Option<String> {
+    let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id)?;
+    if !ws.shared {
+        return None;
+    }
+    // Stored name wins: never re-derive after creation.
+    if let Some(existing) = &instance.session_ref {
+        return Some(existing.clone());
+    }
+    let repo = app.repos.iter().find(|r| r.id == *rid)?;
+    let derived = crate::pty::tmux::session_name(
+        &repo.name,
+        &ws.name,
+        instance.agent,
+        instance.ordinal,
+        instance.is_primary,
+    );
+    // Disambiguate a first-spawn collision with another instance's stored ref.
+    match app.store.session_ref_in_use(&derived, instance.id) {
+        Ok(true) => Some(format!("{derived}-{}", ws_id.0)),
+        _ => Some(derived),
+    }
+}
+
 /// Build spawn parameters for an *added* (non-primary) instance. Added agents
 /// always spawn `Fresh` with an injected handoff note so they re-orient from
 /// the shared worktree + git diff (no session resume — see Task 8 scope).
@@ -1340,11 +1452,29 @@ pub(crate) fn ensure_workspace_session(
         // Resolve the primary agent instance for this workspace, defensively
         // seeding one for any row that somehow lacks a primary instance.
         let inst = resolve_primary_instance(app, id)?;
-        match app
-            .sessions
-            .spawn(inst, id, &path, 80, 24, mode, remote, agent)
-        {
-            Ok(_) => {}
+        let instance = app
+            .store
+            .workspace_agents_by_id(inst)?
+            .ok_or_else(|| crate::error::Error::Store(rusqlite::Error::QueryReturnedNoRows))?;
+        let tmux = tmux_name_for(app, id, &instance);
+        match app.sessions.spawn(
+            inst,
+            id,
+            &path,
+            80,
+            24,
+            mode,
+            remote,
+            agent,
+            tmux.as_deref(),
+        ) {
+            Ok(_) => {
+                if let Some(name) = &tmux {
+                    if let Err(e) = app.store.set_instance_session_ref(inst, name) {
+                        tracing::warn!(error = %e, "failed to persist tmux session_ref");
+                    }
+                }
+            }
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
                 app.modal = Some(crate::ui::modal::Modal::AgentMissing {
                     ws_id,
@@ -1391,11 +1521,25 @@ pub(crate) fn ensure_instance_session(
     if let Some((path, mode, repo_path)) = build_added_spawn_info(app, &instance) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
-        match app
-            .sessions
-            .spawn(inst, ws_id, &path, 80, 24, mode, remote, instance.agent)
-        {
-            Ok(_) => {}
+        let tmux = tmux_name_for(app, ws_id, &instance);
+        match app.sessions.spawn(
+            inst,
+            ws_id,
+            &path,
+            80,
+            24,
+            mode,
+            remote,
+            instance.agent,
+            tmux.as_deref(),
+        ) {
+            Ok(_) => {
+                if let Some(name) = &tmux {
+                    if let Err(e) = app.store.set_instance_session_ref(inst, name) {
+                        tracing::warn!(error = %e, "failed to persist tmux session_ref");
+                    }
+                }
+            }
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
                 if surface_missing {
                     app.modal = Some(crate::ui::modal::Modal::AgentMissing {
@@ -1410,6 +1554,94 @@ pub(crate) fn ensure_instance_session(
         }
     }
     Ok(AttachReady::Ok)
+}
+
+/// Flip a workspace's `shared` flag and restart any currently-running
+/// instances so they respawn with (or without) tmux per the new flag.
+/// `build_spawn_info`/`build_added_spawn_info` already select
+/// `SpawnMode::Continue` whenever `has_prior_session_for` finds a prior
+/// session, so the respawn resumes the conversation via `--continue` for
+/// free — this function just needs to kill the old backend and re-ensure.
+///
+/// Instances with no running session are left untouched (no spurious
+/// spawns). The was-running set is snapshotted *before* flipping the flag
+/// and calling `app.refresh()`, so the borrow of `app.store`/`app.sessions`
+/// used to compute it is long gone by the time we mutate `app` below.
+pub(crate) fn toggle_workspace_shared(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Result<()> {
+    let ws = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == ws_id)
+        .map(|(_, w)| w.clone())
+        .ok_or_else(|| crate::error::Error::UserInput("workspace not found".into()))?;
+    let to_shared = !ws.shared;
+    // Guard: sharing spawns agents inside tmux. If tmux is absent, bail BEFORE
+    // flipping the flag or killing any running direct agent — otherwise we'd
+    // tear down live sessions only to discover we can't respawn them shared.
+    // Surface the same AgentMissing modal the spawn path uses.
+    if to_shared && !crate::pty::tmux::is_available() {
+        app.modal = Some(crate::ui::modal::Modal::AgentMissing {
+            ws_id,
+            agent: ws.agent,
+            binary: crate::pty::tmux::tmux_bin(),
+        });
+        return Ok(());
+    }
+    let all_instances = app.store.workspace_agents(ws_id)?;
+    let running: Vec<_> = all_instances
+        .iter()
+        .filter(|inst| {
+            app.sessions.get(inst.id).is_some_and(|s| {
+                matches!(
+                    *s.status.read().unwrap(),
+                    crate::pty::session::SessionStatus::Running { .. }
+                )
+            })
+        })
+        .cloned()
+        .collect();
+    app.store.set_workspace_shared(ws_id, to_shared)?;
+    app.refresh()?; // reload app.workspaces so spawn sees the new flag
+    // Restart only instances that were actually running. `sessions.remove`
+    // calls `kill_backend` in both directions: for a direct child it SIGKILLs
+    // the agent; for a tmux-backed session (unsharing) it also kills the
+    // tmux server session — there's no way to move a live process out of
+    // tmux, so losing in-flight output and resuming via `--continue` is the
+    // intended design here.
+    for inst in &running {
+        app.sessions.remove(inst.id);
+        if inst.is_primary {
+            ensure_workspace_session(app, ws_id)?;
+        } else {
+            ensure_instance_session(app, inst.id, false)?;
+        }
+    }
+    // When unsharing, no instance should keep a tmux `session_ref`. Running
+    // instances were respawned direct above (their tmux session died inside
+    // `sessions.remove`), but their stored ref is now stale. Non-running
+    // instances were never touched — a detached-but-alive tmux session would
+    // be orphaned, so kill it directly first. Then clear the ref either way so
+    // a later archive doesn't try to kill a name that no longer addresses
+    // anything. (CLI unshare is intentionally left alone: it flag-flips only,
+    // keeping refs so archive can still clean up.)
+    if !to_shared {
+        let running_ids: std::collections::HashSet<_> = running.iter().map(|i| i.id).collect();
+        for inst in &all_instances {
+            let Some(name) = &inst.session_ref else {
+                continue;
+            };
+            if !running_ids.contains(&inst.id) {
+                crate::pty::tmux::kill_session(name);
+            }
+            if let Err(e) = app.store.clear_instance_session_ref(inst.id) {
+                tracing::warn!(error = %e, "failed to clear session_ref on unshare");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Attach to a workspace: ensure a session, restore layout, and switch
@@ -1692,6 +1924,7 @@ mod added_spawn_tests {
                 worktree_path: std::path::Path::new("/tmp/r/feat"),
                 yolo: false,
                 agent: AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
@@ -1966,6 +2199,7 @@ mod selection_helper_tests {
                 worktree_path: std::path::Path::new("/tmp/r/a"),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
             .unwrap();
         let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();

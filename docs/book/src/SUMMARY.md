@@ -27,6 +27,7 @@
 - [Integrations and remote access](integrations/index.md)
   - [Editor, terminal, and diff integration](integrations/editor-terminal-diff.md)
   - [Remote access](integrations/remote-access.md)
+  - [Shared workspaces](integrations/shared-workspaces.md)
   - [Remote control](integrations/remote-control.md)
   - [Named remote shortcuts](integrations/named-remote-shortcuts.md)
   - [MCP server inheritance](integrations/mcp-inheritance.md)

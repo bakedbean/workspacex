@@ -367,6 +367,7 @@ mod workspace_row_tests {
             created_at: 0,
             yolo: false,
             agent: crate::pty::session::AgentKind::Claude,
+            shared: false,
         }
     }
 

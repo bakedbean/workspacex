@@ -43,7 +43,7 @@ pub fn partition(rows: Vec<FlatRow>, quiet_repos: Vec<QuietRepo>) -> AttentionDa
             Status::Question | Status::Stalled | Status::Waiting => needs.push(r),
             Status::Thinking => working.push(r),
             Status::Complete => recent.push(r),
-            Status::Idle => idle.push(r),
+            Status::Idle | Status::Detached => idle.push(r),
         }
     }
     // Within NEEDS ATTENTION: priority desc, then most-recent first

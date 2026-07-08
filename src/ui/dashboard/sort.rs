@@ -10,6 +10,7 @@ pub struct StatusCounts {
     pub waiting: u32,
     pub thinking: u32,
     pub complete: u32,
+    pub detached: u32,
     pub idle: u32,
 }
 
@@ -23,6 +24,7 @@ impl FromIterator<Status> for StatusCounts {
                 Status::Waiting => c.waiting += 1,
                 Status::Thinking => c.thinking += 1,
                 Status::Complete => c.complete += 1,
+                Status::Detached => c.detached += 1,
                 Status::Idle => c.idle += 1,
             }
         }
@@ -32,7 +34,13 @@ impl FromIterator<Status> for StatusCounts {
 
 impl StatusCounts {
     pub fn total(&self) -> u32 {
-        self.question + self.stalled + self.waiting + self.thinking + self.complete + self.idle
+        self.question
+            + self.stalled
+            + self.waiting
+            + self.thinking
+            + self.complete
+            + self.detached
+            + self.idle
     }
 }
 
@@ -56,6 +64,7 @@ mod tests {
             waiting: w,
             thinking: t,
             complete: c,
+            detached: 0,
             idle: i,
         }
     }

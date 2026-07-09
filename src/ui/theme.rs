@@ -366,9 +366,56 @@ impl Theme {
     }
 }
 
+/// The glyph shown left of a branch name, chosen by PR lifecycle. Shared by
+/// the dashboard row and the remote shared-workspace picker so the two can't
+/// drift. Nerd-font mode uses per-lifecycle PR icons; the plain fallback is a
+/// single branch glyph regardless of lifecycle (color still distinguishes the
+/// states). Color comes from [`Theme::lifecycle_style`], not from here.
+pub(crate) fn branch_glyph(
+    lifecycle: Option<crate::git::forge::BranchLifecycle>,
+    nerd_fonts: bool,
+) -> &'static str {
+    use crate::git::forge::BranchLifecycle::*;
+    if !nerd_fonts {
+        return "\u{2387}"; // ⎇
+    }
+    match lifecycle {
+        Some(PrMerged) => "\u{f419}",
+        Some(PrClosed) => "\u{f4dc}",
+        Some(PrDraft) => "\u{f4dd}",
+        Some(PrOpen | PrConflicted) => "\u{f407}",
+        _ => "\u{e0a0}",
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::wsx()
+    }
+}
+
+#[cfg(test)]
+mod branch_glyph_tests {
+    use super::branch_glyph;
+    use crate::git::forge::BranchLifecycle::*;
+
+    #[test]
+    fn plain_mode_is_always_the_branch_glyph() {
+        for lc in [None, Some(PrOpen), Some(PrMerged), Some(PrClosed)] {
+            assert_eq!(branch_glyph(lc, false), "\u{2387}", "lifecycle {lc:?}");
+        }
+    }
+
+    #[test]
+    fn nerd_mode_picks_a_distinct_glyph_per_lifecycle() {
+        assert_eq!(branch_glyph(Some(PrMerged), true), "\u{f419}");
+        assert_eq!(branch_glyph(Some(PrClosed), true), "\u{f4dc}");
+        assert_eq!(branch_glyph(Some(PrDraft), true), "\u{f4dd}");
+        assert_eq!(branch_glyph(Some(PrOpen), true), "\u{f407}");
+        assert_eq!(branch_glyph(Some(PrConflicted), true), "\u{f407}");
+        // NoPr and "unknown" both fall through to the neutral branch glyph.
+        assert_eq!(branch_glyph(Some(NoPr), true), "\u{e0a0}");
+        assert_eq!(branch_glyph(None, true), "\u{e0a0}");
     }
 }
 

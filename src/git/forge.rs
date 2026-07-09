@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::path::Path;
 use tokio::process::Command;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BranchLifecycle {
     NoPr,
     PrDraft,
@@ -222,6 +222,25 @@ mod tests {
         ));
         assert!(!stderr_means_no_pr("error: not authenticated"));
         assert!(!stderr_means_no_pr(""));
+    }
+
+    #[test]
+    fn lifecycle_serde_round_trips_every_variant() {
+        // The shared-workspace wire contract (SharedWorkspaceRecord) carries
+        // this over ssh, so every variant must survive JSON serialize →
+        // deserialize unchanged.
+        for lc in [
+            BranchLifecycle::NoPr,
+            BranchLifecycle::PrDraft,
+            BranchLifecycle::PrOpen,
+            BranchLifecycle::PrConflicted,
+            BranchLifecycle::PrMerged,
+            BranchLifecycle::PrClosed,
+        ] {
+            let json = serde_json::to_string(&lc).unwrap();
+            let back: BranchLifecycle = serde_json::from_str(&json).unwrap();
+            assert_eq!(lc, back, "round-trip failed for {lc:?} (json {json})");
+        }
     }
 
     /// Sanity check that fetch handles a non-git path gracefully.

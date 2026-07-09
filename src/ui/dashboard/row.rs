@@ -204,17 +204,7 @@ pub fn render(
         };
         spans.push(Span::styled(badge.to_string(), badge_style));
     }
-    let branch_glyph = if inputs.nerd_fonts {
-        match inputs.lifecycle {
-            Some(BranchLifecycle::PrMerged) => "\u{f419}",
-            Some(BranchLifecycle::PrClosed) => "\u{f4dc}",
-            Some(BranchLifecycle::PrDraft) => "\u{f4dd}",
-            Some(BranchLifecycle::PrOpen | BranchLifecycle::PrConflicted) => "\u{f407}",
-            _ => "\u{e0a0}",
-        }
-    } else {
-        "⎇"
-    };
+    let branch_glyph = crate::ui::theme::branch_glyph(inputs.lifecycle, inputs.nerd_fonts);
     let branch_text = format!("{} {}", branch_glyph, inputs.branch);
     let branch_target = branch_width
         .saturating_sub(layout_badge_width + shared_badge_width)

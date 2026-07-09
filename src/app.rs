@@ -147,6 +147,12 @@ pub(crate) struct RemoteRow<'a> {
     pub label: &'a str,
     pub tmux_session: Option<&'a str>,
     pub alive: bool,
+    /// The workspace's PR lifecycle as computed on the remote host (see
+    /// `SharedWorkspaceRecord::lifecycle`). Per-workspace, so every agent row
+    /// flattened from the same record carries the same value. `None` = unknown
+    /// (older host, or `gh` unavailable) → the renderer draws the branch dim,
+    /// with no lifecycle color.
+    pub lifecycle: Option<crate::git::forge::BranchLifecycle>,
 }
 
 /// Flatten `list.records` into one `RemoteRow` per *attachable* agent
@@ -175,6 +181,7 @@ pub(crate) fn remote_rows(list: &RemoteList) -> Vec<RemoteRow<'_>> {
                 label: &agent.label,
                 tmux_session: Some(tmux_session),
                 alive: agent.alive,
+                lifecycle: rec.lifecycle,
             });
         }
     }
@@ -214,6 +221,7 @@ mod remote_rows_tests {
                         alive: false,
                     },
                 ],
+                lifecycle: None,
             }],
         };
         let rows = remote_rows(&list);
@@ -240,6 +248,7 @@ mod remote_rows_tests {
                     tmux_session: None,
                     alive: true,
                 }],
+                lifecycle: None,
             }],
         };
         assert!(remote_rows(&list).is_empty());
@@ -261,6 +270,7 @@ mod remote_rows_tests {
                     tmux_session: None,
                     alive: false,
                 }],
+                lifecycle: None,
             }],
         };
         assert!(remote_rows(&list).is_empty());
@@ -2286,6 +2296,7 @@ mod reconcile_remote_tests {
             branch: "b".into(),
             worktree_path: "/x".into(),
             agents: vec![],
+            lifecycle: None,
         };
         // Stale gen: ignored entirely.
         reconcile_remote_list(
@@ -2350,6 +2361,7 @@ mod reconcile_remote_tests {
             branch: "b".into(),
             worktree_path: "/x".into(),
             agents: vec![],
+            lifecycle: None,
         };
         reconcile_remote_list(
             shared.clone(),

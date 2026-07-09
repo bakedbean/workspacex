@@ -1453,10 +1453,16 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             return Err(Error::UserInput(format!("exec sh: {err}")));
         }
         CliAction::SharedList { json } => {
-            let records = crate::commands::shared::shared_list_records(
+            let mut records = crate::commands::shared::shared_list_records(
                 &store,
                 crate::pty::tmux::has_session,
             )?;
+            // Colorable PR status is only useful to a remote picker consuming
+            // `--json`; the human table below doesn't render it, so skip the
+            // per-workspace `gh` calls for the plain path.
+            if json {
+                crate::commands::shared::enrich_with_pr_status(&mut records).await;
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&records)?);
             } else if records.is_empty() {

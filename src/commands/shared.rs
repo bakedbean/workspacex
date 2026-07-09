@@ -22,6 +22,15 @@ pub struct SharedWorkspaceRecord {
     pub branch: String,
     pub worktree_path: String,
     pub agents: Vec<SharedAgentRecord>,
+    /// The workspace branch's PR lifecycle, computed on the host that owns the
+    /// worktree (see `enrich_with_pr_status`) so the remote picker can color
+    /// rows the same way the dashboard does. `#[serde(default)]` keeps the
+    /// wire contract additive: a host on an older wsx that never emits this
+    /// field decodes as `None` (unknown → drawn dim, no lifecycle color).
+    /// `shared_list_records` itself leaves it `None`; enrichment is a separate,
+    /// best-effort step.
+    #[serde(default)]
+    pub lifecycle: Option<crate::git::forge::BranchLifecycle>,
 }
 
 /// Build records for every shared workspace. `liveness` is injected so tests
@@ -52,10 +61,63 @@ pub fn shared_list_records(
                 branch: w.branch.clone(),
                 worktree_path: w.worktree_path.to_string_lossy().into_owned(),
                 agents,
+                // Pure DB pass leaves PR status unknown; `enrich_with_pr_status`
+                // fills it in from `gh` before the records go over the wire.
+                lifecycle: None,
             });
         }
     }
     Ok(out)
+}
+
+/// Max `gh pr view` invocations in flight at once during enrichment. Bounds the
+/// process/network fan-out on a host sharing many workspaces instead of
+/// spawning one `gh` per workspace simultaneously.
+const PR_ENRICH_CONCURRENCY: usize = 8;
+
+/// Per-record ceiling on the `gh pr view` call. `gh` has no timeout of its own,
+/// so a single network-stalled invocation would otherwise hang the whole
+/// `wsx shared list --json` — and with it the remote picker's loading modal —
+/// indefinitely. On timeout the record simply stays `None`: best-effort, and
+/// the list still renders.
+const PR_ENRICH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Populate each record's `lifecycle` by asking `gh` for the branch's PR status,
+/// with bounded concurrency and a per-record timeout. Best-effort: any workspace
+/// whose `gh` call fails, times out, or has no PR is left `None` (uncolored →
+/// dim in the picker), so a missing/unauthenticated/slow `gh` degrades to an
+/// uncolored row rather than an error or a hang. Runs on the host that owns the
+/// worktrees — i.e. inside the remote's `wsx shared list --json` — since PR
+/// status is a property of the branch on the shared forge.
+pub async fn enrich_with_pr_status(records: &mut [SharedWorkspaceRecord]) {
+    use futures::StreamExt;
+
+    let fetches = records.iter().map(|rec| {
+        let path = std::path::PathBuf::from(&rec.worktree_path);
+        let branch = rec.branch.clone();
+        async move {
+            match tokio::time::timeout(
+                PR_ENRICH_TIMEOUT,
+                crate::git::forge::fetch_pr_status(&path, &branch),
+            )
+            .await
+            {
+                Ok(Ok(Some(s))) => Some(s.lifecycle),
+                // gh error, no resolvable PR, or timed out → best-effort None.
+                _ => None,
+            }
+        }
+    });
+    // `buffered` bounds concurrency to PR_ENRICH_CONCURRENCY and preserves input
+    // order, so the collected lifecycles line up with `records` by index.
+    let lifecycles: Vec<Option<crate::git::forge::BranchLifecycle>> =
+        futures::stream::iter(fetches)
+            .buffered(PR_ENRICH_CONCURRENCY)
+            .collect()
+            .await;
+    for (rec, lifecycle) in records.iter_mut().zip(lifecycles) {
+        rec.lifecycle = lifecycle;
+    }
 }
 
 #[cfg(test)]
@@ -201,13 +263,41 @@ mod tests {
                     "tmux_session": "wsx-r-w", "alive": true,
                     "another_future_field": 7}]
     }]"#;
-        let recs: Vec<SharedWorkspaceRecord> = serde_json::from_str(json).unwrap();
+        let mut recs: Vec<SharedWorkspaceRecord> = serde_json::from_str(json).unwrap();
         assert_eq!(recs[0].workspace, "w");
         assert_eq!(recs[0].agents[0].tmux_session.as_deref(), Some("wsx-r-w"));
         assert!(recs[0].agents[0].alive);
-        // and what we serialize, we can deserialize
+        // A payload from an older host with no `lifecycle` key decodes as
+        // `None` (unknown → uncolored), thanks to `#[serde(default)]`.
+        assert_eq!(recs[0].lifecycle, None);
+
+        // A populated lifecycle survives a serialize → deserialize round-trip,
+        // so the color the remote computes reaches the local picker intact.
+        recs[0].lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
         let back: Vec<SharedWorkspaceRecord> =
             serde_json::from_str(&serde_json::to_string(&recs).unwrap()).unwrap();
         assert_eq!(back[0].agents[0].label, "claude");
+        assert_eq!(
+            back[0].lifecycle,
+            Some(crate::git::forge::BranchLifecycle::PrOpen)
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_is_best_effort_on_non_git_paths() {
+        // Worktree paths that aren't git repos make `gh` fail; enrichment must
+        // leave those records `None` rather than error, so a picker still shows
+        // the (uncolored) list.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut records = vec![SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: "w".into(),
+            branch: "main".into(),
+            worktree_path: tmp.path().to_string_lossy().into_owned(),
+            agents: vec![],
+            lifecycle: None,
+        }];
+        enrich_with_pr_status(&mut records).await;
+        assert_eq!(records[0].lifecycle, None);
     }
 }

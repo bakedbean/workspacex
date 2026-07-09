@@ -4543,6 +4543,7 @@ mod pm_state_tests {
                         alive: false,
                     },
                 ],
+                lifecycle: None,
             }],
         }
     }
@@ -4564,6 +4565,7 @@ mod pm_state_tests {
                     tmux_session: None,
                     alive: false,
                 }],
+                lifecycle: None,
             }],
         }
     }

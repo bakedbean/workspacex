@@ -4544,6 +4544,7 @@ mod pm_state_tests {
                     },
                 ],
                 lifecycle: None,
+                pr_number: None,
             }],
         }
     }
@@ -4566,6 +4567,7 @@ mod pm_state_tests {
                     alive: false,
                 }],
                 lifecycle: None,
+                pr_number: None,
             }],
         }
     }

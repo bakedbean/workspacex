@@ -31,6 +31,13 @@ pub struct SharedWorkspaceRecord {
     /// best-effort step.
     #[serde(default)]
     pub lifecycle: Option<crate::git::forge::BranchLifecycle>,
+    /// The workspace branch's PR number, populated alongside `lifecycle` by
+    /// `enrich_with_pr_status`. `#[serde(default)]` keeps the wire contract
+    /// additive (older hosts decode it as `None`). `None` when there is no PR,
+    /// when `gh` couldn't answer, or on a legacy host — the picker just omits
+    /// the `#<num>` prefix in those cases.
+    #[serde(default)]
+    pub pr_number: Option<u32>,
 }
 
 /// Build records for every shared workspace. `liveness` is injected so tests
@@ -62,8 +69,10 @@ pub fn shared_list_records(
                 worktree_path: w.worktree_path.to_string_lossy().into_owned(),
                 agents,
                 // Pure DB pass leaves PR status unknown; `enrich_with_pr_status`
-                // fills it in from `gh` before the records go over the wire.
+                // fills lifecycle + number in from `gh` before the records go
+                // over the wire.
                 lifecycle: None,
+                pr_number: None,
             });
         }
     }
@@ -82,11 +91,16 @@ const PR_ENRICH_CONCURRENCY: usize = 8;
 /// the list still renders.
 const PR_ENRICH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Populate each record's `lifecycle` by asking `gh` for the branch's PR status,
-/// with bounded concurrency and a per-record timeout. Best-effort: any workspace
-/// whose `gh` call fails, times out, or has no PR is left `None` (uncolored →
-/// dim in the picker), so a missing/unauthenticated/slow `gh` degrades to an
-/// uncolored row rather than an error or a hang. Runs on the host that owns the
+/// Populate each record's `lifecycle` and `pr_number` by asking `gh` for the
+/// branch's PR status, with bounded concurrency and a per-record timeout.
+/// Best-effort and degrades gracefully rather than erroring or hanging:
+/// - a branch with **no PR** resolves to `Some(BranchLifecycle::NoPr)` with
+///   `pr_number = None` (dim, no `#<num>`);
+/// - a `gh` failure, timeout, or missing/unauthenticated `gh` leaves both
+///   `lifecycle` and `pr_number` as `None` (also dim, no `#<num>`).
+///
+/// So `None` lifecycle means "couldn't determine", distinct from a known
+/// `NoPr`; both render the same in the picker. Runs on the host that owns the
 /// worktrees — i.e. inside the remote's `wsx shared list --json` — since PR
 /// status is a property of the branch on the shared forge.
 pub async fn enrich_with_pr_status(records: &mut [SharedWorkspaceRecord]) {
@@ -102,21 +116,21 @@ pub async fn enrich_with_pr_status(records: &mut [SharedWorkspaceRecord]) {
             )
             .await
             {
-                Ok(Ok(Some(s))) => Some(s.lifecycle),
+                Ok(Ok(Some(s))) => Some(s),
                 // gh error, no resolvable PR, or timed out → best-effort None.
                 _ => None,
             }
         }
     });
     // `buffered` bounds concurrency to PR_ENRICH_CONCURRENCY and preserves input
-    // order, so the collected lifecycles line up with `records` by index.
-    let lifecycles: Vec<Option<crate::git::forge::BranchLifecycle>> =
-        futures::stream::iter(fetches)
-            .buffered(PR_ENRICH_CONCURRENCY)
-            .collect()
-            .await;
-    for (rec, lifecycle) in records.iter_mut().zip(lifecycles) {
-        rec.lifecycle = lifecycle;
+    // order, so the collected statuses line up with `records` by index.
+    let statuses: Vec<Option<crate::git::forge::PrStatus>> = futures::stream::iter(fetches)
+        .buffered(PR_ENRICH_CONCURRENCY)
+        .collect()
+        .await;
+    for (rec, status) in records.iter_mut().zip(statuses) {
+        rec.lifecycle = status.map(|s| s.lifecycle);
+        rec.pr_number = status.and_then(|s| s.number);
     }
 }
 
@@ -267,13 +281,15 @@ mod tests {
         assert_eq!(recs[0].workspace, "w");
         assert_eq!(recs[0].agents[0].tmux_session.as_deref(), Some("wsx-r-w"));
         assert!(recs[0].agents[0].alive);
-        // A payload from an older host with no `lifecycle` key decodes as
-        // `None` (unknown → uncolored), thanks to `#[serde(default)]`.
+        // A payload from an older host with no `lifecycle`/`pr_number` keys
+        // decodes as `None` (unknown → uncolored, no #num), via `#[serde(default)]`.
         assert_eq!(recs[0].lifecycle, None);
+        assert_eq!(recs[0].pr_number, None);
 
-        // A populated lifecycle survives a serialize → deserialize round-trip,
-        // so the color the remote computes reaches the local picker intact.
+        // A populated lifecycle + PR number survive a serialize → deserialize
+        // round-trip, so what the remote computes reaches the local picker intact.
         recs[0].lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
+        recs[0].pr_number = Some(2087);
         let back: Vec<SharedWorkspaceRecord> =
             serde_json::from_str(&serde_json::to_string(&recs).unwrap()).unwrap();
         assert_eq!(back[0].agents[0].label, "claude");
@@ -281,6 +297,7 @@ mod tests {
             back[0].lifecycle,
             Some(crate::git::forge::BranchLifecycle::PrOpen)
         );
+        assert_eq!(back[0].pr_number, Some(2087));
     }
 
     #[tokio::test]
@@ -296,8 +313,10 @@ mod tests {
             worktree_path: tmp.path().to_string_lossy().into_owned(),
             agents: vec![],
             lifecycle: None,
+            pr_number: None,
         }];
         enrich_with_pr_status(&mut records).await;
         assert_eq!(records[0].lifecycle, None);
+        assert_eq!(records[0].pr_number, None);
     }
 }

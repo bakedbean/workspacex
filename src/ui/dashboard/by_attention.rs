@@ -3,6 +3,7 @@
 
 use crate::ui::dashboard::row::{self, RowInputs};
 use crate::ui::dashboard::status::Status;
+use crate::ui::text::truncate_pad;
 use crate::ui::theme::Theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -126,23 +127,6 @@ fn quiet_line(q: &QuietRepo, width: usize, theme: &Theme) -> Line<'static> {
         spans.push(Span::raw(" ".repeat(width - used)));
     }
     Line::from(spans)
-}
-
-/// Truncate `s` to fit `target` chars (replacing the last char with `…`
-/// when over) and right-pad with spaces when under.
-fn truncate_pad(s: &str, target: usize) -> String {
-    let len = s.chars().count();
-    if len > target && target > 0 {
-        let mut out: String = s.chars().take(target - 1).collect();
-        out.push('…');
-        out
-    } else if len < target {
-        let mut out = s.to_string();
-        out.push_str(&" ".repeat(target - len));
-        out
-    } else {
-        s.to_string()
-    }
 }
 
 fn flat_row_line(

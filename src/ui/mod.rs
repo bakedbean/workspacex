@@ -4,6 +4,7 @@ pub mod footer;
 pub mod modal;
 pub mod pm_pane;
 pub mod split;
+pub mod text;
 pub mod theme;
 pub mod updates_bar;
 

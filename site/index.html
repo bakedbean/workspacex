@@ -195,7 +195,7 @@
     <div class="sec-head reveal">
       <p class="kicker">Capabilities</p>
       <h2>Built for running many agents at once.</h2>
-      <p>Every session is an isolated worktree. workspacex gives you the connective tissue — communication, review, git, processes, and remote access — to drive them in parallel.</p>
+      <p>Every session is an isolated worktree. workspacex gives you the connective tissue — communication, review, git, processes, and shared workspaces you can reattach to from anywhere — to drive them in parallel.</p>
     </div>
 
     <div class="feat-grid">
@@ -242,6 +242,12 @@
         <p>Bring multiple workspaces into a single recursive pane tree and watch your agents work side by side. Split the attached view vim-style — <span class="mono">v</span> for panes side-by-side, <span class="mono">s</span> for stacked — then nest further however you like. Save any arrangement to its anchor workspace and it restores the moment you enter it, even across restarts.</p>
       </div>
 
+      <div class="card col-6 reveal" data-d="1">
+        <div class="glyph g-blue mono">◇</div>
+        <h3>Shared workspaces — agents that outlive your terminal</h3>
+        <p>Mark any workspace shared and its agents run inside tmux sessions instead of wsx's process tree. Quit wsx or lose your ssh connection — the agent keeps working, and reattaching picks the conversation up exactly where you left it. Press <span class="mono">H</span> to browse shared workspaces on any configured host — branches colorized by PR status — and attach over plain ssh, or skip wsx entirely with <span class="mono">tmux attach</span>. No daemon, no port forwarding.</p>
+      </div>
+
       <div class="card col-3 reveal" data-d="1">
         <div class="glyph g-red mono">⊞</div>
         <h3>Process management</h3>
@@ -249,8 +255,8 @@
       </div>
       <div class="card col-3 reveal" data-d="2">
         <div class="glyph g-green mono">⇡</div>
-        <h3>Remote-first sessions</h3>
-        <p>Every Claude Code session starts remote-enabled. Save remote commands to launch tmux-connected sessions instantly — pair with Tailscale to reach your full dashboard and workspaces from anywhere.</p>
+        <h3>Remote-ready sessions</h3>
+        <p>Save remote commands to launch tmux-connected sessions instantly, and pair with Tailscale to reach your full dashboard and workspaces from anywhere.</p>
       </div>
     </div>
   </div>

@@ -150,8 +150,8 @@ pub(crate) struct RemoteRow<'a> {
     /// The workspace's PR lifecycle as computed on the remote host (see
     /// `SharedWorkspaceRecord::lifecycle`). Per-workspace, so every agent row
     /// flattened from the same record carries the same value. `None` = unknown
-    /// (older host, or `gh` unavailable) → the renderer leaves the branch
-    /// uncolored.
+    /// (older host, or `gh` unavailable) → the renderer draws the branch dim,
+    /// with no lifecycle color.
     pub lifecycle: Option<crate::git::forge::BranchLifecycle>,
 }
 

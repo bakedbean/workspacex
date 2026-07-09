@@ -26,8 +26,9 @@ pub struct SharedWorkspaceRecord {
     /// worktree (see `enrich_with_pr_status`) so the remote picker can color
     /// rows the same way the dashboard does. `#[serde(default)]` keeps the
     /// wire contract additive: a host on an older wsx that never emits this
-    /// field decodes as `None` (unknown → uncolored). `shared_list_records`
-    /// itself leaves it `None`; enrichment is a separate, best-effort step.
+    /// field decodes as `None` (unknown → drawn dim, no lifecycle color).
+    /// `shared_list_records` itself leaves it `None`; enrichment is a separate,
+    /// best-effort step.
     #[serde(default)]
     pub lifecycle: Option<crate::git::forge::BranchLifecycle>,
 }
@@ -69,27 +70,51 @@ pub fn shared_list_records(
     Ok(out)
 }
 
+/// Max `gh pr view` invocations in flight at once during enrichment. Bounds the
+/// process/network fan-out on a host sharing many workspaces instead of
+/// spawning one `gh` per workspace simultaneously.
+const PR_ENRICH_CONCURRENCY: usize = 8;
+
+/// Per-record ceiling on the `gh pr view` call. `gh` has no timeout of its own,
+/// so a single network-stalled invocation would otherwise hang the whole
+/// `wsx shared list --json` — and with it the remote picker's loading modal —
+/// indefinitely. On timeout the record simply stays `None`: best-effort, and
+/// the list still renders.
+const PR_ENRICH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Populate each record's `lifecycle` by asking `gh` for the branch's PR status,
-/// concurrently across all records. Best-effort: any workspace whose `gh` call
-/// fails, times out, or has no PR is left with whatever `fetch_pr_status`
-/// returns (it already degrades to `Ok(None)` when `gh` is unusable), so a
-/// missing/unauthenticated `gh` simply yields uncolored rows rather than an
-/// error. Runs on the host that owns the worktrees — i.e. inside the remote's
-/// `wsx shared list --json` — since PR status is a property of the branch on the
-/// shared forge.
+/// with bounded concurrency and a per-record timeout. Best-effort: any workspace
+/// whose `gh` call fails, times out, or has no PR is left `None` (uncolored →
+/// dim in the picker), so a missing/unauthenticated/slow `gh` degrades to an
+/// uncolored row rather than an error or a hang. Runs on the host that owns the
+/// worktrees — i.e. inside the remote's `wsx shared list --json` — since PR
+/// status is a property of the branch on the shared forge.
 pub async fn enrich_with_pr_status(records: &mut [SharedWorkspaceRecord]) {
+    use futures::StreamExt;
+
     let fetches = records.iter().map(|rec| {
         let path = std::path::PathBuf::from(&rec.worktree_path);
         let branch = rec.branch.clone();
         async move {
-            crate::git::forge::fetch_pr_status(&path, &branch)
-                .await
-                .ok()
-                .flatten()
-                .map(|s| s.lifecycle)
+            match tokio::time::timeout(
+                PR_ENRICH_TIMEOUT,
+                crate::git::forge::fetch_pr_status(&path, &branch),
+            )
+            .await
+            {
+                Ok(Ok(Some(s))) => Some(s.lifecycle),
+                // gh error, no resolvable PR, or timed out → best-effort None.
+                _ => None,
+            }
         }
     });
-    let lifecycles = futures::future::join_all(fetches).await;
+    // `buffered` bounds concurrency to PR_ENRICH_CONCURRENCY and preserves input
+    // order, so the collected lifecycles line up with `records` by index.
+    let lifecycles: Vec<Option<crate::git::forge::BranchLifecycle>> =
+        futures::stream::iter(fetches)
+            .buffered(PR_ENRICH_CONCURRENCY)
+            .collect()
+            .await;
     for (rec, lifecycle) in records.iter_mut().zip(lifecycles) {
         rec.lifecycle = lifecycle;
     }

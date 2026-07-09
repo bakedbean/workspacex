@@ -2339,22 +2339,27 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
 
+            // Any other open modal swallows left clicks wholesale: the click
+            // rects below belong to chrome the modal is overlaying, and firing
+            // them "through" it mutates state the modal assumes stable (e.g.
+            // attaching mid-`RemoteListLoading`). One gate here instead of
+            // per-arm checks so future click targets can't reopen the hole.
+            if app.modal.is_some() {
+                return;
+            }
+
             // Footer keybind hint click → behave exactly like pressing the
-            // printed key. Only when no modal is open (a modal overlays the
-            // footer, so clicks "through" it shouldn't fire hints). The footer
-            // row doesn't overlap any other click target, so this is checked
-            // first and returns early.
-            if app.modal.is_none() {
-                if let Some(action) = app.footer_hint_rects.iter().find_map(|(r, a)| {
-                    let hit = m.column >= r.x
-                        && m.column < r.x.saturating_add(r.width)
-                        && m.row >= r.y
-                        && m.row < r.y.saturating_add(r.height);
-                    hit.then_some(*a)
-                }) {
-                    dispatch_footer_hint(app, action).await;
-                    return;
-                }
+            // printed key. The footer row doesn't overlap any other click
+            // target, so this is checked first and returns early.
+            if let Some(action) = app.footer_hint_rects.iter().find_map(|(r, a)| {
+                let hit = m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height);
+                hit.then_some(*a)
+            }) {
+                dispatch_footer_hint(app, action).await;
+                return;
             }
 
             if let Some(idx) = app.chip_rects.iter().position(|r| {
@@ -2408,14 +2413,12 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                     input: None,
                     notice: None,
                 });
-            } else if app.modal.is_none()
-                && app.usage_graph_rect.is_some_and(|r| {
-                    m.column >= r.x
-                        && m.column < r.x.saturating_add(r.width)
-                        && m.row >= r.y
-                        && m.row < r.y.saturating_add(r.height)
-                })
-            {
+            } else if app.usage_graph_rect.is_some_and(|r| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
                 // Clicking the footer activity graph opens the window picker,
                 // seeded with the currently-applied window.
                 let current = crate::config::usage_window::resolve(&app.store);

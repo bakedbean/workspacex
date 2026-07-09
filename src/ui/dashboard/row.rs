@@ -183,7 +183,7 @@ pub fn render(
         spans.push(Span::styled("\u{f0db} ".to_string(), theme.dim_style()));
     }
     // Shared (tmux-backed) badge, immediately left of the branch glyph:
-    // nf-cod-terminal_tmux when nerd fonts are on, hollow diamond otherwise
+    // nf-md-check_network when nerd fonts are on, hollow diamond otherwise
     // (the filled ◆ is the *detached* status glyph — same vocabulary).
     // Unlike the layout glyph this renders in BOTH font modes: shared-ness
     // matters on machines without nerd fonts too. Green while the tmux
@@ -194,7 +194,7 @@ pub fn render(
     let shared_badge_width = if inputs.shared { 2 } else { 0 };
     if inputs.shared {
         let badge = if inputs.nerd_fonts {
-            "\u{ebc8} "
+            "\u{f0c53} "
         } else {
             "◇ "
         };
@@ -404,21 +404,22 @@ mod tests {
             text.contains("◇ ⎇ bakedbean/repo-overview"),
             "shared badge must sit immediately left of the branch glyph: {text:?}"
         );
-        // Nerd fonts: the tmux logo (nf-cod-terminal_tmux), then the branch glyph.
+        // Nerd fonts: the network-check icon (nf-md-check_network), then the
+        // branch glyph.
         inputs.nerd_fonts = true;
         let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
         assert!(
-            text.contains("\u{ebc8} \u{e0a0} bakedbean/repo-overview"),
-            "nerd-font shared badge must be the tmux logo: {text:?}"
+            text.contains("\u{f0c53} \u{e0a0} bakedbean/repo-overview"),
+            "nerd-font shared badge must be the network-check icon: {text:?}"
         );
     }
 
     #[test]
     fn shared_badge_is_green_when_active_and_red_when_dead() {
         let theme = Theme::wsx();
-        // Both font modes: the badge glyph differs (tmux logo vs ◇) but the
-        // liveness coloring must behave identically in each.
-        for (nerd_fonts, badge_text) in [(false, "◇ "), (true, "\u{ebc8} ")] {
+        // Both font modes: the badge glyph differs (network-check icon vs ◇)
+        // but the liveness coloring must behave identically in each.
+        for (nerd_fonts, badge_text) in [(false, "◇ "), (true, "\u{f0c53} ")] {
             let badge_style = |inputs: &RowInputs| {
                 let line = render(inputs, ColumnWidths::default(), 0, &theme, 120);
                 line.spans
@@ -454,7 +455,7 @@ mod tests {
         let theme = Theme::wsx();
         let unshared = line_text(&render(&base(), ColumnWidths::default(), 0, &theme, 120));
         assert!(
-            !unshared.contains('◇') && !unshared.contains('\u{ebc8}'),
+            !unshared.contains('◇') && !unshared.contains('\u{f0c53}'),
             "no badge on direct workspaces: {unshared:?}"
         );
         // The badge consumes 2 cells of the branch column, so both rows

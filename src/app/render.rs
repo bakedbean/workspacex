@@ -760,14 +760,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 app.chip_rects = out.chip_rects;
                 app.pinned_commands_cache = pinned;
                 // The PR chip renders but isn't clickable: opening a PR keys off a
-                // local WorkspaceId we don't have for a remote workspace. Clear
-                // the click-target rects (and the agent/attention rects the remote
-                // frame never populates) so no stale target from a prior local
-                // Attached frame stays live under the remote view.
-                app.pr_link_rect = None;
-                app.procs_link_rect = None;
-                app.agent_chip_rects = out.agent_chip_rects;
-                app.attention_rects = Vec::new();
+                // local WorkspaceId we don't have for a remote workspace, so
+                // `out.pr_link_rect` is deliberately dropped. The other hit-test
+                // state the remote frame doesn't populate (pr/procs/agent/
+                // attention rects) is already reset by `draw()` at frame start, so
+                // no stale target from a prior local Attached frame survives here.
             } else {
                 // ssh client went away; bounce to dashboard on next event.
                 app.leader_pending = false;

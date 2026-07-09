@@ -222,6 +222,7 @@ mod remote_rows_tests {
                     },
                 ],
                 lifecycle: None,
+                pr_number: None,
             }],
         };
         let rows = remote_rows(&list);
@@ -249,6 +250,7 @@ mod remote_rows_tests {
                     alive: true,
                 }],
                 lifecycle: None,
+                pr_number: None,
             }],
         };
         assert!(remote_rows(&list).is_empty());
@@ -271,6 +273,7 @@ mod remote_rows_tests {
                     alive: false,
                 }],
                 lifecycle: None,
+                pr_number: None,
             }],
         };
         assert!(remote_rows(&list).is_empty());
@@ -2297,6 +2300,7 @@ mod reconcile_remote_tests {
             worktree_path: "/x".into(),
             agents: vec![],
             lifecycle: None,
+            pr_number: None,
         };
         // Stale gen: ignored entirely.
         reconcile_remote_list(
@@ -2362,6 +2366,7 @@ mod reconcile_remote_tests {
             worktree_path: "/x".into(),
             agents: vec![],
             lifecycle: None,
+            pr_number: None,
         };
         reconcile_remote_list(
             shared.clone(),

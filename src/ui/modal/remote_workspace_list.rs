@@ -139,6 +139,7 @@ mod tests {
                     },
                 ],
                 lifecycle: None,
+                pr_number: None,
             }],
         }
     }
@@ -185,6 +186,7 @@ mod tests {
                     alive: true,
                 }],
                 lifecycle,
+                pr_number: None,
             }],
         };
         let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -248,6 +250,7 @@ mod tests {
                     alive: false,
                 }],
                 lifecycle: None,
+                pr_number: None,
             }],
         };
         let text = render_to_string(&list, 0, None);

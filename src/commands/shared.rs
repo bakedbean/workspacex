@@ -93,12 +93,16 @@ const PR_ENRICH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5)
 
 /// Populate each record's `lifecycle` and `pr_number` by asking `gh` for the
 /// branch's PR status, with bounded concurrency and a per-record timeout.
-/// Best-effort: any workspace whose `gh` call fails, times out, or has no PR is
-/// left `None` (uncolored → dim in the picker, no `#<num>`), so a
-/// missing/unauthenticated/slow `gh` degrades gracefully rather than erroring or
-/// hanging. Runs on the host that owns the worktrees — i.e. inside the remote's
-/// `wsx shared list --json` — since PR status is a property of the branch on the
-/// shared forge.
+/// Best-effort and degrades gracefully rather than erroring or hanging:
+/// - a branch with **no PR** resolves to `Some(BranchLifecycle::NoPr)` with
+///   `pr_number = None` (dim, no `#<num>`);
+/// - a `gh` failure, timeout, or missing/unauthenticated `gh` leaves both
+///   `lifecycle` and `pr_number` as `None` (also dim, no `#<num>`).
+///
+/// So `None` lifecycle means "couldn't determine", distinct from a known
+/// `NoPr`; both render the same in the picker. Runs on the host that owns the
+/// worktrees — i.e. inside the remote's `wsx shared list --json` — since PR
+/// status is a property of the branch on the shared forge.
 pub async fn enrich_with_pr_status(records: &mut [SharedWorkspaceRecord]) {
     use futures::StreamExt;
 

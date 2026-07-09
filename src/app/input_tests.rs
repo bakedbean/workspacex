@@ -4451,6 +4451,169 @@ mod pm_state_tests {
         }
     }
 
+    /// The remote/shared bottom bar must show the host's GLOBAL pinned commands
+    /// and the workspace's PR chip (recovered from the retained `remote_list`
+    /// record whose agent owns the attached tmux), not just the `^x menu` hint.
+    /// Repo-scoped stats the host doesn't ship (procs/diff/model) stay off.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_bottom_bar_shows_global_pinned_and_pr_chip() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        // Fake ssh that streams a heartbeat so the remote session stays live.
+        let fake = dir.path().join("fake-ssh.sh");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nfor i in $(seq 1 60); do echo beat; sleep 1; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_SSH_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        // Global pinned commands are resolved locally and drive the remote agent.
+        store
+            .set_setting("pinned_commands", "Commit=/commit\nTest=/test")
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut app = App::new(store, tmp.path().to_path_buf()).unwrap();
+
+        // A retained remote list whose live agent owns the tmux we attach to,
+        // carrying a PR (open, #142) so the chip is recoverable by tmux match.
+        app.remote_list = Some({
+            use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+            crate::app::RemoteList {
+                host_name: "mini".into(),
+                dest: "eben@mini".into(),
+                records: vec![SharedWorkspaceRecord {
+                    repo: "r".into(),
+                    workspace: "w".into(),
+                    branch: "b".into(),
+                    worktree_path: "/x".into(),
+                    agents: vec![SharedAgentRecord {
+                        label: "claude".into(),
+                        agent: "claude".into(),
+                        tmux_session: Some("wsx-r-w".into()),
+                        alive: true,
+                    }],
+                    lifecycle: Some(crate::git::forge::BranchLifecycle::PrOpen),
+                    pr_number: Some(142),
+                }],
+            }
+        });
+
+        crate::app::attach_remote(
+            &mut app,
+            crate::app::RemoteTarget {
+                host_name: "mini".into(),
+                dest: "eben@mini".into(),
+                tmux: "wsx-r-w".into(),
+            },
+            80,
+            24,
+        )
+        .unwrap();
+        assert!(matches!(app.view, crate::ui::View::AttachedRemote));
+
+        let backend = TestBackend::new(120, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
+            .unwrap();
+        let text: String = term
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        assert!(text.contains("menu"), "the ^x menu hint must still render");
+        assert!(
+            text.contains("Commit") && text.contains("Test"),
+            "global pinned chips must render in the remote bar: {text:?}"
+        );
+        assert!(
+            text.contains("142"),
+            "the PR chip (#142) must render, recovered via tmux->record match: {text:?}"
+        );
+        // The dispatch cache is populated so `^x <digit>` / clicks can fire.
+        assert_eq!(app.pinned_commands_cache.len(), 2);
+        // No local WorkspaceId backs a remote PR, so its click target stays off.
+        assert!(app.pr_link_rect.is_none());
+
+        crate::app::detach_remote(&mut app);
+    }
+
+    /// `^x <digit>` in the remote view fires the matching global pinned command
+    /// into the ssh PTY, driving the remote agent. The fake ssh `cat`s its stdin
+    /// back out, so the dispatched command text lands on the remote screen.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_leader_digit_fires_pinned_command_into_ssh() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        let fake = dir.path().join("fake-ssh-cat.sh");
+        std::fs::write(&fake, "#!/bin/sh\ncat\n").unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_SSH_BIN", fake.to_str().unwrap());
+
+        let store = Store::open_in_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, tmp.path().to_path_buf()).unwrap(),
+        ));
+        {
+            let mut g = app.lock().await;
+            // The render pass populates the dispatch cache from settings; seed it
+            // directly here since this test drives keys without a render tick.
+            g.pinned_commands_cache = crate::commands::pinned::parse("Ship=/ship-it\nTest=/test");
+            crate::app::attach_remote(
+                &mut g,
+                crate::app::RemoteTarget {
+                    host_name: "mini".into(),
+                    dest: "eben@mini".into(),
+                    tmux: "wsx-r-w".into(),
+                },
+                80,
+                24,
+            )
+            .unwrap();
+        }
+
+        // ^x then '1' -> first pinned command (/ship-it) echoes back via `cat`.
+        for k in [
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('x'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('1'),
+                crossterm::event::KeyModifiers::empty(),
+            ),
+        ] {
+            let mut g = app.lock().await;
+            handle_event(&mut g, &app, CtEvent::Key(k)).await.unwrap();
+        }
+
+        wait_until(&app, "pinned command to echo back through ssh", |g| {
+            g.remote.as_ref().is_some_and(|s| {
+                s.parser
+                    .lock()
+                    .unwrap()
+                    .screen()
+                    .contents()
+                    .contains("/ship-it")
+            })
+        })
+        .await;
+
+        let mut g = app.lock().await;
+        crate::app::detach_remote(&mut g);
+    }
+
     #[tokio::test]
     async fn esc_during_remote_list_loading_clears_pending_gen_and_stale_fetch_no_ops() {
         // Esc while RemoteListLoading is up must close the modal AND clear

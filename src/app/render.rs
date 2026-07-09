@@ -700,8 +700,31 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .as_ref()
                     .map(|t| format!("{}/{}", t.host_name, t.tmux))
                     .unwrap_or_else(|| "remote".to_string());
-                // Remote panes carry no local attention/pinned state.
-                let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
+                // A remote attach is just an `ssh -t … tmux attach` PTY stream,
+                // so the host never ships the workspace's live process/diff/model
+                // stats — those stay off. But two chip-row elements ARE reachable
+                // locally and worth showing:
+                //   - the GLOBAL pinned commands (`resolve(global, None)`): they
+                //     dispatch by writing bytes into the focused PTY, which here
+                //     is the ssh hop into the remote tmux, so they drive the
+                //     remote agent just like a local pane. Repo-scoped pins are
+                //     skipped — we don't know the remote workspace's repo config.
+                //   - the PR chip, recovered from the retained `remote_list`
+                //     record whose agent owns the tmux session we attached to
+                //     (the same `lifecycle`/`pr_number` the H picker colors by).
+                let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
+                let pinned = crate::commands::pinned::resolve(global_pinned.as_deref(), None);
+                let pr = app.remote_list.as_ref().and_then(|list| {
+                    let tmux = app.remote_target.as_ref()?.tmux.as_str();
+                    list.records
+                        .iter()
+                        .find(|rec| {
+                            rec.agents
+                                .iter()
+                                .any(|a| a.tmux_session.as_deref() == Some(tmux))
+                        })
+                        .and_then(|rec| rec.pr_number.and_then(|n| rec.lifecycle.map(|lc| (lc, n))))
+                });
                 let (info_area, separator_area, pane_area, chip_area, agents_area) =
                     attached::layout_chrome(area, false);
                 attached::resize_pane(session, pane_area, false);
@@ -723,10 +746,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &label,
                     None,
                     None,
-                    pinned,
+                    &pinned,
                     0,
                     None,
-                    None,
+                    pr,
                     None,
                     &[],
                     None,
@@ -734,6 +757,17 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 );
                 app.attached_pane_rects = out.pane_rects;
                 app.footer_hint_rects = out.footer_hint_rects;
+                app.chip_rects = out.chip_rects;
+                app.pinned_commands_cache = pinned;
+                // The PR chip renders but isn't clickable: opening a PR keys off a
+                // local WorkspaceId we don't have for a remote workspace. Clear
+                // the click-target rects (and the agent/attention rects the remote
+                // frame never populates) so no stale target from a prior local
+                // Attached frame stays live under the remote view.
+                app.pr_link_rect = None;
+                app.procs_link_rect = None;
+                app.agent_chip_rects = out.agent_chip_rects;
+                app.attention_rects = Vec::new();
             } else {
                 // ssh client went away; bounce to dashboard on next event.
                 app.leader_pending = false;

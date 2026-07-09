@@ -183,8 +183,9 @@ pub fn render(
         spans.push(Span::styled("\u{f0db} ".to_string(), theme.dim_style()));
     }
     // Shared (tmux-backed) badge, immediately left of the branch glyph:
-    // nf-md-check_network when nerd fonts are on, hollow diamond otherwise
-    // (the filled ◆ is the *detached* status glyph — same vocabulary).
+    // with nerd fonts, nf-md-check_network while the session is alive and
+    // nf-md-close_network when it isn't; hollow diamond otherwise (the
+    // filled ◆ is the *detached* status glyph — same vocabulary).
     // Unlike the layout glyph this renders in BOTH font modes: shared-ness
     // matters on machines without nerd fonts too. Green while the tmux
     // session is alive (attached here or detached on the server); red when
@@ -194,7 +195,11 @@ pub fn render(
     let shared_badge_width = if inputs.shared { 2 } else { 0 };
     if inputs.shared {
         let badge = if inputs.nerd_fonts {
-            "\u{f0c53} "
+            if inputs.shared_active {
+                "\u{f0c53} "
+            } else {
+                "\u{f015b} "
+            }
         } else {
             "◇ "
         };
@@ -404,28 +409,41 @@ mod tests {
             text.contains("◇ ⎇ bakedbean/repo-overview"),
             "shared badge must sit immediately left of the branch glyph: {text:?}"
         );
-        // Nerd fonts: the network-check icon (nf-md-check_network), then the
-        // branch glyph.
+        // Nerd fonts, dead session: the network-close icon
+        // (nf-md-close_network), then the branch glyph.
         inputs.nerd_fonts = true;
         let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
         assert!(
+            text.contains("\u{f015b} \u{e0a0} bakedbean/repo-overview"),
+            "nerd-font dead shared badge must be the network-close icon: {text:?}"
+        );
+        // Nerd fonts, live session: the network-check icon
+        // (nf-md-check_network) instead.
+        inputs.shared_active = true;
+        let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        assert!(
             text.contains("\u{f0c53} \u{e0a0} bakedbean/repo-overview"),
-            "nerd-font shared badge must be the network-check icon: {text:?}"
+            "nerd-font live shared badge must be the network-check icon: {text:?}"
         );
     }
 
     #[test]
     fn shared_badge_is_green_when_active_and_red_when_dead() {
         let theme = Theme::wsx();
-        // Both font modes: the badge glyph differs (network-check icon vs ◇)
-        // but the liveness coloring must behave identically in each.
-        for (nerd_fonts, badge_text) in [(false, "◇ "), (true, "\u{f0c53} ")] {
-            let badge_style = |inputs: &RowInputs| {
+        // Both font modes must color liveness identically. Nerd fonts also
+        // switch the glyph with liveness (network-close when dead,
+        // network-check when live); plain Unicode keeps ◇ for both.
+        for (nerd_fonts, dead_badge, live_badge) in
+            [(false, "◇ ", "◇ "), (true, "\u{f015b} ", "\u{f0c53} ")]
+        {
+            let badge_style = |inputs: &RowInputs, badge_text: &str| {
                 let line = render(inputs, ColumnWidths::default(), 0, &theme, 120);
                 line.spans
                     .iter()
                     .find(|s| s.content.as_ref() == badge_text)
-                    .unwrap_or_else(|| panic!("badge span present (nerd_fonts={nerd_fonts})"))
+                    .unwrap_or_else(|| {
+                        panic!("badge span {badge_text:?} present (nerd_fonts={nerd_fonts})")
+                    })
                     .style
             };
             let mut inputs = base();
@@ -435,7 +453,7 @@ mod tests {
             // (the session exited or was never started, so a remote peer can't
             // attach): the error red, not idle gray.
             assert_eq!(
-                badge_style(&inputs).fg,
+                badge_style(&inputs, dead_badge).fg,
                 theme.err_style().fg,
                 "dead shared badge must be red (nerd_fonts={nerd_fonts})"
             );
@@ -443,7 +461,7 @@ mod tests {
             // green — "the agent is alive in tmux right now".
             inputs.shared_active = true;
             assert_eq!(
-                badge_style(&inputs).fg,
+                badge_style(&inputs, live_badge).fg,
                 theme.status_style(Status::Complete).fg,
                 "active badge must use the complete green (nerd_fonts={nerd_fonts})"
             );
@@ -455,7 +473,9 @@ mod tests {
         let theme = Theme::wsx();
         let unshared = line_text(&render(&base(), ColumnWidths::default(), 0, &theme, 120));
         assert!(
-            !unshared.contains('◇') && !unshared.contains('\u{f0c53}'),
+            !unshared.contains('◇')
+                && !unshared.contains('\u{f0c53}')
+                && !unshared.contains('\u{f015b}'),
             "no badge on direct workspaces: {unshared:?}"
         );
         // The badge consumes 2 cells of the branch column, so both rows

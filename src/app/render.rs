@@ -823,6 +823,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         *selected,
                         notice.as_deref(),
                         &app.theme,
+                        nerd_fonts_enabled(&app.store),
                     );
                 }
             }

@@ -18,6 +18,7 @@ pub fn render_remote_workspace_list(
     selected: usize,
     notice: Option<&str>,
     theme: &Theme,
+    nerd_fonts: bool,
 ) {
     let w = area.width.clamp(20, 100);
     let h = area.height.clamp(8, 25);
@@ -69,15 +70,29 @@ pub fn render_remote_workspace_list(
         let mut lines: Vec<Line> = Vec::new();
         for (i, row) in rows.iter().enumerate() {
             let marker = if row.alive { "\u{25CF}" } else { "\u{2717}" };
-            let text = format!(
-                "  {}/{}  {}  {}  {marker}",
-                row.repo, row.workspace, row.branch, row.label
-            );
+            // Branch cell mirrors the dashboard: a PR-lifecycle glyph plus the
+            // branch name, colored by `lifecycle_style` (dim when the status is
+            // unknown or has no PR). The rest of the row stays neutral.
+            let glyph = crate::ui::theme::branch_glyph(row.lifecycle, nerd_fonts);
+            let branch_style = theme
+                .lifecycle_style(row.lifecycle)
+                .unwrap_or_else(|| theme.dim_style());
+            let mut spans = vec![
+                Span::raw(format!("  {}/{}  ", row.repo, row.workspace)),
+                Span::styled(format!("{glyph} {}", row.branch), branch_style),
+                Span::raw(format!("  {}  {marker}", row.label)),
+            ];
+            // Selected row: tint only the background so the lifecycle color and
+            // the neutral spans stay readable — the same `selected_bg_style`
+            // patch the dashboard list uses (a full `selected_style` would flatten
+            // the branch color).
             if i == selected {
-                lines.push(Line::from(Span::styled(text, theme.selected_style())));
-            } else {
-                lines.push(Line::from(text));
+                let bg = theme.selected_bg_style();
+                for s in &mut spans {
+                    s.style = s.style.patch(bg);
+                }
             }
+            lines.push(Line::from(spans));
         }
         f.render_widget(Paragraph::new(lines), body_area);
     }
@@ -132,7 +147,7 @@ mod tests {
         let theme = Theme::wsx();
         let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
         term.draw(|f| {
-            render_remote_workspace_list(f, f.area(), list, selected, notice, &theme);
+            render_remote_workspace_list(f, f.area(), list, selected, notice, &theme, false);
         })
         .unwrap();
         let buf = term.backend().buffer();
@@ -144,6 +159,52 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Render one shared workspace at `lifecycle` and return the foreground
+    /// color of the first cell of its branch glyph — the picker's analog of the
+    /// dashboard's branch coloring. Used to pin PR-status colors.
+    fn branch_glyph_color(
+        lifecycle: Option<crate::git::forge::BranchLifecycle>,
+        nerd_fonts: bool,
+    ) -> ratatui::style::Color {
+        use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+        let theme = Theme::wsx();
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "mini:".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "feature".into(),
+                worktree_path: "/x".into(),
+                agents: vec![SharedAgentRecord {
+                    label: "claude".into(),
+                    agent: "claude".into(),
+                    tmux_session: Some("wsx-r-w".into()),
+                    alive: true,
+                }],
+                lifecycle,
+            }],
+        };
+        let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        term.draw(|f| {
+            render_remote_workspace_list(f, f.area(), &list, usize::MAX, None, &theme, nerd_fonts);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        // Find the branch glyph cell: the first cell of the row's branch span.
+        // The row is "  r/w  <glyph> feature  ...", so scan for the glyph that
+        // `branch_glyph` would have emitted and read its fg.
+        let glyph = crate::ui::theme::branch_glyph(lifecycle, nerd_fonts);
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                if buf[(x, y)].symbol() == glyph {
+                    return buf[(x, y)].style().fg.unwrap();
+                }
+            }
+        }
+        panic!("branch glyph {glyph:?} not found in render");
     }
 
     #[test]
@@ -219,5 +280,48 @@ mod tests {
             text.contains("no live session to attach to"),
             "notice missing:\n{text}"
         );
+    }
+
+    #[test]
+    fn branch_colored_by_pr_lifecycle_in_both_font_modes() {
+        use crate::git::forge::BranchLifecycle::*;
+        let theme = Theme::wsx();
+        // Same lifecycle → color mapping the dashboard uses, and it must hold
+        // regardless of nerd-font mode (the glyph changes, the color doesn't).
+        for nerd_fonts in [false, true] {
+            assert_eq!(
+                branch_glyph_color(Some(PrOpen), nerd_fonts),
+                theme.ok_style().fg.unwrap(),
+                "open PR must be the ok color (nerd_fonts={nerd_fonts})"
+            );
+            assert_eq!(
+                branch_glyph_color(Some(PrConflicted), nerd_fonts),
+                theme.warn_style().fg.unwrap(),
+                "conflicted PR must be the warn color (nerd_fonts={nerd_fonts})"
+            );
+            assert_eq!(
+                branch_glyph_color(Some(PrMerged), nerd_fonts),
+                theme.merged_style().fg.unwrap(),
+                "merged PR must be the merged color (nerd_fonts={nerd_fonts})"
+            );
+            assert_eq!(
+                branch_glyph_color(Some(PrClosed), nerd_fonts),
+                theme.err_style().fg.unwrap(),
+                "closed PR must be the err color (nerd_fonts={nerd_fonts})"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_and_no_pr_branches_render_dim() {
+        use crate::git::forge::BranchLifecycle::*;
+        let theme = Theme::wsx();
+        let dim = theme.dim_style().fg.unwrap();
+        // `None` (older host / gh unavailable) and NoPr/PrDraft have no
+        // colorable status, so the branch falls back to dim — matching the
+        // dashboard's `lifecycle_style(..).unwrap_or(dim)`.
+        assert_eq!(branch_glyph_color(None, false), dim);
+        assert_eq!(branch_glyph_color(Some(NoPr), false), dim);
+        assert_eq!(branch_glyph_color(Some(PrDraft), true), dim);
     }
 }

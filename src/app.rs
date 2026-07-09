@@ -147,6 +147,12 @@ pub(crate) struct RemoteRow<'a> {
     pub label: &'a str,
     pub tmux_session: Option<&'a str>,
     pub alive: bool,
+    /// The workspace's PR lifecycle as computed on the remote host (see
+    /// `SharedWorkspaceRecord::lifecycle`). Per-workspace, so every agent row
+    /// flattened from the same record carries the same value. `None` = unknown
+    /// (older host, or `gh` unavailable) → the renderer leaves the branch
+    /// uncolored.
+    pub lifecycle: Option<crate::git::forge::BranchLifecycle>,
 }
 
 /// Flatten `list.records` into one `RemoteRow` per *attachable* agent
@@ -175,6 +181,7 @@ pub(crate) fn remote_rows(list: &RemoteList) -> Vec<RemoteRow<'_>> {
                 label: &agent.label,
                 tmux_session: Some(tmux_session),
                 alive: agent.alive,
+                lifecycle: rec.lifecycle,
             });
         }
     }

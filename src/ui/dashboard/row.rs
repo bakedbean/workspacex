@@ -19,6 +19,7 @@ use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnEmphasis, RowColumn};
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
+use crate::ui::text::{truncate, truncate_pad};
 use crate::ui::theme::Theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -292,28 +293,6 @@ pub fn render(
     spans.push(Span::styled(ago_padded, theme.dim_style()));
 
     Line::from(spans)
-}
-
-fn truncate_pad(s: &str, target: usize) -> String {
-    let mut out = truncate(s, target);
-    let len = out.chars().count();
-    if len < target {
-        out.push_str(&" ".repeat(target - len));
-    }
-    out
-}
-
-fn truncate(s: &str, target: usize) -> String {
-    let len = s.chars().count();
-    if len <= target {
-        s.to_string()
-    } else if target == 0 {
-        String::new()
-    } else {
-        let mut out: String = s.chars().take(target - 1).collect();
-        out.push('…');
-        out
-    }
 }
 
 fn right_pad(s: &str, target: usize) -> String {

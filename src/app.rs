@@ -153,6 +153,10 @@ pub(crate) struct RemoteRow<'a> {
     /// (older host, or `gh` unavailable) → the renderer draws the branch dim,
     /// with no lifecycle color.
     pub lifecycle: Option<crate::git::forge::BranchLifecycle>,
+    /// The workspace branch's PR number (see `SharedWorkspaceRecord::pr_number`),
+    /// per-workspace like `lifecycle`. `None` when there is no PR or `gh`
+    /// couldn't answer → the renderer omits the `#<num>` prefix.
+    pub pr_number: Option<u32>,
 }
 
 /// Flatten `list.records` into one `RemoteRow` per *attachable* agent
@@ -182,6 +186,7 @@ pub(crate) fn remote_rows(list: &RemoteList) -> Vec<RemoteRow<'_>> {
                 tmux_session: Some(tmux_session),
                 alive: agent.alive,
                 lifecycle: rec.lifecycle,
+                pr_number: rec.pr_number,
             });
         }
     }

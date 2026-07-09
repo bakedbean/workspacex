@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::app::{RemoteList, remote_rows};
+use crate::ui::text::truncate_pad;
 
 /// Render the floating remote-workspace-list modal. Rows are flattened per
 /// agent instance by `crate::app::remote_rows` — the same helper the key
@@ -67,20 +68,58 @@ pub fn render_remote_workspace_list(
         };
         f.render_widget(Paragraph::new(msg).style(theme.dim_style()), body_area);
     } else {
+        // Three aligned columns: agent | <glyph> #<num> branch | repo/workspace.
+        // The branch cell keeps the dashboard's lifecycle glyph + color (dim when
+        // status is unknown / no PR) and gains the PR number when known. No
+        // liveness marker: `remote_rows` is attach-only, so every row is alive.
+        let branch_cells: Vec<String> = rows
+            .iter()
+            .map(|r| {
+                let glyph = crate::ui::theme::branch_glyph(r.lifecycle, nerd_fonts);
+                match r.pr_number {
+                    Some(n) => format!("{glyph} #{n} {}", r.branch),
+                    None => format!("{glyph} {}", r.branch),
+                }
+            })
+            .collect();
+        let ws_cells: Vec<String> = rows
+            .iter()
+            .map(|r| format!("{}/{}", r.repo, r.workspace))
+            .collect();
+
+        // Column widths derive from content (capped) so rows line up; the branch
+        // column takes whatever width is left, shrinking first when the panel is
+        // narrow. Layout: indent(1) + agent + gap(2) + branch + gap(2) + ws.
+        let agent_w = rows
+            .iter()
+            .map(|r| r.label.chars().count())
+            .max()
+            .unwrap_or(1)
+            .clamp(1, 14);
+        let ws_w = ws_cells
+            .iter()
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(1)
+            .clamp(1, 34);
+        let inner_w = body_area.width as usize;
+        let fixed = 1 + agent_w + 2 + 2 + ws_w;
+        let branch_natural = branch_cells
+            .iter()
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(1);
+        let branch_w = branch_natural.min(inner_w.saturating_sub(fixed)).max(1);
+
         let mut lines: Vec<Line> = Vec::new();
         for (i, row) in rows.iter().enumerate() {
-            let marker = if row.alive { "\u{25CF}" } else { "\u{2717}" };
-            // Branch cell mirrors the dashboard: a PR-lifecycle glyph plus the
-            // branch name, colored by `lifecycle_style` (dim when the status is
-            // unknown or has no PR). The rest of the row stays neutral.
-            let glyph = crate::ui::theme::branch_glyph(row.lifecycle, nerd_fonts);
             let branch_style = theme
                 .lifecycle_style(row.lifecycle)
                 .unwrap_or_else(|| theme.dim_style());
             let mut spans = vec![
-                Span::raw(format!("  {}/{}  ", row.repo, row.workspace)),
-                Span::styled(format!("{glyph} {}", row.branch), branch_style),
-                Span::raw(format!("  {}  {marker}", row.label)),
+                Span::raw(format!(" {}  ", truncate_pad(row.label, agent_w))),
+                Span::styled(truncate_pad(&branch_cells[i], branch_w), branch_style),
+                Span::raw(format!("  {}", truncate_pad(&ws_cells[i], ws_w))),
             ];
             // Selected row: tint only the background so the lifecycle color and
             // the neutral spans stay readable — the same `selected_bg_style`
@@ -222,10 +261,11 @@ mod tests {
             !text.contains("codex#2"),
             "dead agent row must be hidden:\n{text}"
         );
-        assert!(text.contains('\u{25CF}'), "alive marker missing:\n{text}");
+        // The liveness marker was dropped: the picker is attach-only, so every
+        // row is alive and a per-row ●/✗ carried no information.
         assert!(
-            !text.contains('\u{2717}'),
-            "no dead marker should render when dead rows are hidden:\n{text}"
+            !text.contains('\u{25CF}') && !text.contains('\u{2717}'),
+            "no liveness marker should render:\n{text}"
         );
     }
 
@@ -326,5 +366,94 @@ mod tests {
         assert_eq!(branch_glyph_color(None, false), dim);
         assert_eq!(branch_glyph_color(Some(NoPr), false), dim);
         assert_eq!(branch_glyph_color(Some(PrDraft), true), dim);
+    }
+
+    /// Build a list of shared workspaces with varying branch lengths / PR
+    /// numbers, one live agent each, for layout assertions.
+    fn layout_list() -> RemoteList {
+        use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+        let mk = |branch: &str, num: Option<u32>, ws: &str| SharedWorkspaceRecord {
+            repo: "repo".into(),
+            workspace: ws.into(),
+            branch: branch.into(),
+            worktree_path: "/x".into(),
+            agents: vec![SharedAgentRecord {
+                label: "claude".into(),
+                agent: "claude".into(),
+                tmux_session: Some(format!("wsx-{ws}")),
+                alive: true,
+            }],
+            lifecycle: Some(crate::git::forge::BranchLifecycle::PrOpen),
+            pr_number: num,
+        };
+        RemoteList {
+            host_name: "mini".into(),
+            dest: "mini:".into(),
+            records: vec![
+                mk("short", Some(42), "alpha"),
+                mk("a-much-longer-branch-name", Some(2087), "beta"),
+            ],
+        }
+    }
+
+    #[test]
+    fn pr_number_renders_next_to_branch() {
+        let text = render_to_string(&layout_list(), usize::MAX, None);
+        assert!(text.contains("#42 short"), "pr #42 next to branch:\n{text}");
+        assert!(
+            text.contains("#2087 a-much-longer-branch-name"),
+            "pr #2087 next to branch:\n{text}"
+        );
+    }
+
+    #[test]
+    fn no_pr_number_omits_the_hash_prefix() {
+        use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "mini:".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "repo".into(),
+                workspace: "alpha".into(),
+                branch: "feature".into(),
+                worktree_path: "/x".into(),
+                agents: vec![SharedAgentRecord {
+                    label: "claude".into(),
+                    agent: "claude".into(),
+                    tmux_session: Some("wsx-a".into()),
+                    alive: true,
+                }],
+                lifecycle: None,
+                pr_number: None,
+            }],
+        };
+        let text = render_to_string(&list, usize::MAX, None);
+        assert!(text.contains("feature"), "branch missing:\n{text}");
+        assert!(
+            !text.contains('#'),
+            "no #num when pr_number is None:\n{text}"
+        );
+    }
+
+    #[test]
+    fn columns_align_across_rows() {
+        // Despite different branch lengths, the branch column and the
+        // repo/workspace column must start at the same x on every row.
+        let text = render_to_string(&layout_list(), usize::MAX, None);
+        let lines: Vec<&str> = text.lines().collect();
+        let r1 = lines.iter().find(|l| l.contains("repo/alpha")).unwrap();
+        let r2 = lines.iter().find(|l| l.contains("repo/beta")).unwrap();
+        // Branch column (glyph is ⎇ in plain-font render) aligns.
+        assert_eq!(
+            r1.find('\u{2387}'),
+            r2.find('\u{2387}'),
+            "branch column not aligned:\n{text}"
+        );
+        // Workspace column aligns.
+        assert_eq!(
+            r1.find("repo/alpha"),
+            r2.find("repo/beta"),
+            "workspace column not aligned:\n{text}"
+        );
     }
 }

@@ -2165,6 +2165,88 @@ mod pm_state_tests {
         );
     }
 
+    /// Regression (#224): while any modal is open, a left click landing on an
+    /// attention row must be swallowed, not attach to the workspace beneath
+    /// the overlay.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_attention_row_while_modal_open_does_not_attach() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        app.view = crate::ui::View::Dashboard;
+
+        app.attention_rects = vec![(
+            ws_id,
+            ratatui::layout::Rect {
+                x: 5,
+                y: 10,
+                width: 20,
+                height: 1,
+            },
+        )];
+        app.modal = Some(Modal::WorkspaceActions);
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 6,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        assert!(
+            matches!(app.view, crate::ui::View::Dashboard),
+            "attention click under a modal must not attach; got {:?}",
+            app.view
+        );
+        assert!(
+            matches!(app.modal, Some(Modal::WorkspaceActions)),
+            "the open modal must be untouched by the swallowed click; got {:?}",
+            app.modal
+        );
+    }
+
+    /// Regression (#224): the modal click gate covers every left-click
+    /// target, not just attention rows — here the attached-view chip-row
+    /// procs count (`procs_link_rect` is only ever set by the attached
+    /// render): a click on it under a modal must not replace that modal
+    /// with ProcessList.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn click_procs_count_while_modal_open_is_swallowed() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+
+        app.procs_link_rect = Some((
+            ws_id,
+            ratatui::layout::Rect {
+                x: 60,
+                y: 30,
+                width: 4,
+                height: 1,
+            },
+        ));
+        app.modal = Some(Modal::Error {
+            message: "boom".into(),
+        });
+
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 61,
+            row: 30,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click).await;
+
+        assert!(
+            matches!(app.modal, Some(Modal::Error { .. })),
+            "procs click under a modal must not open ProcessList; got {:?}",
+            app.modal
+        );
+    }
+
     /// Clicking a dashboard footer hint fires the corresponding key, exactly
     /// as if it had been pressed. `/` enters filter mode.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

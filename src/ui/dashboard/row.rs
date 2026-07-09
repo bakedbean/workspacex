@@ -471,27 +471,39 @@ mod tests {
     #[test]
     fn unshared_row_has_no_shared_badge_and_widths_stay_aligned() {
         let theme = Theme::wsx();
-        let unshared = line_text(&render(&base(), ColumnWidths::default(), 0, &theme, 120));
-        assert!(
-            !unshared.contains('◇')
-                && !unshared.contains('\u{f0c53}')
-                && !unshared.contains('\u{f015b}'),
-            "no badge on direct workspaces: {unshared:?}"
-        );
-        // The badge consumes 2 cells of the branch column, so both rows
-        // must occupy the same display width and downstream columns
-        // (procs/diff/age) must start at the same offset.
-        let mut inputs = base();
-        inputs.shared = true;
-        let shared = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
         // Compare CHAR positions, not byte offsets — ◇/⎇ are multibyte, so
         // `str::find` would report a shift even when columns are aligned.
         let procs_col = |s: &str| s.chars().position(|c| c == '●');
-        assert_eq!(
-            procs_col(&unshared),
-            procs_col(&shared),
-            "procs column must not shift when the shared badge renders:\n  {unshared:?}\n  {shared:?}"
-        );
+        // The badge consumes 2 cells of the branch column, so a shared row
+        // must occupy the same display width as an unshared one and the
+        // downstream columns (procs/diff/age) must start at the same offset.
+        // Checked per font mode and, under nerd fonts, per liveness state,
+        // since each combination renders a different badge glyph (◇ vs
+        // network-close vs network-check).
+        for nerd_fonts in [false, true] {
+            let mut inputs = base();
+            inputs.nerd_fonts = nerd_fonts;
+            let unshared = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+            assert!(
+                !unshared.contains('◇')
+                    && !unshared.contains('\u{f0c53}')
+                    && !unshared.contains('\u{f015b}'),
+                "no badge on direct workspaces (nerd_fonts={nerd_fonts}): {unshared:?}"
+            );
+            for shared_active in [false, true] {
+                let mut inputs = inputs.clone();
+                inputs.shared = true;
+                inputs.shared_active = shared_active;
+                let shared = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+                assert_eq!(
+                    procs_col(&unshared),
+                    procs_col(&shared),
+                    "procs column must not shift when the shared badge renders \
+                     (nerd_fonts={nerd_fonts}, shared_active={shared_active}):\n  \
+                     {unshared:?}\n  {shared:?}"
+                );
+            }
+        }
     }
 
     #[test]

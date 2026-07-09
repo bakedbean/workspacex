@@ -2207,9 +2207,11 @@ mod pm_state_tests {
         );
     }
 
-    /// Regression (#224): the modal click gate covers every dashboard click
-    /// target, not just attention rows — a procs-count click under a modal
-    /// must not replace that modal with ProcessList.
+    /// Regression (#224): the modal click gate covers every left-click
+    /// target, not just attention rows — here the attached-view chip-row
+    /// procs count (`procs_link_rect` is only ever set by the attached
+    /// render): a click on it under a modal must not replace that modal
+    /// with ProcessList.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn click_procs_count_while_modal_open_is_swallowed() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};

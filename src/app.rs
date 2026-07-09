@@ -214,6 +214,7 @@ mod remote_rows_tests {
                         alive: false,
                     },
                 ],
+                lifecycle: None,
             }],
         };
         let rows = remote_rows(&list);
@@ -240,6 +241,7 @@ mod remote_rows_tests {
                     tmux_session: None,
                     alive: true,
                 }],
+                lifecycle: None,
             }],
         };
         assert!(remote_rows(&list).is_empty());
@@ -261,6 +263,7 @@ mod remote_rows_tests {
                     tmux_session: None,
                     alive: false,
                 }],
+                lifecycle: None,
             }],
         };
         assert!(remote_rows(&list).is_empty());
@@ -2286,6 +2289,7 @@ mod reconcile_remote_tests {
             branch: "b".into(),
             worktree_path: "/x".into(),
             agents: vec![],
+            lifecycle: None,
         };
         // Stale gen: ignored entirely.
         reconcile_remote_list(
@@ -2350,6 +2354,7 @@ mod reconcile_remote_tests {
             branch: "b".into(),
             worktree_path: "/x".into(),
             agents: vec![],
+            lifecycle: None,
         };
         reconcile_remote_list(
             shared.clone(),

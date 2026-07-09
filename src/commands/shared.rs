@@ -22,6 +22,14 @@ pub struct SharedWorkspaceRecord {
     pub branch: String,
     pub worktree_path: String,
     pub agents: Vec<SharedAgentRecord>,
+    /// The workspace branch's PR lifecycle, computed on the host that owns the
+    /// worktree (see `enrich_with_pr_status`) so the remote picker can color
+    /// rows the same way the dashboard does. `#[serde(default)]` keeps the
+    /// wire contract additive: a host on an older wsx that never emits this
+    /// field decodes as `None` (unknown → uncolored). `shared_list_records`
+    /// itself leaves it `None`; enrichment is a separate, best-effort step.
+    #[serde(default)]
+    pub lifecycle: Option<crate::git::forge::BranchLifecycle>,
 }
 
 /// Build records for every shared workspace. `liveness` is injected so tests
@@ -52,10 +60,39 @@ pub fn shared_list_records(
                 branch: w.branch.clone(),
                 worktree_path: w.worktree_path.to_string_lossy().into_owned(),
                 agents,
+                // Pure DB pass leaves PR status unknown; `enrich_with_pr_status`
+                // fills it in from `gh` before the records go over the wire.
+                lifecycle: None,
             });
         }
     }
     Ok(out)
+}
+
+/// Populate each record's `lifecycle` by asking `gh` for the branch's PR status,
+/// concurrently across all records. Best-effort: any workspace whose `gh` call
+/// fails, times out, or has no PR is left with whatever `fetch_pr_status`
+/// returns (it already degrades to `Ok(None)` when `gh` is unusable), so a
+/// missing/unauthenticated `gh` simply yields uncolored rows rather than an
+/// error. Runs on the host that owns the worktrees — i.e. inside the remote's
+/// `wsx shared list --json` — since PR status is a property of the branch on the
+/// shared forge.
+pub async fn enrich_with_pr_status(records: &mut [SharedWorkspaceRecord]) {
+    let fetches = records.iter().map(|rec| {
+        let path = std::path::PathBuf::from(&rec.worktree_path);
+        let branch = rec.branch.clone();
+        async move {
+            crate::git::forge::fetch_pr_status(&path, &branch)
+                .await
+                .ok()
+                .flatten()
+                .map(|s| s.lifecycle)
+        }
+    });
+    let lifecycles = futures::future::join_all(fetches).await;
+    for (rec, lifecycle) in records.iter_mut().zip(lifecycles) {
+        rec.lifecycle = lifecycle;
+    }
 }
 
 #[cfg(test)]
@@ -201,13 +238,41 @@ mod tests {
                     "tmux_session": "wsx-r-w", "alive": true,
                     "another_future_field": 7}]
     }]"#;
-        let recs: Vec<SharedWorkspaceRecord> = serde_json::from_str(json).unwrap();
+        let mut recs: Vec<SharedWorkspaceRecord> = serde_json::from_str(json).unwrap();
         assert_eq!(recs[0].workspace, "w");
         assert_eq!(recs[0].agents[0].tmux_session.as_deref(), Some("wsx-r-w"));
         assert!(recs[0].agents[0].alive);
-        // and what we serialize, we can deserialize
+        // A payload from an older host with no `lifecycle` key decodes as
+        // `None` (unknown → uncolored), thanks to `#[serde(default)]`.
+        assert_eq!(recs[0].lifecycle, None);
+
+        // A populated lifecycle survives a serialize → deserialize round-trip,
+        // so the color the remote computes reaches the local picker intact.
+        recs[0].lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
         let back: Vec<SharedWorkspaceRecord> =
             serde_json::from_str(&serde_json::to_string(&recs).unwrap()).unwrap();
         assert_eq!(back[0].agents[0].label, "claude");
+        assert_eq!(
+            back[0].lifecycle,
+            Some(crate::git::forge::BranchLifecycle::PrOpen)
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_is_best_effort_on_non_git_paths() {
+        // Worktree paths that aren't git repos make `gh` fail; enrichment must
+        // leave those records `None` rather than error, so a picker still shows
+        // the (uncolored) list.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut records = vec![SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: "w".into(),
+            branch: "main".into(),
+            worktree_path: tmp.path().to_string_lossy().into_owned(),
+            agents: vec![],
+            lifecycle: None,
+        }];
+        enrich_with_pr_status(&mut records).await;
+        assert_eq!(records[0].lifecycle, None);
     }
 }

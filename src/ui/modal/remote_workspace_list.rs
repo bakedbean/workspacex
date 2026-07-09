@@ -123,6 +123,7 @@ mod tests {
                         alive: false,
                     },
                 ],
+                lifecycle: None,
             }],
         }
     }
@@ -185,6 +186,7 @@ mod tests {
                     tmux_session: None,
                     alive: false,
                 }],
+                lifecycle: None,
             }],
         };
         let text = render_to_string(&list, 0, None);

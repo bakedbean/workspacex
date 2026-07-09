@@ -178,6 +178,10 @@ fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::
             }
             _ => None,
         },
+        // The remote attach shows the host's global pinned commands; firing one
+        // writes into the ssh PTY, driving the remote agent (see `render.rs`
+        // AttachedRemote). Mirrors `active_session`'s remote arm.
+        View::AttachedRemote => app.remote.clone(),
         _ => None,
     }
 }
@@ -1206,6 +1210,18 @@ async fn handle_key_attached_remote(app: &mut App, k: crossterm::event::KeyEvent
         app.leader_pending = false;
         if k.code == KeyCode::Char('d') {
             crate::app::detach_remote(app);
+            return Ok(());
+        }
+        // `^x <digit>` fires the matching global pinned command into the remote
+        // session, mirroring the local attached chord (`handle_leader_key`).
+        if let KeyCode::Char(c @ '1'..='9') = k.code {
+            let idx = (c as u8 - b'1') as usize;
+            if let Some(cmd) = app.pinned_commands_cache.get(idx) {
+                let mut bytes = cmd.command.as_bytes().to_vec();
+                bytes.push(b'\r');
+                session.scroll_to_live();
+                let _ = session.writer.send(bytes).await;
+            }
             return Ok(());
         }
         // Any other key after the leader is a no-op (no remote leader menu).

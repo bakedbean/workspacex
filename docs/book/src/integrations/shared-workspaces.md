@@ -27,7 +27,7 @@ Each agent instance in a shared workspace gets a deterministic tmux session name
 
 **Dashboard indicator:**
 
-Shared workspaces are marked on the dashboard with a badge just left of the branch name — the tmux logo when nerd fonts are enabled, a hollow `◇` otherwise. The badge is **green** while the workspace's tmux session is alive (attached in this wsx, or detached-but-running on the server) and dim when the workspace is shared but no live session backs it yet. Direct workspaces show no badge.
+Shared workspaces are marked on the dashboard with a badge just left of the branch name — the tmux logo when nerd fonts are enabled, a hollow `◇` otherwise. The badge is **green** while the workspace's tmux session is alive (attached in this wsx, or detached-but-running on the server) and **red** when the workspace is shared but no live session backs it — the session has exited or was never started, so a remote peer can't attach. Direct workspaces show no badge.
 
 A shared workspace's tmux session can outlive the wsx process that spawned it — right after a wsx restart, the agent is still running on the server even though this wsx holds no client for it. The green badge covers that case too: wsx periodically confirms the session with `tmux has-session`, so the badge stays green while the workspace's row status reads `idle`. Attaching (`Enter` on the row) reattaches wsx's client to the live session; the agent and its history are exactly where you left them.
 

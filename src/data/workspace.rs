@@ -1603,9 +1603,10 @@ mod tests {
         let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
         kill_tmux_sessions_for(&store, &ws);
 
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
         assert!(
-            !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),
-            "direct workspace archive must not call tmux"
+            calls.is_empty(),
+            "direct workspace archive must not call tmux, got: {calls:?}"
         );
     }
 }

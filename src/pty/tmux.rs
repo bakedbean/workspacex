@@ -16,7 +16,14 @@ pub fn tmux_bin() -> String {
 /// scrubbed, so invocations target the default server even when wsx
 /// itself runs inside a tmux session.
 fn tmux_cmd() -> std::process::Command {
-    let mut cmd = std::process::Command::new(tmux_bin());
+    tmux_cmd_for(&tmux_bin())
+}
+
+/// `tmux_cmd` with the binary supplied by the caller — for code that must
+/// resolve `WSX_TMUX_BIN` once up front (e.g. before spawning a thread)
+/// rather than at invocation time.
+fn tmux_cmd_for(bin: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(bin);
     cmd.env_remove("TMUX").env_remove("TMUX_PANE");
     cmd
 }
@@ -159,10 +166,16 @@ pub fn kill_session(name: &str) -> bool {
 /// from letterboxing each other to the smallest screen. Must run after the
 /// session exists; the client spawn is asynchronous, so retry briefly in a
 /// detached thread. Best-effort — a failure only degrades multi-client UX.
+///
+/// The binary is resolved BEFORE the thread spawns: the thread outlives the
+/// caller, and re-reading `WSX_TMUX_BIN` on each retry would race tests that
+/// swap it under `ENV_LOCK` (a retry can land in another test's fake-tmux
+/// recorder and fail its no-tmux-calls assertion).
 pub fn spawn_window_size_fixup(name: String) {
+    let bin = tmux_bin();
     std::thread::spawn(move || {
         for _ in 0..20 {
-            let ok = tmux_cmd()
+            let ok = tmux_cmd_for(&bin)
                 .args([
                     "set-option",
                     "-t",

@@ -3707,14 +3707,15 @@ mod pm_state_tests {
 
     /// After a wsx restart, a shared workspace's tmux session can outlive
     /// the wsx client that spawned it — no `Session` in `app.sessions`, but
-    /// the server-side session is still alive. `classify_status` should
-    /// surface that as `Status::Detached` rather than the classifier's
-    /// default `Idle`, while a direct workspace (which never touches tmux)
-    /// stays plain `Idle`. Uses a fake `WSX_TMUX_BIN` recorder that exits 0
-    /// for every invocation, so `has-session` reads "alive" without a real
-    /// tmux server.
+    /// the server-side session is still alive. The `shared_detached` sweep
+    /// must record that (it keeps the shared badge green), while the status
+    /// classifier reads plain `Idle` — detachment is badge liveness, not a
+    /// top-level status. A direct workspace (which never touches tmux) gets
+    /// neither. Uses a fake `WSX_TMUX_BIN` recorder that exits 0 for every
+    /// invocation, so `has-session` reads "alive" without a real tmux
+    /// server.
     #[test]
-    fn shared_workspace_with_dead_client_but_live_tmux_is_detached() {
+    fn shared_workspace_with_dead_client_but_live_tmux_is_marked_detached() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use crate::ui::dashboard::status::Status;
 
@@ -3794,7 +3795,12 @@ mod pm_state_tests {
             .map(|(_, w)| w.clone())
             .unwrap();
 
-        assert_eq!(app.classify_status(&shared_ws), Status::Detached);
+        assert!(
+            app.shared_detached.contains(&shared_id),
+            "the sweep must record the detached-but-alive session for badge liveness"
+        );
+        assert!(!app.shared_detached.contains(&direct_id));
+        assert_eq!(app.classify_status(&shared_ws), Status::Idle);
         assert_eq!(app.classify_status(&direct_ws), Status::Idle);
     }
 
@@ -3802,11 +3808,11 @@ mod pm_state_tests {
     /// instance is not detached: someone is watching it. The sweep must
     /// consider every instance's session, not just the primary's — with a
     /// primary-only check, `has_client` reads false while the primary's
-    /// `session_ref` reads alive, and the workspace is wrongly marked `◆`.
+    /// `session_ref` reads alive, and the workspace is wrongly swept into
+    /// `shared_detached`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn shared_workspace_with_running_added_instance_is_not_detached() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
-        use crate::ui::dashboard::status::Status;
 
         let tmpdir = tempfile::tempdir().unwrap();
         let mut env = EnvGuard::new();
@@ -3878,15 +3884,8 @@ mod pm_state_tests {
         app.shared_detached_polled_ms = 0;
         app.refresh().unwrap();
 
-        let ws = app
-            .workspaces
-            .iter()
-            .find(|(_, w)| w.id == ws_id)
-            .map(|(_, w)| w.clone())
-            .unwrap();
-        assert_ne!(
-            app.classify_status(&ws),
-            Status::Detached,
+        assert!(
+            !app.shared_detached.contains(&ws_id),
             "a live client on a non-primary instance means someone is attached; not detached"
         );
     }

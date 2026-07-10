@@ -1603,9 +1603,14 @@ mod tests {
         let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
         kill_tmux_sessions_for(&store, &ws);
 
+        let calls = match std::fs::read_to_string(&log) {
+            Ok(calls) => calls,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => panic!("failed to read tmux call log: {e}"),
+        };
         assert!(
-            !log.exists() || std::fs::read_to_string(&log).unwrap().is_empty(),
-            "direct workspace archive must not call tmux"
+            calls.is_empty(),
+            "direct workspace archive must not call tmux, got: {calls:?}"
         );
     }
 }

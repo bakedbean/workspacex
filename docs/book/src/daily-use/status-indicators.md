@@ -1,7 +1,6 @@
 | Symbol                 | Meaning                                                                         |
 | ---------------------- | ------------------------------------------------------------------------------- |
 | `●`                    | Session is running in this wsx process                                          |
-| `◆`                    | Detached — a shared workspace's tmux session is alive on the server but has no client attached in this wsx process (normal right after a wsx restart; attach to reconnect) |
 | `↻`                    | Resumable — a prior claude session exists for this worktree; attach to continue |
 | `○`                    | No session ever started here                                                    |
 | `✕`                    | Workspace state is `Failed` (worktree creation didn't succeed)                  |

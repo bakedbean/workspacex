@@ -184,8 +184,7 @@ pub fn render(
     }
     // Shared (tmux-backed) badge, immediately left of the branch glyph:
     // with nerd fonts, nf-md-check_network while the session is alive and
-    // nf-md-close_network when it isn't; hollow diamond otherwise (the
-    // filled ◆ is the *detached* status glyph — same vocabulary).
+    // nf-md-close_network when it isn't; hollow diamond otherwise.
     // Unlike the layout glyph this renders in BOTH font modes: shared-ness
     // matters on machines without nerd fonts too. Green while the tmux
     // session is alive (attached here or detached on the server); red when

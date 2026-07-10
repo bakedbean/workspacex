@@ -954,10 +954,15 @@ impl App {
 
     /// Assemble the PM digest from caches the dashboard already maintains.
     pub fn build_pm_digest(&self) -> Vec<crate::ui::pm_pane::RepoDigest> {
+        // Event time (`evt.latest.timestamp_ms`), NOT `last_log_activity_ms`
+        // — the latter is the wall-clock time wsx observed the JSONL grow,
+        // which gets stamped to "now" for every workspace on the initial
+        // tail pass after a wsx restart. Mirrors the detail bar's own
+        // activity-timestamp logic (see `app/render.rs`).
         let last_activity: std::collections::HashMap<_, _> = self
             .workspace_events
             .iter()
-            .map(|(id, e)| (*id, e.last_log_activity_ms))
+            .filter_map(|(id, e)| e.latest.as_ref().map(|latest| (*id, latest.timestamp_ms)))
             .collect();
         crate::ui::pm_pane::build_digest(&crate::ui::pm_pane::DigestInputs {
             repos: &self.repos,

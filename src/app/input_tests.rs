@@ -197,6 +197,72 @@ mod pm_state_tests {
         assert!(app.diff_last_poll_ms.is_empty());
     }
 
+    /// Regression: the render path clamps `pm_digest_selected` to the
+    /// current card count before drawing, but Enter used to look the card
+    /// up with the raw (unclamped) index — so if the card list shrank
+    /// while a stale, out-of-range selection lingered, Enter would find
+    /// no card and silently no-op instead of attaching. `handle_key_dashboard`
+    /// now clamps the same way the renderer does before the `card_at`
+    /// lookup. Model the attach assertion on
+    /// `updates_panel_modal_enter_switches_view_and_clears_attention`:
+    /// a successful attach flips `app.view` to `View::Attached` targeting
+    /// the attached workspace.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn digest_enter_clamps_out_of_range_selection_to_last_card() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", cat_path());
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new(".."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert_eq!(
+            crate::ui::pm_pane::card_count(&app.build_pm_digest()),
+            2,
+            "fixture should yield exactly two digest cards"
+        );
+
+        press_key(&mut app, KeyCode::Char('p')).await; // open + focus digest
+        app.pm_digest_selected = 5; // out of range for a 2-card digest
+        press_key(&mut app, KeyCode::Enter).await;
+
+        assert!(
+            matches!(&app.view, crate::ui::View::Attached(s) if s.focused_target().map(|t| t.workspace_id) == Some(second_id)),
+            "Enter with an out-of-range selection should clamp to and attach \
+             the last card's workspace (second), not no-op; got {:?}",
+            app.view
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dashboard_down_at_last_entry_wraps_to_first() {
         let store = Store::open_in_memory().unwrap();

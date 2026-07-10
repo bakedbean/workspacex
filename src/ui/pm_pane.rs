@@ -39,6 +39,11 @@ pub struct DigestCard {
     pub last_activity_ms: Option<i64>,
 }
 
+/// Session activity within this window after a recap update does not mark
+/// the recap stale — the `wsx recap set` tool call itself (and the rest of
+/// that turn) lands in the session log right after `updated_at`.
+pub const RECAP_STALE_SLACK_MS: i64 = 300_000;
+
 #[derive(Debug, Clone)]
 pub struct RepoDigest {
     pub repo_name: String,
@@ -68,7 +73,7 @@ pub fn build_digest(inputs: &DigestInputs) -> Vec<RepoDigest> {
                 let recap = inputs.recaps.get(&w.id).cloned();
                 let last = inputs.last_activity_ms.get(&w.id).copied();
                 let recap_stale = match (&recap, last) {
-                    (Some(r), Some(act)) => act > r.updated_at,
+                    (Some(r), Some(act)) => act > r.updated_at + RECAP_STALE_SLACK_MS,
                     _ => false,
                 };
                 DigestCard {
@@ -589,6 +594,7 @@ mod digest_tests {
             ws(1, 1, "stale", WorkspaceState::Ready),
             ws(2, 1, "fresh", WorkspaceState::Ready),
             ws(3, 1, "norecap", WorkspaceState::Ready),
+            ws(4, 1, "boundary", WorkspaceState::Ready),
         ];
         let mut recaps = HashMap::new();
         let recap = |t| WorkspaceRecap {
@@ -598,10 +604,17 @@ mod digest_tests {
             updated_at: t,
         };
         recaps.insert(WorkspaceId(1), recap(1_000));
-        recaps.insert(WorkspaceId(2), recap(9_000));
+        recaps.insert(WorkspaceId(2), recap(1_000));
+        recaps.insert(WorkspaceId(4), recap(1_000));
         let mut last_activity = HashMap::new();
-        last_activity.insert(WorkspaceId(1), 5_000);
+        // Well past the slack window -> stale.
+        last_activity.insert(WorkspaceId(1), 400_000);
+        // Within the slack window (the recap-set tool call itself) -> fresh.
         last_activity.insert(WorkspaceId(2), 5_000);
+        // No recap at all -> shown as missing, not stale.
+        last_activity.insert(WorkspaceId(3), 5_000);
+        // Exactly at the slack boundary -> NOT stale (strict `>`).
+        last_activity.insert(WorkspaceId(4), 1_000 + RECAP_STALE_SLACK_MS);
         let inputs = DigestInputs {
             repos: &repos,
             workspaces: &workspaces,
@@ -628,6 +641,33 @@ mod digest_tests {
             "no recap -> shown as missing, not stale"
         );
         assert!(by_name("norecap").recap.is_none());
+        assert!(
+            !by_name("boundary").recap_stale,
+            "activity exactly at updated_at + slack must not be stale"
+        );
+    }
+
+    #[test]
+    fn no_recap_with_activity_present_is_not_stale() {
+        let repos = vec![repo(1, "alpha")];
+        let workspaces = vec![ws(1, 1, "norecap-active", WorkspaceState::Ready)];
+        let recaps = HashMap::new();
+        let mut last_activity = HashMap::new();
+        last_activity.insert(WorkspaceId(1), 5_000);
+        let inputs = DigestInputs {
+            repos: &repos,
+            workspaces: &workspaces,
+            recaps: &recaps,
+            pushed_status: &HashMap::new(),
+            git: &HashMap::new(),
+            pr_lifecycle: &HashMap::new(),
+            pr_number: &HashMap::new(),
+            last_activity_ms: &last_activity,
+        };
+        let digest = build_digest(&inputs);
+        let card = &digest[0].cards[0];
+        assert!(card.recap.is_none());
+        assert!(!card.recap_stale);
     }
 
     #[test]

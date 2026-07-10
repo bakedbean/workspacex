@@ -344,9 +344,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.pm_digest_selected = app.pm_digest_selected.saturating_sub(1);
             }
             KeyCode::Enter => {
-                if let Some(card) =
-                    crate::ui::pm_pane::card_at(&app.build_pm_digest(), app.pm_digest_selected)
-                {
+                let digest = app.build_pm_digest();
+                let idx = app.pm_digest_selected.min(count.saturating_sub(1));
+                if let Some(card) = crate::ui::pm_pane::card_at(&digest, idx) {
                     let ws_id = card.workspace_id;
                     attach_workspace(app, ws_id)?;
                 }

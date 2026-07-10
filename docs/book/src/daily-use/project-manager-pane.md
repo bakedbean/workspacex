@@ -6,7 +6,10 @@ lookups), so it opens with no delay and nothing to configure.
 
 `p` opens the digest and focuses it immediately (like the attached view).
 `Tab` or `Esc` swaps focus back to the dashboard; `Tab` from the dashboard
-swaps back into the digest. `q` or `p` (from either focus) closes it.
+swaps back into the digest. `p` closes it from either focus. `q` also
+closes it, but only while the digest is focused — dashboard-focused `q`
+quits wsx entirely (killing running sessions), so don't reach for `q` to
+close the digest unless focus is already on it.
 
 Within each repo group, cards are ordered by what needs attention first:
 blocked workspaces, then waiting workspaces, then the rest oldest-activity-

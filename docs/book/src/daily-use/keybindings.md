@@ -23,7 +23,7 @@
 | `z M`                             | Fold all repos                                                                                               |
 | `j` / `k` (or arrows) (when digest focused) | Move selection through digest cards                                                                |
 | `Enter` (when digest focused)     | Attach to the selected workspace                                                                             |
-| `q` (when digest focused)         | Close the digest                                                                                             |
+| `q` / `p` (when digest focused)   | Close the digest (`q` only closes it while the digest is focused — dashboard-focused `q` quits wsx)          |
 | `r` (when digest visible)         | Force a git/PR cache refresh                                                                                 |
 
 ### New Workspace / Confirm Archive / Setup Running modals

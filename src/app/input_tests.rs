@@ -197,6 +197,67 @@ mod pm_state_tests {
         assert!(app.diff_last_poll_ms.is_empty());
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn slash_enters_filter_mode_and_chars_edit_buffer() {
+        let mut app = test_app_with_two_ready_workspaces();
+        press_key(&mut app, KeyCode::Char('p')).await;
+        assert_eq!(app.pm_filter, None);
+        press_key(&mut app, KeyCode::Char('/')).await;
+        assert_eq!(app.pm_filter.as_deref(), Some(""));
+        press_key(&mut app, KeyCode::Char('f')).await;
+        press_key(&mut app, KeyCode::Char('i')).await;
+        assert_eq!(app.pm_filter.as_deref(), Some("fi"));
+        press_key(&mut app, KeyCode::Backspace).await;
+        assert_eq!(app.pm_filter.as_deref(), Some("f"));
+        // Bound letters become filter text while typing: q must NOT close.
+        press_key(&mut app, KeyCode::Char('q')).await;
+        assert_eq!(app.pm_filter.as_deref(), Some("fq"));
+        assert!(app.pm_visible, "q while filtering edits the buffer");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn filter_esc_clears_then_second_esc_unfocuses() {
+        let mut app = test_app_with_two_ready_workspaces();
+        press_key(&mut app, KeyCode::Char('p')).await;
+        press_key(&mut app, KeyCode::Char('/')).await;
+        press_key(&mut app, KeyCode::Char('x')).await;
+        press_key(&mut app, KeyCode::Esc).await;
+        assert_eq!(app.pm_filter, None, "first Esc clears the filter");
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+        press_key(&mut app, KeyCode::Esc).await;
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        assert!(app.pm_visible, "second Esc only unfocuses");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn filter_edits_clamp_selection_to_filtered_count() {
+        let mut app = test_app_with_two_ready_workspaces();
+        press_key(&mut app, KeyCode::Char('p')).await;
+        press_key(&mut app, KeyCode::Char('j')).await;
+        assert_eq!(app.pm_digest_selected, 1);
+        press_key(&mut app, KeyCode::Char('/')).await;
+        // "first" matches only one card -> selection clamps to 0.
+        for c in "first".chars() {
+            press_key(&mut app, KeyCode::Char(c)).await;
+        }
+        assert_eq!(app.pm_digest_selected, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn closing_the_pane_clears_the_filter() {
+        let mut app = test_app_with_two_ready_workspaces();
+        press_key(&mut app, KeyCode::Char('p')).await;
+        press_key(&mut app, KeyCode::Char('/')).await;
+        press_key(&mut app, KeyCode::Char('x')).await;
+        // Tab away (filter persists while the pane stays open), then close
+        // from dashboard focus.
+        press_key(&mut app, KeyCode::Tab).await;
+        assert_eq!(app.pm_filter.as_deref(), Some("x"));
+        press_key(&mut app, KeyCode::Char('p')).await;
+        assert!(!app.pm_visible);
+        assert_eq!(app.pm_filter, None, "closing clears the filter");
+    }
+
     /// Regression: the render path clamps `pm_digest_selected` to the
     /// current card count before drawing, but Enter used to look the card
     /// up with the raw (unclamped) index — so if the card list shrank

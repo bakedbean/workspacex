@@ -358,20 +358,6 @@ pub enum SpawnMode {
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
     },
-    /// Spawn the project-manager session. Embeds the PM system prompt and
-    /// a read-only tool allowlist. When `resume` is true, also passes
-    /// `--continue` to pick up PM's prior conversation. Always uses
-    /// `--dangerously-skip-permissions`. When `fast_mode` is true, also
-    /// passes `--settings '{"fastMode":true}'` to enable Claude Code's
-    /// fast mode for this session.
-    ProjectManager {
-        workspaces_json_path: std::path::PathBuf,
-        custom_instructions: Option<String>,
-        // PM has no owning repo, so always empty. Kept for uniformity.
-        additional_dirs: Vec<std::path::PathBuf>,
-        resume: bool,
-        fast_mode: bool,
-    },
 }
 
 /// Resolve `<worktree>/.git` to the real gitdir, following a worktree-style
@@ -400,8 +386,7 @@ pub(crate) fn resolve_gitdir(dot_git: &Path, worktree: &Path) -> Option<std::pat
 
 /// Identity of the workspace+instance a spawned agent belongs to, surfaced to
 /// the child process as `WSX_WORKSPACE_ID` / `WSX_AGENT_INSTANCE_ID` so the
-/// agent's `wsx agent send` can address peers and identify itself. `None` for
-/// the project-manager session (which is not a workspace agent).
+/// agent's `wsx agent send` can address peers and identify itself.
 #[derive(Debug, Clone, Copy)]
 pub struct SpawnIdentity {
     pub workspace_id: i64,
@@ -569,7 +554,6 @@ fn now_ms() -> u64 {
 
 pub struct SessionManager {
     sessions: HashMap<crate::data::store::AgentInstanceId, Arc<Session>>,
-    pm: Option<Arc<Session>>,
 }
 
 impl Default for SessionManager {
@@ -582,7 +566,6 @@ impl SessionManager {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
-            pm: None,
         }
     }
 
@@ -631,10 +614,8 @@ impl SessionManager {
     /// Resize every backgrounded running session to `cols × rows` (the
     /// projected single-pane size). Sessions in `visible` are skipped: the
     /// attached render path already keeps those sized every frame, and resizing
-    /// one would clip the frame the user is looking at. The PM session lives in
-    /// `app.pm`, not here, and is synced separately by
-    /// `App::apply_backgrounded_resize`. See `crate::app::resize_sync` for why
-    /// this sweep exists.
+    /// one would clip the frame the user is looking at. See
+    /// `crate::app::resize_sync` for why this sweep exists.
     pub fn resize_backgrounded(
         &self,
         cols: u16,
@@ -654,50 +635,18 @@ impl SessionManager {
         }
     }
 
-    pub fn spawn_pm(
-        &mut self,
-        cwd: &Path,
-        cols: u16,
-        rows: u16,
-        mode: SpawnMode,
-        remote: crate::agent::remote_control::RemoteOpts,
-        agent: AgentKind,
-    ) -> Result<Arc<Session>> {
-        if let Some(existing) = &self.pm {
-            if matches!(
-                *existing.status.read().unwrap(),
-                SessionStatus::Running { .. }
-            ) {
-                return Ok(existing.clone());
-            }
-        }
-        let session = Arc::new(spawn_session(
-            cwd, cols, rows, mode, remote, agent, None, None,
-        )?);
-        self.pm = Some(session.clone());
-        Ok(session)
-    }
-
-    pub fn pm(&self) -> Option<Arc<Session>> {
-        self.pm.clone()
-    }
-
     pub fn kill_all(&mut self) {
         for s in self.sessions.values() {
             s.kill();
         }
         self.sessions.clear();
-        if let Some(pm) = &self.pm {
-            pm.kill();
-        }
-        self.pm = None;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{EnvGuard, cat_path};
+    use crate::test_support::EnvGuard;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -1049,60 +998,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("AUTO_MSG"), "screen contents: {screen:?}");
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn session_manager_pm_spawn_get_kill() {
-        let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
-        let cwd = PathBuf::from(".");
-        let mut mgr = SessionManager::new();
-        assert!(mgr.pm().is_none());
-        let mode = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/wsx-test-pm/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        };
-        let s = mgr
-            .spawn_pm(
-                &cwd,
-                80,
-                24,
-                mode,
-                crate::agent::remote_control::RemoteOpts::disabled(),
-                AgentKind::Claude,
-            )
-            .unwrap();
-        assert!(mgr.pm().is_some());
-        // Second spawn while running is a no-op (returns existing).
-        let mode2 = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/wsx-test-pm/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        };
-        let s2 = mgr
-            .spawn_pm(
-                &cwd,
-                80,
-                24,
-                mode2,
-                crate::agent::remote_control::RemoteOpts::disabled(),
-                AgentKind::Claude,
-            )
-            .unwrap();
-        assert!(Arc::ptr_eq(&s, &s2));
-        // kill_all also kills PM.
-        mgr.kill_all();
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        assert!(matches!(
-            *s.status.read().unwrap(),
-            SessionStatus::Exited { .. }
-        ));
-        assert!(mgr.pm().is_none(), "kill_all should clear pm slot");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

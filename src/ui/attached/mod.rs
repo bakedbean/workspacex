@@ -20,7 +20,7 @@ use agents_row::{agents_row_spans, layout_agents_row};
 // Re-exported for app::render / app::input via `crate::ui::attached::*`.
 pub use agents_row::agent_switch_keys;
 pub(crate) use chip_row::render_chip_row;
-pub use nav_menu::{NavItem, nav_item_key, nav_menu_items, pm_nav_menu_items, render_nav_overlay};
+pub use nav_menu::{NavItem, nav_item_key, nav_menu_items, render_nav_overlay};
 
 /// One pane in the attached view: a workspace's PTY plus its label,
 /// the rect it occupies, and whether it's the focused pane (cursor + chip
@@ -31,8 +31,8 @@ pub struct PaneSpec<'a> {
     pub label: &'a str,
     pub rect: Rect,
     pub focused: bool,
-    /// The pane's coding agent, or `None` for the project-manager pane
-    /// (which is not one of the four coding agents).
+    /// The pane's coding agent, or `None` for a label-only pane (no agent
+    /// kind).
     pub agent: Option<AgentKind>,
 }
 

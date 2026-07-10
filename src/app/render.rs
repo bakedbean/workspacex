@@ -9,7 +9,8 @@ use crate::ui::dashboard::row::ColumnWidths;
 use ratatui::layout::{Constraint, Direction, Layout};
 
 /// One attached pane's render inputs: session, label, rect, focus flag,
-/// and the workspace's coding agent (`None` for the project-manager pane).
+/// and the workspace's coding agent (`None` when the agent kind can't be
+/// resolved).
 type PaneData = (
     std::sync::Arc<crate::pty::session::Session>,
     String,
@@ -625,83 +626,6 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             app.footer_hint_rects = out.footer_hint_rects;
             app.pinned_commands_cache = pinned;
         }
-        crate::ui::View::AttachedPm => {
-            if let Some(session) = app.pm.as_ref() {
-                let prefix_w = attached::info_line_prefix_width("project-manager", None) as usize;
-                let max_width = (area.width as usize).saturating_sub(3 + prefix_w);
-                let attention = if matches!(
-                    app.modal,
-                    Some(crate::ui::modal::Modal::UpdatesPanel { .. })
-                ) {
-                    None
-                } else {
-                    compute_attention_line(app, None, max_width)
-                };
-                // PM pane is out of scope for pinned commands per spec.
-                let pinned: &[crate::commands::pinned::PinnedCommand] = &[];
-                let (info_area, separator_area, pane_area, chip_area, agents_area) =
-                    attached::layout_chrome(area, false);
-                let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> =
-                    attention
-                        .as_ref()
-                        .map(|a| {
-                            a.segments
-                                .iter()
-                                .map(|s| {
-                                    (
-                                        s.workspace_id,
-                                        ratatui::layout::Rect {
-                                            x: info_area
-                                                .x
-                                                .saturating_add(prefix_w as u16)
-                                                .saturating_add(s.start_col),
-                                            y: info_area.y,
-                                            width: s.width,
-                                            height: 1,
-                                        },
-                                    )
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                let attention_line = attention.map(|a| a.line);
-                attached::resize_pane(session, pane_area, false);
-                let specs = [crate::ui::attached::PaneSpec {
-                    session,
-                    label: "project-manager",
-                    rect: pane_area,
-                    focused: true,
-                    agent: None,
-                }];
-                let out = attached::render_panes(
-                    f,
-                    &specs,
-                    &[],
-                    info_area,
-                    separator_area,
-                    chip_area,
-                    agents_area,
-                    "project-manager",
-                    None,
-                    attention_line,
-                    pinned,
-                    0,
-                    None,
-                    None,
-                    None,
-                    &[],
-                    None,
-                    &app.theme,
-                );
-                app.attached_pane_rects = out.pane_rects;
-                app.attention_rects = attention_rects;
-                app.footer_hint_rects = out.footer_hint_rects;
-            } else {
-                // PM session went away; bounce to dashboard on next event.
-                app.leader_pending = false;
-                app.view = crate::ui::View::Dashboard;
-            }
-        }
         crate::ui::View::AttachedRemote => {
             if let Some(session) = app.remote.as_ref() {
                 let label = app
@@ -912,7 +836,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
 /// Render the Ctrl-x navigation overlay when the leader is armed in an
 /// attached view. Keyed off `leader_pending`, so letter accelerators and the
-/// overlay share one state. Context (multi-pane vs PM) selects the item list.
+/// overlay share one state. Context (single vs multi-pane) selects the item
+/// list.
 fn draw_attached_nav_overlay(f: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) {
     if !app.leader_pending {
         return;
@@ -922,7 +847,6 @@ fn draw_attached_nav_overlay(f: &mut ratatui::Frame, area: ratatui::layout::Rect
             crate::ui::attached::nav_menu_items(state.leaf_count() > 1),
             !app.pinned_commands_cache.is_empty(),
         ),
-        crate::ui::View::AttachedPm => (crate::ui::attached::pm_nav_menu_items(), false),
         _ => return,
     };
     crate::ui::attached::render_nav_overlay(

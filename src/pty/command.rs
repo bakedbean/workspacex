@@ -95,23 +95,6 @@ pub fn build_claude_command(
                 additional_dirs.clone(),
             )
         }
-        SpawnMode::ProjectManager {
-            workspaces_json_path: _,
-            custom_instructions,
-            additional_dirs,
-            resume,
-            fast_mode: _, // emitted below, after the match
-        } => (
-            None,
-            Some(crate::agent::pm::pm_system_prompt(
-                custom_instructions.as_deref(),
-            )),
-            None,
-            false,
-            *resume,
-            true,
-            additional_dirs.clone(),
-        ),
     };
 
     for dir in &add_dirs {
@@ -138,16 +121,9 @@ pub fn build_claude_command(
     }
 
     // Status-reporting wiring goes to the developer agents (Fresh/Continue) via
-    // the harness-agnostic spawn_wiring() entry point; the PM pane keeps just
-    // its fastMode flag. The wiring points at the running wsx binary by
-    // absolute path so PATH differences can't break the callback.
-    let pm_fast = matches!(
-        mode,
-        SpawnMode::ProjectManager {
-            fast_mode: true,
-            ..
-        }
-    );
+    // the harness-agnostic spawn_wiring() entry point. The wiring points at
+    // the running wsx binary by absolute path so PATH differences can't break
+    // the callback.
     let inject_status = matches!(mode, SpawnMode::Fresh { .. } | SpawnMode::Continue { .. });
     if inject_status {
         let wsx_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
@@ -158,9 +134,6 @@ pub fn build_claude_command(
                 cmd.arg(arg);
             }
         }
-    } else if pm_fast {
-        cmd.arg("--settings");
-        cmd.arg(r#"{"fastMode":true}"#);
     }
 
     let parts: Vec<String> = [doctrine, rename_prompt, custom]
@@ -224,7 +197,6 @@ fn render_rename_system_prompt(
 /// Maps wsx spawn modes to pi CLI flags:
 /// - `Fresh` with `rename_ctx` → system prompt for auto-rename
 /// - `Continue` → `--continue`
-/// - `ProjectManager` → system prompt + `--continue` if resuming
 ///
 /// Pi has no permission system, so yolo/--dangerously-skip-permissions
 /// and --allowedTools are no-ops. Pi has no --add-dir or --remote-control
@@ -276,20 +248,6 @@ pub fn build_pi_command(
             };
             (doctrine.clone(), rp, custom_instructions.clone(), false)
         }
-        SpawnMode::ProjectManager {
-            workspaces_json_path: _,
-            custom_instructions,
-            additional_dirs: _,
-            resume,
-            fast_mode: _, // pi has no fast mode
-        } => (
-            None,
-            Some(crate::agent::pm::pm_system_prompt(
-                custom_instructions.as_deref(),
-            )),
-            None,
-            *resume,
-        ),
     };
 
     if add_continue {
@@ -358,7 +316,6 @@ pub fn build_pi_command(
 /// - `Continue` → `--resume <id>` if a prior wsx session exists for this cwd,
 ///   otherwise silently launches fresh (better than bare `--continue` which
 ///   would resume the globally-most-recent Hermes session regardless of cwd).
-/// - `ProjectManager` → `--resume <id>` if `resume`, always `--yolo`.
 ///
 /// Model selection uses env-var precedence:
 ///   1. `WSX_HERMES_MODEL` → set `HERMES_INFERENCE_MODEL` env var on the child
@@ -370,9 +327,9 @@ pub fn build_pi_command(
 /// `--worktree` is never emitted — wsx manages worktrees itself; passing it
 /// would double-isolate.
 ///
-/// Prompt injection (rename / custom_instructions / PM prompt) is handled
-/// separately by `prepare_hermes_workspace`, which writes a wsx-managed
-/// block into `AGENTS.md`.
+/// Prompt injection (rename / custom_instructions) is handled separately by
+/// `prepare_hermes_workspace`, which writes a wsx-managed block into
+/// `AGENTS.md`.
 pub fn build_hermes_command(
     cwd: &Path,
     mode: &SpawnMode,
@@ -397,7 +354,6 @@ pub fn build_hermes_command(
     let (add_continue, add_yolo) = match mode {
         SpawnMode::Continue { yolo, .. } => (true, *yolo),
         SpawnMode::Fresh { yolo, .. } => (false, *yolo),
-        SpawnMode::ProjectManager { resume, .. } => (*resume, true),
     };
 
     if add_continue {
@@ -504,16 +460,6 @@ pub(crate) fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
             doctrine,
             ..
         } => (doctrine.clone(), None, custom_instructions.clone()),
-        SpawnMode::ProjectManager {
-            custom_instructions,
-            ..
-        } => (
-            None,
-            Some(crate::agent::pm::pm_system_prompt(
-                custom_instructions.as_deref(),
-            )),
-            None,
-        ),
     };
 
     let parts: Vec<String> = [doctrine, rename, custom].into_iter().flatten().collect();
@@ -530,16 +476,14 @@ pub(crate) fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
 /// Spawn-mode mapping:
 /// - `Fresh`            → `codex`
 /// - `Continue`         → `codex resume --last` (cwd-filtered by Codex itself)
-/// - `ProjectManager`   → `codex [resume --last]` + `--ask-for-approval never
-///                         --sandbox read-only` (PM reads only, never prompts)
 ///
 /// `yolo` adds `--dangerously-bypass-approvals-and-sandbox`. Non-yolo dev
 /// sessions pass no approval flags, inheriting Codex's interactive defaults.
 /// `WSX_CODEX_MODEL` (trimmed, non-empty) adds `-m <model>`.
 ///
 /// Codex has no `--append-system-prompt`; instruction injection (doctrine /
-/// rename / custom / PM prompt) is handled by `prepare_codex_workspace` via
-/// AGENTS.md. The `remote` arg is unused — wsx's RemoteOpts targets Claude's
+/// rename / custom) is handled by `prepare_codex_workspace` via AGENTS.md.
+/// The `remote` arg is unused — wsx's RemoteOpts targets Claude's
 /// `--remote-control`, which is unrelated to Codex's `--remote`.
 pub fn build_codex_command(
     cwd: &Path,
@@ -555,8 +499,7 @@ pub fn build_codex_command(
 
     // Status reporting: developer sessions (Fresh/Continue) get `-c notify=...`
     // so Codex calls back into `wsx status from-notify` on agent-turn-complete.
-    // The PM pane is excluded, matching the Claude spawn. `-c` is a global flag
-    // and is accepted before any subcommand (`resume`).
+    // `-c` is a global flag and is accepted before any subcommand (`resume`).
     if matches!(mode, SpawnMode::Fresh { .. } | SpawnMode::Continue { .. }) {
         let wsx_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
         if let Some(wiring) =
@@ -568,10 +511,9 @@ pub fn build_codex_command(
         }
     }
 
-    let (resume, yolo, pm) = match mode {
-        SpawnMode::Fresh { yolo, .. } => (false, *yolo, false),
-        SpawnMode::Continue { yolo, .. } => (true, *yolo, false),
-        SpawnMode::ProjectManager { resume, .. } => (*resume, false, true),
+    let (resume, yolo) = match mode {
+        SpawnMode::Fresh { yolo, .. } => (false, *yolo),
+        SpawnMode::Continue { yolo, .. } => (true, *yolo),
     };
 
     if resume {
@@ -581,11 +523,6 @@ pub fn build_codex_command(
 
     if yolo {
         cmd.arg("--dangerously-bypass-approvals-and-sandbox");
-    } else if pm {
-        cmd.arg("--ask-for-approval");
-        cmd.arg("never");
-        cmd.arg("--sandbox");
-        cmd.arg("read-only");
     }
 
     let model = std::env::var("WSX_CODEX_MODEL")
@@ -603,7 +540,7 @@ pub fn build_codex_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{EnvGuard, cat_path};
+    use crate::test_support::EnvGuard;
     use std::path::PathBuf;
 
     #[test]
@@ -858,101 +795,6 @@ mod tests {
     }
 
     #[test]
-    fn project_manager_mode_adds_skip_permissions_and_system_prompt() {
-        let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
-        let cwd = PathBuf::from(".");
-        let mode = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        };
-        let cmd = build_claude_command(
-            &cwd,
-            &mode,
-            crate::agent::remote_control::RemoteOpts::disabled(),
-        );
-        let dbg = format!("{cmd:?}");
-        assert!(dbg.contains("--dangerously-skip-permissions"), "{dbg}");
-        assert!(!dbg.contains("--allowedTools"), "{dbg}");
-        assert!(dbg.contains("--append-system-prompt"), "{dbg}");
-        assert!(dbg.contains("project manager"), "{dbg}");
-        assert!(!dbg.contains("--continue"), "should be Fresh-style: {dbg}");
-    }
-
-    #[test]
-    fn project_manager_mode_resume_adds_continue() {
-        let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
-        let cwd = PathBuf::from(".");
-        let mode = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: true,
-            fast_mode: false,
-        };
-        let cmd = build_claude_command(
-            &cwd,
-            &mode,
-            crate::agent::remote_control::RemoteOpts::disabled(),
-        );
-        let dbg = format!("{cmd:?}");
-        assert!(dbg.contains("--continue"), "{dbg}");
-    }
-
-    #[test]
-    fn project_manager_mode_emits_settings_when_fast_mode() {
-        let cwd = PathBuf::from(".");
-        let mode = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: true,
-        };
-        let cmd = build_claude_command(
-            &cwd,
-            &mode,
-            crate::agent::remote_control::RemoteOpts::disabled(),
-        );
-        let argv = cmd.get_argv();
-        let idx = argv
-            .iter()
-            .position(|a| a == std::ffi::OsStr::new("--settings"))
-            .expect("expected --settings flag when fast_mode is true");
-        let value = argv
-            .get(idx + 1)
-            .expect("expected JSON value after --settings")
-            .to_string_lossy();
-        assert_eq!(value, r#"{"fastMode":true}"#);
-    }
-
-    #[test]
-    fn project_manager_mode_omits_settings_when_fast_mode_false() {
-        let cwd = PathBuf::from(".");
-        let mode = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        };
-        let cmd = build_claude_command(
-            &cwd,
-            &mode,
-            crate::agent::remote_control::RemoteOpts::disabled(),
-        );
-        let argv = cmd.get_argv();
-        assert!(
-            !argv.iter().any(|a| a == std::ffi::OsStr::new("--settings")),
-            "expected no --settings flag when fast_mode is false, argv: {argv:?}"
-        );
-    }
-
-    #[test]
     fn fresh_mode_emits_status_hooks_via_settings() {
         let cwd = PathBuf::from(".");
         let mode = SpawnMode::Fresh {
@@ -1106,29 +948,6 @@ mod tests {
             "expected no --remote-control flag, argv: {argv:?}"
         );
         assert!(!argv.iter().any(|a| a == std::ffi::OsStr::new("--sandbox")));
-    }
-
-    #[test]
-    fn build_claude_command_remote_control_applies_to_pm_mode() {
-        let cwd = PathBuf::from(".");
-        let mode = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        };
-        let opts = crate::agent::remote_control::RemoteOpts {
-            enabled: true,
-            sandbox: false,
-        };
-        let cmd = build_claude_command(&cwd, &mode, opts);
-        let argv = cmd.get_argv();
-        assert!(
-            argv.iter()
-                .any(|a| a == std::ffi::OsStr::new("--remote-control")),
-            "expected --remote-control in PM argv: {argv:?}"
-        );
     }
 
     #[test]
@@ -1382,19 +1201,6 @@ mod tests {
         }
 
         #[test]
-        fn project_manager_returns_pm_prompt() {
-            let mode = super::SpawnMode::ProjectManager {
-                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
-                custom_instructions: None,
-                additional_dirs: vec![],
-                resume: false,
-                fast_mode: false,
-            };
-            let result = super::compose_injected_prompt(&mode).expect("expected Some");
-            assert!(!result.is_empty());
-        }
-
-        #[test]
         fn hermes_prepends_doctrine_before_custom() {
             let mode = super::SpawnMode::Continue {
                 custom_instructions: Some("CUSTOM_MARK".to_string()),
@@ -1409,23 +1215,6 @@ mod tests {
             assert!(
                 result.starts_with("DOCTRINE_MARK"),
                 "doctrine must lead: {result}"
-            );
-        }
-
-        #[test]
-        fn hermes_pm_mode_has_no_doctrine() {
-            let mode = super::SpawnMode::ProjectManager {
-                workspaces_json_path: std::path::PathBuf::from("/tmp/x/workspaces.json"),
-                custom_instructions: None,
-                additional_dirs: vec![],
-                resume: false,
-                fast_mode: false,
-            };
-            let result =
-                super::compose_injected_prompt(&mode).expect("PM still injects its prompt");
-            assert!(
-                !result.contains("DOCTRINE_MARK"),
-                "PM must not get doctrine: {result}"
             );
         }
     }
@@ -1523,69 +1312,6 @@ mod tests {
         }
 
         #[test]
-        fn project_manager_mode_is_always_yolo() {
-            let tmp = tempfile::tempdir().unwrap();
-            let mode = super::SpawnMode::ProjectManager {
-                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
-                custom_instructions: None,
-                additional_dirs: vec![],
-                resume: false,
-                fast_mode: false,
-            };
-            let cmd = super::build_hermes_command(
-                tmp.path(),
-                &mode,
-                crate::agent::remote_control::RemoteOpts::disabled(),
-            );
-            assert!(argv_strings(&cmd).iter().any(|a| a == "--yolo"));
-        }
-
-        #[test]
-        fn project_manager_mode_emits_yolo_and_resume_if_set() {
-            let home = tempfile::tempdir().unwrap();
-            let cwd = tempfile::tempdir().unwrap();
-            // Seed .git/info structure and spawn marker for cwd.
-            std::fs::create_dir_all(cwd.path().join(".git/info")).unwrap();
-            std::fs::write(cwd.path().join(".git/info/wsx-hermes-spawn-at"), "1000.0\n").unwrap();
-            // Seed ~/.hermes/state.db with a session after spawn_ts.
-            let hermes_dir = home.path().join(".hermes");
-            std::fs::create_dir_all(&hermes_dir).unwrap();
-            let db_path = hermes_dir.join("state.db");
-            let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute_batch(
-                "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL);",
-            ).unwrap();
-            conn.execute(
-                "INSERT INTO sessions (id, source, started_at) VALUES ('pm-sess', 'cli', 1234.5);",
-                [],
-            )
-            .unwrap();
-            drop(conn);
-
-            let mut env = super::EnvGuard::new();
-            env.set("HOME", home.path().to_string_lossy().as_ref());
-            let mode = super::SpawnMode::ProjectManager {
-                workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
-                custom_instructions: None,
-                additional_dirs: vec![],
-                resume: true,
-                fast_mode: false,
-            };
-            let cmd = super::build_hermes_command(
-                cwd.path(),
-                &mode,
-                crate::agent::remote_control::RemoteOpts::disabled(),
-            );
-            let argv = argv_strings(&cmd);
-            let resume_idx = argv
-                .iter()
-                .position(|a| a == "--resume")
-                .expect("expected --resume");
-            assert_eq!(argv[resume_idx + 1], "pm-sess");
-            assert!(argv.iter().any(|a| a == "--yolo"), "argv: {argv:?}");
-        }
-
-        #[test]
         fn no_worktree_flag_ever_emitted() {
             let tmp = tempfile::tempdir().unwrap();
             for mode in &[
@@ -1595,13 +1321,6 @@ mod tests {
                     doctrine: None,
                     additional_dirs: vec![],
                     yolo: true,
-                },
-                super::SpawnMode::ProjectManager {
-                    workspaces_json_path: std::path::PathBuf::from("/tmp/ws.json"),
-                    custom_instructions: None,
-                    additional_dirs: vec![],
-                    resume: true,
-                    fast_mode: false,
                 },
             ] {
                 let cmd = super::build_hermes_command(
@@ -1936,74 +1655,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pi_pm_mode_has_no_doctrine_marker() {
-        // PM variant has no doctrine field; ensure nothing leaks one in.
-        // Give PM custom instructions so it definitely emits an
-        // --append-system-prompt, making the no-doctrine assertion non-vacuous.
-        let cwd = PathBuf::from(".");
-        let mode = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
-            custom_instructions: Some("PM_CUSTOM_MARK".to_string()),
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        };
-        let cmd = build_pi_command(
-            &cwd,
-            &mode,
-            crate::agent::remote_control::RemoteOpts::disabled(),
-        );
-        let argv = cmd.get_argv();
-        let idx = argv
-            .iter()
-            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
-            .expect("PM with custom instructions must emit --append-system-prompt");
-        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
-        assert!(
-            prompt.contains("PM_CUSTOM_MARK"),
-            "PM prompt should be present: {prompt}"
-        );
-        assert!(
-            !prompt.contains("DOCTRINE_MARK"),
-            "PM must not get doctrine: {prompt}"
-        );
-    }
-
-    #[test]
-    fn claude_pm_mode_has_no_doctrine_marker() {
-        // PM variant has no doctrine field; ensure nothing leaks one in.
-        let cwd = PathBuf::from(".");
-        // Give PM custom instructions so it definitely emits an
-        // --append-system-prompt, making the no-doctrine assertion non-vacuous.
-        let mode = SpawnMode::ProjectManager {
-            workspaces_json_path: PathBuf::from("/tmp/x/workspaces.json"),
-            custom_instructions: Some("PM_CUSTOM_MARK".to_string()),
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        };
-        let cmd = build_claude_command(
-            &cwd,
-            &mode,
-            crate::agent::remote_control::RemoteOpts::disabled(),
-        );
-        let argv = cmd.get_argv();
-        let idx = argv
-            .iter()
-            .position(|a| a == std::ffi::OsStr::new("--append-system-prompt"))
-            .expect("PM with custom instructions must emit --append-system-prompt");
-        let prompt = argv.get(idx + 1).unwrap().to_string_lossy();
-        assert!(
-            prompt.contains("PM_CUSTOM_MARK"),
-            "PM prompt should be present: {prompt}"
-        );
-        assert!(
-            !prompt.contains("DOCTRINE_MARK"),
-            "PM must not get doctrine: {prompt}"
-        );
-    }
-
     /// Build a Codex command for `mode` and return its argv as lossy Strings.
     fn codex_argv(mode: &SpawnMode) -> Vec<String> {
         let cmd = build_codex_command(
@@ -2086,33 +1737,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_pm_is_read_only_and_never_asks() {
-        let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", "codex");
-        let argv = codex_argv(&SpawnMode::ProjectManager {
-            workspaces_json_path: std::path::PathBuf::from("/tmp/pm/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        });
-        assert!(
-            argv.windows(2)
-                .any(|w| w[0] == "--ask-for-approval" && w[1] == "never"),
-            "pm must never ask: {argv:?}"
-        );
-        assert!(
-            argv.windows(2)
-                .any(|w| w[0] == "--sandbox" && w[1] == "read-only"),
-            "pm must be read-only: {argv:?}"
-        );
-        assert!(
-            !argv.iter().any(|a| a == "resume"),
-            "pm fresh must not resume: {argv:?}"
-        );
-    }
-
-    #[test]
     fn codex_model_env_adds_dash_m() {
         let mut env = EnvGuard::new();
         env.set("WSX_CODEX_BIN", "codex");
@@ -2147,27 +1771,6 @@ mod tests {
             argv.iter()
                 .any(|a| a.starts_with("notify=[") && a.contains("from-notify")),
             "argv: {argv:?}"
-        );
-    }
-
-    #[test]
-    fn codex_pm_omits_notify_status_wiring() {
-        let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", "codex");
-        let argv = codex_argv(&SpawnMode::ProjectManager {
-            workspaces_json_path: std::path::PathBuf::from("/tmp/pm/workspaces.json"),
-            custom_instructions: None,
-            additional_dirs: vec![],
-            resume: false,
-            fast_mode: false,
-        });
-        assert!(
-            !argv.iter().any(|a| a.starts_with("notify=[")),
-            "PM should not get status wiring; argv: {argv:?}"
-        );
-        assert!(
-            !argv.iter().any(|a| a == "-c"),
-            "PM should not inject the -c flag; argv: {argv:?}"
         );
     }
 }

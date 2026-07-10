@@ -16,9 +16,6 @@ pub enum View {
     /// One or more workspace PTYs arranged in a recursive vim-style split
     /// tree, with one pane focused for input.
     Attached(AttachedState),
-    /// Full-screen view of the Project Manager session. Reached from the
-    /// dashboard's PM pane via `Ctrl-O`; detach back with `Ctrl-x d`.
-    AttachedPm,
     /// Full-screen view of a remote tmux-shared workspace attached over ssh.
     /// Reached by pressing Enter on an alive row in `Modal::RemoteWorkspaceList`;
     /// detach back with `Ctrl-x d`. The backing `Session` (in `app.remote`)

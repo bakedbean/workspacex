@@ -17,14 +17,6 @@
 //! repaints at the right width while detached, so the on-attach `resize_pane`
 //! is a no-op and nothing gets clipped.
 //!
-//! The project-manager (PM) session (`app.pm`) is handled separately, not by
-//! the `SessionManager::sessions` sweep. It's render-synced on the dashboard
-//! (`pm_pane::resize_session`) and in the full-screen `AttachedPm` view, but
-//! while attached to an *agent* no render path touches it — so it goes stale
-//! there. `App::apply_backgrounded_resize` resizes it in that case only (see
-//! `should_sync_pm`); doing so in the other views would fight those render
-//! paths, which size it differently (dashboard pane size, not attach size).
-//!
 //! This module holds the pure, clock-injected pieces; the wiring into the event
 //! loop lives in `app.rs` and the per-session resize in `SessionManager`.
 
@@ -98,18 +90,8 @@ pub fn projected_pane_size(cols: u16, rows: u16) -> (u16, u16) {
 pub fn visible_instances(view: &View) -> HashSet<AgentInstanceId> {
     match view {
         View::Attached(state) => state.leaves().into_iter().map(|t| t.instance).collect(),
-        View::Dashboard | View::AttachedPm | View::AttachedRemote => HashSet::new(),
+        View::Dashboard | View::AttachedRemote => HashSet::new(),
     }
-}
-
-/// Whether the backgrounded sweep should also resize the PM session. PM is
-/// render-synced on the dashboard (`pm_pane::resize_session`) and in
-/// `AttachedPm` (`resize_pane`), but while attached to an *agent* or a *remote*
-/// workspace no render path touches it — so it goes stale in those full-screen
-/// attach views and the sweep must cover them. Resizing it in any other view
-/// would ping-pong against those render paths.
-pub fn should_sync_pm(view: &View) -> bool {
-    matches!(view, View::Attached(_) | View::AttachedRemote)
 }
 
 #[cfg(test)]
@@ -174,32 +156,6 @@ mod tests {
     #[test]
     fn visible_instances_empty_when_not_attached() {
         assert!(visible_instances(&View::Dashboard).is_empty());
-        assert!(visible_instances(&View::AttachedPm).is_empty());
-    }
-
-    #[test]
-    fn should_sync_pm_only_while_attached_to_an_agent() {
-        // Dashboard and AttachedPm resize PM via their own render paths.
-        assert!(
-            !should_sync_pm(&View::Dashboard),
-            "dashboard render syncs PM"
-        );
-        assert!(
-            !should_sync_pm(&View::AttachedPm),
-            "AttachedPm render syncs PM"
-        );
-        // Attached to an agent: no render path touches PM, so it's stale.
-        let state = AttachedState::single(target(1));
-        assert!(
-            should_sync_pm(&View::Attached(state)),
-            "PM is backgrounded while attached to an agent"
-        );
-        // Attached to a remote workspace: same full-screen attach with no PM
-        // render path, so the sweep must keep PM sized here too.
-        assert!(
-            should_sync_pm(&View::AttachedRemote),
-            "PM is backgrounded while remote-attached"
-        );
     }
 
     #[test]

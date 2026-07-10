@@ -2,7 +2,7 @@
 //!
 //! `handle_event` is the public entry point called from the run loop.
 //! Per-view handlers (`handle_key_dashboard`, `handle_key_attached`,
-//! `handle_key_attached_pm`) route keystrokes to the right place; the modal
+//! `handle_key_attached`) route keystrokes to the right place; the modal
 //! handler (`handle_key_modal`) takes precedence when a modal is open.
 
 use crate::app::{
@@ -50,42 +50,6 @@ fn report_external_open<E: std::fmt::Display>(app: &mut App, result: std::result
     }
 }
 
-// Only `encode_key_for_pty_*` tests exercise this now — the dashboard's PM
-// pane forwarded keystrokes to a PTY via this helper before it became the
-// digest (see `handle_key_dashboard`'s PM-focus block). Kept test-only
-// rather than deleted outright since Task 7's PM-PTY teardown is the
-// natural place to remove it for good.
-#[cfg(test)]
-fn encode_key_for_pty(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    match (k.code, k.modifiers) {
-        (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-            Some(c.to_string().into_bytes())
-        }
-        (KeyCode::Char(c), m) if m.contains(KeyModifiers::CONTROL) => {
-            let upper = c.to_ascii_uppercase();
-            // Never forward Ctrl-Z (0x1a / SUSP). See `encode_key` for the
-            // rationale: it suspends a line-disciplined job inside the child
-            // PTY with no reachable prompt to `fg` it back.
-            if upper == 'Z' {
-                return None;
-            }
-            if ('@'..='_').contains(&upper) {
-                Some(vec![(upper as u8) - b'@'])
-            } else {
-                None
-            }
-        }
-        (KeyCode::Enter, _) => Some(b"\r".to_vec()),
-        (KeyCode::Backspace, _) => Some(vec![0x7f]),
-        (KeyCode::Up, _) => Some(b"\x1b[A".to_vec()),
-        (KeyCode::Down, _) => Some(b"\x1b[B".to_vec()),
-        (KeyCode::Right, _) => Some(b"\x1b[C".to_vec()),
-        (KeyCode::Left, _) => Some(b"\x1b[D".to_vec()),
-        (KeyCode::Tab, _) => Some(b"\t".to_vec()),
-        _ => None,
-    }
-}
 /// Clear the PR/diff poll throttles so the background loop refetches on its
 /// next tick — the digest's manual refresh.
 fn nudge_status_refresh(app: &mut App) {
@@ -166,12 +130,11 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
         View::Attached(state) => state
             .focused_target()
             .and_then(|target| app.sessions.get(target.instance)),
-        View::AttachedPm => app.pm.clone(),
         View::AttachedRemote => app.remote.clone(),
         // The dashboard's PM pane is now the digest — there is no PTY to
         // scroll or forward paste into, so PM-focused dashboard input
         // falls through to the default (no target).
-        _ => None,
+        View::Dashboard => None,
     }
 }
 /// Resolve the session that should receive a pinned-command dispatch.
@@ -192,7 +155,6 @@ fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::
         // writes into the ssh PTY, driving the remote agent (see `render.rs`
         // AttachedRemote). Mirrors `active_session`'s remote arm.
         View::AttachedRemote => app.remote.clone(),
-        _ => None,
     }
 }
 /// Dispatch the pinned command at `idx` to the chip-target session.
@@ -1068,84 +1030,8 @@ async fn handle_key_attached(
     }
     Ok(())
 }
-/// Fire a single PM-pane leader action for `k` (already-armed leader).
-/// Extracted so the letter-accelerator path and the overlay's Enter path
-/// dispatch through identical code. Caller clears `leader_pending` first.
-async fn dispatch_pm_leader_action(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
-    let session = match app.pm.clone() {
-        Some(s) => s,
-        None => {
-            app.view = View::Dashboard;
-            return Ok(());
-        }
-    };
-    match k.code {
-        KeyCode::Char('d') => {
-            app.view = View::Dashboard;
-            Ok(())
-        }
-        KeyCode::Char('x') => {
-            // Send a literal Ctrl-x (0x18) to claude.
-            session.scroll_to_live();
-            let _ = session.writer.send(vec![0x18]).await;
-            Ok(())
-        }
-        KeyCode::Char('u') => {
-            app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
-    let session = match app.pm.clone() {
-        Some(s) => s,
-        None => {
-            app.leader_pending = false;
-            app.view = View::Dashboard;
-            return Ok(());
-        }
-    };
-    if app.leader_pending {
-        let items = crate::ui::attached::pm_nav_menu_items();
-        match k.code {
-            KeyCode::Up => {
-                let n = items.len();
-                app.leader_selected = (app.leader_selected + n - 1) % n;
-                return Ok(());
-            }
-            KeyCode::Down => {
-                let n = items.len();
-                app.leader_selected = (app.leader_selected + 1) % n;
-                return Ok(());
-            }
-            KeyCode::Enter => {
-                app.leader_pending = false;
-                if let Some(key) = crate::ui::attached::nav_item_key(&items, app.leader_selected) {
-                    return dispatch_pm_leader_action(app, key).await;
-                }
-                return Ok(());
-            }
-            _ => {
-                app.leader_pending = false;
-                return dispatch_pm_leader_action(app, k).await;
-            }
-        }
-    }
-    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
-        app.leader_pending = true;
-        app.leader_selected = 0;
-        return Ok(());
-    }
-    let bytes = encode_key(k);
-    if !bytes.is_empty() {
-        session.scroll_to_live();
-        let _ = session.writer.send(bytes).await;
-    }
-    Ok(())
-}
-/// Full-screen remote-attach key handler. Mirrors `handle_key_attached_pm` but
-/// with no leader menu: `Ctrl-x d` detaches (severing only the local ssh
+/// Full-screen remote-attach key handler. No leader menu:
+/// `Ctrl-x d` detaches (severing only the local ssh
 /// client), everything else is forwarded verbatim to the remote agent's PTY.
 /// If the ssh child has already exited (e.g. tmux printed `can't find session`
 /// for a stale name, then the client quit), any key bounces to the dashboard
@@ -2220,11 +2106,6 @@ async fn route_footer_key(app: &mut App, k: crossterm::event::KeyEvent) {
                 }
             }
         }
-        View::AttachedPm => {
-            if let Err(e) = handle_key_attached_pm(app, k).await {
-                tracing::warn!(error = %e, "footer-hint pm dispatch failed");
-            }
-        }
         View::AttachedRemote => {
             if let Err(e) = handle_key_attached_remote(app, k).await {
                 tracing::warn!(error = %e, "footer-hint remote dispatch failed");
@@ -2238,7 +2119,7 @@ async fn route_footer_key(app: &mut App, k: crossterm::event::KeyEvent) {
 /// poking `leader_pending` directly, so behavior matches the keyboard exactly
 /// (including edge cases like an already-armed leader).
 ///
-/// The dashboard footer lists direct keys. The attached/PM footers list
+/// The dashboard footer lists direct keys. The attached footer lists
 /// leader-prefixed chords, so a labeled key becomes `Ctrl-x` then the key, and
 /// the `^x` pill becomes a lone `Ctrl-x` (which arms the leader, or — if it was
 /// already armed — clears it and sends a literal `^X`, exactly as pressing
@@ -2249,9 +2130,9 @@ async fn dispatch_footer_hint(app: &mut App, action: crate::ui::footer::FooterHi
     match action {
         FooterHintAction::ArmLeader => route_footer_key(app, leader).await,
         FooterHintAction::Key(k) => {
-            // Attached/PM hints are chords: send the leader first, then the key.
+            // Attached hints are chords: send the leader first, then the key.
             // The dashboard footer's keys are not leader-prefixed.
-            if matches!(app.view, View::Attached(_) | View::AttachedPm) {
+            if matches!(app.view, View::Attached(_)) {
                 route_footer_key(app, leader).await;
             }
             route_footer_key(app, k).await;
@@ -2285,9 +2166,7 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
     ) && matches!(
         app.view,
-        crate::ui::View::Attached(_)
-            | crate::ui::View::AttachedPm
-            | crate::ui::View::AttachedRemote
+        crate::ui::View::Attached(_) | crate::ui::View::AttachedRemote
     ) && !m.modifiers.contains(KeyModifiers::SHIFT)
     {
         if let Some((session, rect)) = pane_under_cursor(app, m.column, m.row) {
@@ -2438,7 +2317,6 @@ async fn dispatch_key(
                 };
                 handle_key_attached(app, id, k).await?
             }
-            View::AttachedPm => handle_key_attached_pm(app, k).await?,
             View::AttachedRemote => handle_key_attached_remote(app, k).await?,
         }
     }

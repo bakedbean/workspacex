@@ -16,7 +16,6 @@ mod pm_state_tests {
     fn app_initializes_pm_state_off() {
         let store = Store::open_in_memory().unwrap();
         let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        assert!(app.pm.is_none());
         assert!(!app.pm_visible);
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
     }
@@ -153,7 +152,6 @@ mod pm_state_tests {
         press_key(&mut app, KeyCode::Char('p')).await;
         assert!(app.pm_visible);
         assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
-        assert!(app.pm.is_none(), "no PTY spawn on p"); // Task 7 deletes app.pm and this line
         press_key(&mut app, KeyCode::Char('p')).await;
         assert!(!app.pm_visible);
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
@@ -1634,118 +1632,6 @@ mod pm_state_tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn leader_u_in_attached_pm_opens_updates_panel() {
-        let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
-        let store = Store::open_in_memory().unwrap();
-        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        // Manually spawn a PM session so handle_key_attached_pm has one.
-        let cwd = PathBuf::from(".");
-        let mode = crate::pty::session::SpawnMode::Fresh {
-            rename_ctx: None,
-            custom_instructions: None,
-            doctrine: None,
-            additional_dirs: vec![],
-            yolo: false,
-        };
-        let s = app
-            .sessions
-            .spawn_pm(
-                &cwd,
-                80,
-                24,
-                mode,
-                crate::agent::remote_control::RemoteOpts::disabled(),
-                crate::pty::session::AgentKind::Claude,
-            )
-            .unwrap();
-        app.pm = Some(s);
-        app.view = crate::ui::View::AttachedPm;
-
-        // Send the leader (Ctrl-x) then 'u'.
-        handle_key_attached_pm(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
-        )
-        .await
-        .unwrap();
-        assert!(app.leader_pending);
-
-        handle_key_attached_pm(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
-        )
-        .await
-        .unwrap();
-        assert!(!app.leader_pending);
-        assert!(matches!(
-            app.modal,
-            Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ctrl_x_down_enter_fires_highlighted_action_pm() {
-        let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
-        let store = Store::open_in_memory().unwrap();
-        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        // Spawn a PM session so handle_key_attached_pm has one (mirrors the
-        // setup used by leader_u_in_attached_pm_opens_updates_panel).
-        let cwd = PathBuf::from(".");
-        let mode = crate::pty::session::SpawnMode::Fresh {
-            rename_ctx: None,
-            custom_instructions: None,
-            doctrine: None,
-            additional_dirs: vec![],
-            yolo: false,
-        };
-        let s = app
-            .sessions
-            .spawn_pm(
-                &cwd,
-                80,
-                24,
-                mode,
-                crate::agent::remote_control::RemoteOpts::disabled(),
-                crate::pty::session::AgentKind::Claude,
-            )
-            .unwrap();
-        app.pm = Some(s);
-        app.view = crate::ui::View::AttachedPm;
-
-        // Arm the leader with Ctrl-x; overlay highlight should be at index 0.
-        handle_key_attached_pm(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
-        )
-        .await
-        .unwrap();
-        assert!(app.leader_pending, "leader should be armed after Ctrl-x");
-        assert_eq!(app.leader_selected, 0, "highlight starts at index 0");
-
-        // Down once moves to index 1 ("u" = updates) but keeps the leader armed.
-        handle_key_attached_pm(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
-            .await
-            .unwrap();
-        assert_eq!(app.leader_selected, 1, "Down moves highlight to index 1");
-        assert!(app.leader_pending, "↑↓ keep the leader armed");
-
-        // Enter fires the highlighted action (index 1 = updates panel).
-        handle_key_attached_pm(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .await
-            .unwrap();
-        assert!(!app.leader_pending, "Enter clears the leader");
-        assert!(
-            matches!(
-                app.modal,
-                Some(crate::ui::modal::Modal::UpdatesPanel { .. })
-            ),
-            "Enter on the updates row opens the updates panel"
-        );
-    }
-
     fn mouse_event(kind: MouseEventKind) -> MouseEvent {
         MouseEvent {
             kind,
@@ -1753,33 +1639,6 @@ mod pm_state_tests {
             row: 0,
             modifiers: KeyModifiers::NONE,
         }
-    }
-
-    fn spawn_pm_for_test(app: &mut App) {
-        // Use a wrapper that ignores args and cats stdin: Codex Fresh now
-        // injects `-c notify=...` for status reporting, which bare `cat` rejects.
-        let mut env = EnvGuard::new();
-        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
-        let cwd = PathBuf::from(".");
-        let mode = crate::pty::session::SpawnMode::Fresh {
-            rename_ctx: None,
-            custom_instructions: None,
-            doctrine: None,
-            additional_dirs: vec![],
-            yolo: false,
-        };
-        let s = app
-            .sessions
-            .spawn_pm(
-                &cwd,
-                80,
-                24,
-                mode,
-                crate::agent::remote_control::RemoteOpts::disabled(),
-                crate::pty::session::AgentKind::Codex,
-            )
-            .unwrap();
-        app.pm = Some(s);
     }
 
     fn spawn_attached_workspace(app: &mut App) -> crate::data::store::WorkspaceId {
@@ -1863,23 +1722,6 @@ mod pm_state_tests {
                 .scrollback_offset
                 .load(std::sync::atomic::Ordering::Relaxed),
             2
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn wheel_targets_pm_when_pm_attached() {
-        let store = Store::open_in_memory().unwrap();
-        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        spawn_pm_for_test(&mut app);
-        app.view = crate::ui::View::AttachedPm;
-        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
-        assert_eq!(
-            app.pm
-                .as_ref()
-                .unwrap()
-                .scrollback_offset
-                .load(std::sync::atomic::Ordering::Relaxed),
-            3
         );
     }
 
@@ -7018,37 +6860,6 @@ mod leader_view_transition_tests {
             "leader_pending must be cleared on view transition (was still true after bounce)"
         );
     }
-
-    /// Armed Ctrl-X leader must be cleared when the attached-PM view bounces
-    /// back to Dashboard because the PM session is gone.
-    #[tokio::test]
-    async fn leader_cleared_when_attached_pm_bounces_to_dashboard_on_missing_session() {
-        let store = Store::open_in_memory().unwrap();
-        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-
-        // Place the app in AttachedPm — but do NOT set app.pm, so
-        // handle_key_attached_pm will immediately bounce back to Dashboard.
-        app.view = crate::ui::View::AttachedPm;
-        app.pm = None;
-        // Arm the leader as if the user had pressed Ctrl-X while in AttachedPm.
-        app.leader_pending = true;
-
-        handle_key_attached_pm(
-            &mut app,
-            KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
-        )
-        .await
-        .unwrap();
-
-        assert!(
-            matches!(app.view, crate::ui::View::Dashboard),
-            "view must transition to Dashboard"
-        );
-        assert!(
-            !app.leader_pending,
-            "leader_pending must be cleared on view transition (was still true after PM bounce)"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -7214,30 +7025,6 @@ mod attached_wheel_forwarding {
         );
     }
 
-    fn spawn_pm_for_test_local(app: &mut App) {
-        let mut env = crate::test_support::EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", crate::test_support::cat_path());
-        let mode = crate::pty::session::SpawnMode::Fresh {
-            rename_ctx: None,
-            custom_instructions: None,
-            doctrine: None,
-            additional_dirs: vec![],
-            yolo: false,
-        };
-        let s = app
-            .sessions
-            .spawn_pm(
-                &PathBuf::from("."),
-                80,
-                24,
-                mode,
-                crate::agent::remote_control::RemoteOpts::disabled(),
-                crate::pty::session::AgentKind::Claude,
-            )
-            .unwrap();
-        app.pm = Some(s);
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn plain_wheel_down_forwards_when_mouse_mode_on() {
         let store = crate::data::store::Store::open_in_memory().unwrap();
@@ -7287,38 +7074,6 @@ mod attached_wheel_forwarding {
                 .load(Ordering::Relaxed),
             3,
             "wheel over chrome (no pane under cursor) drives wsx scrollback"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn plain_wheel_forwards_in_attached_pm() {
-        let store = crate::data::store::Store::open_in_memory().unwrap();
-        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        spawn_pm_for_test_local(&mut app);
-        app.view = crate::ui::View::AttachedPm;
-        let pm = app.pm.as_ref().unwrap().clone();
-        {
-            let mut p = pm.parser.lock().unwrap();
-            p.process(b"\x1b[?1000h\x1b[?1006h");
-        }
-        app.attached_pane_rects = vec![(
-            pm.clone(),
-            Rect {
-                x: 0,
-                y: 0,
-                width: 80,
-                height: 24,
-            },
-        )];
-        handle_mouse(
-            &mut app,
-            mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE),
-        )
-        .await;
-        assert_eq!(
-            pm.scrollback_offset.load(Ordering::Relaxed),
-            0,
-            "wheel over the PM pane with mouse mode on is forwarded, not scrolled locally"
         );
     }
 }
@@ -7683,20 +7438,5 @@ mod ctrl_z_suppression_tests {
         // Sanity: a neighboring control key like Ctrl-C is untouched (0x03).
         let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(encode_key(ev), vec![0x03]);
-    }
-
-    #[test]
-    fn encode_key_for_pty_swallows_ctrl_z() {
-        let ev = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
-        assert!(
-            encode_key_for_pty(&ev).is_none(),
-            "Ctrl-Z must not be forwarded to the PM PTY"
-        );
-    }
-
-    #[test]
-    fn encode_key_for_pty_still_forwards_other_ctrl_keys() {
-        let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(encode_key_for_pty(&ev), Some(vec![0x03]));
     }
 }

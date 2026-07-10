@@ -528,6 +528,9 @@ pub struct App {
     /// Index of the selected card in the flattened PM digest (`card_at`
     /// order), clamped on render against the current card count.
     pub pm_digest_selected: usize,
+    /// Live PM digest filter buffer. `None` = inactive; `Some(buf)` = filter
+    /// mode, matched case-insensitively against workspace names.
+    pub pm_filter: Option<String>,
     /// Rects of the rendered chip row buttons from the last draw tick.
     /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
     pub chip_rects: Vec<ratatui::layout::Rect>,
@@ -653,6 +656,7 @@ impl App {
             focus: crate::ui::PaneFocus::Dashboard,
             recaps: Default::default(),
             pm_digest_selected: 0,
+            pm_filter: None,
             next_create_gen: 0,
             pending_create_gen: None,
             next_archive_gen: 0,
@@ -973,6 +977,7 @@ impl App {
             pr_lifecycle: &self.pr_lifecycle,
             pr_number: &self.pr_number,
             last_activity_ms: &last_activity,
+            filter: self.pm_filter.as_deref(),
         })
     }
 

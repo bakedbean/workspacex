@@ -21,6 +21,9 @@ pub struct DigestInputs<'a> {
     pub pr_lifecycle: &'a HashMap<WorkspaceId, BranchLifecycle>,
     pub pr_number: &'a HashMap<WorkspaceId, u32>,
     pub last_activity_ms: &'a HashMap<WorkspaceId, i64>,
+    /// Live filter needle: cards whose workspace name doesn't contain it
+    /// (case-insensitive) are dropped. `None` or `""` matches everything.
+    pub filter: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,12 +66,23 @@ fn attention_rank(status: Option<&ReportedStatus>) -> u8 {
 /// order, repos with no Ready workspaces omitted), each repo's cards sorted
 /// blocked → waiting → stalest-first (oldest activity first).
 pub fn build_digest(inputs: &DigestInputs) -> Vec<RepoDigest> {
+    let needle = inputs
+        .filter
+        .filter(|f| !f.is_empty())
+        .map(|f| f.to_lowercase());
     let mut out = Vec::new();
     for repo in inputs.repos {
         let mut cards: Vec<DigestCard> = inputs
             .workspaces
             .iter()
-            .filter(|(rid, w)| *rid == repo.id && w.state == WorkspaceState::Ready)
+            .filter(|(rid, w)| {
+                *rid == repo.id
+                    && w.state == WorkspaceState::Ready
+                    && needle
+                        .as_ref()
+                        .map(|n| w.name.to_lowercase().contains(n))
+                        .unwrap_or(true)
+            })
             .map(|(_, w)| {
                 let recap = inputs.recaps.get(&w.id).cloned();
                 let last = inputs.last_activity_ms.get(&w.id).copied();
@@ -556,6 +570,7 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &HashMap::new(),
+            filter: None,
         };
         let digest = build_digest(&inputs);
         assert_eq!(digest.len(), 1);
@@ -592,6 +607,7 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &last_activity,
+            filter: None,
         };
         let names: Vec<_> = build_digest(&inputs)[0]
             .cards
@@ -641,6 +657,7 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &last_activity,
+            filter: None,
         };
         let digest = build_digest(&inputs);
         let by_name = |n: &str| {
@@ -680,11 +697,64 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &last_activity,
+            filter: None,
         };
         let digest = build_digest(&inputs);
         let card = &digest[0].cards[0];
         assert!(card.recap.is_none());
         assert!(!card.recap_stale);
+    }
+
+    #[test]
+    fn filter_matches_names_case_insensitively_and_omits_empty_repos() {
+        let repos = vec![repo(1, "alpha"), repo(2, "beta")];
+        let workspaces = vec![
+            ws(1, 1, "auth-refactor", WorkspaceState::Ready),
+            ws(2, 1, "docs-pass", WorkspaceState::Ready),
+            // repo 2 has no matching workspaces -> omitted entirely
+            ws(3, 2, "site-copy", WorkspaceState::Ready),
+        ];
+        let empty = HashMap::new();
+        let inputs = DigestInputs {
+            repos: &repos,
+            workspaces: &workspaces,
+            recaps: &empty,
+            pushed_status: &HashMap::new(),
+            git: &HashMap::new(),
+            pr_lifecycle: &HashMap::new(),
+            pr_number: &HashMap::new(),
+            last_activity_ms: &HashMap::new(),
+            filter: Some("AUTH"),
+        };
+        let digest = build_digest(&inputs);
+        assert_eq!(digest.len(), 1);
+        assert_eq!(digest[0].repo_name, "alpha");
+        let names: Vec<_> = digest[0].cards.iter().map(|c| c.name.clone()).collect();
+        assert_eq!(names, ["auth-refactor"]);
+    }
+
+    #[test]
+    fn empty_or_absent_filter_is_a_noop() {
+        let repos = vec![repo(1, "alpha")];
+        let workspaces = vec![
+            ws(1, 1, "one", WorkspaceState::Ready),
+            ws(2, 1, "two", WorkspaceState::Ready),
+        ];
+        let empty = HashMap::new();
+        let mut inputs = DigestInputs {
+            repos: &repos,
+            workspaces: &workspaces,
+            recaps: &empty,
+            pushed_status: &HashMap::new(),
+            git: &HashMap::new(),
+            pr_lifecycle: &HashMap::new(),
+            pr_number: &HashMap::new(),
+            last_activity_ms: &HashMap::new(),
+            filter: None,
+        };
+        assert_eq!(card_count(&build_digest(&inputs)), 2);
+        inputs.filter = Some("");
+        assert_eq!(card_count(&build_digest(&inputs)), 2);
     }
 
     #[test]
@@ -704,6 +774,7 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &HashMap::new(),
+            filter: None,
         };
         let digest = build_digest(&inputs);
         assert_eq!(card_count(&digest), 2);

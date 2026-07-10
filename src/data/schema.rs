@@ -126,6 +126,10 @@ impl Store {
             )?;
             self.conn().execute("PRAGMA user_version = 16", [])?;
         }
+        if v < 17 {
+            self.conn().execute_batch(SCHEMA_V17_WORKSPACE_RECAP)?;
+            self.conn().execute("PRAGMA user_version = 17", [])?;
+        }
         Ok(())
     }
 
@@ -210,6 +214,16 @@ CREATE TABLE IF NOT EXISTS workspace_status (
     message      TEXT,
     source       TEXT NOT NULL,
     reported_at  INTEGER NOT NULL
+);
+";
+
+const SCHEMA_V17_WORKSPACE_RECAP: &str = "
+CREATE TABLE IF NOT EXISTS workspace_recap (
+    workspace_id INTEGER PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+    goal         TEXT,
+    state        TEXT,
+    next         TEXT,
+    updated_at   INTEGER NOT NULL
 );
 ";
 

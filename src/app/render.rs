@@ -263,10 +263,19 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 &app.theme,
             );
             if let Some(pm_area) = pm_area {
-                if let Some(session) = app.pm.as_ref() {
-                    crate::ui::pm_pane::resize_session(session, pm_area);
-                }
-                crate::ui::pm_pane::render(f, pm_area, app.pm.as_ref(), app.focus, &app.theme);
+                let digest = app.build_pm_digest();
+                let selected = app
+                    .pm_digest_selected
+                    .min(crate::ui::pm_pane::card_count(&digest).saturating_sub(1));
+                crate::ui::pm_pane::render_digest(
+                    f,
+                    pm_area,
+                    &digest,
+                    selected,
+                    app.focus,
+                    crate::time::now_ms(),
+                    &app.theme,
+                );
             }
             if let (Some(detail_area), Some(SelectionTarget::Workspace(ws_id))) =
                 (detail_area, app.selected_target())
@@ -993,16 +1002,6 @@ fn nerd_fonts_enabled(store: &Store) -> bool {
     match store.get_setting("nerd_fonts").ok().flatten().as_deref() {
         Some("false") | Some("0") | Some("off") | Some("no") => false,
         _ => true, // default ON
-    }
-}
-
-pub(crate) fn pm_enabled(store: &Store) -> bool {
-    match store.get_setting("pm_enabled").ok().flatten() {
-        None => true,
-        Some(v) => !matches!(
-            v.trim().to_lowercase().as_str(),
-            "false" | "0" | "off" | "no"
-        ),
     }
 }
 

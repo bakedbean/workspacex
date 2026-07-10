@@ -44,32 +44,10 @@ mod pm_state_tests {
         assert!(!rendered.contains("Project Manager"), "{rendered}");
     }
 
-    #[test]
-    fn dashboard_renders_split_with_pm_title_when_visible_even_without_session() {
-        let store = Store::open_in_memory().unwrap();
-        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.pm_visible = true; // No session yet — the pane shows a placeholder.
-        let backend = TestBackend::new(80, 24);
-        let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
-        let buf = term.backend().buffer();
-        let rendered = (0..buf.area.height)
-            .map(|y| {
-                (0..buf.area.width)
-                    .map(|x| buf[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            rendered.contains("Project Manager"),
-            "expected pane title in rendered buffer:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("Tab to focus"),
-            "expected unfocused hint:\n{rendered}"
-        );
-    }
+    // `dashboard_renders_split_with_pm_title_when_visible_even_without_session`
+    // (the PTY-placeholder render test) is gone — the dashboard's PM pane
+    // now always renders the digest (`render_digest`), whose own render
+    // tests live in `src/ui/pm_pane.rs::digest_tests`.
 
     use crossterm::event::{KeyEvent, KeyModifiers};
 
@@ -122,6 +100,103 @@ mod pm_state_tests {
         .await
         .unwrap();
         assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    /// Test helper: an App with two Ready workspaces in a single repo, so
+    /// `build_pm_digest` yields a two-card digest. Modeled on the
+    /// `updates_panel_v_splits_attached_view_vertically`-style fixtures
+    /// elsewhere in this file: insert the repo/workspaces into the store,
+    /// mark them Ready, then construct the App (whose `refresh()` on
+    /// `App::new` picks them up).
+    fn test_app_with_two_ready_workspaces() -> App {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let first_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "first",
+                branch: "repo/first",
+                worktree_path: std::path::Path::new("/tmp/wsx-digest-1"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let second_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "second",
+                branch: "repo/second",
+                worktree_path: std::path::Path::new("/tmp/wsx-digest-2"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(first_id, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_workspace_state(second_id, WorkspaceState::Ready)
+            .unwrap();
+        App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn p_toggles_digest_and_focus_without_spawning() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(!app.pm_visible);
+        press_key(&mut app, KeyCode::Char('p')).await;
+        assert!(app.pm_visible);
+        assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
+        assert!(app.pm.is_none(), "no PTY spawn on p"); // Task 7 deletes app.pm and this line
+        press_key(&mut app, KeyCode::Char('p')).await;
+        assert!(!app.pm_visible);
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn digest_jk_moves_selection_and_clamps() {
+        let mut app = test_app_with_two_ready_workspaces();
+        press_key(&mut app, KeyCode::Char('p')).await;
+        assert_eq!(app.pm_digest_selected, 0);
+        press_key(&mut app, KeyCode::Char('j')).await;
+        assert_eq!(app.pm_digest_selected, 1);
+        press_key(&mut app, KeyCode::Char('j')).await;
+        assert_eq!(app.pm_digest_selected, 1, "clamped at last card");
+        press_key(&mut app, KeyCode::Char('k')).await;
+        assert_eq!(app.pm_digest_selected, 0);
+        press_key(&mut app, KeyCode::Char('k')).await;
+        assert_eq!(app.pm_digest_selected, 0, "clamped at first card");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn digest_q_and_esc_behavior() {
+        let mut app = test_app_with_two_ready_workspaces();
+        press_key(&mut app, KeyCode::Char('p')).await;
+        press_key(&mut app, KeyCode::Esc).await;
+        assert!(app.pm_visible, "Esc only unfocuses");
+        assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+        press_key(&mut app, KeyCode::Tab).await; // refocus digest
+        press_key(&mut app, KeyCode::Char('q')).await;
+        assert!(!app.pm_visible, "q closes");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn digest_r_clears_poll_throttles() {
+        let mut app = test_app_with_two_ready_workspaces();
+        app.pr_last_poll_ms
+            .insert(crate::data::store::WorkspaceId(1), 123);
+        app.diff_last_poll_ms
+            .insert(crate::data::store::WorkspaceId(1), 123);
+        press_key(&mut app, KeyCode::Char('p')).await;
+        press_key(&mut app, KeyCode::Char('r')).await;
+        assert!(app.pr_last_poll_ms.is_empty());
+        assert!(app.diff_last_poll_ms.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1808,24 +1883,9 @@ mod pm_state_tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn wheel_targets_pm_in_dashboard_when_pm_focused() {
-        let store = Store::open_in_memory().unwrap();
-        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        spawn_pm_for_test(&mut app);
-        app.pm_visible = true;
-        app.focus = crate::ui::PaneFocus::ProjectManager;
-        // view stays Dashboard.
-        handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
-        assert_eq!(
-            app.pm
-                .as_ref()
-                .unwrap()
-                .scrollback_offset
-                .load(std::sync::atomic::Ordering::Relaxed),
-            3
-        );
-    }
+    // `wheel_targets_pm_in_dashboard_when_pm_focused` is gone: the
+    // dashboard's PM pane is the digest now, which has no PTY to scroll —
+    // `active_session` no longer has a Dashboard+ProjectManager arm.
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wheel_noop_when_dashboard_focused_no_target() {
@@ -3069,36 +3129,10 @@ mod pm_state_tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn paste_in_dashboard_with_pm_focused_sends_bracketed_to_pm() {
-        let store = Store::open_in_memory().unwrap();
-        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        spawn_pm_for_test(&mut app);
-        // Dashboard view + PM visible + PM focused — same condition that
-        // routes keystrokes to the PM session.
-        app.pm_visible = true;
-        app.focus = crate::ui::PaneFocus::ProjectManager;
-        let shared = Arc::new(Mutex::new(
-            App::new(
-                Store::open_in_memory().unwrap(),
-                PathBuf::from("/tmp/wsx-test"),
-            )
-            .unwrap(),
-        ));
-
-        handle_event(&mut app, &shared, CtEvent::Paste("hello pm".into()))
-            .await
-            .unwrap();
-
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let pm = app.pm.as_ref().unwrap();
-        let parser = pm.parser.lock().unwrap();
-        let screen_text = parser.screen().contents();
-        assert!(
-            screen_text.contains("hello pm"),
-            "PM-focused paste must reach the PM PTY; got: {screen_text:?}"
-        );
-    }
+    // `paste_in_dashboard_with_pm_focused_sends_bracketed_to_pm` is gone:
+    // Dashboard+ProjectManager focus no longer targets a PTY (the digest
+    // has none), so `active_session` returns `None` and paste falls
+    // through to the per-char fallback instead.
 
     #[test]
     fn paste_char_to_key_translates_newline_to_enter() {

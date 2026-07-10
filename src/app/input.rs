@@ -50,6 +50,12 @@ fn report_external_open<E: std::fmt::Display>(app: &mut App, result: std::result
     }
 }
 
+// Only `encode_key_for_pty_*` tests exercise this now — the dashboard's PM
+// pane forwarded keystrokes to a PTY via this helper before it became the
+// digest (see `handle_key_dashboard`'s PM-focus block). Kept test-only
+// rather than deleted outright since Task 7's PM-PTY teardown is the
+// natural place to remove it for good.
+#[cfg(test)]
 fn encode_key_for_pty(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
     use crossterm::event::{KeyCode, KeyModifiers};
     match (k.code, k.modifiers) {
@@ -79,6 +85,12 @@ fn encode_key_for_pty(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
         (KeyCode::Tab, _) => Some(b"\t".to_vec()),
         _ => None,
     }
+}
+/// Clear the PR/diff poll throttles so the background loop refetches on its
+/// next tick — the digest's manual refresh.
+fn nudge_status_refresh(app: &mut App) {
+    app.pr_last_poll_ms.clear();
+    app.diff_last_poll_ms.clear();
 }
 fn encode_key(k: crossterm::event::KeyEvent) -> Vec<u8> {
     use KeyCode::*;
@@ -156,11 +168,9 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
             .and_then(|target| app.sessions.get(target.instance)),
         View::AttachedPm => app.pm.clone(),
         View::AttachedRemote => app.remote.clone(),
-        View::Dashboard
-            if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
-        {
-            app.pm.clone()
-        }
+        // The dashboard's PM pane is now the digest — there is no PTY to
+        // scroll or forward paste into, so PM-focused dashboard input
+        // falls through to the default (no target).
         _ => None,
     }
 }
@@ -348,40 +358,43 @@ fn fold_all_repos(app: &mut App) {
     }
 }
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
-    // PM pane focus handling. When PM is focused, all keystrokes forward
-    // to its PTY — including 'p' and 'r' (typing words containing those
-    // letters must not toggle the pane or trigger refresh). To use the
-    // dashboard's 'p' / 'r' shortcuts, the user presses Tab/Esc first to
-    // return focus to the dashboard.
+    // PM digest focus handling: j/k navigate the flattened card list,
+    // Enter attaches to the selected workspace, Tab/Esc return focus to
+    // the dashboard, q/p close the pane, and r nudges a cache refresh.
     if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) {
         // Defensive: PM focus means the dashboard's z-leader cannot be
-        // meaningfully consumed here (keys forward to the PM PTY). Clear
-        // it so it doesn't leak across focus transitions.
+        // meaningfully consumed here. Clear it so it doesn't leak across
+        // focus transitions.
         app.z_leader_pending = false;
-        match (k.code, k.modifiers) {
-            (KeyCode::Tab, _) | (KeyCode::Esc, _) => {
+        let count = crate::ui::pm_pane::card_count(&app.build_pm_digest());
+        match k.code {
+            KeyCode::Tab | KeyCode::Esc => {
                 app.focus = crate::ui::PaneFocus::Dashboard;
-                return Ok(());
             }
-            (KeyCode::Char('o'), m) if m.contains(KeyModifiers::CONTROL) => {
-                // Ctrl-O: expand PM to a full-screen attached view so the
-                // user can scroll through claude's history naturally.
-                if app.pm.is_some() {
-                    app.leader_pending = false;
-                    app.view = View::AttachedPm;
+            KeyCode::Char('q') | KeyCode::Char('p') => {
+                app.pm_visible = false;
+                app.focus = crate::ui::PaneFocus::Dashboard;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.pm_digest_selected = (app.pm_digest_selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.pm_digest_selected = app.pm_digest_selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                if let Some(card) =
+                    crate::ui::pm_pane::card_at(&app.build_pm_digest(), app.pm_digest_selected)
+                {
+                    let ws_id = card.workspace_id;
+                    attach_workspace(app, ws_id)?;
                 }
-                return Ok(());
             }
-            _ => {
-                if let Some(session) = app.pm.as_ref() {
-                    if let Some(bytes) = encode_key_for_pty(&k) {
-                        session.scroll_to_live();
-                        let _ = session.writer.send(bytes).await;
-                    }
-                }
-                return Ok(());
+            KeyCode::Char('r') => {
+                nudge_status_refresh(app);
             }
+            _ => {}
         }
+        return Ok(());
     }
     // DetailBarReply focus: keystrokes go to the reply input.
     if matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {
@@ -739,17 +752,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         (KeyCode::Char('r'), _)
             if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::Dashboard) =>
         {
-            // Manual refresh of the PM pane. Only fires from Dashboard focus
-            // so 'r' typed inside PM (when PM is focused) goes to the PTY.
-            let dirs = crate::config::Dirs::discover();
-            let pm_dir = dirs.pm_dir();
-            if let Err(e) =
-                crate::agent::pm::refresh_pm(&mut app.sessions, &app.store, &pm_dir).await
-            {
-                app.modal = Some(Modal::Error {
-                    message: e.to_string(),
-                });
-            }
+            // Manual refresh of the PM digest: nudge the throttled pollers
+            // so the next tick refetches PR/diff state. Only fires from
+            // Dashboard focus; PM-focused 'r' is handled above.
+            nudge_status_refresh(app);
         }
         (KeyCode::Char('G'), _) => {
             use crate::ui::dashboard::layout::GroupMode;
@@ -769,48 +775,13 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.modal = Some(Modal::WorkspaceActions);
             }
         }
-        (KeyCode::Char('p'), _) if crate::app::render::pm_enabled(&app.store) => {
+        (KeyCode::Char('p'), _) => {
             if app.pm_visible {
-                // Hide pane; session stays alive.
                 app.pm_visible = false;
                 app.focus = crate::ui::PaneFocus::Dashboard;
             } else {
-                // Open pane. Spawn if not yet spawned this run.
-                let dirs = crate::config::Dirs::discover();
-                let pm_dir = dirs.pm_dir();
-                let custom = app
-                    .store
-                    .get_setting("pm_custom_instructions")
-                    .ok()
-                    .flatten();
-                let result = if app.pm_auto_summary_sent {
-                    // Reopen path: refresh so PM picks up workspace
-                    // changes that happened while the pane was hidden.
-                    crate::agent::pm::open_pm_with_refresh(
-                        &mut app.sessions,
-                        &app.store,
-                        &pm_dir,
-                        custom,
-                    )
-                    .await
-                } else {
-                    crate::agent::pm::open_pm_with_auto_summary(
-                        &mut app.sessions,
-                        &app.store,
-                        &pm_dir,
-                        custom,
-                    )
-                    .await
-                };
-                if let Err(e) = result {
-                    app.modal = Some(Modal::Error {
-                        message: e.to_string(),
-                    });
-                    return Ok(());
-                }
-                app.pm_auto_summary_sent = true;
-                app.pm = app.sessions.pm();
                 app.pm_visible = true;
+                app.pm_digest_selected = 0;
                 app.focus = crate::ui::PaneFocus::ProjectManager;
             }
         }

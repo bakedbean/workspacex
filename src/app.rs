@@ -521,6 +521,15 @@ pub struct App {
     pub pm_visible: bool,
     pub focus: crate::ui::PaneFocus,
     pub pm_auto_summary_sent: bool,
+    /// Recaps for every workspace, loaded from the store each `refresh()`.
+    /// Feeds `build_pm_digest`'s per-card summary text.
+    pub recaps: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::store::WorkspaceRecap,
+    >,
+    /// Index of the selected card in the flattened PM digest (`card_at`
+    /// order), clamped on render against the current card count.
+    pub pm_digest_selected: usize,
     /// Rects of the rendered chip row buttons from the last draw tick.
     /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
     pub chip_rects: Vec<ratatui::layout::Rect>,
@@ -648,6 +657,8 @@ impl App {
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
             pm_auto_summary_sent: false,
+            recaps: Default::default(),
+            pm_digest_selected: 0,
             next_create_gen: 0,
             pending_create_gen: None,
             next_archive_gen: 0,
@@ -746,6 +757,7 @@ impl App {
             .into_iter()
             .collect();
         self.pushed_status = self.store.all_workspace_status().unwrap_or_default();
+        self.recaps = self.store.all_workspace_recaps().unwrap_or_default();
         Ok(())
     }
 
@@ -954,6 +966,25 @@ impl App {
         let evt = self.workspace_events.get(&ws_id)?;
         let now = crate::time::now_ms();
         evt.pending_permission_tool(now, 3_000)
+    }
+
+    /// Assemble the PM digest from caches the dashboard already maintains.
+    pub fn build_pm_digest(&self) -> Vec<crate::ui::pm_pane::RepoDigest> {
+        let last_activity: std::collections::HashMap<_, _> = self
+            .workspace_events
+            .iter()
+            .map(|(id, e)| (*id, e.last_log_activity_ms))
+            .collect();
+        crate::ui::pm_pane::build_digest(&crate::ui::pm_pane::DigestInputs {
+            repos: &self.repos,
+            workspaces: &self.workspaces,
+            recaps: &self.recaps,
+            pushed_status: &self.pushed_status,
+            git: &self.workspace_status,
+            pr_lifecycle: &self.pr_lifecycle,
+            pr_number: &self.pr_number,
+            last_activity_ms: &last_activity,
+        })
     }
 
     /// Classify a workspace into the V5 dashboard `Status` vocabulary.

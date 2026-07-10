@@ -517,10 +517,17 @@ pub struct App {
     /// the TUI, invokes `external::edit_in_editor`, resumes, and saves.
     pub pending_edit: Option<PendingEdit>,
     pub theme: crate::ui::theme::Theme,
-    pub pm: Option<std::sync::Arc<crate::pty::session::Session>>,
     pub pm_visible: bool,
     pub focus: crate::ui::PaneFocus,
-    pub pm_auto_summary_sent: bool,
+    /// Recaps for every workspace, loaded from the store each `refresh()`.
+    /// Feeds `build_pm_digest`'s per-card summary text.
+    pub recaps: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::store::WorkspaceRecap,
+    >,
+    /// Index of the selected card in the flattened PM digest (`card_at`
+    /// order), clamped on render against the current card count.
+    pub pm_digest_selected: usize,
     /// Rects of the rendered chip row buttons from the last draw tick.
     /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
     pub chip_rects: Vec<ratatui::layout::Rect>,
@@ -543,9 +550,7 @@ pub struct App {
     pub detail_container_rects: [Option<ratatui::layout::Rect>; 4],
     /// Per-pane `(session, content rect)` from the last attached-view draw.
     /// Consumed by `handle_mouse` to find the pane under the cursor and
-    /// forward wheel events to a mouse-aware agent. Storing the `Arc<Session>`
-    /// directly lets the PM pane (which lives in `app.pm`, not `app.sessions`)
-    /// be recorded the same way as workspace panes. Cleared each frame.
+    /// forward wheel events to a mouse-aware agent. Cleared each frame.
     pub attached_pane_rects: Vec<(
         std::sync::Arc<crate::pty::session::Session>,
         ratatui::layout::Rect,
@@ -644,10 +649,10 @@ impl App {
             pending_workspace_refresh: std::collections::HashSet::new(),
             pending_edit: None,
             theme,
-            pm: None,
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
-            pm_auto_summary_sent: false,
+            recaps: Default::default(),
+            pm_digest_selected: 0,
             next_create_gen: 0,
             pending_create_gen: None,
             next_archive_gen: 0,
@@ -746,6 +751,7 @@ impl App {
             .into_iter()
             .collect();
         self.pushed_status = self.store.all_workspace_status().unwrap_or_default();
+        self.recaps = self.store.all_workspace_recaps().unwrap_or_default();
         Ok(())
     }
 
@@ -888,20 +894,10 @@ impl App {
     /// a freshly-repainted frame instead of one the vt100 parser clipped to
     /// stale dimensions. Visible panes are handled by the render path and left
     /// untouched here.
-    ///
-    /// The PM session (`app.pm`) is render-synced on the dashboard and in
-    /// `AttachedPm`, but goes stale while attached to an agent — no render path
-    /// touches it there. So when attached to an agent we resize it too, to the
-    /// projected size `AttachedPm` will use next. See `crate::app::resize_sync`.
     pub fn apply_backgrounded_resize(&self, cols: u16, rows: u16) {
         let (w, h) = crate::app::resize_sync::projected_pane_size(cols, rows);
         let visible = crate::app::resize_sync::visible_instances(&self.view);
         self.sessions.resize_backgrounded(w, h, &visible);
-        if crate::app::resize_sync::should_sync_pm(&self.view)
-            && let Some(pm) = &self.pm
-        {
-            let _ = pm.resize(w, h);
-        }
     }
 
     /// Retarget the focused attached pane to `inst` (switching the visible agent
@@ -954,6 +950,30 @@ impl App {
         let evt = self.workspace_events.get(&ws_id)?;
         let now = crate::time::now_ms();
         evt.pending_permission_tool(now, 3_000)
+    }
+
+    /// Assemble the PM digest from caches the dashboard already maintains.
+    pub fn build_pm_digest(&self) -> Vec<crate::ui::pm_pane::RepoDigest> {
+        // Event time (`evt.latest.timestamp_ms`), NOT `last_log_activity_ms`
+        // — the latter is the wall-clock time wsx observed the JSONL grow,
+        // which gets stamped to "now" for every workspace on the initial
+        // tail pass after a wsx restart. Mirrors the detail bar's own
+        // activity-timestamp logic (see `app/render.rs`).
+        let last_activity: std::collections::HashMap<_, _> = self
+            .workspace_events
+            .iter()
+            .filter_map(|(id, e)| e.latest.as_ref().map(|latest| (*id, latest.timestamp_ms)))
+            .collect();
+        crate::ui::pm_pane::build_digest(&crate::ui::pm_pane::DigestInputs {
+            repos: &self.repos,
+            workspaces: &self.workspaces,
+            recaps: &self.recaps,
+            pushed_status: &self.pushed_status,
+            git: &self.workspace_status,
+            pr_lifecycle: &self.pr_lifecycle,
+            pr_number: &self.pr_number,
+            last_activity_ms: &last_activity,
+        })
     }
 
     /// Classify a workspace into the V5 dashboard `Status` vocabulary.

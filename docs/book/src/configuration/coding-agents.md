@@ -5,11 +5,6 @@ wsx config set coding_agent hermes           # new workspaces use hermes by defa
 wsx workspace create backend --agent pi      # override for a single workspace
 ```
 
-The global `coding_agent` setting also selects the agent that powers the
-[Project Manager pane](../daily-use/project-manager-pane.md); there is no separate PM-only
-setting. The per-workspace `--agent` override applies only to that
-workspace, not the PM.
-
 Supported agents:
 
 | Agent              | CLI option       | Source                                                                    | Config                                    |

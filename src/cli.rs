@@ -196,6 +196,24 @@ pub static GROUPS: &[GroupInfo] = &[
             },
         ],
     },
+    GroupInfo {
+        name: "recap",
+        blurb: "Maintain the agent-authored workspace recap",
+        commands: &[
+            CmdInfo {
+                usage: "set [--goal <text>] [--state <text>] [--next <text>]",
+                blurb: "Update recap fields (partial; at least one flag)",
+            },
+            CmdInfo {
+                usage: "show",
+                blurb: "Print the current recap",
+            },
+            CmdInfo {
+                usage: "clear",
+                blurb: "Delete the recap",
+            },
+        ],
+    },
 ];
 
 pub fn group_name(s: &str) -> Option<&'static str> {
@@ -409,6 +427,13 @@ pub enum CliAction {
         /// `notify` must never fail a turn.
         payload: Option<String>,
     },
+    RecapSet {
+        goal: Option<String>,
+        state: Option<String>,
+        next: Option<String>,
+    },
+    RecapShow,
+    RecapClear,
 }
 
 #[derive(Debug)]
@@ -449,9 +474,6 @@ fn known_setting_key(k: &str) -> bool {
             | "chronox_cmd"
             | "notifications"
             | "theme"
-            | "pm_enabled"
-            | "pm_custom_instructions"
-            | "pm_fast_mode"
             | "mcp_mirror"
             | "remote_control"
             | "remote_control_sandbox"
@@ -514,6 +536,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         "agent" => parse_agent(&mut it).map_err(|e| tag_group(e, group)),
         "setup" => parse_setup(&mut it).map_err(|e| tag_group(e, group)),
         "status" => parse_status(&mut it).map_err(|e| tag_group(e, group)),
+        "recap" => parse_recap(&mut it).map_err(|e| tag_group(e, group)),
         other => Err(Error::Usage {
             group: None,
             msg: format!("unknown command: {other}"),
@@ -1100,6 +1123,47 @@ fn parse_status(it: &mut Args) -> Result<CliAction> {
     }
 }
 
+fn parse_recap(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("set") => {
+            let mut goal = None;
+            let mut state = None;
+            let mut next = None;
+            while let Some(arg) = it.next() {
+                let slot = match arg.as_str() {
+                    "--goal" => &mut goal,
+                    "--state" => &mut state,
+                    "--next" => &mut next,
+                    _ => {
+                        return Err(Error::Usage {
+                            group: None,
+                            msg: format!("unexpected argument: {arg}"),
+                        });
+                    }
+                };
+                *slot = Some(it.next().ok_or_else(|| Error::Usage {
+                    group: None,
+                    msg: format!("{arg} requires a value"),
+                })?);
+            }
+            if goal.is_none() && state.is_none() && next.is_none() {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "usage: wsx recap set [--goal <text>] [--state <text>] [--next <text>] (at least one)"
+                        .into(),
+                });
+            }
+            Ok(CliAction::RecapSet { goal, state, next })
+        }
+        Some("show") => Ok(CliAction::RecapShow),
+        Some("clear") => Ok(CliAction::RecapClear),
+        other => Err(Error::Usage {
+            group: None,
+            msg: format!("unknown recap subcommand: {}", other.unwrap_or("(none)")),
+        }),
+    }
+}
+
 pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     // Actions that don't need the wsx store run before we open it, so a
     // pure `wsx setup install-skill` on a fresh machine doesn't create
@@ -1677,6 +1741,27 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
             // Always succeed.
         }
+        CliAction::RecapSet { goal, state, next } => {
+            let ws = resolve_current_workspace(&store)?;
+            store.set_workspace_recap(ws.id, goal.as_deref(), state.as_deref(), next.as_deref())?;
+            println!("recap updated");
+        }
+        CliAction::RecapShow => {
+            let ws = resolve_current_workspace(&store)?;
+            match store.workspace_recap(ws.id)? {
+                Some(r) => {
+                    println!("goal:  {}", r.goal.as_deref().unwrap_or("-"));
+                    println!("state: {}", r.state.as_deref().unwrap_or("-"));
+                    println!("next:  {}", r.next.as_deref().unwrap_or("-"));
+                }
+                None => println!("no recap set"),
+            }
+        }
+        CliAction::RecapClear => {
+            let ws = resolve_current_workspace(&store)?;
+            store.clear_workspace_recap(ws.id)?;
+            println!("recap cleared");
+        }
         CliAction::SetupInstallSkill => unreachable!("handled before store open"),
         CliAction::Help(_) | CliAction::Version => {
             unreachable!("handled before store open")
@@ -1993,17 +2078,6 @@ mod tests {
                 ..
             })
         ));
-    }
-
-    #[test]
-    fn accepts_pm_enabled_and_pm_custom_instructions() {
-        assert!(known_setting_key("pm_enabled"));
-        assert!(known_setting_key("pm_custom_instructions"));
-    }
-
-    #[test]
-    fn accepts_pm_fast_mode() {
-        assert!(known_setting_key("pm_fast_mode"));
     }
 
     #[test]
@@ -2628,6 +2702,7 @@ mod tests {
             "shared",
             "setup",
             "status",
+            "recap",
         ];
         let registry: Vec<&str> = GROUPS.iter().map(|g| g.name).collect();
         for d in dispatched {
@@ -2790,5 +2865,63 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, Error::Usage { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn parses_recap_set_with_all_flags() {
+        let a = parse(&[
+            "recap",
+            "set",
+            "--goal",
+            "fix auth",
+            "--state",
+            "tests failing",
+            "--next",
+            "debug",
+        ])
+        .unwrap();
+        match a {
+            CliAction::RecapSet { goal, state, next } => {
+                assert_eq!(goal.as_deref(), Some("fix auth"));
+                assert_eq!(state.as_deref(), Some("tests failing"));
+                assert_eq!(next.as_deref(), Some("debug"));
+            }
+            other => panic!("expected RecapSet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_recap_set_partial() {
+        let a = parse(&["recap", "set", "--state", "tests green"]).unwrap();
+        match a {
+            CliAction::RecapSet { goal, state, next } => {
+                assert_eq!(goal, None);
+                assert_eq!(state.as_deref(), Some("tests green"));
+                assert_eq!(next, None);
+            }
+            other => panic!("expected RecapSet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recap_set_requires_at_least_one_flag() {
+        assert!(parse(&["recap", "set"]).is_err());
+    }
+
+    #[test]
+    fn recap_set_rejects_unknown_flag() {
+        assert!(parse(&["recap", "set", "--bogus", "x"]).is_err());
+    }
+
+    #[test]
+    fn parses_recap_show_and_clear() {
+        assert!(matches!(
+            parse(&["recap", "show"]).unwrap(),
+            CliAction::RecapShow
+        ));
+        assert!(matches!(
+            parse(&["recap", "clear"]).unwrap(),
+            CliAction::RecapClear
+        ));
     }
 }

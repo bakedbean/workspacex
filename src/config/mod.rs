@@ -41,9 +41,6 @@ impl Dirs {
     pub fn log_dir(&self) -> PathBuf {
         self.app_dir().join("logs")
     }
-    pub fn pm_dir(&self) -> PathBuf {
-        self.app_dir().join("project-manager")
-    }
 
     pub fn ensure(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(self.log_dir())

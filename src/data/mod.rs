@@ -17,6 +17,7 @@ pub mod workspace;
 // surface of their own, so they stay private modules.
 mod activity;
 mod layout;
+mod recap;
 mod schema;
 mod settings;
 mod status;

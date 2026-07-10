@@ -1,6 +1,6 @@
-When you're attached to a workspace (full-screen claude session) or the
-project manager pane is expanded full-screen, wsx still tracks the other
-workspaces in the background. Two affordances surface that:
+When you're attached to a workspace (full-screen claude session), wsx
+still tracks the other workspaces in the background. Two affordances
+surface that:
 
 - A single-row status indicator above the footer, shown only when another
   workspace needs attention or has produced output in the last 60 seconds.

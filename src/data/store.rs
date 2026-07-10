@@ -91,6 +91,16 @@ pub struct ReportedStatus {
     pub reported_at: i64,
 }
 
+/// A row from the `workspace_recap` table: the goal / state / next digest a
+/// workspace's agent maintains via `wsx recap set`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceRecap {
+    pub goal: Option<String>,
+    pub state: Option<String>,
+    pub next: Option<String>,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Repo {
     pub id: RepoId,
@@ -1341,7 +1351,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 16);
+        assert_eq!(v, 17);
     }
 
     #[test]

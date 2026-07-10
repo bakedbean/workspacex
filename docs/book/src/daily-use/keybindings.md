@@ -16,13 +16,15 @@
 | `s`                               | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected)             |
 | `d`                               | Archive the selected workspace (no-op on repo header)                                                        |
 | `q`                               | Quit (kills all running sessions)                                                                            |
-| `p`                               | Toggle the Project Manager pane (no-op when `pm_enabled` is off)                                             |
-| `Tab`                             | Swap focus between dashboard and the PM pane (when visible)                                                  |
+| `p`                               | Toggle the project-manager digest pane (opens focused, instant, no agent session)                            |
+| `Tab`                             | Swap focus between dashboard and the digest pane (when visible)                                              |
 | `z z`                             | Toggle fold on the focused repo                                                                              |
 | `z a`                             | Expand all repos (override default-fold heuristic)                                                           |
 | `z M`                             | Fold all repos                                                                                               |
-| `r` (when PM focused)             | Refresh `workspaces.json` and ask PM to re-summarize                                                         |
-| `Ctrl-O` (when PM focused)        | Expand PM to full screen (use `Ctrl-x d` to detach back)                                                     |
+| `j` / `k` (or arrows) (when digest focused) | Move selection through digest cards                                                                |
+| `Enter` (when digest focused)     | Attach to the selected workspace                                                                             |
+| `q` / `p` (when digest focused)   | Close the digest (`q` only closes it while the digest is focused — dashboard-focused `q` quits wsx)          |
+| `r` (when digest visible)         | Force a git/PR cache refresh                                                                                 |
 
 ### New Workspace / Confirm Archive / Setup Running modals
 

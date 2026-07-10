@@ -63,6 +63,18 @@ wsx status set done    --message "implemented and tests green"
 
 The `--message` is a short one-liner shown on the dashboard. Claude Code hooks also report coarse state automatically, but an explicit `set` with a message is always clearer — prefer it at the transitions above.
 
+## Maintaining the workspace recap
+
+Alongside status, maintain the workspace recap — the dashboard's project-manager digest renders these three one-liners:
+
+```sh
+wsx recap set --goal "cookie expiry bug from #42"   # once, when scope is clear
+wsx recap set --state "tests added but failing" --next "debug session token regex"
+wsx recap show
+```
+
+Fields update independently; set `--goal` once and refresh `--state`/`--next` as work progresses.
+
 ## Slug rules (read before typing --name)
 
 A slug is a **2-4 word kebab-case summary of the task**: `add-widgets-endpoint`, `fix-login-redirect`.

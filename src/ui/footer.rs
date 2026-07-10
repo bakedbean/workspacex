@@ -1,6 +1,6 @@
 //! Shared types for clickable footer nav hints.
 //!
-//! The dashboard and attached/PM footers print a row of keybind pills
+//! The dashboard and attached footers print a row of keybind pills
 //! (`<key> label`). Each pill is also a click target: clicking one behaves
 //! exactly like pressing the corresponding key. To stay in lockstep with the
 //! keyboard, a hint's action is expressed as a synthetic key event that the
@@ -13,8 +13,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub enum FooterHintAction {
     /// Synthesize this key press. The input handler dispatches it through the
     /// focused view's key handler, arming the attached-view leader first when
-    /// the view is `Attached`/`AttachedPm` (those footers list leader-prefixed
-    /// commands, e.g. `^x e`).
+    /// the view is `Attached` (that footer lists leader-prefixed commands,
+    /// e.g. `^x e`).
     Key(KeyEvent),
     /// The `^x` leader pill: arm the attached-view leader without dispatching a
     /// follow-up key (mirrors pressing `Ctrl-x` alone).

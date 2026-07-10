@@ -2,7 +2,7 @@
 //!
 //! `handle_event` is the public entry point called from the run loop.
 //! Per-view handlers (`handle_key_dashboard`, `handle_key_attached`,
-//! `handle_key_attached_pm`) route keystrokes to the right place; the modal
+//! `handle_key_attached`) route keystrokes to the right place; the modal
 //! handler (`handle_key_modal`) takes precedence when a modal is open.
 
 use crate::app::{
@@ -50,35 +50,11 @@ fn report_external_open<E: std::fmt::Display>(app: &mut App, result: std::result
     }
 }
 
-fn encode_key_for_pty(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    match (k.code, k.modifiers) {
-        (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-            Some(c.to_string().into_bytes())
-        }
-        (KeyCode::Char(c), m) if m.contains(KeyModifiers::CONTROL) => {
-            let upper = c.to_ascii_uppercase();
-            // Never forward Ctrl-Z (0x1a / SUSP). See `encode_key` for the
-            // rationale: it suspends a line-disciplined job inside the child
-            // PTY with no reachable prompt to `fg` it back.
-            if upper == 'Z' {
-                return None;
-            }
-            if ('@'..='_').contains(&upper) {
-                Some(vec![(upper as u8) - b'@'])
-            } else {
-                None
-            }
-        }
-        (KeyCode::Enter, _) => Some(b"\r".to_vec()),
-        (KeyCode::Backspace, _) => Some(vec![0x7f]),
-        (KeyCode::Up, _) => Some(b"\x1b[A".to_vec()),
-        (KeyCode::Down, _) => Some(b"\x1b[B".to_vec()),
-        (KeyCode::Right, _) => Some(b"\x1b[C".to_vec()),
-        (KeyCode::Left, _) => Some(b"\x1b[D".to_vec()),
-        (KeyCode::Tab, _) => Some(b"\t".to_vec()),
-        _ => None,
-    }
+/// Clear the PR/diff poll throttles so the background loop refetches on its
+/// next tick — the digest's manual refresh.
+fn nudge_status_refresh(app: &mut App) {
+    app.pr_last_poll_ms.clear();
+    app.diff_last_poll_ms.clear();
 }
 fn encode_key(k: crossterm::event::KeyEvent) -> Vec<u8> {
     use KeyCode::*;
@@ -154,14 +130,11 @@ fn active_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::Sessi
         View::Attached(state) => state
             .focused_target()
             .and_then(|target| app.sessions.get(target.instance)),
-        View::AttachedPm => app.pm.clone(),
         View::AttachedRemote => app.remote.clone(),
-        View::Dashboard
-            if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) =>
-        {
-            app.pm.clone()
-        }
-        _ => None,
+        // The dashboard's PM pane is now the digest — there is no PTY to
+        // scroll or forward paste into, so PM-focused dashboard input
+        // falls through to the default (no target).
+        View::Dashboard => None,
     }
 }
 /// Resolve the session that should receive a pinned-command dispatch.
@@ -182,7 +155,6 @@ fn chip_target_session(app: &App) -> Option<std::sync::Arc<crate::pty::session::
         // writes into the ssh PTY, driving the remote agent (see `render.rs`
         // AttachedRemote). Mirrors `active_session`'s remote arm.
         View::AttachedRemote => app.remote.clone(),
-        _ => None,
     }
 }
 /// Dispatch the pinned command at `idx` to the chip-target session.
@@ -348,40 +320,43 @@ fn fold_all_repos(app: &mut App) {
     }
 }
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
-    // PM pane focus handling. When PM is focused, all keystrokes forward
-    // to its PTY — including 'p' and 'r' (typing words containing those
-    // letters must not toggle the pane or trigger refresh). To use the
-    // dashboard's 'p' / 'r' shortcuts, the user presses Tab/Esc first to
-    // return focus to the dashboard.
+    // PM digest focus handling: j/k navigate the flattened card list,
+    // Enter attaches to the selected workspace, Tab/Esc return focus to
+    // the dashboard, q/p close the pane, and r nudges a cache refresh.
     if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::ProjectManager) {
         // Defensive: PM focus means the dashboard's z-leader cannot be
-        // meaningfully consumed here (keys forward to the PM PTY). Clear
-        // it so it doesn't leak across focus transitions.
+        // meaningfully consumed here. Clear it so it doesn't leak across
+        // focus transitions.
         app.z_leader_pending = false;
-        match (k.code, k.modifiers) {
-            (KeyCode::Tab, _) | (KeyCode::Esc, _) => {
+        let digest = app.build_pm_digest();
+        let count = crate::ui::pm_pane::card_count(&digest);
+        match k.code {
+            KeyCode::Tab | KeyCode::Esc => {
                 app.focus = crate::ui::PaneFocus::Dashboard;
-                return Ok(());
             }
-            (KeyCode::Char('o'), m) if m.contains(KeyModifiers::CONTROL) => {
-                // Ctrl-O: expand PM to a full-screen attached view so the
-                // user can scroll through claude's history naturally.
-                if app.pm.is_some() {
-                    app.leader_pending = false;
-                    app.view = View::AttachedPm;
+            KeyCode::Char('q') | KeyCode::Char('p') => {
+                app.pm_visible = false;
+                app.focus = crate::ui::PaneFocus::Dashboard;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.pm_digest_selected = (app.pm_digest_selected + 1).min(count.saturating_sub(1));
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.pm_digest_selected = app.pm_digest_selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                let idx = app.pm_digest_selected.min(count.saturating_sub(1));
+                if let Some(card) = crate::ui::pm_pane::card_at(&digest, idx) {
+                    let ws_id = card.workspace_id;
+                    attach_workspace(app, ws_id)?;
                 }
-                return Ok(());
             }
-            _ => {
-                if let Some(session) = app.pm.as_ref() {
-                    if let Some(bytes) = encode_key_for_pty(&k) {
-                        session.scroll_to_live();
-                        let _ = session.writer.send(bytes).await;
-                    }
-                }
-                return Ok(());
+            KeyCode::Char('r') => {
+                nudge_status_refresh(app);
             }
+            _ => {}
         }
+        return Ok(());
     }
     // DetailBarReply focus: keystrokes go to the reply input.
     if matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {
@@ -739,17 +714,10 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         (KeyCode::Char('r'), _)
             if app.pm_visible && matches!(app.focus, crate::ui::PaneFocus::Dashboard) =>
         {
-            // Manual refresh of the PM pane. Only fires from Dashboard focus
-            // so 'r' typed inside PM (when PM is focused) goes to the PTY.
-            let dirs = crate::config::Dirs::discover();
-            let pm_dir = dirs.pm_dir();
-            if let Err(e) =
-                crate::agent::pm::refresh_pm(&mut app.sessions, &app.store, &pm_dir).await
-            {
-                app.modal = Some(Modal::Error {
-                    message: e.to_string(),
-                });
-            }
+            // Manual refresh of the PM digest: nudge the throttled pollers
+            // so the next tick refetches PR/diff state. Only fires from
+            // Dashboard focus; PM-focused 'r' is handled above.
+            nudge_status_refresh(app);
         }
         (KeyCode::Char('G'), _) => {
             use crate::ui::dashboard::layout::GroupMode;
@@ -769,48 +737,13 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.modal = Some(Modal::WorkspaceActions);
             }
         }
-        (KeyCode::Char('p'), _) if crate::app::render::pm_enabled(&app.store) => {
+        (KeyCode::Char('p'), _) => {
             if app.pm_visible {
-                // Hide pane; session stays alive.
                 app.pm_visible = false;
                 app.focus = crate::ui::PaneFocus::Dashboard;
             } else {
-                // Open pane. Spawn if not yet spawned this run.
-                let dirs = crate::config::Dirs::discover();
-                let pm_dir = dirs.pm_dir();
-                let custom = app
-                    .store
-                    .get_setting("pm_custom_instructions")
-                    .ok()
-                    .flatten();
-                let result = if app.pm_auto_summary_sent {
-                    // Reopen path: refresh so PM picks up workspace
-                    // changes that happened while the pane was hidden.
-                    crate::agent::pm::open_pm_with_refresh(
-                        &mut app.sessions,
-                        &app.store,
-                        &pm_dir,
-                        custom,
-                    )
-                    .await
-                } else {
-                    crate::agent::pm::open_pm_with_auto_summary(
-                        &mut app.sessions,
-                        &app.store,
-                        &pm_dir,
-                        custom,
-                    )
-                    .await
-                };
-                if let Err(e) = result {
-                    app.modal = Some(Modal::Error {
-                        message: e.to_string(),
-                    });
-                    return Ok(());
-                }
-                app.pm_auto_summary_sent = true;
-                app.pm = app.sessions.pm();
                 app.pm_visible = true;
+                app.pm_digest_selected = 0;
                 app.focus = crate::ui::PaneFocus::ProjectManager;
             }
         }
@@ -1097,84 +1030,8 @@ async fn handle_key_attached(
     }
     Ok(())
 }
-/// Fire a single PM-pane leader action for `k` (already-armed leader).
-/// Extracted so the letter-accelerator path and the overlay's Enter path
-/// dispatch through identical code. Caller clears `leader_pending` first.
-async fn dispatch_pm_leader_action(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
-    let session = match app.pm.clone() {
-        Some(s) => s,
-        None => {
-            app.view = View::Dashboard;
-            return Ok(());
-        }
-    };
-    match k.code {
-        KeyCode::Char('d') => {
-            app.view = View::Dashboard;
-            Ok(())
-        }
-        KeyCode::Char('x') => {
-            // Send a literal Ctrl-x (0x18) to claude.
-            session.scroll_to_live();
-            let _ = session.writer.send(vec![0x18]).await;
-            Ok(())
-        }
-        KeyCode::Char('u') => {
-            app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-async fn handle_key_attached_pm(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
-    let session = match app.pm.clone() {
-        Some(s) => s,
-        None => {
-            app.leader_pending = false;
-            app.view = View::Dashboard;
-            return Ok(());
-        }
-    };
-    if app.leader_pending {
-        let items = crate::ui::attached::pm_nav_menu_items();
-        match k.code {
-            KeyCode::Up => {
-                let n = items.len();
-                app.leader_selected = (app.leader_selected + n - 1) % n;
-                return Ok(());
-            }
-            KeyCode::Down => {
-                let n = items.len();
-                app.leader_selected = (app.leader_selected + 1) % n;
-                return Ok(());
-            }
-            KeyCode::Enter => {
-                app.leader_pending = false;
-                if let Some(key) = crate::ui::attached::nav_item_key(&items, app.leader_selected) {
-                    return dispatch_pm_leader_action(app, key).await;
-                }
-                return Ok(());
-            }
-            _ => {
-                app.leader_pending = false;
-                return dispatch_pm_leader_action(app, k).await;
-            }
-        }
-    }
-    if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
-        app.leader_pending = true;
-        app.leader_selected = 0;
-        return Ok(());
-    }
-    let bytes = encode_key(k);
-    if !bytes.is_empty() {
-        session.scroll_to_live();
-        let _ = session.writer.send(bytes).await;
-    }
-    Ok(())
-}
-/// Full-screen remote-attach key handler. Mirrors `handle_key_attached_pm` but
-/// with no leader menu: `Ctrl-x d` detaches (severing only the local ssh
+/// Full-screen remote-attach key handler. No leader menu:
+/// `Ctrl-x d` detaches (severing only the local ssh
 /// client), everything else is forwarded verbatim to the remote agent's PTY.
 /// If the ssh child has already exited (e.g. tmux printed `can't find session`
 /// for a stale name, then the client quit), any key bounces to the dashboard
@@ -2249,11 +2106,6 @@ async fn route_footer_key(app: &mut App, k: crossterm::event::KeyEvent) {
                 }
             }
         }
-        View::AttachedPm => {
-            if let Err(e) = handle_key_attached_pm(app, k).await {
-                tracing::warn!(error = %e, "footer-hint pm dispatch failed");
-            }
-        }
         View::AttachedRemote => {
             if let Err(e) = handle_key_attached_remote(app, k).await {
                 tracing::warn!(error = %e, "footer-hint remote dispatch failed");
@@ -2267,7 +2119,7 @@ async fn route_footer_key(app: &mut App, k: crossterm::event::KeyEvent) {
 /// poking `leader_pending` directly, so behavior matches the keyboard exactly
 /// (including edge cases like an already-armed leader).
 ///
-/// The dashboard footer lists direct keys. The attached/PM footers list
+/// The dashboard footer lists direct keys. The attached footer lists
 /// leader-prefixed chords, so a labeled key becomes `Ctrl-x` then the key, and
 /// the `^x` pill becomes a lone `Ctrl-x` (which arms the leader, or — if it was
 /// already armed — clears it and sends a literal `^X`, exactly as pressing
@@ -2278,9 +2130,9 @@ async fn dispatch_footer_hint(app: &mut App, action: crate::ui::footer::FooterHi
     match action {
         FooterHintAction::ArmLeader => route_footer_key(app, leader).await,
         FooterHintAction::Key(k) => {
-            // Attached/PM hints are chords: send the leader first, then the key.
+            // Attached hints are chords: send the leader first, then the key.
             // The dashboard footer's keys are not leader-prefixed.
-            if matches!(app.view, View::Attached(_) | View::AttachedPm) {
+            if matches!(app.view, View::Attached(_)) {
                 route_footer_key(app, leader).await;
             }
             route_footer_key(app, k).await;
@@ -2314,9 +2166,7 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
     ) && matches!(
         app.view,
-        crate::ui::View::Attached(_)
-            | crate::ui::View::AttachedPm
-            | crate::ui::View::AttachedRemote
+        crate::ui::View::Attached(_) | crate::ui::View::AttachedRemote
     ) && !m.modifiers.contains(KeyModifiers::SHIFT)
     {
         if let Some((session, rect)) = pane_under_cursor(app, m.column, m.row) {
@@ -2467,7 +2317,6 @@ async fn dispatch_key(
                 };
                 handle_key_attached(app, id, k).await?
             }
-            View::AttachedPm => handle_key_attached_pm(app, k).await?,
             View::AttachedRemote => handle_key_attached_remote(app, k).await?,
         }
     }

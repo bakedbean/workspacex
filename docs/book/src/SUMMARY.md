@@ -15,7 +15,7 @@
   - [Workspace detail bar](daily-use/detail-bar.md)
   - [Workspace updates panel](daily-use/updates-panel.md)
   - [Split panes](daily-use/split-panes.md)
-  - [Project manager pane](daily-use/project-manager-pane.md)
+  - [Project manager digest](daily-use/project-manager-pane.md)
 - [Configuration and customization](configuration/index.md)
   - [Global settings](configuration/global-settings.md)
   - [Themes](configuration/themes.md)

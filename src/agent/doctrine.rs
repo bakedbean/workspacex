@@ -35,6 +35,12 @@ const CLAUSE_STATUS: &str = "- Report your status as you go with `wsx status set
     `waiting` when parked on something external (a build, CI, a long command), and \
     `done` when the task is finished. This keeps the wsx dashboard accurate.";
 
+const CLAUSE_RECAP: &str = "- Maintain the workspace recap with `wsx recap set`: run \
+    `wsx recap set --goal \"<one line>\"` once you understand the task's scope, and \
+    update `--state \"<one line>\"` and `--next \"<one line>\"` whenever you set status \
+    and whenever you end a turn with the task unfinished. The dashboard's \
+    project-manager digest renders these three lines for this workspace.";
+
 /// Values for the `process_doctrine` setting that disable doctrine injection
 /// entirely (matched case-insensitively against the trimmed value).
 const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
@@ -74,6 +80,7 @@ pub fn process_doctrine(agent: AgentKind) -> String {
     clauses.push(CLAUSE_COMMITS);
     clauses.push(CLAUSE_WSX_SKILL);
     clauses.push(CLAUSE_STATUS);
+    clauses.push(CLAUSE_RECAP);
     format!("{DOCTRINE_HEADER}\n\n{}", clauses.join("\n"))
 }
 
@@ -143,6 +150,22 @@ mod tests {
             d.contains("wsx status"),
             "doctrine must tell the agent to report status: {d}"
         );
+    }
+
+    #[test]
+    fn doctrine_mentions_recap_maintenance() {
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Pi,
+            AgentKind::Hermes,
+            AgentKind::Codex,
+        ] {
+            let d = process_doctrine(agent).to_lowercase();
+            assert!(
+                d.contains("wsx recap set"),
+                "doctrine must tell {agent:?} to maintain the recap: {d}"
+            );
+        }
     }
 
     #[test]

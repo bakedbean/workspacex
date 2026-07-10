@@ -27,11 +27,9 @@ Each agent instance in a shared workspace gets a deterministic tmux session name
 
 **Dashboard indicator:**
 
-Shared workspaces are marked on the dashboard with a badge just left of the branch name — the tmux logo when nerd fonts are enabled, a hollow `◇` otherwise (the filled `◆` is the *detached* status glyph; same vocabulary). The badge is **green** while the workspace's tmux session is alive (attached in this wsx, or detached-but-running on the server) and dim when the workspace is shared but no live session backs it yet. Direct workspaces show no badge.
+Shared workspaces are marked on the dashboard with a badge just left of the branch name — the tmux logo when nerd fonts are enabled, a hollow `◇` otherwise. The badge is **green** while the workspace's tmux session is alive (attached in this wsx, or detached-but-running on the server) and dim when the workspace is shared but no live session backs it yet. Direct workspaces show no badge.
 
-**The `◆ detached` status:**
-
-When wsx starts up (or reconciles state), a shared workspace whose tmux session is confirmed alive on the server but has no client attached in the current wsx process shows `◆ detached` on the dashboard. This is the normal state right after a wsx restart, before you've attached to anything — the agent kept running the whole time. Attaching (`Enter` on the row) reattaches wsx's client to the live session; the agent and its history are exactly where you left them.
+A shared workspace's tmux session can outlive the wsx process that spawned it — right after a wsx restart, the agent is still running on the server even though this wsx holds no client for it. The green badge covers that case too: wsx periodically confirms the session with `tmux has-session`, so the badge stays green while the workspace's row status reads `idle`. Attaching (`Enter` on the row) reattaches wsx's client to the live session; the agent and its history are exactly where you left them.
 
 **Manual access:**
 

@@ -104,7 +104,7 @@ pub fn row_column(
                 emphasis: ColumnEmphasis::Dim,
             })
         }
-        Status::Idle | Status::Detached => {
+        Status::Idle => {
             let body = non_empty_trimmed(evt.first_user_text.as_deref())?;
             Some(RowColumn {
                 text: collapse_ws(body),
@@ -136,9 +136,7 @@ pub(crate) fn format_state_line(status: Status, evt: &WorkspaceEvents, now_ms: i
                 None
             }
         }
-        Status::Waiting | Status::Thinking | Status::Complete | Status::Idle | Status::Detached => {
-            None
-        }
+        Status::Waiting | Status::Thinking | Status::Complete | Status::Idle => None,
     };
     match detail {
         Some(d) => format!("{base} · {d}"),

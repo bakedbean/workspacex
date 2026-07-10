@@ -751,7 +751,9 @@ impl App {
 
     /// Sweep for shared workspaces whose tmux session is alive on the
     /// server while wsx holds no client for it (e.g. right after a wsx
-    /// restart). Populates `shared_detached`, consumed by `classify_status`.
+    /// restart). Populates `shared_detached`, consumed by the shared-badge
+    /// liveness check in `render` — a detached-but-alive session must keep
+    /// the badge green even though this wsx holds no client for it.
     /// Throttled to one sweep per 10s — `tmux has-session` is a subprocess,
     /// so this must not run on every tick.
     fn refresh_shared_detached(&mut self) {
@@ -1004,7 +1006,7 @@ impl App {
             .map(|e| e.last_log_activity_ms)
             .unwrap_or(0);
         let reported = fresh_reported_state(self.pushed_status.get(&ws.id), last_log_activity);
-        let status = crate::ui::dashboard::status::Status::classify(
+        crate::ui::dashboard::status::Status::classify(
             awaiting,
             stopped_kind,
             stalled,
@@ -1013,20 +1015,7 @@ impl App {
             user_has_prompted,
             has_prior,
             reported,
-        );
-        // A shared workspace's tmux session can outlive its wsx client
-        // (e.g. across a wsx restart). The classifier above has no client
-        // to see, so it reads Idle; the `shared_detached` sweep (see
-        // `refresh_shared_detached`) independently confirms the tmux
-        // session is still alive on the server and we surface that here —
-        // but only when the classifier landed on Idle, so it never masks
-        // a higher-priority state like Question or Stalled.
-        if status == crate::ui::dashboard::status::Status::Idle
-            && self.shared_detached.contains(&ws.id)
-        {
-            return crate::ui::dashboard::status::Status::Detached;
-        }
-        status
+        )
     }
 
     /// The freshness-gated agent-pushed status for a workspace, or `None` when

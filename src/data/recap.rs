@@ -53,9 +53,9 @@ impl Store {
     pub fn all_workspace_recaps(
         &self,
     ) -> Result<std::collections::HashMap<WorkspaceId, WorkspaceRecap>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT workspace_id, goal, state, next, updated_at FROM workspace_recap",
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT workspace_id, goal, state, next, updated_at FROM workspace_recap")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 WorkspaceId(r.get(0)?),
@@ -112,7 +112,12 @@ mod tests {
         let (store, ws) = store_with_workspace();
         assert!(store.workspace_recap(ws).unwrap().is_none());
         store
-            .set_workspace_recap(ws, Some("fix auth"), Some("tests failing"), Some("debug regex"))
+            .set_workspace_recap(
+                ws,
+                Some("fix auth"),
+                Some("tests failing"),
+                Some("debug regex"),
+            )
             .unwrap();
         let got = store.workspace_recap(ws).unwrap().unwrap();
         assert_eq!(got.goal.as_deref(), Some("fix auth"));
@@ -141,7 +146,9 @@ mod tests {
     #[test]
     fn clear_and_all_recaps() {
         let (store, ws) = store_with_workspace();
-        store.set_workspace_recap(ws, Some("g"), None, None).unwrap();
+        store
+            .set_workspace_recap(ws, Some("g"), None, None)
+            .unwrap();
         let map = store.all_workspace_recaps().unwrap();
         assert_eq!(map.get(&ws).unwrap().goal.as_deref(), Some("g"));
         store.clear_workspace_recap(ws).unwrap();
@@ -152,7 +159,9 @@ mod tests {
     #[test]
     fn recap_cascade_deletes_with_workspace() {
         let (store, ws) = store_with_workspace();
-        store.set_workspace_recap(ws, Some("g"), None, None).unwrap();
+        store
+            .set_workspace_recap(ws, Some("g"), None, None)
+            .unwrap();
         store.delete_workspace(ws).unwrap();
         assert!(store.workspace_recap(ws).unwrap().is_none());
     }

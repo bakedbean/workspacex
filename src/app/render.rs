@@ -274,6 +274,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &digest,
                     selected,
                     app.focus,
+                    app.pm_filter.as_deref(),
                     crate::time::now_ms(),
                     &app.theme,
                 );

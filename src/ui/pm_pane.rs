@@ -21,6 +21,9 @@ pub struct DigestInputs<'a> {
     pub pr_lifecycle: &'a HashMap<WorkspaceId, BranchLifecycle>,
     pub pr_number: &'a HashMap<WorkspaceId, u32>,
     pub last_activity_ms: &'a HashMap<WorkspaceId, i64>,
+    /// Live filter needle: cards whose workspace name doesn't contain it
+    /// (case-insensitive) are dropped. `None` or `""` matches everything.
+    pub filter: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,12 +66,23 @@ fn attention_rank(status: Option<&ReportedStatus>) -> u8 {
 /// order, repos with no Ready workspaces omitted), each repo's cards sorted
 /// blocked → waiting → stalest-first (oldest activity first).
 pub fn build_digest(inputs: &DigestInputs) -> Vec<RepoDigest> {
+    let needle = inputs
+        .filter
+        .filter(|f| !f.is_empty())
+        .map(|f| f.to_lowercase());
     let mut out = Vec::new();
     for repo in inputs.repos {
         let mut cards: Vec<DigestCard> = inputs
             .workspaces
             .iter()
-            .filter(|(rid, w)| *rid == repo.id && w.state == WorkspaceState::Ready)
+            .filter(|(rid, w)| {
+                *rid == repo.id
+                    && w.state == WorkspaceState::Ready
+                    && needle
+                        .as_ref()
+                        .map(|n| w.name.to_lowercase().contains(n))
+                        .unwrap_or(true)
+            })
             .map(|(_, w)| {
                 let recap = inputs.recaps.get(&w.id).cloned();
                 let last = inputs.last_activity_ms.get(&w.id).copied();
@@ -120,12 +134,14 @@ pub fn card_at(digest: &[RepoDigest], index: usize) -> Option<&DigestCard> {
 
 /// Render the "PM digest" pane: per-repo grouped workspace cards with
 /// status, recap, and fact lines, plus j/k selection and scrolling.
+#[allow(clippy::too_many_arguments)]
 pub fn render_digest(
     f: &mut Frame,
     area: Rect,
     digest: &[RepoDigest],
     selected: usize,
     focus: PaneFocus,
+    filter: Option<&str>,
     now_ms: i64,
     theme: &Theme,
 ) {
@@ -133,7 +149,7 @@ pub fn render_digest(
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(area);
-    render_title(f, chunks[0], focus, theme);
+    render_title(f, chunks[0], focus, filter, theme);
     let body = chunks[1];
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -153,10 +169,12 @@ pub fn render_digest(
         }
     }
     if lines.is_empty() {
-        f.render_widget(
-            Paragraph::new("no active workspaces").style(theme.dim_style()),
-            body,
-        );
+        let msg = if filter.map(|n| !n.is_empty()).unwrap_or(false) {
+            "no matching workspaces"
+        } else {
+            "no active workspaces"
+        };
+        f.render_widget(Paragraph::new(msg).style(theme.dim_style()), body);
         return;
     }
     let offset = scroll_offset(sel_range.0, sel_range.1, body.height as usize, lines.len());
@@ -165,18 +183,25 @@ pub fn render_digest(
 
 /// Same dim label + `─` rule style as the PTY-backed `render`'s title block
 /// (see above), but with digest-specific key hints.
-fn render_title(f: &mut Frame, area: Rect, focus: PaneFocus, theme: &Theme) {
-    let label = match focus {
-        PaneFocus::ProjectManager => "Project Manager [j/k select · Enter attach · Esc/Tab back]",
-        PaneFocus::Dashboard | PaneFocus::DetailBarReply => {
-            "Project Manager [Tab to focus · r refresh · p close]"
+fn render_title(f: &mut Frame, area: Rect, focus: PaneFocus, filter: Option<&str>, theme: &Theme) {
+    let label = match (focus, filter) {
+        // Filter mode: echo the live needle even while it's still empty,
+        // so the `/` press has visible feedback before any typing.
+        (PaneFocus::ProjectManager, Some(needle)) => {
+            format!("Project Manager [/{needle} · Esc clear · Enter attach]")
+        }
+        (PaneFocus::ProjectManager, None) => {
+            "Project Manager [j/k select · / filter · Enter attach · Esc/Tab back]".to_string()
+        }
+        (PaneFocus::Dashboard | PaneFocus::DetailBarReply, _) => {
+            "Project Manager [Tab to focus · r refresh · p close]".to_string()
         }
     };
     let width = area.width as usize;
     let used = label.chars().count();
     let gap = 2;
     let rule_len = width.saturating_sub(used + gap);
-    let mut spans: Vec<Span<'static>> = vec![Span::styled(label.to_string(), theme.dim_style())];
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(label, theme.dim_style())];
     if rule_len > 0 {
         spans.push(Span::raw(" ".repeat(gap)));
         spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
@@ -350,11 +375,20 @@ mod render_tests {
     }
 
     fn draw(digest: &[RepoDigest], selected: usize, focus: PaneFocus) -> String {
+        draw_filtered(digest, selected, focus, None)
+    }
+
+    fn draw_filtered(
+        digest: &[RepoDigest],
+        selected: usize,
+        focus: PaneFocus,
+        filter: Option<&str>,
+    ) -> String {
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         let theme = crate::ui::theme::Theme::default();
         terminal
-            .draw(|f| render_digest(f, f.area(), digest, selected, focus, 10_000, &theme))
+            .draw(|f| render_digest(f, f.area(), digest, selected, focus, filter, 10_000, &theme))
             .unwrap();
         buffer_text(&terminal)
     }
@@ -373,6 +407,37 @@ mod render_tests {
             pr: None,
             last_activity_ms: None,
         }
+    }
+
+    #[test]
+    fn focused_title_advertises_filter_key() {
+        let digest = vec![RepoDigest {
+            repo_name: "alpha".into(),
+            cards: vec![card("w")],
+        }];
+        assert!(draw(&digest, 0, PaneFocus::ProjectManager).contains("/ filter"));
+    }
+
+    #[test]
+    fn active_filter_echoes_needle_in_title() {
+        let digest = vec![RepoDigest {
+            repo_name: "alpha".into(),
+            cards: vec![card("auth-refactor")],
+        }];
+        let text = draw_filtered(&digest, 0, PaneFocus::ProjectManager, Some("auth"));
+        assert!(text.contains("/auth"), "{text}");
+        assert!(text.contains("Esc clear"), "{text}");
+    }
+
+    #[test]
+    fn zero_match_placeholder_differs_from_empty_placeholder() {
+        let with_filter = draw_filtered(&[], 0, PaneFocus::ProjectManager, Some("zzz"));
+        assert!(
+            with_filter.contains("no matching workspaces"),
+            "{with_filter}"
+        );
+        let no_filter = draw(&[], 0, PaneFocus::Dashboard);
+        assert!(no_filter.contains("no active workspaces"), "{no_filter}");
     }
 
     #[test]
@@ -556,6 +621,7 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &HashMap::new(),
+            filter: None,
         };
         let digest = build_digest(&inputs);
         assert_eq!(digest.len(), 1);
@@ -592,6 +658,7 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &last_activity,
+            filter: None,
         };
         let names: Vec<_> = build_digest(&inputs)[0]
             .cards
@@ -641,6 +708,7 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &last_activity,
+            filter: None,
         };
         let digest = build_digest(&inputs);
         let by_name = |n: &str| {
@@ -680,11 +748,64 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &last_activity,
+            filter: None,
         };
         let digest = build_digest(&inputs);
         let card = &digest[0].cards[0];
         assert!(card.recap.is_none());
         assert!(!card.recap_stale);
+    }
+
+    #[test]
+    fn filter_matches_names_case_insensitively_and_omits_empty_repos() {
+        let repos = vec![repo(1, "alpha"), repo(2, "beta")];
+        let workspaces = vec![
+            ws(1, 1, "auth-refactor", WorkspaceState::Ready),
+            ws(2, 1, "docs-pass", WorkspaceState::Ready),
+            // repo 2 has no matching workspaces -> omitted entirely
+            ws(3, 2, "site-copy", WorkspaceState::Ready),
+        ];
+        let empty = HashMap::new();
+        let inputs = DigestInputs {
+            repos: &repos,
+            workspaces: &workspaces,
+            recaps: &empty,
+            pushed_status: &HashMap::new(),
+            git: &HashMap::new(),
+            pr_lifecycle: &HashMap::new(),
+            pr_number: &HashMap::new(),
+            last_activity_ms: &HashMap::new(),
+            filter: Some("AUTH"),
+        };
+        let digest = build_digest(&inputs);
+        assert_eq!(digest.len(), 1);
+        assert_eq!(digest[0].repo_name, "alpha");
+        let names: Vec<_> = digest[0].cards.iter().map(|c| c.name.clone()).collect();
+        assert_eq!(names, ["auth-refactor"]);
+    }
+
+    #[test]
+    fn empty_or_absent_filter_is_a_noop() {
+        let repos = vec![repo(1, "alpha")];
+        let workspaces = vec![
+            ws(1, 1, "one", WorkspaceState::Ready),
+            ws(2, 1, "two", WorkspaceState::Ready),
+        ];
+        let empty = HashMap::new();
+        let mut inputs = DigestInputs {
+            repos: &repos,
+            workspaces: &workspaces,
+            recaps: &empty,
+            pushed_status: &HashMap::new(),
+            git: &HashMap::new(),
+            pr_lifecycle: &HashMap::new(),
+            pr_number: &HashMap::new(),
+            last_activity_ms: &HashMap::new(),
+            filter: None,
+        };
+        assert_eq!(card_count(&build_digest(&inputs)), 2);
+        inputs.filter = Some("");
+        assert_eq!(card_count(&build_digest(&inputs)), 2);
     }
 
     #[test]
@@ -704,6 +825,7 @@ mod digest_tests {
             pr_lifecycle: &HashMap::new(),
             pr_number: &HashMap::new(),
             last_activity_ms: &HashMap::new(),
+            filter: None,
         };
         let digest = build_digest(&inputs);
         assert_eq!(card_count(&digest), 2);

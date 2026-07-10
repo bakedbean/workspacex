@@ -56,7 +56,8 @@ status updates.
 | ----------------------- | -------------------------------------------------- |
 | `j` / `k` (or arrows)  | Move selection                                    |
 | `Enter`                | Attach to the selected workspace                  |
-| `Esc` / `Tab`          | Return focus to the dashboard                     |
+| `/`                    | Filter cards by workspace name (type to narrow)   |
+| `Esc` / `Tab`          | Clear the filter (if active) / return focus       |
 | `q` / `p`              | Close the digest                                  |
 | `r`                    | Force a git/PR cache refresh                      |
 

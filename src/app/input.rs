@@ -319,6 +319,12 @@ fn fold_all_repos(app: &mut App) {
         app.dashboard.folded.insert(r.id.0 as u64, true);
     }
 }
+/// Clamp the PM digest selection after a filter edit shrinks the card list,
+/// so the selection marker never points past the visible cards.
+fn clamp_pm_selection(app: &mut App) {
+    let count = crate::ui::pm_pane::card_count(&app.build_pm_digest());
+    app.pm_digest_selected = app.pm_digest_selected.min(count.saturating_sub(1));
+}
 async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> Result<()> {
     // PM digest focus handling: j/k navigate the flattened card list,
     // Enter attaches to the selected workspace, Tab/Esc return focus to
@@ -328,6 +334,37 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         // meaningfully consumed here. Clear it so it doesn't leak across
         // focus transitions.
         app.z_leader_pending = false;
+        // Filter editing intercepts printable chars, Backspace, and Esc
+        // before the single-key bindings below — while typing, letters
+        // like j/k/q/p/r are filter text, not shortcuts. Arrows, Enter,
+        // and Tab fall through and keep their meanings.
+        if app.pm_filter.is_some() {
+            match k.code {
+                KeyCode::Esc => {
+                    app.pm_filter = None;
+                    return Ok(());
+                }
+                KeyCode::Backspace => {
+                    if let Some(buf) = app.pm_filter.as_mut() {
+                        buf.pop();
+                    }
+                    clamp_pm_selection(app);
+                    return Ok(());
+                }
+                KeyCode::Char(c)
+                    if !c.is_control()
+                        && !k.modifiers.contains(KeyModifiers::CONTROL)
+                        && !k.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    if let Some(buf) = app.pm_filter.as_mut() {
+                        buf.push(c);
+                    }
+                    clamp_pm_selection(app);
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         let digest = app.build_pm_digest();
         let count = crate::ui::pm_pane::card_count(&digest);
         match k.code {
@@ -336,6 +373,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             KeyCode::Char('q') | KeyCode::Char('p') => {
                 app.pm_visible = false;
+                app.pm_filter = None;
                 app.focus = crate::ui::PaneFocus::Dashboard;
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -353,6 +391,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
             KeyCode::Char('r') => {
                 nudge_status_refresh(app);
+            }
+            KeyCode::Char('/') => {
+                app.pm_filter = Some(String::new());
             }
             _ => {}
         }
@@ -738,6 +779,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
         }
         (KeyCode::Char('p'), _) => {
+            // Closing drops the filter; opening must never inherit a
+            // stale one either.
+            app.pm_filter = None;
             if app.pm_visible {
                 app.pm_visible = false;
                 app.focus = crate::ui::PaneFocus::Dashboard;

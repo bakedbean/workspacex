@@ -46,7 +46,8 @@ CREATE TABLE workspace_recap (
     goal TEXT,            -- what the workspace is for (set ~once)
     state TEXT,           -- where the work currently stands
     next TEXT,            -- the immediate next step
-    updated_at INTEGER NOT NULL  -- epoch seconds of last field change
+    updated_at INTEGER NOT NULL  -- epoch ms of last field change (matches
+                                 -- reported_at and last_log_activity_ms)
 );
 ```
 

@@ -167,7 +167,7 @@ pub fn render_digest(
 /// (see above), but with digest-specific key hints.
 fn render_title(f: &mut Frame, area: Rect, focus: PaneFocus, theme: &Theme) {
     let label = match focus {
-        PaneFocus::ProjectManager => "Project Manager [j/k select · Enter attach · Esc back]",
+        PaneFocus::ProjectManager => "Project Manager [j/k select · Enter attach · Esc/Tab back]",
         PaneFocus::Dashboard | PaneFocus::DetailBarReply => {
             "Project Manager [Tab to focus · r refresh · p close]"
         }
@@ -267,16 +267,20 @@ fn push_card_lines(
             theme.dim_style(),
         ));
     }
+    // `NoPr` renders no chip at all, matching the detail bar and attached
+    // chip row — "PR no pr" is noise, not information.
     if let Some((lifecycle, number)) = &card.pr {
-        let label = lifecycle_label(*lifecycle);
-        let text = match number {
-            Some(n) => format!("PR #{n} {label}"),
-            None => format!("PR {label}"),
-        };
-        let style = theme
-            .lifecycle_style(Some(*lifecycle))
-            .unwrap_or_else(|| theme.dim_style());
-        segs.push(Span::styled(text, style));
+        if !matches!(lifecycle, BranchLifecycle::NoPr) {
+            let label = lifecycle_label(*lifecycle);
+            let text = match number {
+                Some(n) => format!("PR #{n} {label}"),
+                None => format!("PR {label}"),
+            };
+            let style = theme
+                .lifecycle_style(Some(*lifecycle))
+                .unwrap_or_else(|| theme.dim_style());
+            segs.push(Span::styled(text, style));
+        }
     }
     if let Some(ms) = card.last_activity_ms {
         if ms != 0 {
@@ -421,6 +425,19 @@ mod render_tests {
         assert!(text.contains("~3"), "{text}");
         assert!(text.contains("#241"), "{text}");
         assert!(text.contains("recap stale"), "{text}");
+    }
+
+    #[test]
+    fn no_pr_lifecycle_renders_no_pr_segment() {
+        let mut c = card("prless");
+        c.pr = Some((crate::git::forge::BranchLifecycle::NoPr, None));
+        let digest = vec![RepoDigest {
+            repo_name: "alpha".into(),
+            cards: vec![c],
+        }];
+        let text = draw(&digest, 0, PaneFocus::Dashboard);
+        assert!(!text.contains("PR"), "NoPr must render no chip: {text}");
+        assert!(!text.contains("no pr"), "{text}");
     }
 
     #[test]

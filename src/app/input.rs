@@ -328,7 +328,8 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         // meaningfully consumed here. Clear it so it doesn't leak across
         // focus transitions.
         app.z_leader_pending = false;
-        let count = crate::ui::pm_pane::card_count(&app.build_pm_digest());
+        let digest = app.build_pm_digest();
+        let count = crate::ui::pm_pane::card_count(&digest);
         match k.code {
             KeyCode::Tab | KeyCode::Esc => {
                 app.focus = crate::ui::PaneFocus::Dashboard;
@@ -344,7 +345,6 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.pm_digest_selected = app.pm_digest_selected.saturating_sub(1);
             }
             KeyCode::Enter => {
-                let digest = app.build_pm_digest();
                 let idx = app.pm_digest_selected.min(count.saturating_sub(1));
                 if let Some(card) = crate::ui::pm_pane::card_at(&digest, idx) {
                     let ws_id = card.workspace_id;

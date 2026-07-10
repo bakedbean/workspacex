@@ -123,12 +123,13 @@ Set globally:
 ```
 
 Select a workspace and press Tab. Expected: focus stays on Dashboard
-if PM is hidden; cycles between Dashboard and ProjectManager if PM is
-visible. Never enters the reply input.
+if the digest is hidden; cycles between Dashboard and the digest pane
+(ProjectManager focus) if the digest is visible. Never enters the
+reply input.
 
 Set `visible` back to true. Expected: Tab cycles Dashboard ↔
-DetailBarReply (PM hidden) or Dashboard → DetailBarReply →
-ProjectManager → Dashboard (PM visible).
+DetailBarReply (digest hidden) or Dashboard → DetailBarReply →
+ProjectManager (digest) → Dashboard (digest visible).
 
 ## 9. Malformed JSON
 

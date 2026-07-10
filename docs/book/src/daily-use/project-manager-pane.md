@@ -1,39 +1,64 @@
-Press `p` on the dashboard to open a horizontal pane below the workspace list
-hosting a dedicated "project manager" session. The PM runs whichever coding
-agent your global `coding_agent` setting selects — `claude` (the default),
-`pi`, `hermes`, or `codex` (see [Coding agents](../configuration/coding-agents.md)) — so
-`wsx config set coding_agent pi` switches the PM to Pi on its next open. PM's
-job is to answer three questions about each of your active workspaces:
+Press `p` on the dashboard to open the project-manager digest: a horizontal
+pane below the workspace list that instantly lists every `Ready` workspace,
+grouped by repo. There's no agent session behind it — the digest is rendered
+directly from wsx's own state (recaps, pushed status, git counts, PR
+lookups), so it opens with no delay and nothing to configure.
 
-- What was this workspace created for?
-- Where have things been left off?
-- What's next to close it out?
+`p` opens the digest and focuses it immediately (like the attached view).
+`Tab` or `Esc` swaps focus back to the dashboard; `Tab` from the dashboard
+swaps back into the digest. `q` or `p` (from either focus) closes it.
 
-`p` opens the pane and focuses it immediately — keystrokes go to PM (like
-the attached view). `Tab` or `Esc` swaps focus back to the dashboard;
-`Tab` from the dashboard swaps back into the PM pane. `r` (while PM is
-focused) refreshes `workspaces.json` and asks PM to re-summarize. `Ctrl-O`
-(while PM is focused) expands PM to a full-screen attached view so you
-can scroll through the agent's history naturally; `Ctrl-x d` detaches back
-to the dashboard with the pane state preserved.
+Within each repo group, cards are ordered by what needs attention first:
+blocked workspaces, then waiting workspaces, then the rest oldest-activity-
+first.
 
-PM only summarizes workspaces where claude has been started at least once
-(i.e., a session log exists under `~/.claude/projects/...`). Workspaces
-you created but never opened are skipped — nothing for PM to report on.
+## What a card shows
 
-PM lives at `$XDG_STATE_HOME/wsx/project-manager/` and persists across wsx
-restarts by resuming the agent's prior session (Claude Code's `--continue`,
-or the equivalent for Pi/Hermes/Codex). On the first `p` of a wsx run with
-no prior PM session, wsx auto-sends a status-summary request (and submits
-it for you). On subsequent runs (resuming via `--continue`), wsx stays
-silent — type your own question or press `r` for a fresh summary.
+- **Header line**: workspace name, branch, and coding agent, plus the
+  agent-pushed status in brackets — `[blocked 4s]`, `[waiting 12m]`, etc. —
+  with its message appended when the agent reported one. This is the same
+  status set via `wsx status set`.
+- **Recap lines** — `goal:`, `state:`, `next:` — the agent's own account of
+  what the workspace is for, where it's at, and what's left. Only fields the
+  agent has actually set are shown. Workspaces whose agent hasn't run since
+  this feature landed (or that have never had a recap written) show
+  `no recap yet — agent hasn't run since this feature landed` instead.
+- **Facts line**: git counts (`↑ahead ↓behind ~modified ?untracked`), a PR
+  chip (`PR #241 open`, `PR #241 draft`, `PR merged`, …) colored by
+  lifecycle, `active <age> ago` from the workspace's last session activity,
+  and a `recap stale` marker when that activity is newer than the recap —
+  a sign the agent moved on without updating it.
 
-PM only sees workspaces wsx knows about (registered repos and their `Ready`
-workspaces). PM runs with `--dangerously-skip-permissions` so its tool
-calls don't prompt you — convenient for an inspection-only sidekick, but
-note that PM can technically write/edit files (the system prompt steers
-it toward read-only inspection but doesn't enforce it). If you don't want
-that, disable PM entirely.
+## Where recaps come from
 
-Disable the feature with `wsx config set pm_enabled off`.
-Customize PM's behavior with `wsx config set pm_custom_instructions @./pm.md`.
+Each workspace's own agent maintains its recap with `wsx recap set`:
+
+```bash
+wsx recap set --goal "fix auth"
+wsx recap set --state "tests failing" --next "debug the regex"
+```
+
+Any subset of `--goal`, `--state`, and `--next` can be set at once (at
+least one is required); omitted flags leave the existing value untouched.
+`wsx recap show` prints the current recap, and `wsx recap clear` deletes
+it. This isn't something you normally run by hand — the standing operating
+doctrine wsx injects into every session (see `process_doctrine` in
+[Global settings](../configuration/global-settings.md)) instructs the agent
+to set the goal once scope is clear and refresh state/next alongside its
+status updates.
+
+## Keys
+
+| Key (digest focused)   | Action                                            |
+| ----------------------- | -------------------------------------------------- |
+| `j` / `k` (or arrows)  | Move selection                                    |
+| `Enter`                | Attach to the selected workspace                  |
+| `Esc` / `Tab`          | Return focus to the dashboard                     |
+| `q` / `p`              | Close the digest                                  |
+| `r`                    | Force a git/PR cache refresh                      |
+
+| Key (dashboard focused)     | Action                                       |
+| ---------------------------- | --------------------------------------------- |
+| `p`                          | Toggle the digest                            |
+| `Tab`                        | Focus the digest (when visible)              |
+| `r` (with digest visible)   | Force a git/PR cache refresh                 |

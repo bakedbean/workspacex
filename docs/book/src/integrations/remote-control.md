@@ -4,9 +4,8 @@ apps. The local PTY behavior is unchanged — claude prints a session
 URL and a QR code at startup that you can scan from your phone or
 open in a browser to attach remotely.
 
-wsx passes `--remote-control` to every claude spawn (workspaces and
-the PM pane) by default, so any session is reachable from your phone
-without extra setup.
+wsx passes `--remote-control` to every claude spawn by default, so
+any session is reachable from your phone without extra setup.
 
 **Toggle**: disable with `wsx config set remote_control false`. With
 it off, sessions are local-only and nothing is sent to Anthropic's

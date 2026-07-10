@@ -4,9 +4,9 @@
 - **Cross-session attention alerts**: terminal bell + `!` or `?` marker when a session is awaiting permission, has gone idle or has a question.
 - **Activity sub-line per workspace**: see the latest tool call or message from each session at a glance.
 - **Configurable Workspace Detail Bar**: Display up to four independent containers with built-in or custom modules. See [Workspace detail bar](../daily-use/detail-bar.md).
-- **Project Manager pane**: a dedicated agent session that summarizes what every workspace is for, where it's at, and what's next.
+- **Project manager digest**: an instant, native pane summarizing what every workspace is for, where it's at, and what's next — no agent session required.
 - **Remote control**: attach from claude.ai/code or the mobile app; or run wsx in tmux+ssh for full-fidelity desktop access; store and access remote connection commands via the `remote` CLI.
 - **Pinned commands**: define your `/pull-request`, `/feedback`, `/ultrareview` shortcuts once; fire them with `Ctrl-x <digit>` or a click while attached or from the workspace details bar.
 - **Related repos**: declare related wsx repos per primary repo; workspaces spawn with `--add-dir` for each and a read-only system prompt so claude can read but won't edit them.  Agent is provided with the wsx skill to use the CLI to orchestrate between repos.
-- **Keyboard first navigation**: comprehensive keybindings for every action, from workspace creation to process killing to project manager refreshes.
+- **Keyboard first navigation**: comprehensive keybindings for every action, from workspace creation to process killing to digest refreshes.
 - **Frictionless workflow**: auto-rename branches from your first prompt, per-repo setup/archive scripts, editor/terminal/diff hooks.

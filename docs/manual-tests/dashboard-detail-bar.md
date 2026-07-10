@@ -1,7 +1,7 @@
 # Dashboard workspace detail bar — manual test
 
 Verifies the detail bar appears for workspace selections, collapses
-for repo selections, stacks with the Project Manager pane, and
+for repo selections, stacks with the project-manager digest pane, and
 accepts an inline reply that lands in the selected workspace's PTY.
 
 ## Setup
@@ -42,11 +42,11 @@ wsx
    selection moves to the next item, and the bar updates (or hides,
    if the move landed on a repo header).
 
-6. **PM coexistence.** With a workspace selected, toggle the Project
-   Manager pane (existing keybind). Expected: the screen stacks
-   list → detail bar → PM → footer, with all three regions visible.
-   Toggle PM off. Expected: bar moves back to the bottom (above
-   footer); list reclaims the PM area.
+6. **Digest coexistence.** With a workspace selected, toggle the
+   project-manager digest pane (`p`). Expected: the screen stacks
+   list → detail bar → digest → footer, with all three regions visible.
+   Toggle the digest off. Expected: bar moves back to the bottom (above
+   footer); list reclaims the digest area.
 
 7. **Narrow terminal.** Resize the terminal width below 80 columns
    with a workspace selected. Expected: the body collapses to a

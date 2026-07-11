@@ -307,6 +307,12 @@ impl Theme {
     pub fn ok_style(&self) -> Style {
         Style::default().fg(self.ok)
     }
+    /// Model identity in the session summary detail module — the `code`
+    /// hue: a model label is an identifier, and `code` is guaranteed
+    /// legible and distinct from `dim` in every theme.
+    pub fn model_style(&self) -> Style {
+        Style::default().fg(self.code)
+    }
     pub fn warn_style(&self) -> Style {
         Style::default().fg(self.warn)
     }

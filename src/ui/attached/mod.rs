@@ -79,7 +79,7 @@ pub struct PanesDrawOutput {
 /// Single-pane mode skips the title bar so it looks identical to the
 /// previous single-attached view.
 #[allow(clippy::too_many_arguments)]
-pub fn render_panes(
+pub(crate) fn render_panes(
     f: &mut Frame,
     panes: &[PaneSpec<'_>],
     dividers: &[Divider],
@@ -94,7 +94,7 @@ pub fn render_panes(
     procs: u32,
     diff: Option<crate::git::DiffStats>,
     pr: Option<(BranchLifecycle, u32)>,
-    model_tokens: Option<(String, bool)>,
+    model_tokens: Option<crate::detail_modules::session_summary::ChipModelTokens>,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active_agent: Option<AgentInstanceId>,
     theme: &Theme,

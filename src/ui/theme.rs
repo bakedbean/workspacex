@@ -307,6 +307,13 @@ impl Theme {
     pub fn ok_style(&self) -> Style {
         Style::default().fg(self.ok)
     }
+    /// Model identity wherever a model label renders (the session summary
+    /// detail module, the chat-view chip row) — the `code` hue: a model
+    /// label is an identifier, and `code` is guaranteed legible and
+    /// distinct from `dim` in every theme.
+    pub fn model_style(&self) -> Style {
+        Style::default().fg(self.code)
+    }
     pub fn warn_style(&self) -> Style {
         Style::default().fg(self.warn)
     }

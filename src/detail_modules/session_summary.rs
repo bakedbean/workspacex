@@ -118,28 +118,36 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
             // Model line: which model the session is running on. Shown
             // as soon as the model id is known, independent of token
             // data, so it appears even before the first usage block.
+            // The value takes the code hue so it stands apart from the
+            // dim data lines around it.
             if let Some(model_id) = evt.model_id.as_deref() {
-                let model_text = format!("model: {}", short_model_label(model_id));
-                out.push(Line::from(vec![
+                out.push(label_value_line(
                     prefix.clone(),
-                    Span::styled(
-                        truncate_to_chars(&model_text, inner_width),
-                        theme.dim_style(),
-                    ),
-                ]));
+                    "model: ",
+                    &short_model_label(model_id),
+                    theme.model_style(),
+                    theme,
+                    inner_width,
+                ));
             }
 
             // Context-window fill: a live signal the row never shows.
+            // Traffic-light value: ok while there's headroom, warn near
+            // the limit.
             if let Some((ctx_text, warn)) = format_context_line(evt) {
                 let style = if warn {
                     theme.warn_style()
                 } else {
-                    theme.dim_style()
+                    theme.ok_style()
                 };
-                out.push(Line::from(vec![
+                out.push(label_value_line(
                     prefix.clone(),
-                    Span::styled(truncate_to_chars(&ctx_text, inner_width), style),
-                ]));
+                    "context: ",
+                    &ctx_text,
+                    style,
+                    theme,
+                    inner_width,
+                ));
             }
         }
     }
@@ -160,6 +168,36 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
     ]));
 
     out
+}
+
+/// A `label value` data line: dim label, value in its own color so the
+/// datum reads at a glance. The value is truncated to the width left
+/// after the label; on columns too narrow for even the label, degrades
+/// to a truncated dim label alone.
+fn label_value_line(
+    prefix: ratatui::text::Span<'static>,
+    label: &str,
+    value: &str,
+    value_style: ratatui::style::Style,
+    theme: &crate::ui::theme::Theme,
+    max_width: usize,
+) -> ratatui::text::Line<'static> {
+    use ratatui::text::{Line, Span};
+    let label_chars = label.chars().count();
+    if label_chars >= max_width {
+        return Line::from(vec![
+            prefix,
+            Span::styled(truncate_to_chars(label, max_width), theme.dim_style()),
+        ]);
+    }
+    Line::from(vec![
+        prefix,
+        Span::styled(label.to_string(), theme.dim_style()),
+        Span::styled(
+            truncate_to_chars(value, max_width - label_chars),
+            value_style,
+        ),
+    ])
 }
 
 /// Abbreviate a token count as `950` / `77k` / `1M` / `1.2M`. The `k` form
@@ -238,8 +276,9 @@ pub(crate) fn short_model_label(model_id: &str) -> String {
     }
 }
 
-/// Build the detail bar's context-fill line and whether it should render in
-/// the warn color. None when there's no token data yet (omit the line).
+/// Build the value part of the detail bar's context-fill line (the caller
+/// prepends the dim `context: ` label) and whether it should render in the
+/// warn color. None when there's no token data yet (omit the line).
 fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
     // Treat a 0 sum (no usage yet, or a malformed all-zero usage block) the
     // same as "no data" — a `context: 0` line is noise, not signal.
@@ -248,30 +287,37 @@ fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
         Some(w) => {
             let pct = (n.saturating_mul(100) / w).min(999);
             let text = format!(
-                "context: {} / {} · {}%",
+                "{} / {} · {}%",
                 abbreviate_tokens(n),
                 abbreviate_tokens(w),
                 pct
             );
             Some((text, pct >= 85))
         }
-        None => Some((
-            format!("context: {} tokens", abbreviate_tokens(n)),
-            n >= 150_000,
-        )),
+        None => Some((format!("{} tokens", abbreviate_tokens(n)), n >= 150_000)),
     }
 }
 
-/// The chat view's compact model + token-usage chip: `{label} {used}/{window}`
-/// when the window is resolvable (e.g. `opus 4.8 45k/200k`), else
-/// `{label} {used}` (raw tokens). The model label is omitted when `model_id`
-/// is absent. Returns `(text, warn)`; `warn` mirrors the detail bar
-/// (`format_context_line`): fill ≥ 85% of a known window, or raw tokens
-/// ≥ 150k when the window is unknown. `None` when there's no token data.
-pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<(String, bool)> {
+/// The chat view's compact model + token-usage chip, split into parts so
+/// the renderer can color the model and the token fill independently —
+/// the same treatment as the detail bar's model/context lines.
+pub(crate) struct ChipModelTokens {
+    /// Short model label (e.g. `opus 4.8`); `None` when the model id is
+    /// unknown (the chip renders the tokens alone).
+    pub model: Option<String>,
+    /// Token fill: `{used}/{window}` when the window is resolvable
+    /// (e.g. `45k/200k`), else raw `{used}`.
+    pub tokens: String,
+    /// Mirrors the detail bar (`format_context_line`): fill ≥ 85% of a
+    /// known window, or raw tokens ≥ 150k when the window is unknown.
+    pub warn: bool,
+}
+
+/// Build the chip's parts, or `None` when there's no token data.
+pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<ChipModelTokens> {
     let n = evt.context_tokens.filter(|&n| n > 0)?;
-    let label = evt.model_id.as_deref().map(short_model_label);
-    let (tokens_text, warn) = match resolve_window(n, evt.model_id.as_deref()) {
+    let model = evt.model_id.as_deref().map(short_model_label);
+    let (tokens, warn) = match resolve_window(n, evt.model_id.as_deref()) {
         Some(w) => {
             let pct = (n.saturating_mul(100) / w).min(999);
             (
@@ -281,11 +327,11 @@ pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<(String,
         }
         None => (abbreviate_tokens(n), n >= 150_000),
     };
-    let text = match label {
-        Some(l) => format!("{l} {tokens_text}"),
-        None => tokens_text,
-    };
-    Some((text, warn))
+    Some(ChipModelTokens {
+        model,
+        tokens,
+        warn,
+    })
 }
 
 /// Render the most-recently-edited files as up to 3 basenames, joined
@@ -629,7 +675,7 @@ mod tests {
             ..WorkspaceEvents::default()
         };
         let (text, warn) = format_context_line(&evt).unwrap();
-        assert_eq!(text, "context: 100k / 200k · 50%");
+        assert_eq!(text, "100k / 200k · 50%");
         assert!(!warn);
     }
 
@@ -652,7 +698,7 @@ mod tests {
             ..WorkspaceEvents::default()
         };
         let (text, warn) = format_context_line(&evt).unwrap();
-        assert_eq!(text, "context: 77k tokens");
+        assert_eq!(text, "77k tokens");
         assert!(!warn);
     }
 
@@ -688,6 +734,92 @@ mod tests {
             text.contains("model: opus 4.8"),
             "missing model line:\n{text}"
         );
+    }
+
+    /// The line whose concatenated span text contains `needle`.
+    fn find_line<'a>(
+        lines: &'a [ratatui::text::Line<'static>],
+        needle: &str,
+    ) -> &'a ratatui::text::Line<'static> {
+        lines
+            .iter()
+            .find(|l| {
+                let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                text.contains(needle)
+            })
+            .unwrap_or_else(|| panic!("no line containing {needle:?}"))
+    }
+
+    #[test]
+    fn model_line_colors_value_with_model_hue() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let lines = SessionSummary.lines(&ctx, 60);
+        let line = find_line(&lines, "model:");
+        // prefix, dim label, colored value
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[2].content.as_ref(), "opus 4.8");
+        assert_eq!(line.spans[2].style, ctx.theme.model_style());
+    }
+
+    #[test]
+    fn context_line_colors_value_ok_when_healthy() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            context_tokens: Some(100_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let lines = SessionSummary.lines(&ctx, 60);
+        let line = find_line(&lines, "context:");
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[2].content.as_ref(), "100k / 200k · 50%");
+        assert_eq!(line.spans[2].style, ctx.theme.ok_style());
+    }
+
+    #[test]
+    fn context_line_colors_value_warn_near_limit() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            context_tokens: Some(190_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let lines = SessionSummary.lines(&ctx, 60);
+        let line = find_line(&lines, "context:");
+        assert_eq!(line.spans[2].style, ctx.theme.warn_style());
+    }
+
+    #[test]
+    fn label_value_line_degrades_to_label_only_when_narrow() {
+        // inner_width for lines(ctx, 8) is 6 — narrower than the 7-char
+        // "model: " label. The line must degrade to a truncated dim
+        // label without underflowing the value width.
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let lines = SessionSummary.lines(&ctx, 8);
+        let line = find_line(&lines, "model");
+        assert_eq!(line.spans.len(), 2, "expected prefix + label only");
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[1].content.chars().count(), 6);
     }
 
     #[test]
@@ -775,9 +907,10 @@ mod tests {
             model_id: Some("claude-opus-4-8".to_string()),
             ..WorkspaceEvents::default()
         };
-        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert_eq!(text, "opus 4.8 45k/200k");
-        assert!(!warn);
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("opus 4.8"));
+        assert_eq!(chip.tokens, "45k/200k");
+        assert!(!chip.warn);
     }
 
     #[test]
@@ -787,9 +920,10 @@ mod tests {
             model_id: Some("claude-opus-4-8".to_string()),
             ..WorkspaceEvents::default()
         };
-        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert_eq!(text, "opus 4.8 190k/200k");
-        assert!(warn);
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("opus 4.8"));
+        assert_eq!(chip.tokens, "190k/200k");
+        assert!(chip.warn);
     }
 
     #[test]
@@ -799,9 +933,10 @@ mod tests {
             model_id: Some("gpt-5-codex".to_string()),
             ..WorkspaceEvents::default()
         };
-        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert_eq!(text, "gpt-5-codex 77k");
-        assert!(!warn);
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(chip.tokens, "77k");
+        assert!(!chip.warn);
     }
 
     #[test]
@@ -811,8 +946,8 @@ mod tests {
             model_id: Some("gpt-5-codex".to_string()),
             ..WorkspaceEvents::default()
         };
-        let (_text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert!(warn);
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert!(chip.warn);
     }
 
     #[test]
@@ -838,7 +973,8 @@ mod tests {
             model_id: None,
             ..WorkspaceEvents::default()
         };
-        let (text, _warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert_eq!(text, "45k");
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert!(chip.model.is_none());
+        assert_eq!(chip.tokens, "45k");
     }
 }

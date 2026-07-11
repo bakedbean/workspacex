@@ -79,7 +79,7 @@ pub struct PanesDrawOutput {
 /// Single-pane mode skips the title bar so it looks identical to the
 /// previous single-attached view.
 #[allow(clippy::too_many_arguments)]
-pub fn render_panes(
+pub(crate) fn render_panes(
     f: &mut Frame,
     panes: &[PaneSpec<'_>],
     dividers: &[Divider],

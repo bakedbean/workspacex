@@ -115,6 +115,20 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
                 ]));
             }
 
+            // Model line: which model the session is running on. Shown
+            // as soon as the model id is known, independent of token
+            // data, so it appears even before the first usage block.
+            if let Some(model_id) = evt.model_id.as_deref() {
+                let model_text = format!("model: {}", short_model_label(model_id));
+                out.push(Line::from(vec![
+                    prefix.clone(),
+                    Span::styled(
+                        truncate_to_chars(&model_text, inner_width),
+                        theme.dim_style(),
+                    ),
+                ]));
+            }
+
             // Context-window fill: a live signal the row never shows.
             if let Some((ctx_text, warn)) = format_context_line(evt) {
                 let style = if warn {
@@ -657,6 +671,37 @@ mod tests {
             ..WorkspaceEvents::default()
         };
         assert!(format_context_line(&evt).is_none());
+    }
+
+    #[test]
+    fn render_shows_model_line() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 12);
+        assert!(
+            text.contains("model: opus 4.8"),
+            "missing model line:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_omits_model_line_when_model_unknown() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents::default()));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 12);
+        assert!(
+            !text.contains("model:"),
+            "expected no model line without a model id:\n{text}"
+        );
     }
 
     #[test]

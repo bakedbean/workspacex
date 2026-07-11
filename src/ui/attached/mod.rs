@@ -94,7 +94,7 @@ pub fn render_panes(
     procs: u32,
     diff: Option<crate::git::DiffStats>,
     pr: Option<(BranchLifecycle, u32)>,
-    model_tokens: Option<(String, bool)>,
+    model_tokens: Option<crate::detail_modules::session_summary::ChipModelTokens>,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active_agent: Option<AgentInstanceId>,
     theme: &Theme,

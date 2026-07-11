@@ -298,16 +298,26 @@ fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
     }
 }
 
-/// The chat view's compact model + token-usage chip: `{label} {used}/{window}`
-/// when the window is resolvable (e.g. `opus 4.8 45k/200k`), else
-/// `{label} {used}` (raw tokens). The model label is omitted when `model_id`
-/// is absent. Returns `(text, warn)`; `warn` mirrors the detail bar
-/// (`format_context_line`): fill ≥ 85% of a known window, or raw tokens
-/// ≥ 150k when the window is unknown. `None` when there's no token data.
-pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<(String, bool)> {
+/// The chat view's compact model + token-usage chip, split into parts so
+/// the renderer can color the model and the token fill independently —
+/// the same treatment as the detail bar's model/context lines.
+pub struct ChipModelTokens {
+    /// Short model label (e.g. `opus 4.8`); `None` when the model id is
+    /// unknown (the chip renders the tokens alone).
+    pub model: Option<String>,
+    /// Token fill: `{used}/{window}` when the window is resolvable
+    /// (e.g. `45k/200k`), else raw `{used}`.
+    pub tokens: String,
+    /// Mirrors the detail bar (`format_context_line`): fill ≥ 85% of a
+    /// known window, or raw tokens ≥ 150k when the window is unknown.
+    pub warn: bool,
+}
+
+/// Build the chip's parts, or `None` when there's no token data.
+pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<ChipModelTokens> {
     let n = evt.context_tokens.filter(|&n| n > 0)?;
-    let label = evt.model_id.as_deref().map(short_model_label);
-    let (tokens_text, warn) = match resolve_window(n, evt.model_id.as_deref()) {
+    let model = evt.model_id.as_deref().map(short_model_label);
+    let (tokens, warn) = match resolve_window(n, evt.model_id.as_deref()) {
         Some(w) => {
             let pct = (n.saturating_mul(100) / w).min(999);
             (
@@ -317,11 +327,11 @@ pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<(String,
         }
         None => (abbreviate_tokens(n), n >= 150_000),
     };
-    let text = match label {
-        Some(l) => format!("{l} {tokens_text}"),
-        None => tokens_text,
-    };
-    Some((text, warn))
+    Some(ChipModelTokens {
+        model,
+        tokens,
+        warn,
+    })
 }
 
 /// Render the most-recently-edited files as up to 3 basenames, joined
@@ -897,9 +907,10 @@ mod tests {
             model_id: Some("claude-opus-4-8".to_string()),
             ..WorkspaceEvents::default()
         };
-        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert_eq!(text, "opus 4.8 45k/200k");
-        assert!(!warn);
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("opus 4.8"));
+        assert_eq!(chip.tokens, "45k/200k");
+        assert!(!chip.warn);
     }
 
     #[test]
@@ -909,9 +920,10 @@ mod tests {
             model_id: Some("claude-opus-4-8".to_string()),
             ..WorkspaceEvents::default()
         };
-        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert_eq!(text, "opus 4.8 190k/200k");
-        assert!(warn);
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("opus 4.8"));
+        assert_eq!(chip.tokens, "190k/200k");
+        assert!(chip.warn);
     }
 
     #[test]
@@ -921,9 +933,10 @@ mod tests {
             model_id: Some("gpt-5-codex".to_string()),
             ..WorkspaceEvents::default()
         };
-        let (text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert_eq!(text, "gpt-5-codex 77k");
-        assert!(!warn);
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(chip.tokens, "77k");
+        assert!(!chip.warn);
     }
 
     #[test]
@@ -933,8 +946,8 @@ mod tests {
             model_id: Some("gpt-5-codex".to_string()),
             ..WorkspaceEvents::default()
         };
-        let (_text, warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert!(warn);
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert!(chip.warn);
     }
 
     #[test]
@@ -960,7 +973,8 @@ mod tests {
             model_id: None,
             ..WorkspaceEvents::default()
         };
-        let (text, _warn) = format_chip_model_tokens(&evt).expect("has tokens");
-        assert_eq!(text, "45k");
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert!(chip.model.is_none());
+        assert_eq!(chip.tokens, "45k");
     }
 }

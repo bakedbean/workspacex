@@ -1,6 +1,7 @@
 //! Extracted from ui/attached.rs.
 
 use super::*;
+use crate::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::dashboard::status::Status;
 
 /// Build the right-justified PR chip's display text and style for the chip
@@ -57,24 +58,30 @@ fn procs_chip_parts(procs: u32, theme: &Theme) -> Option<(Vec<Span<'static>>, us
 }
 
 /// Build the combined `{model} {tokens}` element (e.g. `opus 4.8 45k/200k`)
-/// plus its column width, or `None` when there's no token data. Warn-colored
-/// (matching the detail bar) when `warn` is set, else dim. This is the
-/// leftmost / lowest-priority element in the flush-right block.
+/// plus its column width, or `None` when there's no token data. Colors
+/// mirror the detail bar's SESSION SUMMARY lines: the model label takes the
+/// model hue, and the token fill is a traffic light — ok with headroom,
+/// warn near the limit. This is the leftmost / lowest-priority element in
+/// the flush-right block.
 fn model_tokens_chip_parts(
-    model_tokens: Option<(String, bool)>,
+    model_tokens: Option<ChipModelTokens>,
     theme: &Theme,
 ) -> Option<(Vec<Span<'static>>, usize)> {
-    let (text, warn) = model_tokens?;
-    if text.is_empty() {
-        return None;
-    }
-    let width = text.chars().count();
-    let style = if warn {
+    let chip = model_tokens?;
+    let tokens_style = if chip.warn {
         theme.warn_style()
     } else {
-        theme.dim_style()
+        theme.ok_style()
     };
-    Some((vec![Span::styled(text, style)], width))
+    let mut width = chip.tokens.chars().count();
+    let mut spans = Vec::with_capacity(3);
+    if let Some(model) = chip.model {
+        width += model.chars().count() + 1;
+        spans.push(Span::styled(model, theme.model_style()));
+        spans.push(Span::styled(" ".to_string(), theme.dim_style()));
+    }
+    spans.push(Span::styled(chip.tokens, tokens_style));
+    Some((spans, width))
 }
 
 /// Screen rect where the right-justified PR chip lands within `area`: flush to
@@ -152,7 +159,7 @@ pub(crate) fn render_chip_row(
     procs: u32,
     diff: Option<crate::git::DiffStats>,
     pr: Option<(BranchLifecycle, u32)>,
-    model_tokens: Option<(String, bool)>,
+    model_tokens: Option<ChipModelTokens>,
     theme: &Theme,
 ) -> (Vec<Rect>, Option<Rect>, Option<Rect>) {
     let rects = layout_chip_row(area, pinned);
@@ -300,6 +307,14 @@ mod tests {
                 command: (*c).into(),
             })
             .collect()
+    }
+
+    fn mt(model: &str, tokens: &str, warn: bool) -> ChipModelTokens {
+        ChipModelTokens {
+            model: Some(model.to_string()),
+            tokens: tokens.to_string(),
+            warn,
+        }
     }
 
     #[test]
@@ -768,7 +783,7 @@ mod tests {
                         removed: 3,
                     }),
                     Some((BranchLifecycle::PrOpen, 152)),
-                    Some(("opus 4.8 45k/200k".to_string(), false)),
+                    Some(mt("opus 4.8", "45k/200k", false)),
                     &theme,
                 );
                 pr_rect = r;
@@ -805,7 +820,7 @@ mod tests {
                     0,
                     None,
                     None,
-                    Some(("opus 4.8 45k/200k".to_string(), false)),
+                    Some(mt("opus 4.8", "45k/200k", false)),
                     &theme,
                 );
             })
@@ -842,7 +857,7 @@ mod tests {
                     0,
                     None,
                     Some((BranchLifecycle::PrOpen, 9)),
-                    Some(("opus 4.8 45k/200k".to_string(), false)),
+                    Some(mt("opus 4.8", "45k/200k", false)),
                     &theme,
                 );
                 pr_rect = r;
@@ -864,7 +879,8 @@ mod tests {
 
     #[test]
     fn render_chip_row_model_tokens_warn_style() {
-        // When the warn flag is set, the element paints in the theme warn color.
+        // The model part carries the model hue; with the warn flag set, the
+        // token part paints in the theme warn color.
         let theme = Theme::wsx();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
@@ -879,16 +895,49 @@ mod tests {
                     0,
                     None,
                     None,
-                    Some(("opus 4.8 190k/200k".to_string(), true)),
+                    Some(mt("opus 4.8", "190k/200k", true)),
                     &theme,
                 );
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        // The first painted cell of the element carries the warn foreground.
         let text = "opus 4.8 190k/200k";
         let w = text.chars().count() as u16;
         let start = 80 - w;
-        assert_eq!(buf[(start, 0)].fg, theme.warn_style().fg.unwrap());
+        assert_eq!(buf[(start, 0)].fg, theme.model_style().fg.unwrap());
+        let tokens_start = start + "opus 4.8 ".chars().count() as u16;
+        assert_eq!(buf[(tokens_start, 0)].fg, theme.warn_style().fg.unwrap());
+    }
+
+    #[test]
+    fn render_chip_row_model_tokens_ok_style_when_healthy() {
+        // Without the warn flag, the token part paints in the ok color —
+        // mirroring the detail bar's traffic-light context line.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    0,
+                    None,
+                    None,
+                    Some(mt("opus 4.8", "45k/200k", false)),
+                    &theme,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let text = "opus 4.8 45k/200k";
+        let w = text.chars().count() as u16;
+        let start = 80 - w;
+        assert_eq!(buf[(start, 0)].fg, theme.model_style().fg.unwrap());
+        let tokens_start = start + "opus 4.8 ".chars().count() as u16;
+        assert_eq!(buf[(tokens_start, 0)].fg, theme.ok_style().fg.unwrap());
     }
 }

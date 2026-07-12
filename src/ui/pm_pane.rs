@@ -181,10 +181,12 @@ pub fn render_digest(
     f.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), body);
 }
 
-/// Section title: a full-width `bg_soft` strip with the dim label on top.
-/// The filled row is what separates the PM pane from the detail bar above —
-/// a `─` rule here would blur into the repo-header and detail-bar rules,
-/// which use the same glyph for sub-section separators.
+/// Section title: a full-width `selected_bg` strip with the dim label on
+/// top. The filled row is what separates the PM pane from the detail bar
+/// above — a `─` rule here would blur into the repo-header and detail-bar
+/// rules, which use the same glyph for sub-section separators. `bg_soft`
+/// proved too close to the terminal background to register as a boundary;
+/// `selected_bg` is the tone every theme already tunes to read clearly.
 fn render_title(f: &mut Frame, area: Rect, focus: PaneFocus, filter: Option<&str>, theme: &Theme) {
     let label = match (focus, filter) {
         // Filter mode: echo the live needle even while it's still empty,
@@ -201,7 +203,7 @@ fn render_title(f: &mut Frame, area: Rect, focus: PaneFocus, filter: Option<&str
     };
     let width = area.width as usize;
     let used = label.chars().count();
-    let strip = theme.chip_bg_style();
+    let strip = theme.selected_bg_style();
     let mut spans: Vec<Span<'static>> = vec![Span::styled(label, theme.dim_style().patch(strip))];
     let pad = width.saturating_sub(used);
     if pad > 0 {
@@ -437,8 +439,8 @@ mod render_tests {
         for x in 0..buf.area().width {
             let cell = &buf[(x, 0)];
             assert_eq!(
-                cell.bg, theme.bg_soft,
-                "title row col {x} must carry the bg_soft strip"
+                cell.bg, theme.selected_bg,
+                "title row col {x} must carry the selected_bg strip"
             );
             assert_ne!(
                 cell.symbol(),

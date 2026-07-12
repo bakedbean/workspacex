@@ -181,8 +181,10 @@ pub fn render_digest(
     f.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), body);
 }
 
-/// Same dim label + `─` rule style as the PTY-backed `render`'s title block
-/// (see above), but with digest-specific key hints.
+/// Section title: a full-width `bg_soft` strip with the dim label on top.
+/// The filled row is what separates the PM pane from the detail bar above —
+/// a `─` rule here would blur into the repo-header and detail-bar rules,
+/// which use the same glyph for sub-section separators.
 fn render_title(f: &mut Frame, area: Rect, focus: PaneFocus, filter: Option<&str>, theme: &Theme) {
     let label = match (focus, filter) {
         // Filter mode: echo the live needle even while it's still empty,
@@ -199,12 +201,11 @@ fn render_title(f: &mut Frame, area: Rect, focus: PaneFocus, filter: Option<&str
     };
     let width = area.width as usize;
     let used = label.chars().count();
-    let gap = 2;
-    let rule_len = width.saturating_sub(used + gap);
-    let mut spans: Vec<Span<'static>> = vec![Span::styled(label, theme.dim_style())];
-    if rule_len > 0 {
-        spans.push(Span::raw(" ".repeat(gap)));
-        spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
+    let strip = theme.chip_bg_style();
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(label, theme.dim_style().patch(strip))];
+    let pad = width.saturating_sub(used);
+    if pad > 0 {
+        spans.push(Span::styled(" ".repeat(pad), strip));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -407,6 +408,50 @@ mod render_tests {
             pr: None,
             last_activity_ms: None,
         }
+    }
+
+    #[test]
+    fn title_row_is_a_full_width_bg_strip_without_rule() {
+        let digest = vec![RepoDigest {
+            repo_name: "alpha".into(),
+            cards: vec![card("w")],
+        }];
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let theme = crate::ui::theme::Theme::default();
+        terminal
+            .draw(|f| {
+                render_digest(
+                    f,
+                    f.area(),
+                    &digest,
+                    0,
+                    PaneFocus::Dashboard,
+                    None,
+                    10_000,
+                    &theme,
+                )
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        for x in 0..buf.area().width {
+            let cell = &buf[(x, 0)];
+            assert_eq!(
+                cell.bg, theme.bg_soft,
+                "title row col {x} must carry the bg_soft strip"
+            );
+            assert_ne!(
+                cell.symbol(),
+                "─",
+                "title row must not draw a ─ rule (col {x})"
+            );
+        }
+        // The repo group headers below keep their ─ rules — only the
+        // section title trades the rule for the strip.
+        let text = buffer_text(&terminal);
+        let repo_line = text.lines().nth(1).unwrap();
+        assert!(repo_line.contains("alpha"), "{text}");
+        assert!(repo_line.contains("─"), "{text}");
     }
 
     #[test]

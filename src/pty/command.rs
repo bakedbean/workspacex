@@ -257,12 +257,13 @@ pub fn build_pi_command(
         //
         // Pi silently ignores `--provider` unless `--model` is also passed
         // (see pi's resolveCliModel: it short-circuits when cliModel is empty),
-        // so we always pass a model selector. Precedence:
+        // so a provider-only override goes through `--models`. Precedence:
         //   1. WSX_PI_MODEL — explicit model pattern, e.g. "claude-sonnet-4-5"
         //      or "deepseek/deepseek-v4-pro". Pi resolves via substring/exact.
         //   2. WSX_PI_PROVIDER — scope to that provider via `--models "<p>/*"`
         //      (plural `--models` accepts globs; singular `--model` does not).
-        //   3. Default to the deepseek provider.
+        //   3. Neither set — pass no model flags so pi uses whatever model it
+        //      is configured with (its own settings/default resolution).
         //
         // Empty/whitespace env var values are treated as unset — shells expand
         // `export FOO=$BAR` to "" when $BAR is unset, and we don't want to
@@ -283,8 +284,7 @@ pub fn build_pi_command(
                 cmd.arg("--provider");
                 cmd.arg(&provider);
             }
-        } else {
-            let provider = provider.unwrap_or_else(|| "deepseek".to_string());
+        } else if let Some(provider) = provider {
             cmd.arg("--models");
             cmd.arg(format!("{provider}/*"));
         }
@@ -1040,17 +1040,13 @@ mod tests {
                 .collect()
         };
 
-        // 1. Default (no env vars) → --models "deepseek/*"
+        // 1. Default (no env vars) → no model flags; pi uses its own config
         {
             let mut env = EnvGuard::new();
             env.remove("WSX_PI_MODEL");
             env.remove("WSX_PI_PROVIDER");
             let argv = argv_of(&mut env, &mode);
-            let models_idx = argv
-                .iter()
-                .position(|a| a == "--models")
-                .unwrap_or_else(|| panic!("expected --models in {argv:?}"));
-            assert_eq!(argv[models_idx + 1], "deepseek/*");
+            assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
             assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
             assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
         }
@@ -1078,14 +1074,13 @@ mod tests {
             assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
         }
 
-        // 4. Empty/whitespace env values → treated as unset, fall back to default
+        // 4. Empty/whitespace env values → treated as unset, no model flags
         {
             let mut env = EnvGuard::new();
             env.set("WSX_PI_MODEL", "   ");
             env.set("WSX_PI_PROVIDER", "");
             let argv = argv_of(&mut env, &mode);
-            let models_idx = argv.iter().position(|a| a == "--models").unwrap();
-            assert_eq!(argv[models_idx + 1], "deepseek/*");
+            assert!(!argv.iter().any(|a| a == "--models"), "argv: {argv:?}");
             assert!(!argv.iter().any(|a| a == "--model"), "argv: {argv:?}");
             assert!(!argv.iter().any(|a| a == "--provider"), "argv: {argv:?}");
         }

@@ -272,7 +272,10 @@ mod pm_state_tests {
     async fn digest_enter_clamps_out_of_range_selection_to_last_card() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -598,7 +601,10 @@ mod pm_state_tests {
     async fn updates_panel_modal_enter_switches_view_and_clears_attention() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -651,7 +657,10 @@ mod pm_state_tests {
     async fn updates_panel_v_splits_attached_view_vertically() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -785,7 +794,10 @@ mod pm_state_tests {
     async fn ctrl_x_d_closes_focused_pane_when_split() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -902,7 +914,10 @@ mod pm_state_tests {
         // events-tail refresh.
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -991,7 +1006,10 @@ mod pm_state_tests {
         // Same as the d-path test above, for the Ctrl-X Shift-D save+detach.
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -1061,7 +1079,10 @@ mod pm_state_tests {
     async fn ctrl_x_arrow_moves_focus_in_split() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -1141,7 +1162,10 @@ mod pm_state_tests {
     async fn ctrl_x_down_enter_fires_highlighted_action() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -1226,7 +1250,10 @@ mod pm_state_tests {
     async fn ctrl_x_esc_dismisses_nav_overlay_without_detaching() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -1599,7 +1626,10 @@ mod pm_state_tests {
         use ratatui::backend::TestBackend;
 
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -1694,7 +1724,10 @@ mod pm_state_tests {
         use ratatui::backend::TestBackend;
 
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -2776,7 +2809,10 @@ mod pm_state_tests {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         // Remote-control defaults ON, which appends `--remote-control` to the
         // spawned agent command. The real `claude` understands that flag; the
@@ -3662,7 +3698,10 @@ mod pm_state_tests {
             .unwrap();
         let mut env = EnvGuard::new();
         env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
-        env.set("WSX_CLAUDE_BIN", crate::test_support::cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
 
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
@@ -6092,12 +6131,15 @@ mod pm_state_tests {
     async fn agent_picker_enter_persists_and_retries_attach() {
         use crate::data::store::{NewWorkspace, WorkspaceState};
         use crate::pty::session::AgentKind;
-        use crate::test_support::{EnvGuard, cat_path};
+        use crate::test_support::EnvGuard;
         use crate::ui::modal::Modal;
         // Switch from broken Hermes (won't spawn) to Claude (substituted with `cat`,
         // which spawns fine), so the retry attach succeeds.
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -6286,7 +6328,7 @@ mod detail_scroll {
 #[cfg(test)]
 mod ctrl_x_shift_d_tests {
     use super::*;
-    use crate::test_support::{EnvGuard, cat_path};
+    use crate::test_support::EnvGuard;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -6295,7 +6337,10 @@ mod ctrl_x_shift_d_tests {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         use crate::ui::split::{AttachedState, SplitDirection};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -6414,7 +6459,7 @@ mod ctrl_x_shift_d_tests {
 #[cfg(test)]
 mod restore_layout_tests {
     use super::*;
-    use crate::test_support::{EnvGuard, cat_path};
+    use crate::test_support::EnvGuard;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
@@ -6427,7 +6472,10 @@ mod restore_layout_tests {
     ) {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let store = Store::open_in_memory().unwrap();
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -6805,10 +6853,13 @@ mod detail_bar_focus_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ctrl_x_digit_works_while_reply_focused() {
         use crate::data::store::NewWorkspace;
-        use crate::test_support::{EnvGuard, cat_path};
+        use crate::test_support::EnvGuard;
 
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
 
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
@@ -7008,9 +7059,12 @@ mod attached_wheel_forwarding {
 
     fn spawn_attached_workspace(app: &mut App) -> crate::data::store::WorkspaceId {
         use crate::data::store::NewWorkspace;
-        use crate::test_support::{EnvGuard, cat_path};
+        use crate::test_support::EnvGuard;
         let mut env = EnvGuard::new();
-        env.set("WSX_CLAUDE_BIN", cat_path());
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
         let repo_id = app
             .store
             .add_repo(std::path::Path::new("."), "scratch", "test")

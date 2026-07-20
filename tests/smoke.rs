@@ -11,7 +11,7 @@ use ratatui::backend::TestBackend;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dashboard_renders_with_one_repo_one_workspace() {
     let mut env = wsx::test_support::EnvGuard::new();
-    env.set("WSX_CLAUDE_BIN", wsx::test_support::cat_path());
+    env.set("WSX_CLAUDE_BIN", wsx::test_support::cat_ignore_args_path());
 
     let repo_dir = TempDir::new().unwrap();
     let r = |args: &[&str]| {

@@ -56,6 +56,85 @@ pub fn remove_worktree_entry(worktree_path: &Path) -> Result<()> {
     remove_into(&p, worktree_path)
 }
 
+/// Remove several worktrees' `projects` entries from `~/.claude.json` in
+/// one write. Used by repo removal, which drops every workspace of a repo
+/// at once. Best-effort: callers should ignore errors (log + continue).
+pub fn remove_worktree_entries(worktree_paths: &[PathBuf]) -> Result<()> {
+    let Some(p) = claude_json_path() else {
+        return Ok(());
+    };
+    remove_entries_into(&p, worktree_paths)
+}
+
+/// Remove `projects` entries under `worktree_base` that are not in
+/// `live` — orphans left behind by code paths that deleted a workspace
+/// without pruning (or by crashes between the two steps). Entries outside
+/// `worktree_base` are never touched. Returns the number of entries
+/// removed. Best-effort backstop, run at TUI startup.
+pub fn sweep_orphaned_worktree_entries(
+    worktree_base: &Path,
+    live: &std::collections::HashSet<PathBuf>,
+) -> Result<usize> {
+    let Some(p) = claude_json_path() else {
+        return Ok(0);
+    };
+    sweep_orphans_into(&p, worktree_base, live)
+}
+
+fn remove_entries_into(claude_json: &Path, worktrees: &[PathBuf]) -> Result<()> {
+    let Some(mut root) = read_claude_json(claude_json)? else {
+        return Ok(());
+    };
+    let Some(projects) = root
+        .as_object_mut()
+        .and_then(|o| o.get_mut("projects"))
+        .and_then(|p| p.as_object_mut())
+    else {
+        return Ok(());
+    };
+    let mut removed = false;
+    for wt in worktrees {
+        removed |= projects.remove(wt.to_string_lossy().as_ref()).is_some();
+    }
+    if !removed {
+        return Ok(());
+    }
+    write_claude_json_atomic(claude_json, &root)
+}
+
+fn sweep_orphans_into(
+    claude_json: &Path,
+    worktree_base: &Path,
+    live: &std::collections::HashSet<PathBuf>,
+) -> Result<usize> {
+    let Some(mut root) = read_claude_json(claude_json)? else {
+        return Ok(0);
+    };
+    let Some(projects) = root
+        .as_object_mut()
+        .and_then(|o| o.get_mut("projects"))
+        .and_then(|p| p.as_object_mut())
+    else {
+        return Ok(0);
+    };
+    let orphans: Vec<String> = projects
+        .keys()
+        .filter(|k| {
+            let p = Path::new(k.as_str());
+            p.starts_with(worktree_base) && !live.contains(p)
+        })
+        .cloned()
+        .collect();
+    if orphans.is_empty() {
+        return Ok(0);
+    }
+    for k in &orphans {
+        projects.remove(k);
+    }
+    write_claude_json_atomic(claude_json, &root)?;
+    Ok(orphans.len())
+}
+
 fn remove_into(claude_json: &Path, worktree: &Path) -> Result<()> {
     let Some(mut root) = read_claude_json(claude_json)? else {
         return Ok(());
@@ -312,5 +391,108 @@ mod tests {
             leftovers.is_empty(),
             "expected no temp files, got {leftovers:?}"
         );
+    }
+
+    #[test]
+    fn remove_entries_into_no_file_is_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join("nope.json");
+        remove_entries_into(&p, &[PathBuf::from("/wt")]).unwrap();
+        assert!(!p.exists());
+    }
+
+    #[test]
+    fn remove_entries_into_drops_all_listed_entries() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        write_json(
+            &p,
+            &serde_json::json!({
+                "projects": {
+                    "/r": {"mcpServers": {}},
+                    "/wt/a": {"lastSessionId": "a"},
+                    "/wt/b": {"lastSessionId": "b"}
+                }
+            }),
+        );
+        remove_entries_into(&p, &[PathBuf::from("/wt/a"), PathBuf::from("/wt/b")]).unwrap();
+        let after = read_json(&p);
+        assert!(after["projects"].get("/wt/a").is_none());
+        assert!(after["projects"].get("/wt/b").is_none());
+        assert!(after["projects"]["/r"].is_object());
+    }
+
+    #[test]
+    fn remove_entries_into_ignores_missing_entries() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        write_json(
+            &p,
+            &serde_json::json!({"projects": {"/wt/a": {}, "/other": {}}}),
+        );
+        remove_entries_into(&p, &[PathBuf::from("/wt/a"), PathBuf::from("/wt/gone")]).unwrap();
+        let after = read_json(&p);
+        assert!(after["projects"].get("/wt/a").is_none());
+        assert!(after["projects"]["/other"].is_object());
+    }
+
+    #[test]
+    fn sweep_orphans_into_no_file_returns_zero() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join("nope.json");
+        let n = sweep_orphans_into(&p, Path::new("/base"), &Default::default()).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn sweep_orphans_into_removes_dead_entries_under_base() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        write_json(
+            &p,
+            &serde_json::json!({
+                "projects": {
+                    "/base/repo/dead": {"lastSessionId": "x"},
+                    "/base/repo/live": {"lastSessionId": "y"},
+                    "/elsewhere/dead": {"lastSessionId": "z"}
+                }
+            }),
+        );
+        let live: std::collections::HashSet<PathBuf> =
+            [PathBuf::from("/base/repo/live")].into_iter().collect();
+        let n = sweep_orphans_into(&p, Path::new("/base"), &live).unwrap();
+        assert_eq!(n, 1);
+        let after = read_json(&p);
+        assert!(after["projects"].get("/base/repo/dead").is_none());
+        assert!(after["projects"]["/base/repo/live"].is_object());
+        assert!(after["projects"]["/elsewhere/dead"].is_object());
+    }
+
+    #[test]
+    fn sweep_orphans_into_does_not_match_sibling_prefix_dirs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        let original = serde_json::json!({
+            "projects": {"/base-other/repo/x": {"lastSessionId": "keep"}}
+        });
+        write_json(&p, &original);
+        let n = sweep_orphans_into(&p, Path::new("/base"), &Default::default()).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(read_json(&p), original);
+    }
+
+    #[test]
+    fn sweep_orphans_into_all_live_leaves_file_untouched() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let p = dir.path().join(".claude.json");
+        let original = serde_json::json!({
+            "projects": {"/base/repo/live": {"lastSessionId": "y"}}
+        });
+        write_json(&p, &original);
+        let live: std::collections::HashSet<PathBuf> =
+            [PathBuf::from("/base/repo/live")].into_iter().collect();
+        let n = sweep_orphans_into(&p, Path::new("/base"), &live).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(read_json(&p), original);
     }
 }

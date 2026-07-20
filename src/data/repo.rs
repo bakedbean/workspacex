@@ -17,7 +17,20 @@ pub fn list(store: &Store) -> Result<Vec<Repo>> {
 }
 
 pub fn remove(store: &Store, id: RepoId) -> Result<()> {
-    store.remove_repo(id)
+    // Collect worktree paths before the rows are gone, so their
+    // ~/.claude.json entries can be pruned like `workspace::archive` does.
+    let worktrees: Vec<PathBuf> = store
+        .workspaces(id)?
+        .into_iter()
+        .map(|ws| ws.worktree_path)
+        .collect();
+    store.remove_repo(id)?;
+    if crate::agent::mcp::enabled(store)
+        && let Err(e) = crate::agent::mcp::remove_worktree_entries(&worktrees)
+    {
+        tracing::warn!(error = %e, "failed to remove worktree entries from ~/.claude.json");
+    }
+    Ok(())
 }
 
 /// Resolve the effective branch prefix for a repo: per-repo value if set,

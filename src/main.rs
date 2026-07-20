@@ -14,6 +14,32 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use wsx::{app, cli, config, data::store, error::Result, git};
 
+/// Backstop for ~/.claude.json entries orphaned by code paths that
+/// deleted workspaces without pruning (e.g. `repo remove` before it
+/// pruned, or a crash between row delete and prune).
+fn sweep_orphaned_claude_entries(store: &store::Store, worktree_base: &std::path::Path) {
+    if !wsx::agent::mcp::enabled(store) {
+        return;
+    }
+    let live: std::collections::HashSet<_> = match store.all_workspaces() {
+        Ok(ws) => ws.into_iter().map(|w| w.worktree_path).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to list workspaces for ~/.claude.json sweep");
+            return;
+        }
+    };
+    match wsx::agent::mcp::sweep_orphaned_worktree_entries(worktree_base, &live) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            count = n,
+            "pruned orphaned worktree entries from ~/.claude.json"
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to sweep orphaned entries from ~/.claude.json")
+        }
+    }
+}
+
 fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -62,6 +88,7 @@ async fn main() -> Result<()> {
     let store = store::Store::open(&dirs.db_path())?;
     let worktree_base = dirs.app_dir().join("worktrees");
     std::fs::create_dir_all(&worktree_base)?;
+    sweep_orphaned_claude_entries(&store, &worktree_base);
     let app = Arc::new(Mutex::new(app::App::new(store, worktree_base)?));
 
     // Watch for git branch renames performed by claude (or the user)

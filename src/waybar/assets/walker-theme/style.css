@@ -75,17 +75,20 @@ child:selected {
   border-left-color: #cba6f7;
 }
 
-.item-box.pr-conflicted,
+/* Conflicted is orange to match the TUI's warn color; closed and blocked
+   are red like the TUI's err color. Draft is deliberately neutral — the
+   TUI leaves it uncolored too. */
+.item-box.pr-conflicted {
+  border-left-color: #fab387;
+}
+
+.item-box.pr-closed,
 .item-box.blocked {
   border-left-color: #f38ba8;
 }
 
 .item-box.pr-draft {
-  border-left-color: alpha(#a6e3a1, 0.45);
-}
-
-.item-box.pr-closed {
-  border-left-color: alpha(@text, 0.25);
+  border-left-color: alpha(@text, 0.3);
 }
 
 .item-box.dirty {

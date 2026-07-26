@@ -48,17 +48,23 @@ pub(crate) fn needs_pr_refresh(fetched_at: Option<i64>, now: i64) -> bool {
 /// and "no PR" earns no glyph).
 fn pr_segment(row: &ScmCacheRow) -> Option<String> {
     let lifecycle = row.pr_lifecycle?;
-    let (glyph, suffix) = match lifecycle {
+    // Lifecycle dot mirrors the TUI's `Theme::lifecycle_style`: open=green,
+    // conflicted=orange (warn), merged=purple, closed=red; draft stays
+    // uncolored there too. Emoji because labels are single-color (set_text).
+    let (glyph, dot, suffix) = match lifecycle {
         BranchLifecycle::NoPr => return None,
-        BranchLifecycle::PrOpen => (GLYPH_PR, None),
-        BranchLifecycle::PrDraft => (GLYPH_PR, Some("draft")),
-        BranchLifecycle::PrConflicted => (GLYPH_PR, Some("conflict")),
-        BranchLifecycle::PrMerged => (GLYPH_MERGED, None),
-        BranchLifecycle::PrClosed => (GLYPH_PR, Some("closed")),
+        BranchLifecycle::PrOpen => (GLYPH_PR, Some("\u{1f7e2}"), None),
+        BranchLifecycle::PrDraft => (GLYPH_PR, None, Some("draft")),
+        BranchLifecycle::PrConflicted => (GLYPH_PR, Some("\u{1f7e0}"), Some("conflict")),
+        BranchLifecycle::PrMerged => (GLYPH_MERGED, Some("\u{1f7e3}"), None),
+        BranchLifecycle::PrClosed => (GLYPH_PR, Some("\u{1f534}"), Some("closed")),
     };
     let mut parts = vec![glyph.to_string()];
-    if let Some(n) = row.pr_number {
-        parts.push(format!("#{n}"));
+    match (dot, row.pr_number) {
+        (Some(dot), Some(n)) => parts.push(format!("{dot}#{n}")),
+        (Some(dot), None) => parts.push(dot.to_string()),
+        (None, Some(n)) => parts.push(format!("#{n}")),
+        (None, None) => {}
     }
     if let Some(s) = suffix {
         parts.push(s.to_string());
@@ -465,6 +471,35 @@ mod entry_tests {
         assert_eq!(v[0]["icon"], "i");
         assert_eq!(v[0]["action"], "a");
         assert_eq!(v[0]["state"][0], "pr-open");
+    }
+
+    #[test]
+    fn pr_dots_mirror_tui_lifecycle_colors() {
+        let cases = [
+            (BranchLifecycle::PrOpen, Some('\u{1f7e2}')),
+            (BranchLifecycle::PrConflicted, Some('\u{1f7e0}')),
+            (BranchLifecycle::PrMerged, Some('\u{1f7e3}')),
+            (BranchLifecycle::PrClosed, Some('\u{1f534}')),
+            (BranchLifecycle::PrDraft, None),
+        ];
+        for (lifecycle, dot) in cases {
+            let row = ScmCacheRow {
+                pr_lifecycle: Some(lifecycle),
+                pr_number: Some(7),
+                ..Default::default()
+            };
+            let text = compose_text("r", "w", &row);
+            match dot {
+                Some(d) => assert!(text.contains(&format!("{d}#7")), "{lifecycle:?}: {text}"),
+                // Draft is uncolored in the TUI too: number, no dot.
+                None => {
+                    assert!(text.contains("#7"), "{lifecycle:?}: {text}");
+                    for d in ['\u{1f7e2}', '\u{1f7e0}', '\u{1f7e3}', '\u{1f534}'] {
+                        assert!(!text.contains(d), "{lifecycle:?}: {text}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -175,6 +175,12 @@ async fn collect_rows(store: &Store) -> Result<Vec<RowInput>> {
             cache.additions = Some(stats.added);
             cache.deletions = Some(stats.removed);
             let _ = store.upsert_scm_git(id, dirty, stats.added, stats.removed);
+        } else {
+            // Git failed (missing worktree, not a repo, etc.): suppress stale
+            // indicators in-memory while preserving cached PR state.
+            cache.dirty = None;
+            cache.additions = None;
+            cache.deletions = None;
         }
         rows.push(RowInput {
             repo_name,
@@ -418,6 +424,9 @@ mod entry_tests {
                 0,
             )
             .unwrap();
+        // Pre-seed alpha with stale dirty/diff indicators (to be suppressed
+        // when git fails on nonexistent worktree).
+        store.upsert_scm_git(ids[0], true, 4, 2).unwrap();
 
         let rows = super::collect_rows(&store).await.unwrap();
         let entries = super::build_entries(&rows, "/bin/wsx");
@@ -432,5 +441,17 @@ mod entry_tests {
         // Branch always present in subtext.
         assert!(entries[0].subtext.contains("x/alpha"), "{:?}", entries[0]);
         assert_eq!(entries[0].action, "/bin/wsx waybar jump r alpha");
+        // Stale dirty/diff indicators suppressed when git fails (alpha's
+        // worktree is nonexistent): text should lack ● and +4 −2.
+        assert!(
+            !entries[0].text.contains('\u{25cf}'),
+            "stale dirty indicator should be suppressed: {:?}",
+            entries[0]
+        );
+        assert!(
+            !entries[0].text.contains("+4"),
+            "stale diff indicator should be suppressed: {:?}",
+            entries[0]
+        );
     }
 }

@@ -1,0 +1,9 @@
+{
+  "custom/wsx": {
+    "exec": "wsx waybar status",
+    "return-type": "json",
+    "interval": 5,
+    "on-click": "wsx waybar menu",
+    "tooltip": true
+  }
+}

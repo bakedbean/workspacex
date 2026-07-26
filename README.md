@@ -45,6 +45,24 @@ spawns inside the worktree. See the
 [Quick start guide](https://bakedbean.github.io/workspacex/docs/overview/quick-start.html)
 for the full walkthrough and next steps.
 
+## Waybar indicator (Linux)
+
+On Linux, a custom waybar module shows a git-branch glyph plus your live
+workspace count across every repo, colored by the most urgent status
+(blocked/done/waiting/working); hover it for a per-workspace tooltip.
+
+```bash
+wsx setup waybar
+```
+
+writes `wsx.jsonc`/`wsx.css` into `~/.config/waybar/` and patches
+`config.jsonc` to include them (with a timestamped backup). Under the hood:
+`wsx waybar status` emits the module JSON, `wsx waybar menu` opens a picker
+(walker by default; override with `WSX_WAYBAR_MENU`), and
+`wsx waybar jump <repo> <slug>` focuses a running TUI on that workspace or
+launches a new one. These commands are Linux-only and error on other
+platforms.
+
 ## Development
 
 Build and test with `cargo build` / `cargo test`. See the

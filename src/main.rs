@@ -68,10 +68,13 @@ async fn main() -> Result<()> {
             std::process::exit(2);
         }
     };
-    if !matches!(action, cli::CliAction::Tui) {
-        cli::run_cli(action, &dirs).await?;
-        return Ok(());
-    }
+    let select = match action {
+        cli::CliAction::Tui { select } => select,
+        other => {
+            cli::run_cli(other, &dirs).await?;
+            return Ok(());
+        }
+    };
 
     let file_appender = tracing_appender::rolling::daily(dirs.log_dir(), "wsx.log");
     let (nb, _guard) = tracing_appender::non_blocking(file_appender);
@@ -91,9 +94,20 @@ async fn main() -> Result<()> {
     sweep_orphaned_claude_entries(&store, &worktree_base);
     let app = Arc::new(Mutex::new(app::App::new(store, worktree_base)?));
 
+    if let Some((repo, slug)) = &select {
+        app.lock().await.select_workspace_by_name(repo, slug);
+    }
+
     // Watch for git branch renames performed by claude (or the user)
     // and propagate to the wsx store. Aborts when the runtime drops.
     tokio::spawn(app::branch_drift_poll(app.clone()));
+
+    #[cfg(target_os = "linux")]
+    let ipc_socket = {
+        let path = wsx::waybar::ipc::socket_path_for(std::process::id());
+        tokio::spawn(wsx::waybar::ipc::listen(app.clone(), path.clone()));
+        path
+    };
 
     install_panic_hook();
 
@@ -109,6 +123,9 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let result = app::run(&mut terminal, app.clone()).await;
+
+    #[cfg(target_os = "linux")]
+    let _ = std::fs::remove_file(&ipc_socket);
 
     disable_raw_mode()?;
     execute!(

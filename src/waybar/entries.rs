@@ -3,6 +3,7 @@
 //! See docs/superpowers/specs/2026-07-26-elephant-menu-design.md.
 
 use crate::data::scm_cache::ScmCacheRow;
+use crate::data::store::ReportedState;
 use crate::data::store::ReportedStatus;
 use crate::data::store::Store;
 use crate::error::Result;
@@ -30,6 +31,9 @@ pub struct MenuEntry {
     pub subtext: String,
     pub icon: String,
     pub action: String,
+    /// Row CSS classes: walker adds each string as a class on the item box,
+    /// which the wsx walker theme styles (colored edge per PR state, etc.).
+    pub state: Vec<String>,
 }
 
 pub(crate) fn needs_pr_refresh(fetched_at: Option<i64>, now: i64) -> bool {
@@ -44,17 +48,23 @@ pub(crate) fn needs_pr_refresh(fetched_at: Option<i64>, now: i64) -> bool {
 /// and "no PR" earns no glyph).
 fn pr_segment(row: &ScmCacheRow) -> Option<String> {
     let lifecycle = row.pr_lifecycle?;
-    let (glyph, suffix) = match lifecycle {
+    // Lifecycle dot mirrors the TUI's `Theme::lifecycle_style`: open=green,
+    // conflicted=orange (warn), merged=purple, closed=red; draft stays
+    // uncolored there too. Emoji because labels are single-color (set_text).
+    let (glyph, dot, suffix) = match lifecycle {
         BranchLifecycle::NoPr => return None,
-        BranchLifecycle::PrOpen => (GLYPH_PR, None),
-        BranchLifecycle::PrDraft => (GLYPH_PR, Some("draft")),
-        BranchLifecycle::PrConflicted => (GLYPH_PR, Some("conflict")),
-        BranchLifecycle::PrMerged => (GLYPH_MERGED, None),
-        BranchLifecycle::PrClosed => (GLYPH_PR, Some("closed")),
+        BranchLifecycle::PrOpen => (GLYPH_PR, Some("\u{1f7e2}"), None),
+        BranchLifecycle::PrDraft => (GLYPH_PR, None, Some("draft")),
+        BranchLifecycle::PrConflicted => (GLYPH_PR, Some("\u{1f7e0}"), Some("conflict")),
+        BranchLifecycle::PrMerged => (GLYPH_MERGED, Some("\u{1f7e3}"), None),
+        BranchLifecycle::PrClosed => (GLYPH_PR, Some("\u{1f534}"), Some("closed")),
     };
     let mut parts = vec![glyph.to_string()];
-    if let Some(n) = row.pr_number {
-        parts.push(format!("#{n}"));
+    match (dot, row.pr_number) {
+        (Some(dot), Some(n)) => parts.push(format!("{dot}#{n}")),
+        (Some(dot), None) => parts.push(dot.to_string()),
+        (None, Some(n)) => parts.push(format!("#{n}")),
+        (None, None) => {}
     }
     if let Some(s) = suffix {
         parts.push(s.to_string());
@@ -72,10 +82,37 @@ pub(crate) fn compose_text(repo: &str, slug: &str, row: &ScmCacheRow) -> String 
     }
     if let (Some(a), Some(d)) = (row.additions, row.deletions) {
         if a + d > 0 {
-            parts.push(format!("+{a} \u{2212}{d}"));
+            // Colored emoji dots: labels are single-color (walker uses
+            // set_text, no Pango), so color-font glyphs are the only way to
+            // tint the counts themselves.
+            parts.push(format!("\u{1f7e2}+{a} \u{1f534}\u{2212}{d}"));
         }
     }
     parts.join("  ")
+}
+
+/// Row CSS classes derived from PR/git/agent state. Walker turns each into
+/// a class on the item box; the wsx walker theme colors row edges/tints.
+pub(crate) fn state_classes(row: &ScmCacheRow, status: Option<&ReportedStatus>) -> Vec<String> {
+    let mut classes = Vec::new();
+    let pr = row.pr_lifecycle.and_then(|l| match l {
+        BranchLifecycle::NoPr => None,
+        BranchLifecycle::PrOpen => Some("pr-open"),
+        BranchLifecycle::PrDraft => Some("pr-draft"),
+        BranchLifecycle::PrConflicted => Some("pr-conflicted"),
+        BranchLifecycle::PrMerged => Some("pr-merged"),
+        BranchLifecycle::PrClosed => Some("pr-closed"),
+    });
+    if let Some(pr) = pr {
+        classes.push(pr.to_string());
+    }
+    if row.dirty == Some(true) {
+        classes.push("dirty".to_string());
+    }
+    if status.map(|s| s.state) == Some(ReportedState::Blocked) {
+        classes.push("blocked".to_string());
+    }
+    classes
 }
 
 pub(crate) fn compose_subtext(branch: &str, status: Option<&ReportedStatus>) -> String {
@@ -114,13 +151,25 @@ pub(crate) struct RowInput {
     pub cache: ScmCacheRow,
 }
 
+/// Menu icon per agent state — same visual language as the waybar bar
+/// glyphs, but every value must be NON-ASCII: walker treats an ASCII icon
+/// string as an icon-theme NAME, and a failed lookup renders the red
+/// "missing image" symbol (the bar's blocked glyph "!" hit exactly this).
+fn icon_glyph(state: Option<ReportedState>) -> &'static str {
+    match state {
+        Some(ReportedState::Blocked) => "\u{f12a}", // nf-fa-exclamation
+        other => crate::waybar::status::glyph(other),
+    }
+}
+
 pub(crate) fn build_entries(rows: &[RowInput], wsx_bin: &str) -> Vec<MenuEntry> {
     rows.iter()
         .map(|r| MenuEntry {
             text: compose_text(&r.repo_name, &r.slug, &r.cache),
             subtext: compose_subtext(&r.branch, r.status.as_ref()),
-            icon: crate::waybar::status::glyph(r.status.as_ref().map(|s| s.state)).to_string(),
+            icon: icon_glyph(r.status.as_ref().map(|s| s.state)).to_string(),
             action: action_cmd(wsx_bin, &r.repo_name, &r.slug),
+            state: state_classes(&r.cache, r.status.as_ref()),
         })
         .collect()
 }
@@ -295,7 +344,7 @@ mod entry_tests {
         assert!(text.starts_with("workspacex/fix-bug"), "{text}");
         assert!(text.contains("#123"), "{text}");
         assert!(text.contains('\u{25cf}'), "{text}");
-        assert!(text.contains("+45 \u{2212}12"), "{text}");
+        assert!(text.contains("\u{1f7e2}+45 \u{1f534}\u{2212}12"), "{text}");
     }
 
     #[test]
@@ -387,18 +436,92 @@ mod entry_tests {
     }
 
     #[test]
+    fn icon_glyphs_are_never_ascii_icon_names() {
+        // Walker resolves ASCII icon strings as icon-theme names; a failed
+        // lookup renders the red "missing image" symbol. Every state must
+        // therefore map to a non-ASCII glyph.
+        for state in [
+            None,
+            Some(ReportedState::Working),
+            Some(ReportedState::Waiting),
+            Some(ReportedState::Blocked),
+            Some(ReportedState::Done),
+            Some(ReportedState::Busy),
+        ] {
+            let icon = icon_glyph(state);
+            assert!(
+                !icon.is_ascii(),
+                "{state:?} icon {icon:?} would be looked up as an icon name"
+            );
+        }
+    }
+
+    #[test]
     fn menu_entry_serializes_with_lowercase_keys() {
         let e = MenuEntry {
             text: "t".into(),
             subtext: "s".into(),
             icon: "i".into(),
             action: "a".into(),
+            state: vec!["pr-open".into()],
         };
         let v = serde_json::to_value([e]).unwrap();
         assert_eq!(v[0]["text"], "t");
         assert_eq!(v[0]["subtext"], "s");
         assert_eq!(v[0]["icon"], "i");
         assert_eq!(v[0]["action"], "a");
+        assert_eq!(v[0]["state"][0], "pr-open");
+    }
+
+    #[test]
+    fn pr_dots_mirror_tui_lifecycle_colors() {
+        let cases = [
+            (BranchLifecycle::PrOpen, Some('\u{1f7e2}')),
+            (BranchLifecycle::PrConflicted, Some('\u{1f7e0}')),
+            (BranchLifecycle::PrMerged, Some('\u{1f7e3}')),
+            (BranchLifecycle::PrClosed, Some('\u{1f534}')),
+            (BranchLifecycle::PrDraft, None),
+        ];
+        for (lifecycle, dot) in cases {
+            let row = ScmCacheRow {
+                pr_lifecycle: Some(lifecycle),
+                pr_number: Some(7),
+                ..Default::default()
+            };
+            let text = compose_text("r", "w", &row);
+            match dot {
+                Some(d) => assert!(text.contains(&format!("{d}#7")), "{lifecycle:?}: {text}"),
+                // Draft is uncolored in the TUI too: number, no dot.
+                None => {
+                    assert!(text.contains("#7"), "{lifecycle:?}: {text}");
+                    for d in ['\u{1f7e2}', '\u{1f7e0}', '\u{1f7e3}', '\u{1f534}'] {
+                        assert!(!text.contains(d), "{lifecycle:?}: {text}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn state_classes_reflect_pr_dirty_and_blocked() {
+        assert!(state_classes(&ScmCacheRow::default(), None).is_empty());
+        let row = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrConflicted),
+            dirty: Some(true),
+            ..Default::default()
+        };
+        let blocked = status(ReportedState::Blocked, None);
+        assert_eq!(
+            state_classes(&row, Some(&blocked)),
+            vec!["pr-conflicted", "dirty", "blocked"]
+        );
+        // NoPr earns no class — same no-indicator rule as the text segment.
+        let no_pr = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::NoPr),
+            dirty: Some(false),
+            ..Default::default()
+        };
+        assert!(state_classes(&no_pr, None).is_empty());
     }
 
     #[tokio::test]

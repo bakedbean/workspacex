@@ -1,0 +1,121 @@
+/* wsx walker theme, derived from omarchy-default. Differences: the
+   item-subtext line is visible (omarchy zeroes it out for its single-line
+   app launcher) and row padding is tightened for two-line entries. Colors
+   come from the active omarchy theme via the same walker.css omarchy's own
+   theme imports; on a non-omarchy setup the import fails harmlessly and
+   GTK falls back to default colors.
+   Installed by `wsx setup waybar`; edits are overwritten on re-run. */
+@import "../../../omarchy/current/theme/walker.css";
+
+* {
+  all: unset;
+}
+
+* {
+  font-family: monospace;
+  font-size: 18px;
+  color: @text;
+}
+
+scrollbar {
+  opacity: 0;
+}
+
+.normal-icons {
+  -gtk-icon-size: 16px;
+}
+
+.large-icons {
+  -gtk-icon-size: 32px;
+}
+
+.box-wrapper {
+  background: alpha(@base, 0.95);
+  padding: 20px;
+  border: 2px solid @border;
+}
+
+.search-container {
+  background: @base;
+  padding: 10px;
+}
+
+.input placeholder {
+  opacity: 0.5;
+}
+
+.input:focus,
+.input:active {
+  box-shadow: none;
+  outline: none;
+}
+
+child:selected .item-box * {
+  color: @selected-text;
+}
+
+child:selected {
+  background: alpha(@text, 0.07);
+}
+
+.item-box {
+  padding-left: 14px;
+  border-left: 3px solid transparent;
+}
+
+/* Row state accents — classes come from the entry's State list (see
+   wsx waybar menu-entries). Accent hexes are fixed rather than themed:
+   omarchy's walker.css exposes no semantic green/red/purple variables,
+   and these read well on dark and light bases alike. */
+.item-box.pr-open {
+  border-left-color: #a6e3a1;
+}
+
+.item-box.pr-merged {
+  border-left-color: #cba6f7;
+}
+
+/* Conflicted is orange to match the TUI's warn color; closed and blocked
+   are red like the TUI's err color. Draft is deliberately neutral — the
+   TUI leaves it uncolored too. */
+.item-box.pr-conflicted {
+  border-left-color: #fab387;
+}
+
+.item-box.pr-closed,
+.item-box.blocked {
+  border-left-color: #f38ba8;
+}
+
+.item-box.pr-draft {
+  border-left-color: alpha(@text, 0.3);
+}
+
+.item-box.dirty {
+  background: alpha(#f9e2af, 0.07);
+}
+
+.item-text-box {
+  all: unset;
+  padding: 8px 0;
+}
+
+.item-subtext {
+  font-size: 13px;
+  opacity: 0.65;
+}
+
+.item-image {
+  margin-right: 14px;
+  -gtk-icon-transform: scale(0.9);
+}
+
+.current {
+  font-style: italic;
+}
+
+.keybind-hints {
+  background: @background;
+  padding: 10px;
+  margin-top: 10px;
+}

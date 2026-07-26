@@ -236,6 +236,14 @@ pub static GROUPS: &[GroupInfo] = &[
                 usage: "jump <repo> <slug>",
                 blurb: "Select the workspace in a running TUI, or launch one",
             },
+            CmdInfo {
+                usage: "menu-entries",
+                blurb: "Print walker/elephant menu entries as JSON",
+            },
+            CmdInfo {
+                usage: "refresh-prs",
+                blurb: "Refresh the cached PR state for all workspaces",
+            },
         ],
     },
 ];
@@ -432,6 +440,8 @@ pub enum CliAction {
         repo: String,
         slug: String,
     },
+    WaybarMenuEntries,
+    WaybarRefreshPrs,
     AgentList,
     AgentSend {
         target: String,
@@ -1123,6 +1133,8 @@ fn parse_waybar(it: &mut Args) -> Result<CliAction> {
             };
             Ok(CliAction::WaybarJump { repo, slug })
         }
+        Some("menu-entries") => Ok(CliAction::WaybarMenuEntries),
+        Some("refresh-prs") => Ok(CliAction::WaybarRefreshPrs),
         other => Err(Error::Usage {
             group: None,
             msg: match other {
@@ -1861,8 +1873,15 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         CliAction::WaybarMenu => crate::waybar::menu::run_menu(&store)?,
         #[cfg(target_os = "linux")]
         CliAction::WaybarJump { repo, slug } => crate::waybar::jump::jump(&repo, &slug)?,
+        #[cfg(target_os = "linux")]
+        CliAction::WaybarMenuEntries => crate::waybar::entries::run_menu_entries(&store).await?,
+        #[cfg(target_os = "linux")]
+        CliAction::WaybarRefreshPrs => crate::waybar::entries::run_refresh_prs(&store).await?,
         #[cfg(not(target_os = "linux"))]
-        CliAction::WaybarMenu | CliAction::WaybarJump { .. } => return Err(waybar_linux_only()),
+        CliAction::WaybarMenu
+        | CliAction::WaybarJump { .. }
+        | CliAction::WaybarMenuEntries
+        | CliAction::WaybarRefreshPrs => return Err(waybar_linux_only()),
         CliAction::SetupInstallSkill | CliAction::WaybarStatus | CliAction::SetupWaybar => {
             unreachable!("handled before store open")
         }
@@ -3070,6 +3089,18 @@ mod tests {
         assert!(parse(&["waybar", "jump", "onlyrepo"]).is_err());
         assert!(parse(&["waybar", "bogus"]).is_err());
         assert!(parse(&["waybar"]).is_err());
+    }
+
+    #[test]
+    fn parses_waybar_menu_entries_and_refresh_prs() {
+        assert!(matches!(
+            parse(&["waybar", "menu-entries"]),
+            Ok(CliAction::WaybarMenuEntries)
+        ));
+        assert!(matches!(
+            parse(&["waybar", "refresh-prs"]),
+            Ok(CliAction::WaybarRefreshPrs)
+        ));
     }
 
     #[test]

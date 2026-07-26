@@ -33,6 +33,20 @@ fn leading_ws(line: &str) -> String {
     line.chars().take_while(|c| c.is_whitespace()).collect()
 }
 
+/// Insert `"custom/wsx",` as the FIRST entry of the multi-line array whose
+/// key line starts with `key`. Returns false if the key isn't found.
+fn prepend_to_array(lines: &mut Vec<String>, key: &str) -> bool {
+    let Some(open) = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with(key) && l.contains('['))
+    else {
+        return false;
+    };
+    let entry_indent = format!("{}  ", leading_ws(&lines[open]));
+    lines.insert(open + 1, format!("{entry_indent}\"custom/wsx\","));
+    true
+}
+
 /// Insert `"custom/wsx",` as the LAST entry of the multi-line array whose key
 /// line starts with `key`. Returns false if the key or its closing bracket
 /// isn't found (single-line arrays are deliberately not handled — the caller
@@ -55,9 +69,9 @@ fn append_to_array(lines: &mut Vec<String>, key: &str) -> bool {
 }
 
 /// Text-based jsonc patcher: adds a top-level `"include"` for the wsx module
-/// file and appends `"custom/wsx",` as the last entry of `modules-right`
-/// (falling back to `modules-left`), so the indicator sits at the right edge
-/// of the bar.
+/// file and inserts `"custom/wsx",` as the FIRST entry of `modules-right`
+/// (falling back to the last entry of `modules-left`), so the indicator sits
+/// at the leading edge of the bar's right-side group.
 pub fn patch_config(text: &str, include_path: &str) -> PatchOutcome {
     if text.contains("custom/wsx") {
         return PatchOutcome::AlreadyInstalled;
@@ -77,9 +91,9 @@ pub fn patch_config(text: &str, include_path: &str) -> PatchOutcome {
     };
     lines.insert(open + 1, format!("  \"include\": [\"{include_path}\"],"));
 
-    // 2. module entry: append as the last entry of modules-right so the
-    //    indicator sits at the bar's right edge, else last of modules-left.
-    let placed = append_to_array(&mut lines, "\"modules-right\"")
+    // 2. module entry: first entry of modules-right so the indicator leads
+    //    the bar's right-side group, else last of modules-left.
+    let placed = prepend_to_array(&mut lines, "\"modules-right\"")
         || append_to_array(&mut lines, "\"modules-left\"");
     if !placed {
         return PatchOutcome::Unrecognized;
@@ -108,7 +122,7 @@ fn snippet_report(include_path: &str) -> Vec<String> {
     vec![
         "could not patch config.jsonc automatically — add manually:".into(),
         format!("  1. top-level: \"include\": [\"{include_path}\"],"),
-        "  2. last entry of modules-right (or -left): \"custom/wsx\",".into(),
+        "  2. first entry of modules-right (or last of -left): \"custom/wsx\",".into(),
     ]
 }
 
@@ -186,15 +200,15 @@ mod install_tests {
 "#;
 
     #[test]
-    fn patches_as_last_entry_of_modules_right() {
+    fn patches_as_first_entry_of_modules_right() {
         let PatchOutcome::Patched(out) =
             patch_config(OMARCHY_STYLE, "/home/u/.config/waybar/wsx.jsonc")
         else {
             panic!("expected Patched");
         };
         let wsx_entry = out.find("\"custom/wsx\",").unwrap();
-        assert!(wsx_entry > out.find("\"battery\",").unwrap());
-        assert!(wsx_entry < out.find("\"custom/omarchy\": {").unwrap());
+        assert!(wsx_entry > out.find("\"modules-right\"").unwrap());
+        assert!(wsx_entry < out.find("\"cpu\",").unwrap());
         // modules-left is untouched
         assert!(out.find("\"custom/wsx\",") == out.rfind("\"custom/wsx\","));
         assert!(out.contains(r#""include": ["/home/u/.config/waybar/wsx.jsonc"],"#));

@@ -108,9 +108,9 @@ Follows the `wsx setup install-skill` precedent. Steps:
    working/idle` using omarchy theme variables where possible.
 3. Patch `~/.config/waybar/config.jsonc` after making a timestamped `.bak`:
    add `"include": [".../wsx.jsonc"]` (or append to an existing include
-   array) and append `"custom/wsx"` as the last entry of `modules-right`
-   (falling back to `modules-left`), so the indicator sits at the bar's
-   right edge. The patch is targeted text editing of
+   array) and insert `"custom/wsx"` as the first entry of `modules-right`
+   (falling back to the last entry of `modules-left`), so the indicator
+   leads the bar's right-side group. The patch is targeted text editing of
    jsonc; if the structure isn't confidently recognized, change nothing and
    print paste-ready snippets instead.
 4. Print a note to `@import "wsx.css";` from `style.css` (CSS imports can't

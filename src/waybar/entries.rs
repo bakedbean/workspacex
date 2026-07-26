@@ -3,6 +3,7 @@
 //! See docs/superpowers/specs/2026-07-26-elephant-menu-design.md.
 
 use crate::data::scm_cache::ScmCacheRow;
+use crate::data::store::ReportedState;
 use crate::data::store::ReportedStatus;
 use crate::data::store::Store;
 use crate::error::Result;
@@ -114,12 +115,23 @@ pub(crate) struct RowInput {
     pub cache: ScmCacheRow,
 }
 
+/// Menu icon per agent state — same visual language as the waybar bar
+/// glyphs, but every value must be NON-ASCII: walker treats an ASCII icon
+/// string as an icon-theme NAME, and a failed lookup renders the red
+/// "missing image" symbol (the bar's blocked glyph "!" hit exactly this).
+fn icon_glyph(state: Option<ReportedState>) -> &'static str {
+    match state {
+        Some(ReportedState::Blocked) => "\u{f12a}", // nf-fa-exclamation
+        other => crate::waybar::status::glyph(other),
+    }
+}
+
 pub(crate) fn build_entries(rows: &[RowInput], wsx_bin: &str) -> Vec<MenuEntry> {
     rows.iter()
         .map(|r| MenuEntry {
             text: compose_text(&r.repo_name, &r.slug, &r.cache),
             subtext: compose_subtext(&r.branch, r.status.as_ref()),
-            icon: crate::waybar::status::glyph(r.status.as_ref().map(|s| s.state)).to_string(),
+            icon: icon_glyph(r.status.as_ref().map(|s| s.state)).to_string(),
             action: action_cmd(wsx_bin, &r.repo_name, &r.slug),
         })
         .collect()
@@ -384,6 +396,27 @@ mod entry_tests {
         assert!(needs_pr_refresh(Some(880), 1000));
         assert!(!needs_pr_refresh(Some(881), 1000));
         assert!(!needs_pr_refresh(Some(2000), 1000)); // clock skew: don't refetch
+    }
+
+    #[test]
+    fn icon_glyphs_are_never_ascii_icon_names() {
+        // Walker resolves ASCII icon strings as icon-theme names; a failed
+        // lookup renders the red "missing image" symbol. Every state must
+        // therefore map to a non-ASCII glyph.
+        for state in [
+            None,
+            Some(ReportedState::Working),
+            Some(ReportedState::Waiting),
+            Some(ReportedState::Blocked),
+            Some(ReportedState::Done),
+            Some(ReportedState::Busy),
+        ] {
+            let icon = icon_glyph(state);
+            assert!(
+                !icon.is_ascii(),
+                "{state:?} icon {icon:?} would be looked up as an icon name"
+            );
+        }
     }
 
     #[test]

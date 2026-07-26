@@ -1,0 +1,16 @@
+/* wsx waybar module — status classes. Tune to your theme. */
+#custom-wsx {
+  padding: 0 10px;
+}
+#custom-wsx.blocked {
+  color: #f38ba8;
+}
+#custom-wsx.done {
+  color: #89b4fa;
+}
+#custom-wsx.waiting {
+  color: #f9e2af;
+}
+#custom-wsx.working {
+  color: #a6e3a1;
+}

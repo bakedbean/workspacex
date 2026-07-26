@@ -4,8 +4,11 @@
 
 use crate::data::scm_cache::ScmCacheRow;
 use crate::data::store::ReportedStatus;
+use crate::data::store::Store;
+use crate::error::Result;
 use crate::git::forge::BranchLifecycle;
 use crate::waybar::menu::sanitize;
+use std::path::PathBuf;
 
 /// Skip `gh` for a workspace whose PR state was fetched more recently than
 /// this. Matches the spirit of the TUI's 30s in-memory throttle but is more
@@ -97,6 +100,147 @@ pub(crate) fn action_cmd(wsx_bin: &str, repo: &str, slug: &str) -> String {
         quote(repo),
         quote(slug)
     )
+}
+
+pub(crate) struct RowInput {
+    pub repo_name: String,
+    pub slug: String,
+    pub branch: String,
+    pub status: Option<ReportedStatus>,
+    pub cache: ScmCacheRow,
+}
+
+pub(crate) fn build_entries(rows: &[RowInput], wsx_bin: &str) -> Vec<MenuEntry> {
+    rows.iter()
+        .map(|r| MenuEntry {
+            text: compose_text(&r.repo_name, &r.slug, &r.cache),
+            subtext: compose_subtext(&r.branch, r.status.as_ref()),
+            icon: crate::waybar::status::glyph(r.status.as_ref().map(|s| s.state)).to_string(),
+            action: action_cmd(wsx_bin, &r.repo_name, &r.slug),
+        })
+        .collect()
+}
+
+/// Git facts for one worktree, or None if git fails (missing worktree, not a
+/// repo, …) — the row then renders without dirty/diff indicators.
+async fn gather_git_facts(worktree: PathBuf) -> Option<(bool, crate::git::DiffStats)> {
+    let st = crate::git::workspace_status(&worktree).await.ok()?;
+    let dirty = st.modified > 0 || st.untracked > 0;
+    let base = crate::git::resolve_base_branch(&worktree).await;
+    let stats = crate::git::workspace_diff_stats(&worktree, &base)
+        .await
+        .unwrap_or(crate::git::DiffStats {
+            added: 0,
+            removed: 0,
+        });
+    Some((dirty, stats))
+}
+
+/// Rows sorted by repo name then workspace name (parity with the dmenu
+/// picker). Git-local facts are gathered concurrently across workspaces and
+/// written through to `scm_cache`; PR fields are read from cache only.
+async fn collect_rows(store: &Store) -> Result<Vec<RowInput>> {
+    let statuses = store.all_workspace_status()?;
+    let mut caches = store.all_scm_cache()?;
+    let mut repos = crate::data::repo::list(store)?;
+    repos.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut metas = Vec::new();
+    for repo in &repos {
+        let mut workspaces = store.workspaces(repo.id)?;
+        workspaces.sort_by(|a, b| a.name.cmp(&b.name));
+        for ws in workspaces {
+            metas.push((
+                ws.id,
+                repo.name.clone(),
+                ws.name,
+                ws.branch,
+                ws.worktree_path,
+            ));
+        }
+    }
+
+    let facts = futures::future::join_all(
+        metas
+            .iter()
+            .map(|(_, _, _, _, worktree)| gather_git_facts(worktree.clone())),
+    )
+    .await;
+
+    let mut rows = Vec::with_capacity(metas.len());
+    for ((id, repo_name, slug, branch, _), fact) in metas.into_iter().zip(facts) {
+        let mut cache = caches.remove(&id).unwrap_or_default();
+        if let Some((dirty, stats)) = fact {
+            cache.dirty = Some(dirty);
+            cache.additions = Some(stats.added);
+            cache.deletions = Some(stats.removed);
+            let _ = store.upsert_scm_git(id, dirty, stats.added, stats.removed);
+        }
+        rows.push(RowInput {
+            repo_name,
+            slug,
+            branch,
+            status: statuses.get(&id).cloned(),
+            cache,
+        });
+    }
+    Ok(rows)
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Fire-and-forget `wsx waybar refresh-prs` so PR data self-heals by the
+/// next menu open even when the TUI is not running.
+fn spawn_pr_sweep(wsx_bin: &str) {
+    use std::process::Stdio;
+    let _ = std::process::Command::new(wsx_bin)
+        .args(["waybar", "refresh-prs"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+pub async fn run_menu_entries(store: &Store) -> Result<()> {
+    let rows = collect_rows(store).await?;
+    let wsx_bin = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "wsx".into());
+    let entries = build_entries(&rows, &wsx_bin);
+    // Serialization of plain strings cannot fail.
+    println!(
+        "{}",
+        serde_json::to_string(&entries).expect("serialize entries")
+    );
+    spawn_pr_sweep(&wsx_bin);
+    Ok(())
+}
+
+/// Sequentially refresh PR state for every workspace outside the throttle
+/// window. Silent by contract: improves the cache or does nothing.
+pub async fn run_refresh_prs(store: &Store) -> Result<()> {
+    let caches = store.all_scm_cache()?;
+    for repo in crate::data::repo::list(store)? {
+        for ws in store.workspaces(repo.id)? {
+            let fetched = caches.get(&ws.id).and_then(|c| c.fetched_at);
+            if !needs_pr_refresh(fetched, unix_now()) {
+                continue;
+            }
+            if let Ok(Some(status)) =
+                crate::git::forge::fetch_pr_status(&ws.worktree_path, &ws.branch).await
+            {
+                let _ = store.upsert_scm_pr(ws.id, status.lifecycle, status.number, unix_now());
+            }
+            // Err / Ok(None): leave cached state alone (transient failure
+            // must not clobber a known lifecycle).
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -239,5 +383,54 @@ mod entry_tests {
         assert_eq!(v[0]["subtext"], "s");
         assert_eq!(v[0]["icon"], "i");
         assert_eq!(v[0]["action"], "a");
+    }
+
+    #[tokio::test]
+    async fn collect_rows_sorted_and_composed() {
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let mut ids = vec![];
+        for name in ["zeta", "alpha"] {
+            ids.push(
+                store
+                    .insert_workspace(&NewWorkspace {
+                        repo_id: repo,
+                        name,
+                        branch: &format!("x/{name}"),
+                        worktree_path: &std::path::PathBuf::from(format!("/nonexistent/r/{name}")),
+                        yolo: false,
+                        agent: AgentKind::Claude,
+                        shared: false,
+                    })
+                    .unwrap(),
+            );
+        }
+        store
+            .upsert_scm_pr(
+                ids[0],
+                crate::git::forge::BranchLifecycle::PrOpen,
+                Some(5),
+                0,
+            )
+            .unwrap();
+
+        let rows = super::collect_rows(&store).await.unwrap();
+        let entries = super::build_entries(&rows, "/bin/wsx");
+
+        assert_eq!(entries.len(), 2);
+        // Sorted by workspace name within repo.
+        assert!(entries[0].text.starts_with("r/alpha"), "{:?}", entries[0]);
+        assert!(entries[1].text.starts_with("r/zeta"), "{:?}", entries[1]);
+        // zeta carries the cached PR indicator even though its worktree is
+        // missing (git facts degrade to absent, PR comes from cache).
+        assert!(entries[1].text.contains("#5"), "{:?}", entries[1]);
+        // Branch always present in subtext.
+        assert!(entries[0].subtext.contains("x/alpha"), "{:?}", entries[0]);
+        assert_eq!(entries[0].action, "/bin/wsx waybar jump r alpha");
     }
 }

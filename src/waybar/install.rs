@@ -33,12 +33,31 @@ fn leading_ws(line: &str) -> String {
     line.chars().take_while(|c| c.is_whitespace()).collect()
 }
 
+/// Insert `"custom/wsx",` as the LAST entry of the multi-line array whose key
+/// line starts with `key`. Returns false if the key or its closing bracket
+/// isn't found (single-line arrays are deliberately not handled — the caller
+/// falls back to snippets).
+fn append_to_array(lines: &mut Vec<String>, key: &str) -> bool {
+    let Some(open) = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with(key) && l.contains('['))
+    else {
+        return false;
+    };
+    let entry_indent = format!("{}  ", leading_ws(&lines[open]));
+    for i in open + 1..lines.len() {
+        if lines[i].trim_start().starts_with(']') {
+            lines.insert(i, format!("{entry_indent}\"custom/wsx\","));
+            return true;
+        }
+    }
+    false
+}
+
 /// Text-based jsonc patcher: adds a top-level `"include"` for the wsx module
-/// file and inserts `"custom/wsx",` into a modules array.
-///
-/// Matches the `"custom/omarchy"` ARRAY ENTRY by exact trimmed line
-/// (`"custom/omarchy",`) — the module-definition line `"custom/omarchy": {`
-/// does not match this and is left untouched.
+/// file and appends `"custom/wsx",` as the last entry of `modules-right`
+/// (falling back to `modules-left`), so the indicator sits at the right edge
+/// of the bar.
 pub fn patch_config(text: &str, include_path: &str) -> PatchOutcome {
     if text.contains("custom/wsx") {
         return PatchOutcome::AlreadyInstalled;
@@ -58,29 +77,10 @@ pub fn patch_config(text: &str, include_path: &str) -> PatchOutcome {
     };
     lines.insert(open + 1, format!("  \"include\": [\"{include_path}\"],"));
 
-    // 2. module entry: prefer right after the "custom/omarchy" ARRAY ENTRY
-    //    (exact trimmed match with trailing comma — the module-definition key
-    //    "custom/omarchy": { must not match), else top of modules-left,
-    //    else modules-right.
-    let entry_idx = lines.iter().position(|l| l.trim() == "\"custom/omarchy\",");
-    let placed = if let Some(i) = entry_idx {
-        let indent = leading_ws(&lines[i]);
-        lines.insert(i + 1, format!("{indent}\"custom/wsx\","));
-        true
-    } else {
-        ["\"modules-left\"", "\"modules-right\""].iter().any(|key| {
-            if let Some(i) = lines
-                .iter()
-                .position(|l| l.trim_start().starts_with(key) && l.contains('['))
-            {
-                let indent = format!("{}  ", leading_ws(&lines[i]));
-                lines.insert(i + 1, format!("{indent}\"custom/wsx\","));
-                true
-            } else {
-                false
-            }
-        })
-    };
+    // 2. module entry: append as the last entry of modules-right so the
+    //    indicator sits at the bar's right edge, else last of modules-left.
+    let placed = append_to_array(&mut lines, "\"modules-right\"")
+        || append_to_array(&mut lines, "\"modules-left\"");
     if !placed {
         return PatchOutcome::Unrecognized;
     }
@@ -108,7 +108,7 @@ fn snippet_report(include_path: &str) -> Vec<String> {
     vec![
         "could not patch config.jsonc automatically — add manually:".into(),
         format!("  1. top-level: \"include\": [\"{include_path}\"],"),
-        "  2. into modules-left (or -right): \"custom/wsx\",".into(),
+        "  2. last entry of modules-right (or -left): \"custom/wsx\",".into(),
     ]
 }
 
@@ -167,13 +167,17 @@ pub fn run() -> Result<Vec<String>> {
 mod install_tests {
     use super::*;
 
-    // Mirrors the user-facing omarchy layout: modules-left with custom/omarchy
-    // plus a module-definition key later that must NOT be matched.
+    // Mirrors the user-facing omarchy layout: modules-left with custom/omarchy,
+    // a modules-right array, plus a module-definition key that must be ignored.
     const OMARCHY_STYLE: &str = r#"{
   "reload_style_on_change": true,
   "modules-left": [
     "custom/omarchy",
     "hyprland/workspaces#main",
+  ],
+  "modules-right": [
+    "cpu",
+    "battery",
   ],
   "custom/omarchy": {
     "format": "x"
@@ -182,27 +186,28 @@ mod install_tests {
 "#;
 
     #[test]
-    fn patches_after_custom_omarchy_array_entry_not_module_def() {
+    fn patches_as_last_entry_of_modules_right() {
         let PatchOutcome::Patched(out) =
             patch_config(OMARCHY_STYLE, "/home/u/.config/waybar/wsx.jsonc")
         else {
             panic!("expected Patched");
         };
-        let omarchy_entry = out.find("\"custom/omarchy\",").unwrap();
         let wsx_entry = out.find("\"custom/wsx\",").unwrap();
-        assert!(wsx_entry > omarchy_entry);
-        assert!(wsx_entry < out.find("hyprland/workspaces").unwrap());
+        assert!(wsx_entry > out.find("\"battery\",").unwrap());
+        assert!(wsx_entry < out.find("\"custom/omarchy\": {").unwrap());
+        // modules-left is untouched
+        assert!(out.find("\"custom/wsx\",") == out.rfind("\"custom/wsx\","));
         assert!(out.contains(r#""include": ["/home/u/.config/waybar/wsx.jsonc"],"#));
     }
 
     #[test]
-    fn patches_plain_modules_left_without_omarchy() {
+    fn falls_back_to_last_of_modules_left_without_modules_right() {
         let cfg = "{\n  \"modules-left\": [\n    \"clock\",\n  ],\n}\n";
         let PatchOutcome::Patched(out) = patch_config(cfg, "/x/wsx.jsonc") else {
             panic!("expected Patched");
         };
         let wsx = out.find("custom/wsx").unwrap();
-        assert!(wsx < out.find("clock").unwrap());
+        assert!(wsx > out.find("clock").unwrap());
     }
 
     #[test]

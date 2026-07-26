@@ -23,11 +23,15 @@ the menu is open. Keep the existing dmenu pipe as an automatic fallback.
   `walker -m menus:omarchythemes`) is the working template.
 - Elephant's Lua runtime (gopher-lua) registers a `jsonDecode` global —
   the shim can consume JSON from wsx directly.
-- Per-entry `async` (elephant `internal/providers/menus/setup.go`): runs the
-  command via `sh -c` in a goroutine after entries are served, then replaces
-  **only the entry's text line** with trimmed stdout and pushes an in-place
-  update to walker. Command failure sets the text to `%DELETE%` (row removed).
-  The async output also overwrites the entry's `value`.
+- Elephant's per-entry `async` field (replaces an entry's text line in place
+  after display) is **TOML-only**: the Lua entry parser
+  (`pkg/common/menucfg.go`) reads Text/Subtext/Icon/Value/Actions/Keywords/
+  SubMenu/Preview/State — not Async. Lua-generated entries cannot
+  self-refresh after display, and static TOML menus cannot enumerate a
+  dynamic workspace list, so live in-place row updates are not achievable.
+  Freshness is instead delivered at menu open (see §3/§4).
+- Elephant's Lua runtime registers `jsonDecode`, which returns `nil, err` on
+  invalid JSON.
 - wsx already has PR machinery: `git/forge.rs` (`BranchLifecycle`:
   NoPr/PrDraft/PrOpen/PrConflicted/PrMerged/PrClosed, `fetch_pr_status` via
   `gh pr view --json`), polled per-workspace by the TUI in
@@ -42,7 +46,7 @@ the menu is open. Keep the existing dmenu pipe as an automatic fallback.
 | Question | Decision |
 |---|---|
 | Row content | Branch, PR state + number, agent status message, dirty/diff indicator |
-| Freshness | Hybrid: instant from sqlite cache + per-entry `async` live refresh |
+| Freshness | Git-local facts computed fresh at every menu open (parallel, local); PR state from sqlite cache, kept warm by TUI write-through + a detached throttled sweep spawned at menu open |
 | Actions | Jump only (Enter) |
 | Install/fallback | `wsx setup waybar` installs the Lua menu; `wsx waybar menu` auto-detects, falls back to the dmenu pipe; `WSX_WAYBAR_MENU` always wins |
 
@@ -79,15 +83,20 @@ write git-local fields. This keeps the cache warm so most menu opens make no
 
 ### 3. `wsx waybar menu-entries --json` (new subcommand)
 
-Reads store + cache only (no git, no gh — milliseconds). Prints a JSON array
-of display-ready entries:
+Prints a JSON array of display-ready entries:
 
 ```json
 [{ "text": "...", "subtext": "...", "icon": "...",
-   "async": "<abs-wsx> waybar entry-refresh 'repo' 'slug'",
    "action": "<abs-wsx> waybar jump 'repo' 'slug'" }]
 ```
 
+- Git-local facts (dirty, diff stats vs base) are computed here at menu open,
+  concurrently across workspaces (~3 git subprocesses each, local disk;
+  ~100–300 ms total). A workspace whose git commands fail renders without
+  those indicators. Fresh git facts are also upserted into `scm_cache`.
+- PR fields come from `scm_cache` only — never a `gh` call on the open path.
+- After printing, spawns a detached `wsx waybar refresh-prs` sweep (§4) so PR
+  data self-heals by the next open even without a running TUI.
 - All composition in Rust (unit-testable); Lua does zero formatting.
 - Command strings shell-quoted with `shlex` (repo names may contain spaces).
 - Absolute wsx binary path (`std::env::current_exe`) baked in: elephant runs
@@ -95,23 +104,17 @@ of display-ready entries:
 - Sorted repo name, then workspace name (parity with today).
 - Zero workspaces → `[]`.
 
-### 4. `wsx waybar entry-refresh <repo> <slug>` (new subcommand)
+### 4. `wsx waybar refresh-prs` (new subcommand)
 
-The `async` target for one row. Steps:
-
-1. Recompute git-local facts via existing helpers (`git::workspace_status`
-   for dirty, `git::workspace_diff_stats` vs resolved base).
-2. If `fetched_at` is older than the throttle window (120 s, a module
-   constant), call
-   `forge::fetch_pr_status`; on success update PR fields + `fetched_at`; on
-   failure leave cached PR fields untouched (same don't-clobber rule as the
-   TUI poll).
-3. Upsert the cache.
-4. Print the recomposed text line.
-
-**Contract: always exit 0 with non-empty stdout.** Any failure (unknown
-workspace, git error, gh missing) prints the best line composable from cache —
-minimum `repo/slug`. Non-zero exit or empty output would delete/blank the row.
+Detached PR-cache sweep, spawned fire-and-forget (stdio null) by
+`menu-entries`. For every workspace whose `fetched_at` is older than the
+throttle window (120 s, a module constant), call `forge::fetch_pr_status`;
+on success update PR fields + `fetched_at`; on failure leave cached PR fields
+untouched (same don't-clobber rule as the TUI poll). Workspaces inside the
+window are skipped, so back-to-back menu opens cost no `gh` calls. Failures
+are silent — the sweep improves the cache or does nothing. Known trade-off:
+a PR state change lands on the *next* menu open, not while the menu is
+already showing.
 
 ### 5. Lua shim `~/.config/elephant/menus/wsx.lua`
 
@@ -122,7 +125,7 @@ overwritten by `wsx setup waybar`:
 Name = "wsx"
 NamePretty = "wsx Workspaces"
 -- GetEntries(): io.popen("<abs-wsx> waybar menu-entries --json")
---   -> jsonDecode -> map fields 1:1 (Text, Subtext, Icon, Async, Actions.activate)
+--   -> jsonDecode -> map fields 1:1 (Text, Subtext, Icon, Actions.activate)
 --   -> {} on popen/decode failure
 ```
 
@@ -144,27 +147,27 @@ silently.
 
 ## Row format
 
-`async` can only replace the text line, so live data lives there; subtext and
-icon are cached-at-open.
+All fields are computed at menu open: git-local indicators freshly, PR
+indicators from cache.
 
 - **Icon**: agent-status glyph matching the waybar module (`↻` working,
   `…` waiting, `!` blocked, `✓` done, `·` none). Elephant renders non-ASCII
   icon strings as text glyphs.
-- **Text (live)**: `repo/slug` + PR segment + dirty/diff, e.g.
+- **Text**: `repo/slug` + PR segment + dirty/diff, e.g.
   `workspacex/fix-bug   #123 · ●  +45 −12`
   - PR segment by lifecycle: open ` #N`; draft ` #N draft`;
     conflicted ` #N conflict`; merged ` #N`; closed ` #N closed`;
     NoPr/unknown → nothing. (Nerd-font octicons; exact glyphs tunable.)
   - `●` when uncommitted changes; `+N −N` when diff stats vs base nonzero.
-- **Subtext (static)**: ` branch — state: message` via existing
+- **Subtext**: ` branch — state: message` via existing
   `sanitize()`; just the branch when no reported status.
 
-The async `value`-clobbering is harmless: action strings embed repo/slug
-literally and never use `%VALUE%`.
+Action strings embed repo/slug literally and never use `%VALUE%`.
 
 ## Error handling
 
-- `entry-refresh` traps everything, exits 0, non-empty output (see §4).
+- `menu-entries` never fails a row: per-workspace git errors degrade to
+  cached/absent indicators; `refresh-prs` failures are silent (§3, §4).
 - Unknown vs none distinct end to end (NULL cache → no indicator).
 - Lua shim returns `{}` on any popen/jsonDecode failure rather than erroring
   the elephant service.
@@ -184,7 +187,8 @@ literally and never use `%VALUE%`.
 - **Not covered on purpose:** live `gh` calls — `parse_gh_pr_status` and
   degrade paths already tested in `forge.rs`.
 - **Manual checklist** appended to `docs/manual-tests/waybar.md`: fresh
-  install, instant open + visible live row update, Enter jumps, fallback with
+  install, instant open with fresh dirty/diff indicators, PR indicator
+  appearing by the next open after the sweep, Enter jumps, fallback with
   walker absent, `WSX_WAYBAR_MENU` override.
 - CI gates: `cargo fmt --check`, clippy, tests.
 

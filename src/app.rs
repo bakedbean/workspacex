@@ -896,9 +896,10 @@ impl App {
 
     /// Select a workspace by repo name + slug and attach to it — the
     /// programmatic equivalent of highlighting the row and pressing Enter.
-    /// Returns false when the pair doesn't exist. Attach failures (e.g. the
-    /// agent binary missing) are logged and leave the dashboard selection in
-    /// place, so automation callers still land on the right row.
+    /// Returns false when the pair doesn't exist. A missing agent binary
+    /// surfaces as the in-TUI `AgentMissing` modal (attach aborts, selection
+    /// and any attention marker stay); other attach errors are logged. Either
+    /// way automation callers still land on the right row.
     /// Used by automation surfaces (waybar jump, `wsx --select`).
     pub fn open_workspace_by_name(&mut self, repo_name: &str, slug: &str) -> bool {
         if !self.select_workspace_by_name(repo_name, slug) {
@@ -2048,11 +2049,14 @@ pub(crate) fn attach_workspace(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<()> {
-    app.workspace_needs_attention.remove(&ws_id);
     match ensure_workspace_session(app, ws_id)? {
         AttachReady::Ok => {}
+        // Attach didn't happen (AgentMissing modal is up) — leave the
+        // workspace's attention marker alone so a failed open doesn't
+        // silently dismiss it.
         AttachReady::AgentMissing => return Ok(()),
     }
+    app.workspace_needs_attention.remove(&ws_id);
     if app
         .primary_instance(ws_id)
         .and_then(|i| app.sessions.get(i))
@@ -2890,5 +2894,26 @@ mod select_by_name_tests {
         let mut app = app_with_one_workspace();
         assert!(!app.open_workspace_by_name("nope", "nothing"));
         assert!(matches!(app.view, crate::ui::View::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_with_missing_agent_keeps_attention_and_dashboard() {
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/claude-not-here");
+        let mut app = app_with_one_workspace();
+        let repo_name = app.repos[0].name.clone();
+        let ws = app.workspaces[0].1.clone();
+        app.workspace_needs_attention.insert(ws.id);
+        assert!(app.open_workspace_by_name(&repo_name, &ws.name));
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        assert!(
+            app.workspace_needs_attention.contains(&ws.id),
+            "a jump that could not attach must not dismiss attention"
+        );
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Workspace(ws.id)),
+            "selection should still land on the row"
+        );
     }
 }

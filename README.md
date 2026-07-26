@@ -59,8 +59,9 @@ writes `wsx.jsonc`/`wsx.css` into `~/.config/waybar/` and patches
 `config.jsonc` to include them (with a timestamped backup). Under the hood:
 `wsx waybar status` emits the module JSON, `wsx waybar menu` opens a picker
 (walker by default; override with `WSX_WAYBAR_MENU`), and
-`wsx waybar jump <repo> <slug>` focuses a running TUI on that workspace or
-launches a new one. These commands are Linux-only and error on other
+`wsx waybar jump <repo> <slug>` focuses a running TUI and opens that
+workspace (attaching as if you pressed Enter on it), or launches a new TUI
+already attached. These commands are Linux-only and error on other
 platforms.
 
 ## Development

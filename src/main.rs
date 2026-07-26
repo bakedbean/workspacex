@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
     let app = Arc::new(Mutex::new(app::App::new(store, worktree_base)?));
 
     if let Some((repo, slug)) = &select {
-        app.lock().await.select_workspace_by_name(repo, slug);
+        app.lock().await.open_workspace_by_name(repo, slug);
     }
 
     // Watch for git branch renames performed by claude (or the user)

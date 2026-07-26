@@ -42,8 +42,8 @@ Four pieces, all inside one Linux-only module tree:
      (reusable by any future automation). The TUI has no event channel —
      background tasks lock the shared `Arc<Mutex<App>>` and mutate directly,
      so the listener follows that established pattern instead of an event.
-  2. A `--select <repo>/<slug>` launch flag that opens the TUI with that
-     workspace selected.
+  2. A `--select <repo>/<slug>` launch flag that opens the TUI attached to
+     that workspace.
   3. One `#[cfg(target_os = "linux")]` call at TUI startup that starts the
      IPC listener thread (the thread itself lives in `src/waybar/ipc.rs` and
      talks to the app only through the existing event channel).
@@ -86,8 +86,8 @@ module hides instead of flashing errors in the bar.
    if `XDG_RUNTIME_DIR` unset). Socket removed on TUI exit; connect failure →
    treat as stale and skip/unlink. Jump connects to the first live socket and
    sends one line: `select <repo> <slug>\n`. The listener locks the shared
-   app and calls `App::select_workspace_by_name`, which switches selection
-   (same code path as picking it in the picker).
+   app and calls `App::open_workspace_by_name`, which selects the workspace
+   and attaches to it (same code path as pressing Enter on its row).
 2. **Focus**: find the terminal window hosting that TUI — walk the `/proc`
    ppid chain upward from the TUI pid, match pids against `hyprctl clients
    -j`, then `hyprctl dispatch focuswindow pid:<terminal-pid>`. No hyprctl /

@@ -201,4 +201,22 @@ mod scm_cache_tests {
         store.delete_workspace(id).unwrap();
         assert!(store.all_scm_cache().unwrap().is_empty());
     }
+
+    /// Regression: `wsx repo remove` (Store::remove_repo) manually cascades
+    /// deletes for agent_messages/workspace_agents before dropping
+    /// workspaces, but scm_cache has no ON DELETE CASCADE either. Before the
+    /// fix, this failed with "FOREIGN KEY constraint failed" once the menu
+    /// or TUI had populated the cache for a workspace in the repo.
+    #[test]
+    fn remove_repo_deletes_cache_rows_for_its_workspaces() {
+        let (store, id) = store_with_workspace();
+        store.upsert_scm_git(id, true, 3, 1).unwrap();
+        assert!(!store.all_scm_cache().unwrap().is_empty());
+
+        let repo_id = store.repos().unwrap()[0].id;
+        crate::data::repo::remove(&store, repo_id).unwrap();
+
+        assert!(store.all_scm_cache().unwrap().is_empty());
+        assert!(store.repos().unwrap().is_empty());
+    }
 }

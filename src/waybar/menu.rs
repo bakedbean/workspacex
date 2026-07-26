@@ -4,9 +4,19 @@ use std::process::{Command, Stdio};
 use crate::data::store::Store;
 use crate::error::{Error, Result};
 
+/// Collapse control characters (incl. '\n', '\t') to a single space so a
+/// value with embedded newlines can't inject fake rows into the picker.
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 pub fn menu_line(repo: &str, slug: &str, message: Option<&str>) -> String {
+    let repo = sanitize(repo);
+    let slug = sanitize(slug);
     match message {
-        Some(m) => format!("{repo}/{slug} — {m}"),
+        Some(m) => format!("{repo}/{slug} — {}", sanitize(m)),
         None => format!("{repo}/{slug}"),
     }
 }
@@ -35,19 +45,27 @@ fn notify(message: &str) {
     eprintln!("wsx: {message}");
 }
 
-pub fn run_menu(store: &Store) -> Result<()> {
+/// Builds the picker lines, sorted by repo name then workspace name.
+fn menu_lines(store: &Store) -> Result<Vec<String>> {
     let statuses = store.all_workspace_status()?;
     let mut lines = Vec::new();
     let mut repos = crate::data::repo::list(store)?;
     repos.sort_by(|a, b| a.name.cmp(&b.name));
     for repo in &repos {
-        for ws in store.workspaces(repo.id)? {
+        let mut workspaces = store.workspaces(repo.id)?;
+        workspaces.sort_by(|a, b| a.name.cmp(&b.name));
+        for ws in workspaces {
             let message = statuses
                 .get(&ws.id)
                 .and_then(|s| s.message.as_deref().map(str::to_string));
             lines.push(menu_line(&repo.name, &ws.name, message.as_deref()));
         }
     }
+    Ok(lines)
+}
+
+pub fn run_menu(store: &Store) -> Result<()> {
+    let lines = menu_lines(store)?;
     if lines.is_empty() {
         notify("no workspaces");
         return Ok(());
@@ -99,6 +117,44 @@ mod menu_tests {
         }
         assert_eq!(parse_menu_line(""), None);
         assert_eq!(parse_menu_line("noslash — msg"), None);
+    }
+
+    #[test]
+    fn menu_line_sanitizes_embedded_newlines() {
+        let line = menu_line("re\npo", "sl\nug", Some("mes\nsage"));
+        assert!(!line.contains('\n'), "line was {line:?}");
+        assert_eq!(
+            parse_menu_line(&line),
+            Some(("re po".to_string(), "sl ug".to_string())),
+            "line was {line:?}"
+        );
+    }
+
+    #[test]
+    fn menu_lines_sorted_by_repo_then_slug() {
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        // Insert out of name order: "zeta" first, then "alpha".
+        for name in ["zeta", "alpha"] {
+            store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name,
+                    branch: &format!("x/{name}"),
+                    worktree_path: &std::path::PathBuf::from(format!("/tmp/r/{name}")),
+                    yolo: false,
+                    agent: AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+        }
+        let lines = menu_lines(&store).unwrap();
+        assert_eq!(lines, vec!["r/alpha".to_string(), "r/zeta".to_string()]);
     }
 
     #[test]

@@ -41,9 +41,16 @@ fn glyph(state: Option<ReportedState>) -> &'static str {
 }
 
 pub(crate) fn escape_pango(s: &str) -> String {
-    s.replace('&', "&amp;")
+    let escaped = s
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
-        .replace('>', "&gt;")
+        .replace('>', "&gt;");
+    // Control characters (incl. '\n', '\t') would otherwise let a status
+    // message inject extra tooltip lines; collapse them to a single space.
+    escaped
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 pub fn status_payload(store: &Store) -> Result<StatusPayload> {
@@ -189,6 +196,26 @@ mod status_tests {
         assert_eq!(p.class, "working");
         assert!(p.tooltip.contains("a &lt;b&gt; &amp; c"));
         assert!(!p.tooltip.contains("<b>"));
+    }
+
+    #[test]
+    fn embedded_newline_in_message_cannot_inject_tooltip_lines() {
+        let store = seed();
+        let ws = store.all_workspaces().unwrap();
+        // Baseline: alpha, one, two, empty, (no workspaces) = 5 lines.
+        let baseline_lines = status_payload(&store).unwrap().tooltip.lines().count();
+        store
+            .set_workspace_status(ws[0].id, ReportedState::Working, Some("a\nb"), "hook")
+            .unwrap();
+        let p = status_payload(&store).unwrap();
+        assert!(p.tooltip.contains("a b"), "tooltip was {:?}", p.tooltip);
+        assert!(!p.tooltip.contains("a\nb"), "tooltip was {:?}", p.tooltip);
+        assert_eq!(
+            baseline_lines,
+            p.tooltip.lines().count(),
+            "embedded newline must not add a tooltip line; tooltip was {:?}",
+            p.tooltip
+        );
     }
 
     #[test]

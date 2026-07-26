@@ -78,8 +78,13 @@ pub async fn listen(app: SharedApp, path: PathBuf) {
         }
     };
     loop {
-        let Ok((stream, _)) = listener.accept().await else {
-            continue;
+        let (stream, _) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!("waybar ipc: accept failed: {e}");
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue;
+            }
         };
         let app = app.clone();
         tokio::spawn(async move {

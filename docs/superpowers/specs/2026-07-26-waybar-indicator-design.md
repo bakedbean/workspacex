@@ -85,8 +85,8 @@ module hides instead of flashing errors in the bar.
    `$XDG_RUNTIME_DIR/wsx/tui-<pid>.sock` (fallback `~/.local/state/wsx/run/`
    if `XDG_RUNTIME_DIR` unset). Socket removed on TUI exit; connect failure →
    treat as stale and skip/unlink. Jump connects to the first live socket and
-   sends one line: `select <repo> <slug>\n`. The listener thread forwards it
-   as `SelectWorkspace` on the app event channel; the TUI switches selection
+   sends one line: `select <repo> <slug>\n`. The listener locks the shared
+   app and calls `App::select_workspace_by_name`, which switches selection
    (same code path as picking it in the picker).
 2. **Focus**: find the terminal window hosting that TUI — walk the `/proc`
    ppid chain upward from the TUI pid, match pids against `hyprctl clients

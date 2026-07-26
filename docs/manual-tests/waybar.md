@@ -45,13 +45,13 @@ lines. Pressing Escape dismisses it with no side effects.
 ## Test 6: jump into a running TUI
 
 With a wsx TUI already running, pick an entry from the menu. Expected: the
-TUI's window is focused and the workspace is selected (its repo unfolds if
-it was folded).
+TUI's window is focused and the workspace is attached (opened, as if you
+had pressed Enter on it — spawning its agent session if missing).
 
 ## Test 7: jump launches a new TUI
 
 Quit all wsx TUIs, then pick an entry from the menu. Expected: a new
-terminal opens running wsx with that workspace already selected.
+terminal opens running wsx already attached to that workspace.
 
 ## Test 8: stale socket fallback
 

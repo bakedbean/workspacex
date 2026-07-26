@@ -62,7 +62,7 @@ pub async fn handle_line(app: &SharedApp, line: &str) -> bool {
     let mut g = app.lock().await;
     // The workspace may have been created after the TUI last refreshed.
     let _ = g.refresh();
-    g.select_workspace_by_name(&repo, &slug)
+    g.open_workspace_by_name(&repo, &slug)
 }
 
 pub async fn listen(app: SharedApp, path: PathBuf) {

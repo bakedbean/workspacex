@@ -894,6 +894,26 @@ impl App {
         }
     }
 
+    /// Select a workspace by repo name + slug and attach to it — the
+    /// programmatic equivalent of highlighting the row and pressing Enter.
+    /// Returns false when the pair doesn't exist. A missing agent binary
+    /// surfaces as the in-TUI `AgentMissing` modal (attach aborts, selection
+    /// and any attention marker stay); other attach errors are logged. Either
+    /// way automation callers still land on the right row.
+    /// Used by automation surfaces (waybar jump, `wsx --select`).
+    pub fn open_workspace_by_name(&mut self, repo_name: &str, slug: &str) -> bool {
+        if !self.select_workspace_by_name(repo_name, slug) {
+            return false;
+        }
+        let Some(SelectionTarget::Workspace(ws_id)) = self.selected_target() else {
+            return false;
+        };
+        if let Err(e) = attach_workspace(self, ws_id) {
+            tracing::warn!(error = %e, "automation attach failed; staying on dashboard");
+        }
+        true
+    }
+
     /// Whether a selection target still refers to a live repo/workspace.
     /// Used by `reconcile_selection` to tell a temporarily-hidden target
     /// (park it) from a removed one (fall back to a neighbor).
@@ -2029,11 +2049,14 @@ pub(crate) fn attach_workspace(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<()> {
-    app.workspace_needs_attention.remove(&ws_id);
     match ensure_workspace_session(app, ws_id)? {
         AttachReady::Ok => {}
+        // Attach didn't happen (AgentMissing modal is up) — leave the
+        // workspace's attention marker alone so a failed open doesn't
+        // silently dismiss it.
         AttachReady::AgentMissing => return Ok(()),
     }
+    app.workspace_needs_attention.remove(&ws_id);
     if app
         .primary_instance(ws_id)
         .and_then(|i| app.sessions.get(i))
@@ -2841,5 +2864,56 @@ mod select_by_name_tests {
         assert!(!app.select_workspace_by_name("nope", "nothing"));
         assert!(!app.select_workspace_by_name(&app.repos[0].name.clone(), "nothing"));
         assert_eq!(app.selected_target(), before);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_selects_and_attaches() {
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
+        let mut app = app_with_one_workspace();
+        let repo_name = app.repos[0].name.clone();
+        let ws = app.workspaces[0].1.clone();
+        assert!(app.open_workspace_by_name(&repo_name, &ws.name));
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Workspace(ws.id))
+        );
+        assert!(
+            matches!(&app.view, crate::ui::View::Attached(s)
+                if s.focused_target().map(|t| t.workspace_id) == Some(ws.id)),
+            "open_workspace_by_name should attach like Enter does; got {:?}",
+            app.view
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_unknown_returns_false_and_stays_on_dashboard() {
+        let mut app = app_with_one_workspace();
+        assert!(!app.open_workspace_by_name("nope", "nothing"));
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn open_with_missing_agent_keeps_attention_and_dashboard() {
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/claude-not-here");
+        let mut app = app_with_one_workspace();
+        let repo_name = app.repos[0].name.clone();
+        let ws = app.workspaces[0].1.clone();
+        app.workspace_needs_attention.insert(ws.id);
+        assert!(app.open_workspace_by_name(&repo_name, &ws.name));
+        assert!(matches!(app.view, crate::ui::View::Dashboard));
+        assert!(
+            app.workspace_needs_attention.contains(&ws.id),
+            "a jump that could not attach must not dismiss attention"
+        );
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Workspace(ws.id)),
+            "selection should still land on the row"
+        );
     }
 }

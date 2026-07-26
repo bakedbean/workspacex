@@ -15,6 +15,8 @@ use crate::error::{Error, Result};
 const MODULE_JSONC: &str = include_str!("assets/wsx.jsonc");
 /// The wsx waybar module stylesheet, embedded at compile time.
 const MODULE_CSS: &str = include_str!("assets/wsx.css");
+/// The elephant menu definition, embedded at compile time.
+const MENU_LUA: &str = include_str!("assets/wsx.lua");
 
 /// Result of attempting to patch a `config.jsonc` text in place.
 pub enum PatchOutcome {
@@ -164,17 +166,40 @@ pub fn install_into(waybar_dir: &Path, epoch: u64) -> Result<Vec<String>> {
     Ok(report)
 }
 
+/// Write the elephant menu definition under `config_root` (normally
+/// `~/.config`), substituting the shell-quoted wsx binary path. Creating the
+/// directory is harmless when elephant isn't installed — the menu only
+/// activates once `walker` is detected on PATH (see waybar::menu).
+pub fn install_elephant_menu_into(config_root: &Path, wsx_bin: &str) -> Result<String> {
+    let dir = config_root.join("elephant/menus");
+    std::fs::create_dir_all(&dir)?;
+    let quoted = shlex::try_quote(wsx_bin)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| wsx_bin.to_string());
+    let path = dir.join("wsx.lua");
+    std::fs::write(&path, MENU_LUA.replace("__WSX_BIN__", &quoted))?;
+    Ok(format!("installed elephant menu: {}", path.display()))
+}
+
 /// Resolves `~/.config/waybar` and the current epoch, then delegates to
 /// [`install_into`]. This is what `wsx setup waybar` calls.
 pub fn run() -> Result<Vec<String>> {
-    let waybar_dir = dirs::config_dir()
-        .ok_or_else(|| Error::UserInput("could not resolve ~/.config".into()))?
-        .join("waybar");
+    let config_root =
+        dirs::config_dir().ok_or_else(|| Error::UserInput("could not resolve ~/.config".into()))?;
+    let waybar_dir = config_root.join("waybar");
     let epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    install_into(&waybar_dir, epoch)
+    let mut lines = install_into(&waybar_dir, epoch)?;
+    let wsx_bin = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "wsx".into());
+    match install_elephant_menu_into(&config_root, &wsx_bin) {
+        Ok(line) => lines.push(line),
+        Err(e) => lines.push(format!("elephant menu skipped: {e}")),
+    }
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -280,5 +305,22 @@ mod install_tests {
             report.iter().any(|l| l.contains("custom/wsx")),
             "snippet with module name expected"
         );
+    }
+
+    #[test]
+    fn elephant_menu_installs_with_quoted_binary_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let line = install_elephant_menu_into(tmp.path(), "/opt/my tools/wsx").unwrap();
+        let lua_path = tmp.path().join("elephant/menus/wsx.lua");
+        assert!(lua_path.exists(), "{line}");
+        let lua = std::fs::read_to_string(&lua_path).unwrap();
+        assert!(lua.contains("'/opt/my tools/wsx'"), "{lua}");
+        assert!(lua.contains("waybar menu-entries --json"), "{lua}");
+        assert!(lua.contains("function GetEntries()"), "{lua}");
+        assert!(!lua.contains("__WSX_BIN__"), "{lua}");
+        // Re-install overwrites without error (setup is re-runnable).
+        install_elephant_menu_into(tmp.path(), "/usr/bin/wsx").unwrap();
+        let lua = std::fs::read_to_string(&lua_path).unwrap();
+        assert!(lua.contains("/usr/bin/wsx"), "{lua}");
     }
 }

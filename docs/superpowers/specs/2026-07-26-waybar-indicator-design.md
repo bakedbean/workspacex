@@ -38,8 +38,10 @@ Four pieces, all inside one Linux-only module tree:
   `wsx waybar is only available on Linux (waybar integration)`.
 - Core modules get exactly three narrow, platform-neutral seams; none of them
   mention waybar:
-  1. An app event `SelectWorkspace { repo, slug }` handled by the TUI event
-     loop (reusable by any future automation).
+  1. A public `App::select_workspace_by_name(repo, slug) -> bool` method
+     (reusable by any future automation). The TUI has no event channel —
+     background tasks lock the shared `Arc<Mutex<App>>` and mutate directly,
+     so the listener follows that established pattern instead of an event.
   2. A `--select <repo>/<slug>` launch flag that opens the TUI with that
      workspace selected.
   3. One `#[cfg(target_os = "linux")]` call at TUI startup that starts the

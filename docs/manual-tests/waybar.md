@@ -75,11 +75,18 @@ deliberately overwritten every run to refresh the baked wsx binary path.
 Prereqs: omarchy host with walker + elephant running; `wsx` installed to
 `~/.local/bin` (rebuild ≠ install — copy the binary).
 
-- [ ] `wsx setup waybar` prints `installed elephant menu: …/elephant/menus/wsx.lua`
+- [ ] `wsx setup waybar` prints `installed elephant menu: …/elephant/menus/wsx.lua`,
+      `restarted elephant …` (or the restart hint), and
+      `installed walker theme: …/walker/themes/wsx`
+- [ ] `elephant listproviders` shows `menus:wsx`; a `journalctl --user -u
+      elephant` query line for `menus:wsx` reports results in ms, not µs
+      (µs-fast empty results = dead registration, restart elephant)
 - [ ] `wsx waybar menu-entries --json | jq .` shows one object per workspace
       with text/subtext/icon/action; repo/slug sorted; branch in subtext
-- [ ] Click the waybar module: walker opens the rich menu (two-line rows,
-      status glyph icon), not the plain dmenu list
+- [ ] Click the waybar module: walker opens the rich menu — two-line rows
+      (branch/status on the dimmer second line), wide window with no
+      ellipsized rows at normal lengths, status glyph icons (a blocked
+      workspace shows a glyph, never the red missing-icon symbol)
 - [ ] Rows show dirty ● and +N −N immediately after touching a worktree
 - [ ] With a PR open on a branch: PR indicator appears (immediately if the
       TUI is running; otherwise by the second menu open, after the sweep)

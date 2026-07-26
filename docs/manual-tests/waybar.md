@@ -67,3 +67,22 @@ wsx setup waybar
 
 again. Expected: "already" messages for each file/config; no second backup
 is created.
+
+## Elephant menu (walker rich picker)
+
+Prereqs: omarchy host with walker + elephant running; `wsx` installed to
+`~/.local/bin` (rebuild ≠ install — copy the binary).
+
+- [ ] `wsx setup waybar` prints `installed elephant menu: …/elephant/menus/wsx.lua`
+- [ ] `wsx waybar menu-entries --json | jq .` shows one object per workspace
+      with text/subtext/icon/action; repo/slug sorted; branch in subtext
+- [ ] Click the waybar module: walker opens the rich menu (two-line rows,
+      status glyph icon), not the plain dmenu list
+- [ ] Rows show dirty ● and +N −N immediately after touching a worktree
+- [ ] With a PR open on a branch: PR indicator appears (immediately if the
+      TUI is running; otherwise by the second menu open, after the sweep)
+- [ ] Enter on a row jumps/attaches the workspace (same as dmenu behavior)
+- [ ] Esc closes without jumping; no fallback dmenu double-opens
+- [ ] `WSX_WAYBAR_MENU="wofi --dmenu" wsx waybar menu` still uses the pipe
+- [ ] `mv ~/.config/elephant/menus/wsx.lua{,.off} && wsx waybar menu` falls
+      back to the plain dmenu pipe (restore the file after)

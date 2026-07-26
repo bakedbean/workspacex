@@ -237,7 +237,7 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Select the workspace in a running TUI, or launch one",
             },
             CmdInfo {
-                usage: "menu-entries",
+                usage: "menu-entries [--json]",
                 blurb: "Print walker/elephant menu entries as JSON",
             },
             CmdInfo {
@@ -1133,7 +1133,14 @@ fn parse_waybar(it: &mut Args) -> Result<CliAction> {
             };
             Ok(CliAction::WaybarJump { repo, slug })
         }
-        Some("menu-entries") => Ok(CliAction::WaybarMenuEntries),
+        Some("menu-entries") => {
+            // The installed elephant Lua invokes `menu-entries --json`; make
+            // that contract explicit rather than relying on trailing args
+            // being silently ignored. Any other trailing arg keeps today's
+            // lenient behavior (not rejected).
+            let _ = it.next().filter(|a| a == "--json");
+            Ok(CliAction::WaybarMenuEntries)
+        }
         Some("refresh-prs") => Ok(CliAction::WaybarRefreshPrs),
         other => Err(Error::Usage {
             group: None,
@@ -3095,6 +3102,10 @@ mod tests {
     fn parses_waybar_menu_entries_and_refresh_prs() {
         assert!(matches!(
             parse(&["waybar", "menu-entries"]),
+            Ok(CliAction::WaybarMenuEntries)
+        ));
+        assert!(matches!(
+            parse(&["waybar", "menu-entries", "--json"]),
             Ok(CliAction::WaybarMenuEntries)
         ));
         assert!(matches!(

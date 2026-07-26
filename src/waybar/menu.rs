@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 
 /// Collapse control characters (incl. '\n', '\t') to a single space so a
 /// value with embedded newlines can't inject fake rows into the picker.
-fn sanitize(s: &str) -> String {
+pub(crate) fn sanitize(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()

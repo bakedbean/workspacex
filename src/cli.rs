@@ -173,10 +173,16 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "setup",
         blurb: "One-off setup helpers",
-        commands: &[CmdInfo {
-            usage: "install-skill",
-            blurb: "Install the wsx Claude Code skill",
-        }],
+        commands: &[
+            CmdInfo {
+                usage: "install-skill",
+                blurb: "Install the wsx Claude Code skill",
+            },
+            CmdInfo {
+                usage: "waybar",
+                blurb: "Install the waybar module into ~/.config/waybar",
+            },
+        ],
     },
     GroupInfo {
         name: "status",
@@ -211,6 +217,24 @@ pub static GROUPS: &[GroupInfo] = &[
             CmdInfo {
                 usage: "clear",
                 blurb: "Delete the recap",
+            },
+        ],
+    },
+    GroupInfo {
+        name: "waybar",
+        blurb: "Linux waybar status module and workspace jumper",
+        commands: &[
+            CmdInfo {
+                usage: "status",
+                blurb: "Print waybar JSON for the custom module",
+            },
+            CmdInfo {
+                usage: "menu",
+                blurb: "Pick a workspace in a menu and jump to it",
+            },
+            CmdInfo {
+                usage: "jump <repo> <slug>",
+                blurb: "Select the workspace in a running TUI, or launch one",
             },
         ],
     },
@@ -399,6 +423,13 @@ pub enum CliAction {
         shared: bool,
     },
     SetupInstallSkill,
+    SetupWaybar,
+    WaybarStatus,
+    WaybarMenu,
+    WaybarJump {
+        repo: String,
+        slug: String,
+    },
     AgentList,
     AgentSend {
         target: String,
@@ -537,6 +568,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         "setup" => parse_setup(&mut it).map_err(|e| tag_group(e, group)),
         "status" => parse_status(&mut it).map_err(|e| tag_group(e, group)),
         "recap" => parse_recap(&mut it).map_err(|e| tag_group(e, group)),
+        "waybar" => parse_waybar(&mut it).map_err(|e| tag_group(e, group)),
         other => Err(Error::Usage {
             group: None,
             msg: format!("unknown command: {other}"),
@@ -1048,11 +1080,35 @@ fn parse_agent(it: &mut Args) -> Result<CliAction> {
 fn parse_setup(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
         Some("install-skill") => Ok(CliAction::SetupInstallSkill),
+        Some("waybar") => Ok(CliAction::SetupWaybar),
         other => Err(Error::Usage {
             group: None,
             msg: match other {
                 Some(cmd) => format!("unknown setup command: {cmd}"),
                 None => "missing setup command".into(),
+            },
+        }),
+    }
+}
+
+fn parse_waybar(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("status") => Ok(CliAction::WaybarStatus),
+        Some("menu") => Ok(CliAction::WaybarMenu),
+        Some("jump") => {
+            let (Some(repo), Some(slug)) = (it.next(), it.next()) else {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "jump needs <repo> <slug>".into(),
+                });
+            };
+            Ok(CliAction::WaybarJump { repo, slug })
+        }
+        other => Err(Error::Usage {
+            group: None,
+            msg: match other {
+                Some(cmd) => format!("unknown waybar command: {cmd}"),
+                None => "missing waybar command".into(),
             },
         }),
     }
@@ -1206,6 +1262,26 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         return Ok(());
+    }
+    if matches!(action, CliAction::WaybarStatus) {
+        #[cfg(target_os = "linux")]
+        {
+            crate::waybar::status::print_status(&dirs.db_path());
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err(waybar_linux_only());
+    }
+    if matches!(action, CliAction::SetupWaybar) {
+        #[cfg(target_os = "linux")]
+        {
+            for line in crate::waybar::install::run()? {
+                println!("{line}");
+            }
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err(waybar_linux_only());
     }
     let store = crate::data::store::Store::open(&dirs.db_path())?;
     match action {
@@ -1762,12 +1838,25 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             store.clear_workspace_recap(ws.id)?;
             println!("recap cleared");
         }
-        CliAction::SetupInstallSkill => unreachable!("handled before store open"),
+        #[cfg(target_os = "linux")]
+        CliAction::WaybarMenu => crate::waybar::menu::run_menu(&store)?,
+        #[cfg(target_os = "linux")]
+        CliAction::WaybarJump { repo, slug } => crate::waybar::jump::jump(&repo, &slug)?,
+        #[cfg(not(target_os = "linux"))]
+        CliAction::WaybarMenu | CliAction::WaybarJump { .. } => return Err(waybar_linux_only()),
+        CliAction::SetupInstallSkill | CliAction::WaybarStatus | CliAction::SetupWaybar => {
+            unreachable!("handled before store open")
+        }
         CliAction::Help(_) | CliAction::Version => {
             unreachable!("handled before store open")
         }
     }
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn waybar_linux_only() -> Error {
+    Error::UserInput("wsx waybar is only available on Linux (waybar integration)".into())
 }
 
 /// Resolve the workspace the current `wsx` invocation is acting within:
@@ -2703,6 +2792,7 @@ mod tests {
             "setup",
             "status",
             "recap",
+            "waybar",
         ];
         let registry: Vec<&str> = GROUPS.iter().map(|g| g.name).collect();
         for d in dispatched {
@@ -2923,5 +3013,43 @@ mod tests {
             parse(&["recap", "clear"]).unwrap(),
             CliAction::RecapClear
         ));
+    }
+
+    #[test]
+    fn parses_waybar_commands() {
+        assert!(matches!(
+            parse(&["waybar", "status"]),
+            Ok(CliAction::WaybarStatus)
+        ));
+        assert!(matches!(
+            parse(&["waybar", "menu"]),
+            Ok(CliAction::WaybarMenu)
+        ));
+        match parse(&["waybar", "jump", "meals backend", "api-fix"]) {
+            Ok(CliAction::WaybarJump { repo, slug }) => {
+                assert_eq!(repo, "meals backend");
+                assert_eq!(slug, "api-fix");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(parse(&["waybar", "jump", "onlyrepo"]).is_err());
+        assert!(parse(&["waybar", "bogus"]).is_err());
+        assert!(parse(&["waybar"]).is_err());
+    }
+
+    #[test]
+    fn parses_setup_waybar() {
+        assert!(matches!(
+            parse(&["setup", "waybar"]),
+            Ok(CliAction::SetupWaybar)
+        ));
+    }
+
+    #[test]
+    fn waybar_group_help_renders() {
+        let h = render_group_help("waybar");
+        assert!(h.contains("wsx waybar —"));
+        assert!(h.contains("status"));
+        assert!(h.contains("jump <repo> <slug>"));
     }
 }

@@ -68,10 +68,13 @@ async fn main() -> Result<()> {
             std::process::exit(2);
         }
     };
-    if !matches!(action, cli::CliAction::Tui) {
-        cli::run_cli(action, &dirs).await?;
-        return Ok(());
-    }
+    let select = match action {
+        cli::CliAction::Tui { select } => select,
+        other => {
+            cli::run_cli(other, &dirs).await?;
+            return Ok(());
+        }
+    };
 
     let file_appender = tracing_appender::rolling::daily(dirs.log_dir(), "wsx.log");
     let (nb, _guard) = tracing_appender::non_blocking(file_appender);
@@ -90,6 +93,10 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&worktree_base)?;
     sweep_orphaned_claude_entries(&store, &worktree_base);
     let app = Arc::new(Mutex::new(app::App::new(store, worktree_base)?));
+
+    if let Some((repo, slug)) = &select {
+        app.lock().await.select_workspace_by_name(repo, slug);
+    }
 
     // Watch for git branch renames performed by claude (or the user)
     // and propagate to the wsx store. Aborts when the runtime drops.

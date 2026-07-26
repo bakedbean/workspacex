@@ -318,7 +318,9 @@ pub enum HelpTopic {
 
 #[derive(Debug)]
 pub enum CliAction {
-    Tui,
+    Tui {
+        select: Option<(String, String)>,
+    },
     Help(HelpTopic),
     Version,
     RepoAdd {
@@ -528,7 +530,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
     };
 
     match first.as_deref() {
-        None => return Ok(CliAction::Tui),
+        None => return Ok(CliAction::Tui { select: None }),
         // Match the literal `help` subcommand before the is_help() flag guard,
         // so `wsx help <group>` resolves the group instead of collapsing to Root.
         Some("help") => {
@@ -540,6 +542,23 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         }
         Some(t) if is_help_flag(t) => return Ok(CliAction::Help(HelpTopic::Root)),
         Some(t) if is_version(t) => return Ok(CliAction::Version),
+        Some("--select") => {
+            let Some(target) = rest.first().cloned() else {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "--select needs <repo>/<slug>".into(),
+                });
+            };
+            let Some((repo, slug)) = target.split_once('/') else {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "--select target must be <repo>/<slug>".into(),
+                });
+            };
+            return Ok(CliAction::Tui {
+                select: Some((repo.to_string(), slug.to_string())),
+            });
+        }
         _ => {}
     }
 
@@ -1285,7 +1304,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     }
     let store = crate::data::store::Store::open(&dirs.db_path())?;
     match action {
-        CliAction::Tui => unreachable!("handled in main"),
+        CliAction::Tui { .. } => unreachable!("handled in main"),
         CliAction::RepoAdd {
             path,
             name,
@@ -2016,7 +2035,23 @@ mod tests {
 
     #[test]
     fn bare_wsx_is_tui() {
-        assert!(matches!(parse(&[]).unwrap(), CliAction::Tui));
+        assert!(matches!(parse(&[]).unwrap(), CliAction::Tui { .. }));
+    }
+
+    #[test]
+    fn parses_select_launch_flag() {
+        match parse(&["--select", "meals backend/api-fix"]) {
+            Ok(CliAction::Tui {
+                select: Some((repo, slug)),
+            }) => {
+                assert_eq!(repo, "meals backend");
+                assert_eq!(slug, "api-fix");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(matches!(parse(&[]), Ok(CliAction::Tui { select: None })));
+        assert!(parse(&["--select"]).is_err());
+        assert!(parse(&["--select", "no-slash"]).is_err());
     }
 
     #[test]

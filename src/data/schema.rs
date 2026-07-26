@@ -130,6 +130,10 @@ impl Store {
             self.conn().execute_batch(SCHEMA_V17_WORKSPACE_RECAP)?;
             self.conn().execute("PRAGMA user_version = 17", [])?;
         }
+        if v < 18 {
+            self.conn().execute_batch(SCHEMA_V18_SCM_CACHE)?;
+            self.conn().execute("PRAGMA user_version = 18", [])?;
+        }
         Ok(())
     }
 
@@ -224,6 +228,18 @@ CREATE TABLE IF NOT EXISTS workspace_recap (
     state        TEXT,
     next         TEXT,
     updated_at   INTEGER NOT NULL
+);
+";
+
+const SCHEMA_V18_SCM_CACHE: &str = "
+CREATE TABLE IF NOT EXISTS scm_cache (
+    workspace_id INTEGER PRIMARY KEY REFERENCES workspaces(id),
+    pr_lifecycle TEXT,
+    pr_number    INTEGER,
+    dirty        INTEGER,
+    additions    INTEGER,
+    deletions    INTEGER,
+    fetched_at   INTEGER
 );
 ";
 

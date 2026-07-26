@@ -8,6 +8,7 @@ pub mod agents;
 pub mod messages;
 pub mod progress;
 pub mod repo;
+pub mod scm_cache;
 pub mod setup;
 pub mod setup_log;
 pub mod store;

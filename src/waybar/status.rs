@@ -30,7 +30,7 @@ fn class_name(state: ReportedState) -> &'static str {
     }
 }
 
-fn glyph(state: Option<ReportedState>) -> &'static str {
+pub(crate) fn glyph(state: Option<ReportedState>) -> &'static str {
     match state {
         Some(ReportedState::Blocked) => "!",
         Some(ReportedState::Done) => "\u{2713}",

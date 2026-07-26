@@ -7,8 +7,11 @@ Status: approved for planning
 
 Upgrade the waybar workspace picker from a plain `walker --dmenu` text list to a
 rich walker/elephant menu: two-line rows with an agent-status icon, git branch,
-PR state + number, and dirty/diff indicators — with rows refreshing live while
-the menu is open. Keep the existing dmenu pipe as an automatic fallback.
+PR state + number, and dirty/diff indicators — git-local indicators computed
+fresh at every menu open, PR state served from a cache kept warm by the TUI
+poll and a detached sweep (in-place refresh while the menu is open is not
+achievable; see Background). Keep the existing dmenu pipe as an automatic
+fallback.
 
 ## Background (verified against sources)
 

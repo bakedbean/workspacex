@@ -15,6 +15,10 @@ use std::path::PathBuf;
 /// conservative: menu opens are burstier than TUI ticks.
 pub const PR_REFRESH_THROTTLE_SECS: i64 = 120;
 
+/// Max concurrent per-workspace git fact gathers at menu open (each runs
+/// ~3 git subprocesses; unbounded fan-out would spike on large fleets).
+const GIT_FACTS_CONCURRENCY: usize = 8;
+
 const GLYPH_BRANCH: &str = "\u{e0a0}"; // powerline branch
 const GLYPH_PR: &str = "\u{f407}"; // nf-oct-git_pull_request
 const GLYPH_MERGED: &str = "\u{f419}"; // nf-oct-git_merge
@@ -160,11 +164,17 @@ async fn collect_rows(store: &Store) -> Result<Vec<RowInput>> {
         }
     }
 
-    let facts = futures::future::join_all(
+    // Bounded fan-out: ~3 git subprocesses per workspace, so unbounded
+    // join_all would spike process count on large fleets. `buffered` keeps
+    // results in input order for the zip below.
+    use futures::StreamExt;
+    let facts: Vec<_> = futures::stream::iter(
         metas
             .iter()
             .map(|(_, _, _, _, worktree)| gather_git_facts(worktree.clone())),
     )
+    .buffered(GIT_FACTS_CONCURRENCY)
+    .collect()
     .await;
 
     let mut rows = Vec::with_capacity(metas.len());

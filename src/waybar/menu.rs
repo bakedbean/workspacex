@@ -33,10 +33,19 @@ pub fn parse_menu_line(line: &str) -> Option<(String, String)> {
 }
 
 pub(crate) fn env_menu_command() -> Option<Vec<String>> {
-    std::env::var("WSX_WAYBAR_MENU")
-        .ok()
-        .and_then(|v| shlex::split(&v))
-        .filter(|v| !v.is_empty())
+    let raw = std::env::var("WSX_WAYBAR_MENU").ok()?;
+    if raw.trim().is_empty() {
+        // An empty var reads as "unset", not as an override.
+        return None;
+    }
+    // Set but unparseable (e.g. unbalanced quotes): still an explicit
+    // override — fall back to the default pipe command rather than silently
+    // dropping the override and letting elephant detection win.
+    Some(
+        shlex::split(&raw)
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| vec!["walker".into(), "--dmenu".into()]),
+    )
 }
 
 #[derive(Debug)]
@@ -217,6 +226,19 @@ mod menu_tests {
         );
         env.remove("WSX_WAYBAR_MENU");
         assert_eq!(env_menu_command(), None);
+
+        // Empty (or whitespace-only) reads as unset, not as an override.
+        env.set("WSX_WAYBAR_MENU", "  ");
+        assert_eq!(env_menu_command(), None);
+
+        // Set but unparseable (unbalanced quote): the override still wins,
+        // degrading to the default pipe command — it must never fall through
+        // to elephant detection.
+        env.set("WSX_WAYBAR_MENU", "wofi 'unbalanced");
+        assert_eq!(
+            env_menu_command(),
+            Some(vec!["walker".to_string(), "--dmenu".to_string()])
+        );
     }
 
     #[test]

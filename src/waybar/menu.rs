@@ -32,12 +32,38 @@ pub fn parse_menu_line(line: &str) -> Option<(String, String)> {
     Some((repo.to_string(), slug.to_string()))
 }
 
-pub fn menu_command() -> Vec<String> {
+pub(crate) fn env_menu_command() -> Option<Vec<String>> {
     std::env::var("WSX_WAYBAR_MENU")
         .ok()
         .and_then(|v| shlex::split(&v))
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| vec!["walker".into(), "--dmenu".into()])
+}
+
+#[derive(Debug)]
+pub(crate) enum MenuMode {
+    /// Pipe lines to a dmenu-style command and parse the selection.
+    Pipe(Vec<String>),
+    /// Launch walker against the installed elephant `menus:wsx` provider;
+    /// selection and jump are handled by the entry's action, not stdout.
+    Elephant,
+}
+
+pub(crate) fn detect_menu_mode(
+    env_cmd: Option<Vec<String>>,
+    lua_installed: bool,
+    walker_on_path: bool,
+) -> MenuMode {
+    if let Some(cmd) = env_cmd {
+        return MenuMode::Pipe(cmd);
+    }
+    if lua_installed && walker_on_path {
+        return MenuMode::Elephant;
+    }
+    MenuMode::Pipe(vec!["walker".into(), "--dmenu".into()])
+}
+
+pub(crate) fn find_in_path(name: &str, path_var: &str) -> bool {
+    std::env::split_paths(path_var).any(|d| !d.as_os_str().is_empty() && d.join(name).is_file())
 }
 
 fn notify(message: &str) {
@@ -65,12 +91,31 @@ fn menu_lines(store: &Store) -> Result<Vec<String>> {
 }
 
 pub fn run_menu(store: &Store) -> Result<()> {
+    let lua_installed = dirs::config_dir()
+        .map(|d| d.join("elephant/menus/wsx.lua").exists())
+        .unwrap_or(false);
+    let walker_ok = find_in_path("walker", &std::env::var("PATH").unwrap_or_default());
+    match detect_menu_mode(env_menu_command(), lua_installed, walker_ok) {
+        MenuMode::Elephant => {
+            match Command::new("walker").args(["-m", "menus:wsx"]).status() {
+                // Any exit status counts as handled: walker returns non-zero
+                // on dismissal too, and falling back would double-open.
+                Ok(_) => Ok(()),
+                // Spawn failure (walker vanished between check and exec):
+                // degrade silently to the dmenu pipe.
+                Err(_) => run_pipe_menu(store, vec!["walker".into(), "--dmenu".into()]),
+            }
+        }
+        MenuMode::Pipe(cmd) => run_pipe_menu(store, cmd),
+    }
+}
+
+fn run_pipe_menu(store: &Store, cmd: Vec<String>) -> Result<()> {
     let lines = menu_lines(store)?;
     if lines.is_empty() {
         notify("no workspaces");
         return Ok(());
     }
-    let cmd = menu_command();
     let mut child = Command::new(&cmd[0])
         .args(&cmd[1..])
         .stdin(Stdio::piped())
@@ -161,8 +206,46 @@ mod menu_tests {
     fn menu_command_env_override() {
         let mut env = crate::test_support::EnvGuard::new();
         env.set("WSX_WAYBAR_MENU", "wofi --dmenu -p pick");
-        assert_eq!(menu_command(), vec!["wofi", "--dmenu", "-p", "pick"]);
+        assert_eq!(
+            env_menu_command(),
+            Some(vec![
+                "wofi".to_string(),
+                "--dmenu".to_string(),
+                "-p".to_string(),
+                "pick".to_string()
+            ])
+        );
         env.remove("WSX_WAYBAR_MENU");
-        assert_eq!(menu_command(), vec!["walker", "--dmenu"]);
+        assert_eq!(env_menu_command(), None);
+    }
+
+    #[test]
+    fn detect_prefers_env_then_elephant_then_dmenu() {
+        let env_cmd = Some(vec!["wofi".to_string(), "--dmenu".to_string()]);
+        assert!(matches!(
+            detect_menu_mode(env_cmd, true, true),
+            MenuMode::Pipe(ref c) if c[0] == "wofi"
+        ));
+        assert!(matches!(
+            detect_menu_mode(None, true, true),
+            MenuMode::Elephant
+        ));
+        // Missing lua or missing walker → dmenu pipe default.
+        for (lua, walker) in [(false, true), (true, false), (false, false)] {
+            assert!(matches!(
+                detect_menu_mode(None, lua, walker),
+                MenuMode::Pipe(ref c) if c == &["walker".to_string(), "--dmenu".to_string()]
+            ));
+        }
+    }
+
+    #[test]
+    fn find_in_path_scans_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("walker"), "").unwrap();
+        let path_var = format!("/nonexistent:{}", tmp.path().display());
+        assert!(find_in_path("walker", &path_var));
+        assert!(!find_in_path("walker", "/nonexistent"));
+        assert!(!find_in_path("walker", ""));
     }
 }

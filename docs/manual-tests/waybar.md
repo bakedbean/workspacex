@@ -66,7 +66,9 @@ wsx setup waybar
 ```
 
 again. Expected: "already" messages for each file/config; no second backup
-is created.
+is created. The elephant menu line is the exception: it always reports
+`installed elephant menu: …` (never "already"), by design — the file is
+deliberately overwritten every run to refresh the baked wsx binary path.
 
 ## Elephant menu (walker rich picker)
 

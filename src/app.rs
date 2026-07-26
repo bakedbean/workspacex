@@ -860,6 +860,40 @@ impl App {
         self.dashboard.selection = self.selectable.get(idx).copied();
     }
 
+    /// Select a workspace by repo name + workspace slug, unfolding its repo.
+    /// Returns false if the pair doesn't exist or isn't currently selectable.
+    /// Used by automation surfaces (waybar jump, `wsx --select`).
+    pub fn select_workspace_by_name(&mut self, repo_name: &str, slug: &str) -> bool {
+        let Some(repo_id) = self
+            .repos
+            .iter()
+            .find(|r| r.name == repo_name)
+            .map(|r| r.id)
+        else {
+            return false;
+        };
+        let Some(ws_id) = self
+            .workspaces
+            .iter()
+            .find(|(rid, w)| *rid == repo_id && w.name == slug)
+            .map(|(_, w)| w.id)
+        else {
+            return false;
+        };
+        self.dashboard.folded.insert(repo_id.0 as u64, false);
+        match self
+            .selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(ws_id))
+        {
+            Some(idx) => {
+                self.select_index(idx);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Whether a selection target still refers to a live repo/workspace.
     /// Used by `reconcile_selection` to tell a temporarily-hidden target
     /// (park it) from a removed one (fall back to a neighbor).
@@ -2755,5 +2789,57 @@ mod selection_helper_tests {
         assert!(!app.selection_target_exists(SelectionTarget::Workspace(
             crate::data::store::WorkspaceId(9999)
         )));
+    }
+}
+
+#[cfg(test)]
+mod select_by_name_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, Store};
+    use std::path::PathBuf;
+
+    fn app_with_one_workspace() -> App {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap()
+    }
+
+    #[test]
+    fn selects_existing_workspace_and_unfolds_repo() {
+        let mut app = app_with_one_workspace();
+        let repo_name = app.repos[0].name.clone();
+        let ws = app.workspaces[0].1.clone();
+        app.dashboard.folded.insert(app.repos[0].id.0 as u64, true); // folded → must unfold
+        assert!(app.select_workspace_by_name(&repo_name, &ws.name));
+        assert_eq!(
+            app.dashboard.folded.get(&(app.repos[0].id.0 as u64)),
+            Some(&false)
+        );
+        assert_eq!(
+            app.selected_target(),
+            Some(SelectionTarget::Workspace(ws.id))
+        );
+    }
+
+    #[test]
+    fn unknown_names_return_false_and_leave_selection_alone() {
+        let mut app = app_with_one_workspace();
+        let before = app.selected_target();
+        assert!(!app.select_workspace_by_name("nope", "nothing"));
+        assert!(!app.select_workspace_by_name(&app.repos[0].name.clone(), "nothing"));
+        assert_eq!(app.selected_target(), before);
     }
 }

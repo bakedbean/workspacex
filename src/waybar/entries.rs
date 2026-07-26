@@ -31,6 +31,9 @@ pub struct MenuEntry {
     pub subtext: String,
     pub icon: String,
     pub action: String,
+    /// Row CSS classes: walker adds each string as a class on the item box,
+    /// which the wsx walker theme styles (colored edge per PR state, etc.).
+    pub state: Vec<String>,
 }
 
 pub(crate) fn needs_pr_refresh(fetched_at: Option<i64>, now: i64) -> bool {
@@ -73,10 +76,37 @@ pub(crate) fn compose_text(repo: &str, slug: &str, row: &ScmCacheRow) -> String 
     }
     if let (Some(a), Some(d)) = (row.additions, row.deletions) {
         if a + d > 0 {
-            parts.push(format!("+{a} \u{2212}{d}"));
+            // Colored emoji dots: labels are single-color (walker uses
+            // set_text, no Pango), so color-font glyphs are the only way to
+            // tint the counts themselves.
+            parts.push(format!("\u{1f7e2}+{a} \u{1f534}\u{2212}{d}"));
         }
     }
     parts.join("  ")
+}
+
+/// Row CSS classes derived from PR/git/agent state. Walker turns each into
+/// a class on the item box; the wsx walker theme colors row edges/tints.
+pub(crate) fn state_classes(row: &ScmCacheRow, status: Option<&ReportedStatus>) -> Vec<String> {
+    let mut classes = Vec::new();
+    let pr = row.pr_lifecycle.and_then(|l| match l {
+        BranchLifecycle::NoPr => None,
+        BranchLifecycle::PrOpen => Some("pr-open"),
+        BranchLifecycle::PrDraft => Some("pr-draft"),
+        BranchLifecycle::PrConflicted => Some("pr-conflicted"),
+        BranchLifecycle::PrMerged => Some("pr-merged"),
+        BranchLifecycle::PrClosed => Some("pr-closed"),
+    });
+    if let Some(pr) = pr {
+        classes.push(pr.to_string());
+    }
+    if row.dirty == Some(true) {
+        classes.push("dirty".to_string());
+    }
+    if status.map(|s| s.state) == Some(ReportedState::Blocked) {
+        classes.push("blocked".to_string());
+    }
+    classes
 }
 
 pub(crate) fn compose_subtext(branch: &str, status: Option<&ReportedStatus>) -> String {
@@ -133,6 +163,7 @@ pub(crate) fn build_entries(rows: &[RowInput], wsx_bin: &str) -> Vec<MenuEntry> 
             subtext: compose_subtext(&r.branch, r.status.as_ref()),
             icon: icon_glyph(r.status.as_ref().map(|s| s.state)).to_string(),
             action: action_cmd(wsx_bin, &r.repo_name, &r.slug),
+            state: state_classes(&r.cache, r.status.as_ref()),
         })
         .collect()
 }
@@ -307,7 +338,7 @@ mod entry_tests {
         assert!(text.starts_with("workspacex/fix-bug"), "{text}");
         assert!(text.contains("#123"), "{text}");
         assert!(text.contains('\u{25cf}'), "{text}");
-        assert!(text.contains("+45 \u{2212}12"), "{text}");
+        assert!(text.contains("\u{1f7e2}+45 \u{1f534}\u{2212}12"), "{text}");
     }
 
     #[test]
@@ -426,12 +457,36 @@ mod entry_tests {
             subtext: "s".into(),
             icon: "i".into(),
             action: "a".into(),
+            state: vec!["pr-open".into()],
         };
         let v = serde_json::to_value([e]).unwrap();
         assert_eq!(v[0]["text"], "t");
         assert_eq!(v[0]["subtext"], "s");
         assert_eq!(v[0]["icon"], "i");
         assert_eq!(v[0]["action"], "a");
+        assert_eq!(v[0]["state"][0], "pr-open");
+    }
+
+    #[test]
+    fn state_classes_reflect_pr_dirty_and_blocked() {
+        assert!(state_classes(&ScmCacheRow::default(), None).is_empty());
+        let row = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrConflicted),
+            dirty: Some(true),
+            ..Default::default()
+        };
+        let blocked = status(ReportedState::Blocked, None);
+        assert_eq!(
+            state_classes(&row, Some(&blocked)),
+            vec!["pr-conflicted", "dirty", "blocked"]
+        );
+        // NoPr earns no class — same no-indicator rule as the text segment.
+        let no_pr = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::NoPr),
+            dirty: Some(false),
+            ..Default::default()
+        };
+        assert!(state_classes(&no_pr, None).is_empty());
     }
 
     #[tokio::test]

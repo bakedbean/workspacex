@@ -60,6 +60,36 @@ child:selected {
 
 .item-box {
   padding-left: 14px;
+  border-left: 3px solid transparent;
+}
+
+/* Row state accents — classes come from the entry's State list (see
+   wsx waybar menu-entries). Accent hexes are fixed rather than themed:
+   omarchy's walker.css exposes no semantic green/red/purple variables,
+   and these read well on dark and light bases alike. */
+.item-box.pr-open {
+  border-left-color: #a6e3a1;
+}
+
+.item-box.pr-merged {
+  border-left-color: #cba6f7;
+}
+
+.item-box.pr-conflicted,
+.item-box.blocked {
+  border-left-color: #f38ba8;
+}
+
+.item-box.pr-draft {
+  border-left-color: alpha(#a6e3a1, 0.45);
+}
+
+.item-box.pr-closed {
+  border-left-color: alpha(@text, 0.25);
+}
+
+.item-box.dirty {
+  background: alpha(#f9e2af, 0.07);
 }
 
 .item-text-box {

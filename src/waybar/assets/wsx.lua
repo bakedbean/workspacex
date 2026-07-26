@@ -26,12 +26,17 @@ function GetEntries()
   end
   for _, e in ipairs(decoded) do
     if type(e) == "table" and e.text and e.action then
-      table.insert(entries, {
+      local entry = {
         Text = e.text,
         Subtext = e.subtext,
         Icon = e.icon,
         Actions = { activate = e.action },
-      })
+      }
+      -- Row CSS classes (walker styles them via the wsx theme).
+      if type(e.state) == "table" and #e.state > 0 then
+        entry.State = e.state
+      end
+      table.insert(entries, entry)
     end
   end
   return entries

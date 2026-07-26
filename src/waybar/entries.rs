@@ -424,8 +424,10 @@ mod entry_tests {
                 0,
             )
             .unwrap();
-        // Pre-seed alpha with stale dirty/diff indicators (to be suppressed
-        // when git fails on nonexistent worktree).
+        // Pre-seed zeta (ids[0]) with stale dirty/diff indicators: when
+        // git fails on its nonexistent worktree, these must be suppressed
+        // in-memory (not persisted to DB), so the row renders without ● and
+        // +N −N but keeps its PR indicator (#5).
         store.upsert_scm_git(ids[0], true, 4, 2).unwrap();
 
         let rows = super::collect_rows(&store).await.unwrap();
@@ -435,23 +437,22 @@ mod entry_tests {
         // Sorted by workspace name within repo.
         assert!(entries[0].text.starts_with("r/alpha"), "{:?}", entries[0]);
         assert!(entries[1].text.starts_with("r/zeta"), "{:?}", entries[1]);
-        // zeta carries the cached PR indicator even though its worktree is
-        // missing (git facts degrade to absent, PR comes from cache).
-        assert!(entries[1].text.contains("#5"), "{:?}", entries[1]);
         // Branch always present in subtext.
         assert!(entries[0].subtext.contains("x/alpha"), "{:?}", entries[0]);
         assert_eq!(entries[0].action, "/bin/wsx waybar jump r alpha");
-        // Stale dirty/diff indicators suppressed when git fails (alpha's
-        // worktree is nonexistent): text should lack ● and +4 −2.
+        // zeta (entries[1]) carries the cached PR indicator #5 even though
+        // its worktree is missing. Stale dirty/diff indicators are suppressed
+        // when git fails: text contains #5 but NOT ● or +4.
+        assert!(entries[1].text.contains("#5"), "{:?}", entries[1]);
         assert!(
-            !entries[0].text.contains('\u{25cf}'),
+            !entries[1].text.contains('\u{25cf}'),
             "stale dirty indicator should be suppressed: {:?}",
-            entries[0]
+            entries[1]
         );
         assert!(
-            !entries[0].text.contains("+4"),
+            !entries[1].text.contains("+4"),
             "stale diff indicator should be suppressed: {:?}",
-            entries[0]
+            entries[1]
         );
     }
 }

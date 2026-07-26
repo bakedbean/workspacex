@@ -71,6 +71,18 @@ pub(crate) fn detect_menu_mode(
     MenuMode::Pipe(vec!["walker".into(), "--dmenu".into()])
 }
 
+/// Args for launching walker against the elephant menu. The wsx theme
+/// (wider window, visible subtext) is passed only when installed — walker
+/// falls back to its default theme resolution otherwise.
+pub(crate) fn elephant_walker_args(theme_installed: bool) -> Vec<String> {
+    let mut args = vec!["-m".to_string(), "menus:wsx".to_string()];
+    if theme_installed {
+        args.push("-t".to_string());
+        args.push("wsx".to_string());
+    }
+    args
+}
+
 pub(crate) fn find_in_path(name: &str, path_var: &str) -> bool {
     std::env::split_paths(path_var).any(|d| !d.as_os_str().is_empty() && d.join(name).is_file())
 }
@@ -106,7 +118,13 @@ pub fn run_menu(store: &Store) -> Result<()> {
     let walker_ok = find_in_path("walker", &std::env::var("PATH").unwrap_or_default());
     match detect_menu_mode(env_menu_command(), lua_installed, walker_ok) {
         MenuMode::Elephant => {
-            match Command::new("walker").args(["-m", "menus:wsx"]).status() {
+            let theme_installed = dirs::config_dir()
+                .map(|d| d.join("walker/themes/wsx/layout.xml").exists())
+                .unwrap_or(false);
+            match Command::new("walker")
+                .args(elephant_walker_args(theme_installed))
+                .status()
+            {
                 // Any exit status counts as handled: walker returns non-zero
                 // on dismissal too, and falling back would double-open.
                 Ok(_) => Ok(()),
@@ -259,6 +277,15 @@ mod menu_tests {
                 MenuMode::Pipe(ref c) if c == &["walker".to_string(), "--dmenu".to_string()]
             ));
         }
+    }
+
+    #[test]
+    fn elephant_args_include_theme_only_when_installed() {
+        assert_eq!(elephant_walker_args(false), vec!["-m", "menus:wsx"]);
+        assert_eq!(
+            elephant_walker_args(true),
+            vec!["-m", "menus:wsx", "-t", "wsx"]
+        );
     }
 
     #[test]

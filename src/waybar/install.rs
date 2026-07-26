@@ -17,6 +17,9 @@ const MODULE_JSONC: &str = include_str!("assets/wsx.jsonc");
 const MODULE_CSS: &str = include_str!("assets/wsx.css");
 /// The elephant menu definition, embedded at compile time.
 const MENU_LUA: &str = include_str!("assets/wsx.lua");
+/// The wsx walker theme (widened, subtext visible), embedded at compile time.
+const WALKER_THEME_LAYOUT: &str = include_str!("assets/walker-theme/layout.xml");
+const WALKER_THEME_CSS: &str = include_str!("assets/walker-theme/style.css");
 
 /// Result of attempting to patch a `config.jsonc` text in place.
 pub enum PatchOutcome {
@@ -181,6 +184,34 @@ pub fn install_elephant_menu_into(config_root: &Path, wsx_bin: &str) -> Result<S
     Ok(format!("installed elephant menu: {}", path.display()))
 }
 
+/// Write the wsx walker theme under `config_root` (normally `~/.config`).
+/// Omarchy's default walker theme hides the item subtext line (`font-size:
+/// 0px`) and sizes the window for the app launcher, which crams every
+/// workspace indicator onto one truncated line — this theme is the same look
+/// with the subtext visible and a wider window. `waybar::menu` passes
+/// `-t wsx` only when the theme is installed.
+pub fn install_walker_theme_into(config_root: &Path) -> Result<String> {
+    let dir = config_root.join("walker/themes/wsx");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("layout.xml"), WALKER_THEME_LAYOUT)?;
+    std::fs::write(dir.join("style.css"), WALKER_THEME_CSS)?;
+    Ok(format!("installed walker theme: {}", dir.display()))
+}
+
+/// Elephant only hot-REGISTERS a freshly written menu file — its Lua doesn't
+/// execute until the service restarts, so a new menu silently serves
+/// "No Results" until then. Best-effort: `try-restart` is a no-op when
+/// elephant isn't running, and any failure degrades to a printed hint.
+fn restart_elephant() -> String {
+    match std::process::Command::new("systemctl")
+        .args(["--user", "try-restart", "elephant"])
+        .status()
+    {
+        Ok(s) if s.success() => "restarted elephant (menu definitions load only on restart)".into(),
+        _ => "restart elephant to load the menu: systemctl --user try-restart elephant".into(),
+    }
+}
+
 /// Picks the wsx binary path baked into the elephant menu's Lua.
 ///
 /// Dev builds (`cargo run`, `target/debug/wsx`, …) live in paths that vanish
@@ -220,8 +251,15 @@ pub fn run() -> Result<Vec<String>> {
     let mut lines = install_into(&waybar_dir, epoch)?;
     let wsx_bin = preferred_wsx_bin(dirs::home_dir());
     match install_elephant_menu_into(&config_root, &wsx_bin) {
-        Ok(line) => lines.push(line),
+        Ok(line) => {
+            lines.push(line);
+            lines.push(restart_elephant());
+        }
         Err(e) => lines.push(format!("elephant menu skipped: {e}")),
+    }
+    match install_walker_theme_into(&config_root) {
+        Ok(line) => lines.push(line),
+        Err(e) => lines.push(format!("walker theme skipped: {e}")),
     }
     Ok(lines)
 }
@@ -353,6 +391,25 @@ mod install_tests {
             !resolved.starts_with(&home.path().join(".local/bin/wsx").display().to_string()),
             "{resolved}"
         );
+    }
+
+    #[test]
+    fn walker_theme_installs_wide_layout_with_visible_subtext() {
+        let tmp = tempfile::tempdir().unwrap();
+        let line = install_walker_theme_into(tmp.path()).unwrap();
+        let dir = tmp.path().join("walker/themes/wsx");
+        assert!(dir.join("layout.xml").exists(), "{line}");
+        let layout = std::fs::read_to_string(dir.join("layout.xml")).unwrap();
+        assert!(layout.contains("920"), "widened window: {layout:.100}");
+        let css = std::fs::read_to_string(dir.join("style.css")).unwrap();
+        // The whole point of the theme: subtext must NOT be zeroed out.
+        assert!(css.contains(".item-subtext"), "{css:.200}");
+        assert!(
+            !css.contains("font-size: 0px"),
+            "subtext hidden: {css:.200}"
+        );
+        // Re-install overwrites without error (setup is re-runnable).
+        install_walker_theme_into(tmp.path()).unwrap();
     }
 
     #[test]

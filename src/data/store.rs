@@ -198,6 +198,8 @@ impl Store {
             [id.0],
         )?;
         self.conn
+            .execute("DELETE FROM scm_cache WHERE workspace_id = ?1", [id.0])?;
+        self.conn
             .execute("DELETE FROM workspaces WHERE id = ?1", [id.0])?;
         Ok(())
     }
@@ -1351,7 +1353,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 17);
+        assert_eq!(v, 18);
     }
 
     #[test]

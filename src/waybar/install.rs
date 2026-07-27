@@ -420,6 +420,18 @@ mod install_tests {
             layout.contains("<property name=\"max-content-width\">960</property>"),
             "widened scroll area: {layout:.100}"
         );
+        // Walker hides the "Waiting for elephant..." hint only on the window
+        // of the theme active at connect time (the config default, not wsx),
+        // so a non-default theme must ship the hint pre-hidden. Walker still
+        // shows it explicitly if elephant actually disconnects.
+        let hint = layout
+            .split_once("id=\"ElephantHint\"")
+            .map(|(_, rest)| rest.split("</object>").next().unwrap())
+            .expect("layout has an ElephantHint label");
+        assert!(
+            hint.contains("<property name=\"visible\">false</property>"),
+            "ElephantHint must start hidden: {hint}"
+        );
         // The provider item layout carries the field-coloring attributes.
         let item = std::fs::read_to_string(dir.join("item_menus-wsx.xml")).unwrap();
         assert!(item.contains("<attributes>"), "{item:.200}");

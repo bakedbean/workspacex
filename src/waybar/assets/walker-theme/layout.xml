@@ -67,6 +67,11 @@
                     <style>
                       <class name="elephant-hint"></class>
                     </style>
+                    <!-- Pre-hidden: walker only hides this hint on the window
+                         of the theme active when elephant connects (the config
+                         default theme, not wsx), and shows it itself on a real
+                         disconnect. -->
+                    <property name="visible">false</property>
                     <property name="hexpand">true</property>
                     <property name="height-request">100</property>
                     <property name="label">Waiting for elephant...</property>

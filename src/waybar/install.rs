@@ -412,7 +412,14 @@ mod install_tests {
         let dir = tmp.path().join("walker/themes/wsx");
         assert!(dir.join("layout.xml").exists(), "{line}");
         let layout = std::fs::read_to_string(dir.join("layout.xml")).unwrap();
-        assert!(layout.contains("1000"), "widened window: {layout:.100}");
+        assert!(
+            layout.contains("<property name=\"width-request\">1000</property>"),
+            "widened window: {layout:.100}"
+        );
+        assert!(
+            layout.contains("<property name=\"max-content-width\">960</property>"),
+            "widened scroll area: {layout:.100}"
+        );
         // The provider item layout carries the field-coloring attributes.
         let item = std::fs::read_to_string(dir.join("item_menus-wsx.xml")).unwrap();
         assert!(item.contains("<attributes>"), "{item:.200}");

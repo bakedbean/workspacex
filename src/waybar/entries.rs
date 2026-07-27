@@ -106,7 +106,7 @@ pub(crate) fn compose_text(repo: &str, slug: &str, row: &ScmCacheRow) -> String 
         BLANK_GLYPH
     };
     let (adds, dels) = match (row.additions, row.deletions) {
-        (Some(a), Some(d)) if a + d > 0 => {
+        (Some(a), Some(d)) if a > 0 || d > 0 => {
             (format!("+{}", a.min(99_999)), format!("-{}", d.min(99_999)))
         }
         _ => (String::new(), String::new()),

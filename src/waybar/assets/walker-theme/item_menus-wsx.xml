@@ -54,7 +54,7 @@
               <attribute name="foreground" value="#f38ba8" start="72" end="78"></attribute>
             </attributes>
             <property name="ellipsize">end</property>
-            <property name="vexpand_set">true</property>
+            <property name="vexpand-set">true</property>
             <property name="vexpand">true</property>
             <property name="xalign">0</property>
           </object>
@@ -65,7 +65,7 @@
               <class name="item-subtext"></class>
             </style>
             <property name="ellipsize">end</property>
-            <property name="vexpand_set">true</property>
+            <property name="vexpand-set">true</property>
             <property name="vexpand">true</property>
             <property name="xalign">0</property>
             <property name="yalign">0</property>

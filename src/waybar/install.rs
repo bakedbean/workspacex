@@ -20,6 +20,9 @@ const MENU_LUA: &str = include_str!("assets/wsx.lua");
 /// The wsx walker theme (widened, subtext visible), embedded at compile time.
 const WALKER_THEME_LAYOUT: &str = include_str!("assets/walker-theme/layout.xml");
 const WALKER_THEME_CSS: &str = include_str!("assets/walker-theme/style.css");
+/// Item layout for the menus:wsx provider — carries the static Pango
+/// attribute ranges that color the fixed-column fields (see waybar::entries).
+const WALKER_THEME_ITEM: &str = include_str!("assets/walker-theme/item_menus-wsx.xml");
 
 /// Result of attempting to patch a `config.jsonc` text in place.
 pub enum PatchOutcome {
@@ -195,6 +198,7 @@ pub fn install_walker_theme_into(config_root: &Path) -> Result<String> {
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("layout.xml"), WALKER_THEME_LAYOUT)?;
     std::fs::write(dir.join("style.css"), WALKER_THEME_CSS)?;
+    std::fs::write(dir.join("item_menus-wsx.xml"), WALKER_THEME_ITEM)?;
     Ok(format!("installed walker theme: {}", dir.display()))
 }
 
@@ -258,7 +262,15 @@ pub fn run() -> Result<Vec<String>> {
         Err(e) => lines.push(format!("elephant menu skipped: {e}")),
     }
     match install_walker_theme_into(&config_root) {
-        Ok(line) => lines.push(line),
+        Ok(line) => {
+            lines.push(line);
+            // Walker scans theme files once at service startup; a running
+            // walker service keeps rendering the old theme until restarted.
+            lines.push(
+                "restart walker to reload the wsx theme: omarchy-restart-walker (or pkill walker)"
+                    .into(),
+            );
+        }
         Err(e) => lines.push(format!("walker theme skipped: {e}")),
     }
     Ok(lines)
@@ -400,7 +412,10 @@ mod install_tests {
         let dir = tmp.path().join("walker/themes/wsx");
         assert!(dir.join("layout.xml").exists(), "{line}");
         let layout = std::fs::read_to_string(dir.join("layout.xml")).unwrap();
-        assert!(layout.contains("920"), "widened window: {layout:.100}");
+        assert!(layout.contains("1000"), "widened window: {layout:.100}");
+        // The provider item layout carries the field-coloring attributes.
+        let item = std::fs::read_to_string(dir.join("item_menus-wsx.xml")).unwrap();
+        assert!(item.contains("<attributes>"), "{item:.200}");
         let css = std::fs::read_to_string(dir.join("style.css")).unwrap();
         // The whole point of the theme: subtext must NOT be zeroed out.
         assert!(css.contains(".item-subtext"), "{css:.200}");

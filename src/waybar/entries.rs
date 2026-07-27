@@ -25,6 +25,35 @@ const GLYPH_PR: &str = "\u{f407}"; // nf-oct-git_pull_request
 const GLYPH_MERGED: &str = "\u{f419}"; // nf-oct-git_merge
 const GLYPH_DIRTY: &str = "\u{25cf}"; // ●
 
+// Fixed-column text layout. Walker renders entry text with GTK's set_text(),
+// which force-disables Pango markup — but a label's `attributes` property
+// (static color ranges over BYTE offsets) survives set_text(). The wsx walker
+// theme's item_menus-wsx.xml carries such ranges, so every field below must
+// sit at a constant byte offset in every row:
+// - the name column is forced to ASCII (chars == bytes) and padded or
+//   truncated to NAME_W,
+// - number/suffix fields are ASCII, space-padded to fixed widths,
+// - the 1-char glyphs (GLYPH_PR, GLYPH_MERGED, GLYPH_DIRTY) are all 3-byte
+//   UTF-8 and blank out to FIGURE SPACE (also 3 bytes, digit-width in the
+//   theme's monospace font), keeping byte AND visual alignment.
+// `xml_attribute_ranges_match_layout` asserts the theme XML stays in sync.
+const NAME_W: usize = 36;
+const PR_W: usize = 6; // "#" + up to 5 digits
+const SUFFIX_W: usize = 8; // "conflict" is the widest suffix
+const COUNT_W: usize = 6; // sign + up to 5 digits
+const BLANK_GLYPH: &str = "\u{2007}"; // figure space: 3 bytes, digit width
+
+/// Byte offsets of the colorable fields, mirrored by the Pango attribute
+/// ranges in assets/walker-theme/item_menus-wsx.xml.
+pub(crate) const PR_START: usize = NAME_W + 2; // glyph + " " + "#N"
+pub(crate) const PR_END: usize = PR_START + 3 + 1 + PR_W;
+pub(crate) const DIRTY_START: usize = PR_END + 2 + SUFFIX_W + 2;
+pub(crate) const DIRTY_END: usize = DIRTY_START + 3;
+pub(crate) const ADDS_START: usize = DIRTY_END + 2;
+pub(crate) const ADDS_END: usize = ADDS_START + COUNT_W;
+pub(crate) const DELS_START: usize = ADDS_END + 1;
+pub(crate) const DELS_END: usize = DELS_START + COUNT_W;
+
 #[derive(serde::Serialize, Debug, PartialEq)]
 pub struct MenuEntry {
     pub text: String,
@@ -43,52 +72,72 @@ pub(crate) fn needs_pr_refresh(fetched_at: Option<i64>, now: i64) -> bool {
     }
 }
 
-/// PR indicator, or None when there is no PR or the state was never fetched
-/// (deliberately identical renderings — an unknown must not claim "no PR",
-/// and "no PR" earns no glyph).
-fn pr_segment(row: &ScmCacheRow) -> Option<String> {
-    let lifecycle = row.pr_lifecycle?;
-    // Lifecycle dot mirrors the TUI's `Theme::lifecycle_style`: open=green,
-    // conflicted=orange (warn), merged=purple, closed=red; draft stays
-    // uncolored there too. Emoji because labels are single-color (set_text).
-    let (glyph, dot, suffix) = match lifecycle {
-        BranchLifecycle::NoPr => return None,
-        BranchLifecycle::PrOpen => (GLYPH_PR, Some("\u{1f7e2}"), None),
-        BranchLifecycle::PrDraft => (GLYPH_PR, None, Some("draft")),
-        BranchLifecycle::PrConflicted => (GLYPH_PR, Some("\u{1f7e0}"), Some("conflict")),
-        BranchLifecycle::PrMerged => (GLYPH_MERGED, Some("\u{1f7e3}"), None),
-        BranchLifecycle::PrClosed => (GLYPH_PR, Some("\u{1f534}"), Some("closed")),
-    };
-    let mut parts = vec![glyph.to_string()];
-    match (dot, row.pr_number) {
-        (Some(dot), Some(n)) => parts.push(format!("{dot}#{n}")),
-        (Some(dot), None) => parts.push(dot.to_string()),
-        (None, Some(n)) => parts.push(format!("#{n}")),
-        (None, None) => {}
+/// The padded name column: ASCII-only so chars == bytes (a non-ASCII char
+/// would shift every colored range after it), truncated with ".." when it
+/// overflows the column.
+fn name_column(repo: &str, slug: &str) -> String {
+    let mut name: String = format!("{}/{}", sanitize(repo), sanitize(slug))
+        .chars()
+        .map(|c| if c.is_ascii() { c } else { '?' })
+        .collect();
+    if name.len() > NAME_W {
+        name.truncate(NAME_W - 2);
+        name.push_str("..");
     }
-    if let Some(s) = suffix {
-        parts.push(s.to_string());
-    }
-    Some(parts.join(" "))
+    name
 }
 
 pub(crate) fn compose_text(repo: &str, slug: &str, row: &ScmCacheRow) -> String {
-    let mut parts = vec![format!("{}/{}", sanitize(repo), sanitize(slug))];
-    if let Some(pr) = pr_segment(row) {
-        parts.push(pr);
-    }
-    if row.dirty == Some(true) {
-        parts.push(GLYPH_DIRTY.to_string());
-    }
-    if let (Some(a), Some(d)) = (row.additions, row.deletions) {
-        if a + d > 0 {
-            // Colored emoji dots: labels are single-color (walker uses
-            // set_text, no Pango), so color-font glyphs are the only way to
-            // tint the counts themselves.
-            parts.push(format!("\u{1f7e2}+{a} \u{1f534}\u{2212}{d}"));
+    // Suffix words mirror the TUI's lifecycle labels; open/merged need none
+    // (the merge glyph and the row's border color already carry it). An
+    // unfetched state and NoPr render identically — an unknown must not
+    // claim "no PR", and "no PR" earns no indicator.
+    let (glyph, num, suffix) = match row.pr_lifecycle {
+        Some(BranchLifecycle::PrOpen) => (GLYPH_PR, pr_num(row), ""),
+        Some(BranchLifecycle::PrDraft) => (GLYPH_PR, pr_num(row), "draft"),
+        Some(BranchLifecycle::PrConflicted) => (GLYPH_PR, pr_num(row), "conflict"),
+        Some(BranchLifecycle::PrMerged) => (GLYPH_MERGED, pr_num(row), ""),
+        Some(BranchLifecycle::PrClosed) => (GLYPH_PR, pr_num(row), "closed"),
+        Some(BranchLifecycle::NoPr) | None => (BLANK_GLYPH, String::new(), ""),
+    };
+    let dirty = if row.dirty == Some(true) {
+        GLYPH_DIRTY
+    } else {
+        BLANK_GLYPH
+    };
+    let (adds, dels) = match (row.additions, row.deletions) {
+        (Some(a), Some(d)) if a > 0 || d > 0 => {
+            (format!("+{}", a.min(99_999)), format!("-{}", d.min(99_999)))
         }
-    }
-    parts.join("  ")
+        _ => (String::new(), String::new()),
+    };
+    let text = format!(
+        "{name:<NAME_W$}  {glyph} {num:<PR_W$}  {suffix:<SUFFIX_W$}  {dirty}  {adds:<COUNT_W$} {dels:<COUNT_W$}",
+        name = name_column(repo, slug),
+    );
+    debug_assert_eq!(text.len(), DELS_END, "column layout drifted: {text:?}");
+    debug_assert!(
+        [
+            PR_START,
+            PR_END,
+            DIRTY_START,
+            DIRTY_END,
+            ADDS_START,
+            DELS_START
+        ]
+        .iter()
+        .all(|&i| text.is_char_boundary(i)),
+        "colored field off a char boundary: {text:?}"
+    );
+    text.trim_end().to_string()
+}
+
+/// "#N" or empty when the number was never fetched. Clamped so the field
+/// can't overflow its column (a six-digit PR number is theoretical anyway).
+fn pr_num(row: &ScmCacheRow) -> String {
+    row.pr_number
+        .map(|n| format!("#{}", n.min(99_999)))
+        .unwrap_or_default()
 }
 
 /// Row CSS classes derived from PR/git/agent state. Walker turns each into
@@ -331,7 +380,7 @@ mod entry_tests {
     }
 
     #[test]
-    fn text_with_all_indicators() {
+    fn text_with_all_indicators_at_fixed_byte_offsets() {
         let row = ScmCacheRow {
             pr_lifecycle: Some(BranchLifecycle::PrOpen),
             pr_number: Some(123),
@@ -342,9 +391,102 @@ mod entry_tests {
         };
         let text = compose_text("workspacex", "fix-bug", &row);
         assert!(text.starts_with("workspacex/fix-bug"), "{text}");
-        assert!(text.contains("#123"), "{text}");
-        assert!(text.contains('\u{25cf}'), "{text}");
-        assert!(text.contains("\u{1f7e2}+45 \u{1f534}\u{2212}12"), "{text}");
+        // Byte-slicing at the theme's attribute offsets: a slice off a char
+        // boundary would panic, which is itself an alignment failure.
+        assert_eq!(&text[PR_START..PR_END], "\u{f407} #123  ", "{text}");
+        assert_eq!(&text[DIRTY_START..DIRTY_END], "\u{25cf}", "{text}");
+        assert_eq!(&text[ADDS_START..ADDS_END], "+45   ", "{text}");
+        // The row is trim_end'ed, so the last field loses its padding.
+        assert_eq!(&text[DELS_START..], "-12", "{text}");
+    }
+
+    #[test]
+    fn offsets_hold_for_every_field_combination() {
+        // Vary name length, PR digits, suffix presence, dirty, and diff
+        // magnitudes: the colored fields must never move.
+        let rows = [
+            ("r", "w", BranchLifecycle::PrDraft, Some(7), false, 1, 0),
+            (
+                "workspacex",
+                "some-quite-long-workspace-name",
+                BranchLifecycle::PrConflicted,
+                Some(99999),
+                true,
+                99999,
+                99999,
+            ),
+            ("a", "b", BranchLifecycle::PrClosed, None, true, 0, 3),
+        ];
+        for (repo, slug, l, n, dirty, a, d) in rows {
+            let row = ScmCacheRow {
+                pr_lifecycle: Some(l),
+                pr_number: n,
+                dirty: Some(dirty),
+                additions: Some(a),
+                deletions: Some(d),
+                fetched_at: Some(0),
+            };
+            let text = compose_text(repo, slug, &row);
+            assert!(text.is_char_boundary(PR_START), "{text}");
+            assert_eq!(&text[PR_START..PR_START + 3], "\u{f407}", "{text}");
+            match n {
+                Some(n) => {
+                    assert!(text[PR_START..PR_END].contains(&format!("#{n}")), "{text}")
+                }
+                None => assert!(!text.contains('#'), "{text}"),
+            }
+            let dirty_field = &text[DIRTY_START..DIRTY_END];
+            if dirty {
+                assert_eq!(dirty_field, "\u{25cf}", "{text}");
+            } else {
+                assert_eq!(dirty_field, "\u{2007}", "{text}");
+            }
+            assert_eq!(
+                text.as_bytes()[ADDS_START],
+                b'+',
+                "adds column moved: {text}"
+            );
+            assert_eq!(
+                text.as_bytes()[DELS_START],
+                b'-',
+                "dels column moved: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_column_truncates_and_forces_ascii() {
+        let long = "a-very-long-workspace-name-that-overflows";
+        let text = compose_text("workspacex", long, &ScmCacheRow::default());
+        assert_eq!(text.len(), NAME_W, "truncated name fills the column");
+        assert!(text.ends_with(".."), "{text}");
+
+        let row = ScmCacheRow {
+            additions: Some(1),
+            deletions: Some(0),
+            ..Default::default()
+        };
+        let text = compose_text("répo", "wörk", &row);
+        assert!(text.starts_with("r?po/w?rk"), "{text}");
+        assert_eq!(&text[ADDS_START..ADDS_END], "+1    ", "{text}");
+    }
+
+    #[test]
+    fn xml_attribute_ranges_match_layout() {
+        // The walker theme colors byte ranges of the composed text; if the
+        // column constants move, the theme XML must move with them.
+        let xml = include_str!("assets/walker-theme/item_menus-wsx.xml");
+        for (start, end) in [
+            (PR_START, PR_END),
+            (DIRTY_START, DIRTY_END),
+            (ADDS_START, ADDS_END),
+            (DELS_START, DELS_END),
+        ] {
+            assert!(
+                xml.contains(&format!("start=\"{start}\" end=\"{end}\"")),
+                "item_menus-wsx.xml missing attribute range {start}..{end}"
+            );
+        }
     }
 
     #[test]
@@ -474,30 +616,27 @@ mod entry_tests {
     }
 
     #[test]
-    fn pr_dots_mirror_tui_lifecycle_colors() {
-        let cases = [
-            (BranchLifecycle::PrOpen, Some('\u{1f7e2}')),
-            (BranchLifecycle::PrConflicted, Some('\u{1f7e0}')),
-            (BranchLifecycle::PrMerged, Some('\u{1f7e3}')),
-            (BranchLifecycle::PrClosed, Some('\u{1f534}')),
-            (BranchLifecycle::PrDraft, None),
-        ];
-        for (lifecycle, dot) in cases {
+    fn no_emoji_dots_in_any_lifecycle() {
+        // Lifecycle/diff colors come from the walker theme's Pango attribute
+        // ranges now — the color-font emoji dots must never come back.
+        for l in [
+            BranchLifecycle::PrOpen,
+            BranchLifecycle::PrDraft,
+            BranchLifecycle::PrConflicted,
+            BranchLifecycle::PrMerged,
+            BranchLifecycle::PrClosed,
+        ] {
             let row = ScmCacheRow {
-                pr_lifecycle: Some(lifecycle),
+                pr_lifecycle: Some(l),
                 pr_number: Some(7),
-                ..Default::default()
+                dirty: Some(true),
+                additions: Some(4),
+                deletions: Some(2),
+                fetched_at: Some(0),
             };
             let text = compose_text("r", "w", &row);
-            match dot {
-                Some(d) => assert!(text.contains(&format!("{d}#7")), "{lifecycle:?}: {text}"),
-                // Draft is uncolored in the TUI too: number, no dot.
-                None => {
-                    assert!(text.contains("#7"), "{lifecycle:?}: {text}");
-                    for d in ['\u{1f7e2}', '\u{1f7e0}', '\u{1f7e3}', '\u{1f534}'] {
-                        assert!(!text.contains(d), "{lifecycle:?}: {text}");
-                    }
-                }
+            for d in ['\u{1f7e2}', '\u{1f7e0}', '\u{1f7e3}', '\u{1f534}'] {
+                assert!(!text.contains(d), "{l:?}: {text}");
             }
         }
     }

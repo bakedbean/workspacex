@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- wsx walker theme layout, derived from omarchy-default: identical
-     structure, widened (920/880 vs 644/600) and taller (480 vs 300) so
-     two-line workspace rows with PR/diff indicators don't ellipsize.
+     structure, widened (1000/960 vs 644/600) and taller (480 vs 300) so
+     two-line fixed-column workspace rows (74 chars of 18px monospace plus
+     the icon column) don't ellipsize.
      Installed by `wsx setup waybar`; edits are overwritten on re-run. -->
 <interface>
   <requires lib="gtk" version="4.0"></requires>
@@ -16,7 +17,7 @@
         <style>
           <class name="box-wrapper"></class>
         </style>
-        <property name="width-request">920</property>
+        <property name="width-request">1000</property>
         <property name="overflow">hidden</property>
         <property name="orientation">horizontal</property>
         <property name="valign">center</property>
@@ -89,7 +90,7 @@
                     <property name="hexpand">true</property>
                     <property name="can_focus">false</property>
                     <property name="overlay-scrolling">true</property>
-                    <property name="max-content-width">880</property>
+                    <property name="max-content-width">960</property>
                     <property name="max-content-height">480</property>
                     <property name="min-content-height">0</property>
                     <property name="propagate-natural-height">true</property>

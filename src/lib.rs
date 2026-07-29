@@ -14,6 +14,8 @@ pub mod pty;
 pub mod test_support;
 /// Internal wall-clock helpers; not part of the public API.
 pub(crate) mod time;
+#[cfg(unix)]
+pub mod tui_ipc;
 pub mod ui;
 #[cfg(target_os = "linux")]
 pub mod waybar;

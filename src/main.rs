@@ -102,10 +102,10 @@ async fn main() -> Result<()> {
     // and propagate to the wsx store. Aborts when the runtime drops.
     tokio::spawn(app::branch_drift_poll(app.clone()));
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     let ipc_socket = {
-        let path = wsx::waybar::ipc::socket_path_for(std::process::id());
-        tokio::spawn(wsx::waybar::ipc::listen(app.clone(), path.clone()));
+        let path = wsx::tui_ipc::socket_path_for(std::process::id());
+        tokio::spawn(wsx::tui_ipc::listen(app.clone(), path.clone()));
         path
     };
 
@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
 
     let result = app::run(&mut terminal, app.clone()).await;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     let _ = std::fs::remove_file(&ipc_socket);
 
     disable_raw_mode()?;

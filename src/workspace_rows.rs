@@ -13,6 +13,10 @@ use std::path::PathBuf;
 /// conservative: menu opens are burstier than TUI ticks.
 pub const PR_REFRESH_THROTTLE_SECS: i64 = 120;
 
+/// Skip re-gathering local git facts (dirty/added/removed) for a workspace
+/// whose facts were computed more recently than this.
+pub const GIT_REFRESH_THROTTLE_SECS: i64 = 60;
+
 /// Max concurrent per-workspace git fact gathers at menu open (each runs
 /// ~3 git subprocesses; unbounded fan-out would spike on large fleets).
 pub(crate) const GIT_FACTS_CONCURRENCY: usize = 8;
@@ -78,29 +82,60 @@ pub(crate) async fn gather_git_facts(worktree: PathBuf) -> Option<(bool, crate::
     Some((dirty, stats))
 }
 
+struct WsMeta {
+    id: crate::data::store::WorkspaceId,
+    repo_name: String,
+    slug: String,
+    branch: String,
+    worktree_path: PathBuf,
+}
+
+/// Workspace metadata sorted by repo name then workspace name.
+fn workspace_metas(store: &Store) -> Result<Vec<WsMeta>> {
+    let mut repos = crate::data::repo::list(store)?;
+    repos.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut metas = Vec::new();
+    for repo in &repos {
+        let mut workspaces = store.workspaces(repo.id)?;
+        workspaces.sort_by(|a, b| a.name.cmp(&b.name));
+        for ws in workspaces {
+            metas.push(WsMeta {
+                id: ws.id,
+                repo_name: repo.name.clone(),
+                slug: ws.name,
+                branch: ws.branch,
+                worktree_path: ws.worktree_path,
+            });
+        }
+    }
+    Ok(metas)
+}
+
+/// Cache-only rows: store + scm_cache reads, zero subprocesses. The
+/// menubar plugin renders from this on every poll.
+pub fn collect_rows_cached(store: &Store) -> Result<Vec<RowInput>> {
+    let statuses = store.all_workspace_status()?;
+    let mut caches = store.all_scm_cache()?;
+    Ok(workspace_metas(store)?
+        .into_iter()
+        .map(|m| RowInput {
+            status: statuses.get(&m.id).cloned(),
+            cache: caches.remove(&m.id).unwrap_or_default(),
+            repo_name: m.repo_name,
+            slug: m.slug,
+            branch: m.branch,
+            worktree_path: m.worktree_path,
+        })
+        .collect())
+}
+
 /// Rows sorted by repo name then workspace name (parity with the dmenu
 /// picker). Git-local facts are gathered concurrently across workspaces and
 /// written through to `scm_cache`; PR fields are read from cache only.
 pub async fn collect_rows_fresh(store: &Store) -> Result<Vec<RowInput>> {
     let statuses = store.all_workspace_status()?;
     let mut caches = store.all_scm_cache()?;
-    let mut repos = crate::data::repo::list(store)?;
-    repos.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let mut metas = Vec::new();
-    for repo in &repos {
-        let mut workspaces = store.workspaces(repo.id)?;
-        workspaces.sort_by(|a, b| a.name.cmp(&b.name));
-        for ws in workspaces {
-            metas.push((
-                ws.id,
-                repo.name.clone(),
-                ws.name,
-                ws.branch,
-                ws.worktree_path,
-            ));
-        }
-    }
+    let metas = workspace_metas(store)?;
 
     // Bounded fan-out: ~3 git subprocesses per workspace, so unbounded
     // join_all would spike process count on large fleets. `buffered` keeps
@@ -109,20 +144,20 @@ pub async fn collect_rows_fresh(store: &Store) -> Result<Vec<RowInput>> {
     let facts: Vec<_> = futures::stream::iter(
         metas
             .iter()
-            .map(|(_, _, _, _, worktree)| gather_git_facts(worktree.clone())),
+            .map(|m| gather_git_facts(m.worktree_path.clone())),
     )
     .buffered(GIT_FACTS_CONCURRENCY)
     .collect()
     .await;
 
     let mut rows = Vec::with_capacity(metas.len());
-    for ((id, repo_name, slug, branch, worktree_path), fact) in metas.into_iter().zip(facts) {
-        let mut cache = caches.remove(&id).unwrap_or_default();
+    for (m, fact) in metas.into_iter().zip(facts) {
+        let mut cache = caches.remove(&m.id).unwrap_or_default();
         if let Some((dirty, stats)) = fact {
             cache.dirty = Some(dirty);
             cache.additions = Some(stats.added);
             cache.deletions = Some(stats.removed);
-            let _ = store.upsert_scm_git(id, dirty, stats.added, stats.removed, unix_now());
+            let _ = store.upsert_scm_git(m.id, dirty, stats.added, stats.removed, unix_now());
         } else {
             // Git failed (missing worktree, not a repo, etc.): suppress stale
             // indicators in-memory while preserving cached PR state.
@@ -131,15 +166,51 @@ pub async fn collect_rows_fresh(store: &Store) -> Result<Vec<RowInput>> {
             cache.deletions = None;
         }
         rows.push(RowInput {
-            repo_name,
-            slug,
-            branch,
-            worktree_path,
-            status: statuses.get(&id).cloned(),
+            repo_name: m.repo_name,
+            slug: m.slug,
+            branch: m.branch,
+            worktree_path: m.worktree_path,
+            status: statuses.get(&m.id).cloned(),
             cache,
         });
     }
     Ok(rows)
+}
+
+/// Recompute git facts for every workspace whose git_fetched_at is stale.
+/// Bounded fan-out; git failure clears the row's git fields (a stale ● is
+/// worse than none). Silent by contract, like run_refresh_prs.
+pub async fn refresh_git_facts(store: &Store) -> Result<()> {
+    let now = unix_now();
+    let caches = store.all_scm_cache()?;
+    let targets: Vec<WsMeta> = workspace_metas(store)?
+        .into_iter()
+        .filter(|m| {
+            caches
+                .get(&m.id)
+                .is_none_or(|c| is_stale(c.git_fetched_at, now, GIT_REFRESH_THROTTLE_SECS))
+        })
+        .collect();
+    use futures::StreamExt;
+    let facts: Vec<_> = futures::stream::iter(
+        targets
+            .iter()
+            .map(|m| gather_git_facts(m.worktree_path.clone())),
+    )
+    .buffered(GIT_FACTS_CONCURRENCY)
+    .collect()
+    .await;
+    for (m, fact) in targets.into_iter().zip(facts) {
+        match fact {
+            Some((dirty, stats)) => {
+                let _ = store.upsert_scm_git(m.id, dirty, stats.added, stats.removed, now);
+            }
+            None => {
+                let _ = store.clear_scm_git(m.id, now);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn unix_now() -> i64 {
@@ -187,5 +258,84 @@ mod tests {
         assert!(is_stale(Some(880), 1000, 120));
         assert!(!is_stale(Some(881), 1000, 120));
         assert!(!is_stale(Some(2000), 1000, 120)); // clock skew: don't refetch
+    }
+
+    #[tokio::test]
+    async fn cached_collect_reads_cache_without_git() {
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "x/w",
+                // Nonexistent on purpose: cached collect must not care.
+                worktree_path: &std::path::PathBuf::from("/nonexistent/r/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store.upsert_scm_git(id, true, 4, 2, 1000).unwrap();
+
+        let rows = collect_rows_cached(&store).unwrap();
+        assert_eq!(rows.len(), 1);
+        // Cache values pass through untouched — fresh mode would have
+        // suppressed them because git fails on the missing worktree.
+        assert_eq!(rows[0].cache.dirty, Some(true));
+        assert_eq!(rows[0].cache.additions, Some(4));
+        assert_eq!(
+            rows[0].worktree_path.display().to_string(),
+            "/nonexistent/r/w"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_git_facts_clears_failed_and_skips_fresh() {
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let mut ids = vec![];
+        for name in ["stale", "fresh"] {
+            ids.push(
+                store
+                    .insert_workspace(&NewWorkspace {
+                        repo_id: repo,
+                        name,
+                        branch: &format!("x/{name}"),
+                        worktree_path: &std::path::PathBuf::from(format!("/nonexistent/{name}")),
+                        yolo: false,
+                        agent: AgentKind::Claude,
+                        shared: false,
+                    })
+                    .unwrap(),
+            );
+        }
+        // stale: git_fetched_at long ago → swept; git fails → cleared, restamped.
+        store.upsert_scm_git(ids[0], true, 4, 2, 0).unwrap();
+        // fresh: stamped now → skipped, indicators survive even though the
+        // worktree is equally nonexistent.
+        store
+            .upsert_scm_git(ids[1], true, 9, 9, unix_now())
+            .unwrap();
+
+        refresh_git_facts(&store).await.unwrap();
+
+        let caches = store.all_scm_cache().unwrap();
+        let stale = caches[&ids[0]].clone();
+        assert_eq!(stale.dirty, None, "failed git must clear stale indicators");
+        assert!(stale.git_fetched_at.unwrap() > 0, "sweep must restamp");
+        let fresh = caches[&ids[1]].clone();
+        assert_eq!(fresh.dirty, Some(true), "fresh row must not be swept");
+        assert_eq!(fresh.additions, Some(9));
     }
 }

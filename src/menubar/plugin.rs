@@ -25,18 +25,29 @@ fn sfcolor(state: ReportedState) -> &'static str {
     }
 }
 
-/// Cap on a rendered line's text segment, in chars. Named per the spec's
-/// "length-capped" sanitization bullet — keeps one hostile/huge status
-/// message from ballooning the SwiftBar document.
+/// Cap on a rendered line's *display text* segment, in chars. Named per the
+/// spec's "length-capped" sanitization bullet — keeps one hostile/huge
+/// status message from ballooning the SwiftBar document. Never applied to
+/// param values (paths, URLs) — those must survive intact or the action
+/// they drive (open path, open URL) breaks.
 const MAX_TEXT_LEN: usize = 120;
 
-/// Line text sanitizer: control chars collapse (via sanitize), the
-/// protocol's text/params separator '|' becomes a broken bar, a leading
-/// '-' is guarded so the string can't read as a '---' separator or '--'
-/// submenu marker, and the result is length-capped — so no
-/// user-controlled string can smuggle params, extra rows, or bloat.
+/// Injection barrier shared by display text and param values: control
+/// chars collapse (via sanitize) and the protocol's text/params separator
+/// '|' becomes a broken bar, so no user-controlled string can smuggle
+/// params or extra rows. Uncapped and no dash guard — safe for param
+/// values (quoted, not line-initial) where truncation would corrupt a
+/// real path or URL.
+fn esc_core(s: &str) -> String {
+    sanitize(s).replace('|', "\u{00a6}")
+}
+
+/// Display-text sanitizer built on `esc_core`: additionally guards a
+/// leading '-' (so the string can't read as a '---' separator or '--'
+/// submenu marker) and length-caps the result. Only for text that renders
+/// directly on a menu line — never for param values.
 fn esc_text(s: &str) -> String {
-    let mut out = sanitize(s).replace('|', "\u{00a6}");
+    let mut out = esc_core(s);
     if out.starts_with('-') {
         out.replace_range(0..1, "\u{2011}");
     }
@@ -48,9 +59,12 @@ fn esc_text(s: &str) -> String {
 
 /// All bash=/paramN=/href= values are double-quoted; interior quotes
 /// degrade to '\'' (a path with a double quote is pathological — keeping
-/// the protocol unbreakable beats preserving it).
+/// the protocol unbreakable beats preserving it). Uses the uncapped,
+/// unguarded `esc_core` — param values are real paths/URLs consumed by the
+/// action they drive (Jump, Reveal in Finder, Open PR), not display text,
+/// so they must never be truncated or dash-shifted.
 fn quote_param(s: &str) -> String {
-    format!("\"{}\"", esc_text(s).replace('"', "'"))
+    format!("\"{}\"", esc_core(s).replace('"', "'"))
 }
 
 pub(crate) fn error_header() -> String {
@@ -417,6 +431,35 @@ mod plugin_tests {
         // The whole subtitle text segment (branch + state + message) is
         // capped as one unit — nowhere near the 1000-char input.
         assert!(subtitle.chars().count() < 200, "{subtitle}");
+    }
+
+    #[test]
+    fn long_worktree_path_survives_uncapped_in_reveal_param() {
+        // The MAX_TEXT_LEN cap is for display text only; a long real path
+        // must reach `open -R` intact or Reveal in Finder breaks.
+        let mut r = row("r", "w");
+        let long_segment = "d".repeat(300);
+        r.worktree_path = format!("/wt/r/{long_segment}").into();
+        let lines = submenu_lines(&r, "/bin/wsx");
+        let reveal = lines
+            .iter()
+            .find(|l| l.starts_with("-- Reveal in Finder"))
+            .expect("reveal line present");
+        assert!(reveal.contains(&long_segment), "{reveal}");
+    }
+
+    #[test]
+    fn long_pr_url_survives_uncapped_in_href() {
+        let mut r = row("r", "w");
+        let long_segment = "u".repeat(300);
+        r.cache.pr_number = Some(9);
+        r.cache.pr_url = Some(format!("https://example.com/{long_segment}"));
+        let lines = submenu_lines(&r, "/bin/wsx");
+        let open_pr = lines
+            .iter()
+            .find(|l| l.starts_with("-- Open PR"))
+            .expect("open PR line present");
+        assert!(open_pr.contains(&long_segment), "{open_pr}");
     }
 
     #[test]

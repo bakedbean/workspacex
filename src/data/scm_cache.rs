@@ -55,12 +55,19 @@ impl Store {
         fetched_at: i64,
     ) -> Result<()> {
         self.conn().execute(
+            // A NULL incoming url keeps any previously cached one: a fetch
+            // that knows the lifecycle but not the url must not regress the
+            // menu's "Open PR" action. NoPr clears it — no PR, no URL.
             "INSERT INTO scm_cache (workspace_id, pr_lifecycle, pr_number, pr_url, fetched_at)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(workspace_id) DO UPDATE SET
                pr_lifecycle = excluded.pr_lifecycle,
                pr_number    = excluded.pr_number,
-               pr_url       = excluded.pr_url,
+               pr_url       = CASE
+                 WHEN excluded.pr_url IS NOT NULL THEN excluded.pr_url
+                 WHEN excluded.pr_lifecycle = 'no_pr' THEN NULL
+                 ELSE scm_cache.pr_url
+               END,
                fetched_at   = excluded.fetched_at",
             rusqlite::params![id.0, lifecycle_to_str(lifecycle), number, url, fetched_at],
         )?;
@@ -197,6 +204,36 @@ mod scm_cache_tests {
         let row = store.all_scm_cache().unwrap()[&id].clone();
         assert_eq!(row.pr_lifecycle, Some(BranchLifecycle::NoPr));
         assert_eq!(row.pr_number, None);
+    }
+
+    #[test]
+    fn null_url_preserves_cached_url_except_for_no_pr() {
+        let (store, id) = store_with_workspace();
+        let url = "https://github.com/o/r/pull/7";
+        store
+            .upsert_scm_pr(id, BranchLifecycle::PrOpen, Some(7), Some(url), 1000)
+            .unwrap();
+        // A later fetch that knows the lifecycle but not the url must not
+        // clear the cached one ("Open PR" would silently vanish).
+        store
+            .upsert_scm_pr(id, BranchLifecycle::PrConflicted, Some(7), None, 2000)
+            .unwrap();
+        let row = store.all_scm_cache().unwrap()[&id].clone();
+        assert_eq!(row.pr_url.as_deref(), Some(url));
+        assert_eq!(row.pr_lifecycle, Some(BranchLifecycle::PrConflicted));
+        // A fresh url still overwrites.
+        let url2 = "https://github.com/o/r/pull/8";
+        store
+            .upsert_scm_pr(id, BranchLifecycle::PrOpen, Some(8), Some(url2), 3000)
+            .unwrap();
+        let row = store.all_scm_cache().unwrap()[&id].clone();
+        assert_eq!(row.pr_url.as_deref(), Some(url2));
+        // NoPr clears: no PR, no URL.
+        store
+            .upsert_scm_pr(id, BranchLifecycle::NoPr, None, None, 4000)
+            .unwrap();
+        let row = store.all_scm_cache().unwrap()[&id].clone();
+        assert_eq!(row.pr_url, None);
     }
 
     #[test]

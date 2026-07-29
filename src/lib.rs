@@ -8,6 +8,8 @@ pub mod data;
 pub mod detail_modules;
 pub mod error;
 pub mod git;
+#[cfg(target_os = "macos")]
+pub mod menubar;
 pub mod names;
 pub mod pty;
 #[doc(hidden)]

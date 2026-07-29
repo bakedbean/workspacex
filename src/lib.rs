@@ -8,6 +8,7 @@ pub mod data;
 pub mod detail_modules;
 pub mod error;
 pub mod git;
+pub(crate) mod install_common;
 #[cfg(target_os = "macos")]
 pub mod menubar;
 pub mod names;

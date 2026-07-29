@@ -174,10 +174,7 @@ fn spawn_refresh(wsx_bin: &str) {
 /// Never fails: SwiftBar polls this; on any error print the bare symbol
 /// and exit 0 so the bar shows a quiet idle item, never an error string.
 pub fn print_plugin(db_path: &Path) {
-    // Task 7 swaps this for preferred_wsx_bin.
-    let wsx_bin = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "wsx".into());
+    let wsx_bin = crate::install_common::preferred_wsx_bin(dirs::home_dir());
     match Store::open(db_path).and_then(|s| plugin_document(&s, &wsx_bin)) {
         Ok(doc) => println!("{doc}"),
         Err(_) => println!("{}", error_header()),

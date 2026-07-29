@@ -31,6 +31,7 @@ Four pieces inside one macOS-only module tree, mirroring `src/waybar/`:
 | Plugin renderer | `wsx menubar plugin` | Print the full SwiftBar document (header + menu); run by SwiftBar on every refresh |
 | Refresh sweep | `wsx menubar refresh` | Detached, throttled recompute of git facts + PR status into `scm_cache` |
 | Jump | `wsx menubar jump <repo> <slug>` | Select workspace in a running TUI + focus its window, or launch one |
+| Copy path | `wsx menubar copy-path <repo> <slug>` | Pipe the worktree path to `pbcopy` (SwiftBar's `bash=` cannot express a shell pipeline safely) |
 | Installer | `wsx setup menubar` | Install the SwiftBar plugin shim |
 
 The installed SwiftBar plugin is a two-line shell shim
@@ -90,9 +91,10 @@ Prints the complete SwiftBar document to stdout on every poll:
   blocked red, done green, waiting yellow, working blue, idle default
   (no color param). Colors specified as hex with a light,dark pair where
   the palettes differ.
-- No registered repos → print nothing meaningful (SwiftBar hides an item
-  whose output is empty); any error → bare symbol with no count, exit 0.
-  Never a visible error string in the menubar.
+- No registered repos or any error → icon-only header (bare `sfimage`
+  line, no count, no color), exit 0. Empty plugin output is not an option
+  — SwiftBar renders a warning icon for it. Never a visible error string
+  in the menubar.
 
 ### Menu body
 
@@ -122,7 +124,8 @@ including empty ones:
      opens the PR URL via `href=`. The PR URL is stored in `scm_cache`
      alongside the number (small additive column) so no `gh` call is
      needed at render time.
-  3. `Copy worktree path` — pipes the path to `pbcopy`.
+  3. `Copy worktree path` — runs `wsx menubar copy-path <repo> <slug>`,
+     which resolves the path from the store and pipes it to `pbcopy`.
   4. `Reveal in Finder` — `open -R <worktree>`.
   A second `-- <branch> — <status message>` disabled subtitle line at the
   top of the submenu carries the info the Linux menu shows as subtext.

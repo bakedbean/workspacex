@@ -182,6 +182,10 @@ pub static GROUPS: &[GroupInfo] = &[
                 usage: "waybar",
                 blurb: "Install the waybar module into ~/.config/waybar",
             },
+            CmdInfo {
+                usage: "menubar",
+                blurb: "Install the SwiftBar plugin shim",
+            },
         ],
     },
     GroupInfo {
@@ -243,6 +247,28 @@ pub static GROUPS: &[GroupInfo] = &[
             CmdInfo {
                 usage: "refresh-prs",
                 blurb: "Refresh the cached PR state for all workspaces",
+            },
+        ],
+    },
+    GroupInfo {
+        name: "menubar",
+        blurb: "macOS menubar (SwiftBar) status module and workspace jumper",
+        commands: &[
+            CmdInfo {
+                usage: "plugin",
+                blurb: "Print the SwiftBar plugin document",
+            },
+            CmdInfo {
+                usage: "jump <repo> <slug>",
+                blurb: "Select the workspace in a running TUI, or launch one",
+            },
+            CmdInfo {
+                usage: "copy-path <repo> <slug>",
+                blurb: "Copy the workspace's worktree path to the clipboard",
+            },
+            CmdInfo {
+                usage: "refresh",
+                blurb: "Refresh cached git/PR indicators for all workspaces",
             },
         ],
     },
@@ -442,6 +468,17 @@ pub enum CliAction {
     },
     WaybarMenuEntries,
     WaybarRefreshPrs,
+    SetupMenubar,
+    MenubarPlugin,
+    MenubarJump {
+        repo: String,
+        slug: String,
+    },
+    MenubarCopyPath {
+        repo: String,
+        slug: String,
+    },
+    MenubarRefresh,
     AgentList,
     AgentSend {
         target: String,
@@ -598,6 +635,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         "status" => parse_status(&mut it).map_err(|e| tag_group(e, group)),
         "recap" => parse_recap(&mut it).map_err(|e| tag_group(e, group)),
         "waybar" => parse_waybar(&mut it).map_err(|e| tag_group(e, group)),
+        "menubar" => parse_menubar(&mut it).map_err(|e| tag_group(e, group)),
         other => Err(Error::Usage {
             group: None,
             msg: format!("unknown command: {other}"),
@@ -1110,6 +1148,7 @@ fn parse_setup(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
         Some("install-skill") => Ok(CliAction::SetupInstallSkill),
         Some("waybar") => Ok(CliAction::SetupWaybar),
+        Some("menubar") => Ok(CliAction::SetupMenubar),
         other => Err(Error::Usage {
             group: None,
             msg: match other {
@@ -1147,6 +1186,38 @@ fn parse_waybar(it: &mut Args) -> Result<CliAction> {
             msg: match other {
                 Some(cmd) => format!("unknown waybar command: {cmd}"),
                 None => "missing waybar command".into(),
+            },
+        }),
+    }
+}
+
+fn parse_menubar(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("plugin") => Ok(CliAction::MenubarPlugin),
+        Some("jump") => {
+            let (Some(repo), Some(slug)) = (it.next(), it.next()) else {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "jump needs <repo> <slug>".into(),
+                });
+            };
+            Ok(CliAction::MenubarJump { repo, slug })
+        }
+        Some("copy-path") => {
+            let (Some(repo), Some(slug)) = (it.next(), it.next()) else {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "copy-path needs <repo> <slug>".into(),
+                });
+            };
+            Ok(CliAction::MenubarCopyPath { repo, slug })
+        }
+        Some("refresh") => Ok(CliAction::MenubarRefresh),
+        other => Err(Error::Usage {
+            group: None,
+            msg: match other {
+                Some(cmd) => format!("unknown menubar command: {cmd}"),
+                None => "missing menubar command".into(),
             },
         }),
     }
@@ -1320,6 +1391,26 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         }
         #[cfg(not(target_os = "linux"))]
         return Err(waybar_linux_only());
+    }
+    if matches!(action, CliAction::MenubarPlugin) {
+        #[cfg(target_os = "macos")]
+        {
+            crate::menubar::plugin::print_plugin(&dirs.db_path());
+            return Ok(());
+        }
+        #[cfg(not(target_os = "macos"))]
+        return Err(menubar_macos_only());
+    }
+    if matches!(action, CliAction::SetupMenubar) {
+        #[cfg(target_os = "macos")]
+        {
+            for line in crate::menubar::install::run()? {
+                println!("{line}");
+            }
+            return Ok(());
+        }
+        #[cfg(not(target_os = "macos"))]
+        return Err(menubar_macos_only());
     }
     let store = crate::data::store::Store::open(&dirs.db_path())?;
     match action {
@@ -1889,7 +1980,28 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         | CliAction::WaybarJump { .. }
         | CliAction::WaybarMenuEntries
         | CliAction::WaybarRefreshPrs => return Err(waybar_linux_only()),
-        CliAction::SetupInstallSkill | CliAction::WaybarStatus | CliAction::SetupWaybar => {
+        #[cfg(target_os = "macos")]
+        CliAction::MenubarJump { repo, slug } => {
+            let terminal_cmd = store.get_setting("terminal_cmd")?;
+            crate::menubar::jump::jump(&repo, &slug, terminal_cmd.as_deref())?
+        }
+        #[cfg(target_os = "macos")]
+        CliAction::MenubarCopyPath { repo, slug } => {
+            crate::menubar::jump::copy_path(&store, &repo, &slug)?
+        }
+        #[cfg(target_os = "macos")]
+        CliAction::MenubarRefresh => crate::menubar::refresh::run_refresh(&store).await?,
+        #[cfg(not(target_os = "macos"))]
+        CliAction::MenubarJump { .. }
+        | CliAction::MenubarCopyPath { .. }
+        | CliAction::MenubarRefresh => {
+            return Err(menubar_macos_only());
+        }
+        CliAction::SetupInstallSkill
+        | CliAction::WaybarStatus
+        | CliAction::SetupWaybar
+        | CliAction::MenubarPlugin
+        | CliAction::SetupMenubar => {
             unreachable!("handled before store open")
         }
         CliAction::Help(_) | CliAction::Version => {
@@ -1902,6 +2014,11 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
 #[cfg(not(target_os = "linux"))]
 fn waybar_linux_only() -> Error {
     Error::UserInput("wsx waybar is only available on Linux (waybar integration)".into())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn menubar_macos_only() -> Error {
+    Error::UserInput("wsx menubar is only available on macOS (SwiftBar integration)".into())
 }
 
 /// Resolve the workspace the current `wsx` invocation is acting within:
@@ -2854,6 +2971,7 @@ mod tests {
             "status",
             "recap",
             "waybar",
+            "menubar",
         ];
         let registry: Vec<&str> = GROUPS.iter().map(|g| g.name).collect();
         for d in dispatched {
@@ -3128,5 +3246,50 @@ mod tests {
         assert!(h.contains("wsx waybar —"));
         assert!(h.contains("status"));
         assert!(h.contains("jump <repo> <slug>"));
+    }
+
+    #[test]
+    fn parses_menubar_commands() {
+        assert!(matches!(
+            parse(&["menubar", "plugin"]),
+            Ok(CliAction::MenubarPlugin)
+        ));
+        match parse(&["menubar", "jump", "meals backend", "api-fix"]) {
+            Ok(CliAction::MenubarJump { repo, slug }) => {
+                assert_eq!(repo, "meals backend");
+                assert_eq!(slug, "api-fix");
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse(&["menubar", "copy-path", "r", "s"]) {
+            Ok(CliAction::MenubarCopyPath { repo, slug }) => {
+                assert_eq!(repo, "r");
+                assert_eq!(slug, "s");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse(&["menubar", "refresh"]),
+            Ok(CliAction::MenubarRefresh)
+        ));
+        assert!(parse(&["menubar", "jump", "onlyrepo"]).is_err());
+        assert!(parse(&["menubar", "bogus"]).is_err());
+        assert!(parse(&["menubar"]).is_err());
+    }
+
+    #[test]
+    fn parses_setup_menubar() {
+        assert!(matches!(
+            parse(&["setup", "menubar"]),
+            Ok(CliAction::SetupMenubar)
+        ));
+    }
+
+    #[test]
+    fn menubar_group_help_renders() {
+        let h = render_group_help("menubar");
+        assert!(h.contains("wsx menubar —"));
+        assert!(h.contains("plugin"));
+        assert!(h.contains("copy-path"));
     }
 }

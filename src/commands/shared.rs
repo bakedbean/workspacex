@@ -129,7 +129,7 @@ pub async fn enrich_with_pr_status(records: &mut [SharedWorkspaceRecord]) {
         .collect()
         .await;
     for (rec, status) in records.iter_mut().zip(statuses) {
-        rec.lifecycle = status.map(|s| s.lifecycle);
+        rec.lifecycle = status.as_ref().map(|s| s.lifecycle);
         rec.pr_number = status.and_then(|s| s.number);
     }
 }

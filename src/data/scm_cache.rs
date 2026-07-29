@@ -10,7 +10,7 @@ use crate::data::store::{Store, WorkspaceId};
 use crate::error::Result;
 use crate::git::forge::BranchLifecycle;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScmCacheRow {
     pub pr_lifecycle: Option<BranchLifecycle>,
     pub pr_number: Option<u32>,
@@ -18,6 +18,8 @@ pub struct ScmCacheRow {
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
     pub fetched_at: Option<i64>,
+    pub pr_url: Option<String>,
+    pub git_fetched_at: Option<i64>,
 }
 
 pub(crate) fn lifecycle_to_str(l: BranchLifecycle) -> &'static str {
@@ -49,16 +51,18 @@ impl Store {
         id: WorkspaceId,
         lifecycle: BranchLifecycle,
         number: Option<u32>,
+        url: Option<&str>,
         fetched_at: i64,
     ) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO scm_cache (workspace_id, pr_lifecycle, pr_number, fetched_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO scm_cache (workspace_id, pr_lifecycle, pr_number, pr_url, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(workspace_id) DO UPDATE SET
                pr_lifecycle = excluded.pr_lifecycle,
                pr_number    = excluded.pr_number,
+               pr_url       = excluded.pr_url,
                fetched_at   = excluded.fetched_at",
-            rusqlite::params![id.0, lifecycle_to_str(lifecycle), number, fetched_at],
+            rusqlite::params![id.0, lifecycle_to_str(lifecycle), number, url, fetched_at],
         )?;
         Ok(())
     }
@@ -69,22 +73,40 @@ impl Store {
         dirty: bool,
         additions: u32,
         deletions: u32,
+        git_fetched_at: i64,
     ) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO scm_cache (workspace_id, dirty, additions, deletions)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO scm_cache (workspace_id, dirty, additions, deletions, git_fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(workspace_id) DO UPDATE SET
-               dirty     = excluded.dirty,
-               additions = excluded.additions,
-               deletions = excluded.deletions",
-            rusqlite::params![id.0, dirty as i64, additions, deletions],
+               dirty          = excluded.dirty,
+               additions      = excluded.additions,
+               deletions      = excluded.deletions,
+               git_fetched_at = excluded.git_fetched_at",
+            rusqlite::params![id.0, dirty as i64, additions, deletions, git_fetched_at],
+        )?;
+        Ok(())
+    }
+
+    /// NULLs the git-derived fields (dirty/additions/deletions) while
+    /// stamping `git_fetched_at` and leaving PR fields untouched. Used when
+    /// a fresh git read fails so stale indicators don't linger under a
+    /// fresh timestamp.
+    pub fn clear_scm_git(&self, id: WorkspaceId, git_fetched_at: i64) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO scm_cache (workspace_id, git_fetched_at) VALUES (?1, ?2)
+             ON CONFLICT(workspace_id) DO UPDATE SET
+               dirty = NULL, additions = NULL, deletions = NULL,
+               git_fetched_at = excluded.git_fetched_at",
+            rusqlite::params![id.0, git_fetched_at],
         )?;
         Ok(())
     }
 
     pub fn all_scm_cache(&self) -> Result<HashMap<WorkspaceId, ScmCacheRow>> {
         let mut stmt = self.conn().prepare(
-            "SELECT workspace_id, pr_lifecycle, pr_number, dirty, additions, deletions, fetched_at
+            "SELECT workspace_id, pr_lifecycle, pr_number, dirty, additions, deletions, \
+                    fetched_at, pr_url, git_fetched_at
              FROM scm_cache",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -100,6 +122,8 @@ impl Store {
                     additions: r.get(4)?,
                     deletions: r.get(5)?,
                     fetched_at: r.get(6)?,
+                    pr_url: r.get(7)?,
+                    git_fetched_at: r.get(8)?,
                 },
             ))
         })?;
@@ -141,12 +165,12 @@ mod scm_cache_tests {
         let (store, id) = store_with_workspace();
         assert!(store.all_scm_cache().unwrap().is_empty());
 
-        store.upsert_scm_git(id, true, 4, 2).unwrap();
+        store.upsert_scm_git(id, true, 4, 2, 500).unwrap();
         store
-            .upsert_scm_pr(id, BranchLifecycle::PrOpen, Some(12), 1000)
+            .upsert_scm_pr(id, BranchLifecycle::PrOpen, Some(12), None, 1000)
             .unwrap();
 
-        let row = store.all_scm_cache().unwrap()[&id];
+        let row = store.all_scm_cache().unwrap()[&id].clone();
         assert_eq!(row.dirty, Some(true));
         assert_eq!(row.additions, Some(4));
         assert_eq!(row.deletions, Some(2));
@@ -155,8 +179,8 @@ mod scm_cache_tests {
         assert_eq!(row.fetched_at, Some(1000));
 
         // A git-only update must not clobber PR fields, and vice versa.
-        store.upsert_scm_git(id, false, 0, 0).unwrap();
-        let row = store.all_scm_cache().unwrap()[&id];
+        store.upsert_scm_git(id, false, 0, 0, 600).unwrap();
+        let row = store.all_scm_cache().unwrap()[&id].clone();
         assert_eq!(row.pr_lifecycle, Some(BranchLifecycle::PrOpen));
         assert_eq!(row.dirty, Some(false));
     }
@@ -165,12 +189,12 @@ mod scm_cache_tests {
     fn pr_number_none_clears_stored_number() {
         let (store, id) = store_with_workspace();
         store
-            .upsert_scm_pr(id, BranchLifecycle::PrOpen, Some(7), 1000)
+            .upsert_scm_pr(id, BranchLifecycle::PrOpen, Some(7), None, 1000)
             .unwrap();
         store
-            .upsert_scm_pr(id, BranchLifecycle::NoPr, None, 2000)
+            .upsert_scm_pr(id, BranchLifecycle::NoPr, None, None, 2000)
             .unwrap();
-        let row = store.all_scm_cache().unwrap()[&id];
+        let row = store.all_scm_cache().unwrap()[&id].clone();
         assert_eq!(row.pr_lifecycle, Some(BranchLifecycle::NoPr));
         assert_eq!(row.pr_number, None);
     }
@@ -197,7 +221,7 @@ mod scm_cache_tests {
     #[test]
     fn remove_workspace_deletes_cache_row() {
         let (store, id) = store_with_workspace();
-        store.upsert_scm_git(id, true, 1, 1).unwrap();
+        store.upsert_scm_git(id, true, 1, 1, 1000).unwrap();
         store.delete_workspace(id).unwrap();
         assert!(store.all_scm_cache().unwrap().is_empty());
     }
@@ -210,7 +234,7 @@ mod scm_cache_tests {
     #[test]
     fn remove_repo_deletes_cache_rows_for_its_workspaces() {
         let (store, id) = store_with_workspace();
-        store.upsert_scm_git(id, true, 3, 1).unwrap();
+        store.upsert_scm_git(id, true, 3, 1, 1000).unwrap();
         assert!(!store.all_scm_cache().unwrap().is_empty());
 
         let repo_id = store.repos().unwrap()[0].id;
@@ -218,5 +242,44 @@ mod scm_cache_tests {
 
         assert!(store.all_scm_cache().unwrap().is_empty());
         assert!(store.repos().unwrap().is_empty());
+    }
+
+    #[test]
+    fn v19_columns_round_trip() {
+        let (store, id) = store_with_workspace();
+        store
+            .upsert_scm_pr(
+                id,
+                BranchLifecycle::PrOpen,
+                Some(12),
+                Some("https://github.com/o/r/pull/12"),
+                1000,
+            )
+            .unwrap();
+        store.upsert_scm_git(id, true, 4, 2, 2000).unwrap();
+        let row = store.all_scm_cache().unwrap()[&id].clone();
+        assert_eq!(
+            row.pr_url.as_deref(),
+            Some("https://github.com/o/r/pull/12")
+        );
+        assert_eq!(row.git_fetched_at, Some(2000));
+        assert_eq!(row.fetched_at, Some(1000));
+    }
+
+    #[test]
+    fn clear_scm_git_nulls_git_fields_and_stamps_time() {
+        let (store, id) = store_with_workspace();
+        store.upsert_scm_git(id, true, 4, 2, 1000).unwrap();
+        store
+            .upsert_scm_pr(id, BranchLifecycle::PrOpen, Some(7), None, 1000)
+            .unwrap();
+        store.clear_scm_git(id, 3000).unwrap();
+        let row = store.all_scm_cache().unwrap()[&id].clone();
+        assert_eq!(row.dirty, None);
+        assert_eq!(row.additions, None);
+        assert_eq!(row.deletions, None);
+        assert_eq!(row.git_fetched_at, Some(3000));
+        // PR fields untouched.
+        assert_eq!(row.pr_number, Some(7));
     }
 }

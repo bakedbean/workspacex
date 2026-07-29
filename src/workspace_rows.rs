@@ -122,7 +122,7 @@ pub async fn collect_rows_fresh(store: &Store) -> Result<Vec<RowInput>> {
             cache.dirty = Some(dirty);
             cache.additions = Some(stats.added);
             cache.deletions = Some(stats.removed);
-            let _ = store.upsert_scm_git(id, dirty, stats.added, stats.removed);
+            let _ = store.upsert_scm_git(id, dirty, stats.added, stats.removed, unix_now());
         } else {
             // Git failed (missing worktree, not a repo, etc.): suppress stale
             // indicators in-memory while preserving cached PR state.
@@ -162,7 +162,13 @@ pub async fn run_refresh_prs(store: &Store) -> Result<()> {
             if let Ok(Some(status)) =
                 crate::git::forge::fetch_pr_status(&ws.worktree_path, &ws.branch).await
             {
-                let _ = store.upsert_scm_pr(ws.id, status.lifecycle, status.number, unix_now());
+                let _ = store.upsert_scm_pr(
+                    ws.id,
+                    status.lifecycle,
+                    status.number,
+                    status.url.as_deref(),
+                    unix_now(),
+                );
             }
             // Err / Ok(None): leave cached state alone (transient failure
             // must not clobber a known lifecycle).

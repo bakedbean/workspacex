@@ -258,6 +258,7 @@ mod entry_tests {
             additions: Some(45),
             deletions: Some(12),
             fetched_at: Some(0),
+            ..Default::default()
         };
         let text = compose_text("workspacex", "fix-bug", &row);
         assert!(text.starts_with("workspacex/fix-bug"), "{text}");
@@ -295,6 +296,7 @@ mod entry_tests {
                 additions: Some(a),
                 deletions: Some(d),
                 fetched_at: Some(0),
+                ..Default::default()
             };
             let text = compose_text(repo, slug, &row);
             assert!(text.is_char_boundary(PR_START), "{text}");
@@ -495,6 +497,7 @@ mod entry_tests {
                 additions: Some(4),
                 deletions: Some(2),
                 fetched_at: Some(0),
+                ..Default::default()
             };
             let text = compose_text("r", "w", &row);
             for d in ['\u{1f7e2}', '\u{1f7e0}', '\u{1f7e3}', '\u{1f534}'] {
@@ -555,6 +558,7 @@ mod entry_tests {
                 ids[0],
                 crate::git::forge::BranchLifecycle::PrOpen,
                 Some(5),
+                None,
                 0,
             )
             .unwrap();
@@ -562,7 +566,7 @@ mod entry_tests {
         // git fails on its nonexistent worktree, these must be suppressed
         // in-memory (not persisted to DB), so the row renders without ● and
         // +N −N but keeps its PR indicator (#5).
-        store.upsert_scm_git(ids[0], true, 4, 2).unwrap();
+        store.upsert_scm_git(ids[0], true, 4, 2, 0).unwrap();
 
         let rows = crate::workspace_rows::collect_rows_fresh(&store)
             .await

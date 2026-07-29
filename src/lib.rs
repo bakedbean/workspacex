@@ -17,3 +17,4 @@ pub(crate) mod time;
 pub mod ui;
 #[cfg(target_os = "linux")]
 pub mod waybar;
+pub mod workspace_rows;

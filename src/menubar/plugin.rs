@@ -25,11 +25,25 @@ fn sfcolor(state: ReportedState) -> &'static str {
     }
 }
 
-/// Line text sanitizer: control chars collapse (via sanitize) and the
-/// protocol's text/params separator '|' becomes a broken bar, so no
-/// user-controlled string can smuggle params or extra rows.
+/// Cap on a rendered line's text segment, in chars. Named per the spec's
+/// "length-capped" sanitization bullet — keeps one hostile/huge status
+/// message from ballooning the SwiftBar document.
+const MAX_TEXT_LEN: usize = 120;
+
+/// Line text sanitizer: control chars collapse (via sanitize), the
+/// protocol's text/params separator '|' becomes a broken bar, a leading
+/// '-' is guarded so the string can't read as a '---' separator or '--'
+/// submenu marker, and the result is length-capped — so no
+/// user-controlled string can smuggle params, extra rows, or bloat.
 fn esc_text(s: &str) -> String {
-    sanitize(s).replace('|', "\u{00a6}")
+    let mut out = sanitize(s).replace('|', "\u{00a6}");
+    if out.starts_with('-') {
+        out.replace_range(0..1, "\u{2011}");
+    }
+    if out.chars().count() > MAX_TEXT_LEN {
+        out = out.chars().take(MAX_TEXT_LEN).collect();
+    }
+    out
 }
 
 /// All bash=/paramN=/href= values are double-quoted; interior quotes
@@ -102,7 +116,7 @@ fn subtitle(r: &RowInput) -> String {
 
 pub(crate) fn submenu_lines(r: &RowInput, wsx_bin: &str) -> Vec<String> {
     let wt = r.worktree_path.display().to_string();
-    let mut out = vec![format!("-- {}", esc_text(&subtitle(r)))];
+    let mut out = vec![format!("-- {} | disabled=true", esc_text(&subtitle(r)))];
     out.push(format!(
         "-- Jump | bash={} param1=\"menubar\" param2=\"jump\" param3={} param4={} terminal=false",
         quote_param(wsx_bin),
@@ -135,7 +149,7 @@ pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) ->
         .max_by_key(|s| attention_rank(*s));
     let mut lines = vec![header_line(rows.len(), best), "---".into()];
     for repo in repo_names {
-        lines.push(esc_text(repo));
+        lines.push(format!("{} | disabled=true", esc_text(repo)));
         let mut any = false;
         for r in rows.iter().filter(|r| &r.repo_name == repo) {
             any = true;
@@ -143,7 +157,7 @@ pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) ->
             lines.extend(submenu_lines(r, wsx_bin));
         }
         if !any {
-            lines.push("(no workspaces)".into());
+            lines.push("(no workspaces) | disabled=true".into());
         }
     }
     lines.push("---".into());
@@ -151,12 +165,23 @@ pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) ->
     lines.join("\n")
 }
 
+/// Full document: the "no registered repos" quiet state degrades to the
+/// same icon-only header as an error (no `---`, no footer — SwiftBar shows
+/// a bare menubar item with no dropdown content), otherwise the composed
+/// header + menu body.
+fn document(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) -> String {
+    if repo_names.is_empty() {
+        return error_header();
+    }
+    render(repo_names, rows, wsx_bin)
+}
+
 fn plugin_document(store: &Store, wsx_bin: &str) -> Result<String> {
     let mut repos = crate::data::repo::list(store)?;
     repos.sort_by(|a, b| a.name.cmp(&b.name));
     let names: Vec<String> = repos.into_iter().map(|r| r.name).collect();
     let rows = collect_rows_cached(store)?;
-    Ok(render(&names, &rows, wsx_bin))
+    Ok(document(&names, &rows, wsx_bin))
 }
 
 /// Fire-and-forget `wsx menubar refresh` so indicators self-heal by a
@@ -284,8 +309,11 @@ mod plugin_tests {
         let mut r = row("meals backend", "api-fix");
         r.status = Some(status(ReportedState::Blocked, Some("needs input")));
         let lines = submenu_lines(&r, "/usr/local/bin/wsx");
-        // Subtitle first: branch — state: message.
-        assert_eq!(lines[0], "-- x/api-fix \u{2014} blocked: needs input");
+        // Subtitle first: branch — state: message, disabled (not clickable).
+        assert_eq!(
+            lines[0],
+            "-- x/api-fix \u{2014} blocked: needs input | disabled=true"
+        );
         assert_eq!(
             lines[1],
             "-- Jump | bash=\"/usr/local/bin/wsx\" param1=\"menubar\" param2=\"jump\" param3=\"meals backend\" param4=\"api-fix\" terminal=false"
@@ -347,12 +375,65 @@ mod plugin_tests {
         let lines: Vec<&str> = doc.lines().collect();
         assert_eq!(lines[0], "3 | sfimage=arrow.triangle.branch");
         assert_eq!(lines[1], "---");
-        let alpha = lines.iter().position(|l| *l == "alpha").unwrap();
-        let beta = lines.iter().position(|l| *l == "beta").unwrap();
-        let empty = lines.iter().position(|l| *l == "empty").unwrap();
+        let alpha = lines
+            .iter()
+            .position(|l| *l == "alpha | disabled=true")
+            .unwrap();
+        let beta = lines
+            .iter()
+            .position(|l| *l == "beta | disabled=true")
+            .unwrap();
+        let empty = lines
+            .iter()
+            .position(|l| *l == "empty | disabled=true")
+            .unwrap();
         assert!(alpha < beta && beta < empty);
-        assert_eq!(lines[empty + 1], "(no workspaces)");
+        assert_eq!(lines[empty + 1], "(no workspaces) | disabled=true");
         // Footer.
         assert_eq!(*lines.last().unwrap(), "Refresh | refresh=true");
+    }
+
+    #[test]
+    fn empty_repo_list_is_icon_only_document() {
+        // No registered repos or any error → icon-only header alone: no
+        // `---`, no footer, nothing for SwiftBar to render as a dropdown.
+        assert_eq!(document(&[], &[], "/bin/wsx"), error_header());
+    }
+
+    #[test]
+    fn esc_text_caps_length() {
+        let huge = "x".repeat(1000);
+        let capped = esc_text(&huge);
+        assert_eq!(capped.chars().count(), MAX_TEXT_LEN);
+        assert_eq!(capped, "x".repeat(MAX_TEXT_LEN));
+    }
+
+    #[test]
+    fn huge_status_message_caps_rendered_subtitle() {
+        let huge = "x".repeat(1000);
+        let mut r = row("r", "w");
+        r.status = Some(status(ReportedState::Working, Some(&huge)));
+        let subtitle = &submenu_lines(&r, "/bin/wsx")[0];
+        // The whole subtitle text segment (branch + state + message) is
+        // capped as one unit — nowhere near the 1000-char input.
+        assert!(subtitle.chars().count() < 200, "{subtitle}");
+    }
+
+    #[test]
+    fn esc_text_guards_leading_dash() {
+        // A repo named "---evil" must not render a line that IS a bare
+        // separator once escaped.
+        let escaped = esc_text("---evil");
+        assert_ne!(escaped, "---");
+        assert!(!escaped.starts_with('-'), "{escaped}");
+
+        // A status message starting with "-- " must stay embedded inside
+        // its single subtitle line, not spawn an extra menu row.
+        let mut r = row("r", "w");
+        r.status = Some(status(ReportedState::Working, Some("-- fake")));
+        let lines = submenu_lines(&r, "/bin/wsx");
+        assert!(lines[0].starts_with("-- "), "{:?}", lines[0]);
+        assert!(lines[0].contains("-- fake"), "{:?}", lines[0]);
+        assert_eq!(lines[0].matches("\n").count(), 0);
     }
 }

@@ -83,8 +83,11 @@ background (≤ ~70s staleness). Each workspace row's submenu has Jump, Open
 PR, Copy worktree path, and Reveal in Finder; jump prefers a running TUI via
 its unix socket and falls back to spawning your terminal — set
 `wsx config set terminal_cmd '<cmd with {cmd}>'` to control which one, or
-let it use iTerm2/Terminal automatically. These commands are macOS-only and
-error on other platforms.
+let it use iTerm2/Terminal automatically. Note that `terminal_cmd` is shared
+with the TUI's own open-in-terminal shortcut, which substitutes cwd rather
+than `{cmd}` — if you use that shortcut, prefer leaving `terminal_cmd`
+unset on macOS and letting jump auto-detect iTerm2/Terminal. These commands
+are macOS-only and error on other platforms.
 
 ## Development
 

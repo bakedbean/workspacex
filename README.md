@@ -64,6 +64,28 @@ workspace (attaching as if you pressed Enter on it), or launches a new TUI
 already attached. These commands are Linux-only and error on other
 platforms.
 
+## macOS menubar (SwiftBar)
+
+On macOS, a [SwiftBar](https://github.com/swiftbar/SwiftBar) plugin mirrors
+the waybar indicator: a branch glyph plus your live workspace count, tinted
+by the most urgent status, with a dropdown listing every repo and its
+workspaces (status glyph, dirty marker, diff stats, PR number once known).
+
+```bash
+brew install swiftbar   # if you don't have it; launch once, pick a plugin folder
+wsx setup menubar
+```
+
+installs a `wsx-menubar.10s.sh` shim into that plugin folder. Under the
+hood: `wsx menubar plugin` renders the dropdown (polled by SwiftBar every
+10s from cache) while `wsx menubar refresh` sweeps git/PR facts in the
+background (≤ ~70s staleness). Each workspace row's submenu has Jump, Open
+PR, Copy worktree path, and Reveal in Finder; jump prefers a running TUI via
+its unix socket and falls back to spawning your terminal — set
+`wsx config set terminal_cmd '<cmd with {cmd}>'` to control which one, or
+let it use iTerm2/Terminal automatically. These commands are macOS-only and
+error on other platforms.
+
 ## Development
 
 Build and test with `cargo build` / `cargo test`. See the

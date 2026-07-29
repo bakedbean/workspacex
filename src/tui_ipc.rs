@@ -1,3 +1,7 @@
+//! Unix-socket IPC listener for the running TUI. A per-process socket lets
+//! external jumpers (the waybar workspace menu, the macOS menubar app) tell
+//! a live TUI to select a workspace instead of spawning a new one.
+
 use std::path::PathBuf;
 
 use tokio::io::AsyncBufReadExt;

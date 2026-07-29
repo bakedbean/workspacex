@@ -4,13 +4,7 @@ use std::process::{Command, Stdio};
 use crate::data::store::Store;
 use crate::error::{Error, Result};
 
-/// Collapse control characters (incl. '\n', '\t') to a single space so a
-/// value with embedded newlines can't inject fake rows into the picker.
-pub(crate) fn sanitize(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
-}
+pub(crate) use crate::workspace_rows::sanitize;
 
 pub fn menu_line(repo: &str, slug: &str, message: Option<&str>) -> String {
     let repo = sanitize(repo);

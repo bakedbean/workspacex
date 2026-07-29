@@ -22,13 +22,16 @@ struct GhPrView {
     mergeable: Option<String>,
     #[serde(default)]
     number: Option<u32>,
+    #[serde(default)]
+    url: Option<String>,
 }
 
-/// A branch's PR status: its lifecycle plus the PR number (when known).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A branch's PR status: its lifecycle plus the PR number and URL (when known).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrStatus {
     pub lifecycle: BranchLifecycle,
     pub number: Option<u32>,
+    pub url: Option<String>,
 }
 
 /// Parse the JSON returned by
@@ -52,6 +55,7 @@ pub(crate) fn parse_gh_pr_status(stdout: &str) -> Option<PrStatus> {
     Some(PrStatus {
         lifecycle,
         number: parsed.number,
+        url: parsed.url,
     })
 }
 
@@ -70,7 +74,7 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
             "view",
             branch,
             "--json",
-            "state,isDraft,mergeable,number",
+            "state,isDraft,mergeable,number,url",
         ])
         .output()
         .await;
@@ -91,6 +95,7 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
         return Ok(Some(PrStatus {
             lifecycle: BranchLifecycle::NoPr,
             number: None,
+            url: None,
         }));
     }
 
@@ -213,6 +218,18 @@ mod tests {
         let s = parse_gh_pr_status(json).unwrap();
         assert_eq!(s.lifecycle, BranchLifecycle::PrOpen);
         assert_eq!(s.number, None);
+    }
+
+    #[test]
+    fn parse_carries_pr_url() {
+        let s = parse_gh_pr_status(
+            r#"{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","number":5,"url":"https://github.com/o/r/pull/5"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.url.as_deref(), Some("https://github.com/o/r/pull/5"));
+        // Absent url stays None.
+        let s = parse_gh_pr_status(r#"{"state":"MERGED","number":9}"#).unwrap();
+        assert_eq!(s.url, None);
     }
 
     #[test]

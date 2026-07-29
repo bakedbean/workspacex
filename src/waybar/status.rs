@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::data::store::{ReportedState, Store};
 use crate::error::Result;
+use crate::workspace_rows::{attention_rank, state_glyph};
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct StatusPayload {
@@ -12,31 +13,12 @@ pub struct StatusPayload {
     pub tooltip: String,
 }
 
-fn rank(state: ReportedState) -> u8 {
-    match state {
-        ReportedState::Blocked => 4,
-        ReportedState::Done => 3,
-        ReportedState::Waiting => 2,
-        ReportedState::Working | ReportedState::Busy => 1,
-    }
-}
-
 fn class_name(state: ReportedState) -> &'static str {
     match state {
         ReportedState::Blocked => "blocked",
         ReportedState::Done => "done",
         ReportedState::Waiting => "waiting",
         ReportedState::Working | ReportedState::Busy => "working",
-    }
-}
-
-pub(crate) fn glyph(state: Option<ReportedState>) -> &'static str {
-    match state {
-        Some(ReportedState::Blocked) => "!",
-        Some(ReportedState::Done) => "\u{2713}",
-        Some(ReportedState::Waiting) => "\u{2026}",
-        Some(ReportedState::Working | ReportedState::Busy) => "\u{21bb}",
-        None => "\u{b7}",
     }
 }
 
@@ -76,13 +58,13 @@ pub fn status_payload(store: &Store) -> Result<StatusPayload> {
             count += 1;
             let st = statuses.get(&ws.id);
             if let Some(st) = st {
-                if best.is_none_or(|b| rank(st.state) > rank(b)) {
+                if best.is_none_or(|b| attention_rank(st.state) > attention_rank(b)) {
                     best = Some(st.state);
                 }
             }
             let mut line = format!(
                 "  {} {}",
-                glyph(st.map(|s| s.state)),
+                state_glyph(st.map(|s| s.state)),
                 escape_pango(&ws.name)
             );
             if let Some(msg) = st.and_then(|s| s.message.as_deref()) {

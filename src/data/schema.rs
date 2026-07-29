@@ -134,6 +134,11 @@ impl Store {
             self.conn().execute_batch(SCHEMA_V18_SCM_CACHE)?;
             self.conn().execute("PRAGMA user_version = 18", [])?;
         }
+        if v < 19 {
+            self.add_column_if_missing("scm_cache", "pr_url", "pr_url TEXT")?;
+            self.add_column_if_missing("scm_cache", "git_fetched_at", "git_fetched_at INTEGER")?;
+            self.conn().execute("PRAGMA user_version = 19", [])?;
+        }
         Ok(())
     }
 

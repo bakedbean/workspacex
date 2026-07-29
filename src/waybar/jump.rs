@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 /// Jump to a workspace: tell a running TUI to select it and focus that
 /// window, or launch a fresh TUI on it.
 pub fn jump(repo: &str, slug: &str) -> Result<()> {
-    for (path, pid) in crate::waybar::ipc::live_socket_candidates() {
+    for (path, pid) in crate::tui_ipc::live_socket_candidates() {
         match std::os::unix::net::UnixStream::connect(&path) {
             Ok(mut stream) => {
                 if writeln!(stream, "select {repo} {slug}").is_ok() {

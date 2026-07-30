@@ -730,6 +730,71 @@ mod tests {
         assert!(screen.contains("hello"), "screen contents: {screen:?}");
     }
 
+    /// A large bracketed paste must reach the child byte-for-byte in one
+    /// piece. This guards the wsx -> PTY hop specifically: `write_all` loops
+    /// over partial writes and the pty applies backpressure rather than
+    /// dropping, so neither marker can be lost to a short write. If this ever
+    /// regresses, an agent sees the pasted newlines as Enter and submits a
+    /// partial prompt.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn large_bracketed_paste_reaches_child_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("probe.bin");
+        // `stty raw -echo` so the tty line discipline doesn't mangle the
+        // payload (canonical mode would apply MAX_CANON limits and erase
+        // processing). `cat` then dumps stdin verbatim to the file.
+        let script = format!("stty raw -echo; cat > {}", out.display());
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg(&script);
+        cmd.cwd(std::env::current_dir().unwrap());
+        let s =
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "sh".to_string(), None).unwrap();
+        // Let `stty raw` finish before writing, otherwise we race the shell.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let para = "x".repeat(200);
+        let content = (0..40)
+            .map(|i| format!("paragraph {i} {para}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"\x1b[200~");
+        payload.extend_from_slice(content.as_bytes());
+        payload.extend_from_slice(b"\x1b[201~");
+        let expected = payload.clone();
+        // One send: the whole payload goes to the writer task as a single Vec.
+        s.writer.send(payload).await.unwrap();
+
+        // Poll until the file stops growing.
+        let mut last = 0usize;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let n = std::fs::metadata(&out)
+                .map(|m| m.len() as usize)
+                .unwrap_or(0);
+            if n == expected.len() || (n > 0 && n == last) {
+                break;
+            }
+            last = n;
+        }
+        let got = std::fs::read(&out).unwrap_or_default();
+        assert!(
+            got.windows(6).any(|w| w == b"\x1b[200~"),
+            "start marker missing from what the child received"
+        );
+        assert!(
+            got.windows(6).any(|w| w == b"\x1b[201~"),
+            "end marker missing from what the child received"
+        );
+        assert_eq!(
+            got.len(),
+            expected.len(),
+            "child did not receive the whole payload"
+        );
+        assert_eq!(got, expected, "payload corrupted in transit");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resize_to_zero_rows_is_floored_and_does_not_panic() {
         // A terminal short enough that the projected pane height collapses to 0

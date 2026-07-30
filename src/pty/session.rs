@@ -743,10 +743,15 @@ mod tests {
         // `stty raw -echo` so the tty line discipline doesn't mangle the
         // payload (canonical mode would apply MAX_CANON limits and erase
         // processing). `cat` then dumps stdin verbatim to the file.
-        let script = format!("stty raw -echo; cat > {}", out.display());
+        //
+        // The destination travels in the environment rather than interpolated
+        // into the script, so a $TMPDIR containing spaces or shell
+        // metacharacters can't redirect the output somewhere else and fail the
+        // test for a reason that has nothing to do with paste handling.
         let mut cmd = CommandBuilder::new("sh");
         cmd.arg("-c");
-        cmd.arg(&script);
+        cmd.arg("stty raw -echo; cat > \"$WSX_PROBE_OUT\"");
+        cmd.env("WSX_PROBE_OUT", &out);
         cmd.cwd(std::env::current_dir().unwrap());
         let s =
             spawn_command_session(cmd, 80, 24, AgentKind::Claude, "sh".to_string(), None).unwrap();

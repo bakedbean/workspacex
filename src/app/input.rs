@@ -111,6 +111,62 @@ pub(crate) fn wrap_paste_bytes(content: &str) -> Vec<u8> {
     out.extend_from_slice(b"\x1b[201~");
     out
 }
+/// Whether the diagnostic input trace is on. Set `WSX_INPUT_TRACE=1` to
+/// enable; read once and cached, so the hot key path costs one atomic load.
+fn input_trace_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("WSX_INPUT_TRACE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+/// First or last `n` chars of a payload, control chars escaped, for the trace.
+fn trace_preview(s: &str, head: bool, n: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let slice: String = if head {
+        chars.iter().take(n).collect()
+    } else {
+        chars.iter().skip(chars.len().saturating_sub(n)).collect()
+    };
+    slice.escape_debug().to_string()
+}
+
+/// Log one crossterm event to `wsx.log` when `WSX_INPUT_TRACE=1`.
+///
+/// This exists to settle a question that cannot be answered from inside
+/// `handle_paste`: whether a paste reached wsx as a single `Event::Paste`
+/// (the terminal's `ESC[200~ … ESC[201~` markers survived) or as a burst of
+/// individual key presses (the markers were lost upstream). The two are
+/// indistinguishable after the fact, and they have opposite fixes — but they
+/// produce the same user-visible symptom, because a bare `\r` forwarded to an
+/// agent PTY submits whatever is in its composer.
+fn trace_event(evt: &CtEvent) {
+    if !input_trace_enabled() {
+        return;
+    }
+    match evt {
+        CtEvent::Paste(content) => tracing::info!(
+            target: "wsx::input_trace",
+            bytes = content.len(),
+            chars = content.chars().count(),
+            newlines = content.chars().filter(|c| *c == '\n' || *c == '\r').count(),
+            head = %trace_preview(content, true, 48),
+            tail = %trace_preview(content, false, 48),
+            "paste"
+        ),
+        CtEvent::Key(k) => tracing::info!(
+            target: "wsx::input_trace",
+            code = ?k.code,
+            mods = ?k.modifiers,
+            kind = ?k.kind,
+            "key"
+        ),
+        _ => {}
+    }
+}
+
 /// Apply a scroll delta to whichever session is currently in focus.
 /// `up=true` scrolls toward older content (higher offset).
 fn scroll_active(app: &App, rows: usize, up: bool) {
@@ -2064,9 +2120,26 @@ async fn handle_paste(app: &mut App, shared: &SharedApp, content: String) -> Res
         None
     };
     if let Some(session) = session {
+        let bytes = wrap_paste_bytes(&content);
+        if input_trace_enabled() {
+            tracing::info!(
+                target: "wsx::input_trace",
+                bytes = bytes.len(),
+                "paste -> bracketed PTY write"
+            );
+        }
         session.scroll_to_live();
-        let _ = session.writer.send(wrap_paste_bytes(&content)).await;
+        let _ = session.writer.send(bytes).await;
         return Ok(());
+    }
+    if input_trace_enabled() {
+        tracing::info!(
+            target: "wsx::input_trace",
+            chars = content.chars().count(),
+            modal_open = app.modal.is_some(),
+            view = ?std::mem::discriminant(&app.view),
+            "paste -> per-char fallback (newlines become Enter)"
+        );
     }
     // Non-attached fallback: forward each char as if typed, translating
     // control chars to the KeyCodes crossterm would have emitted live so
@@ -2367,6 +2440,7 @@ async fn dispatch_key(
     Ok(())
 }
 pub(crate) async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent) -> Result<()> {
+    trace_event(&evt);
     match evt {
         CtEvent::Key(k) if k.kind == KeyEventKind::Press => dispatch_key(app, shared, k).await?,
         CtEvent::Mouse(m) => handle_mouse(app, m).await,

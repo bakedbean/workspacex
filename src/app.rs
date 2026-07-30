@@ -1254,20 +1254,17 @@ where
         }
     };
 
-    // Suspend the TUI.
+    // Suspend the TUI, handing the terminal to the editor.
     crossterm::terminal::disable_raw_mode()?;
-    crossterm::execute!(
-        terminal.backend_mut(),
-        crossterm::terminal::LeaveAlternateScreen
-    )?;
+    crate::ui::term_modes::leave_tui_modes(terminal.backend_mut())?;
 
     let result = crate::commands::external::edit_in_editor(&current, ext);
 
-    // Resume the TUI.
-    crossterm::execute!(
-        terminal.backend_mut(),
-        crossterm::terminal::EnterAlternateScreen
-    )?;
+    // Resume. This must re-assert EVERY mode, not just the alternate screen:
+    // the editor resets bracketed paste and mouse reporting as it exits (vim
+    // emits `ESC[?2004l`), and those modes are global tty state that nothing
+    // else restores. See `crate::ui::term_modes`.
+    crate::ui::term_modes::enter_tui_modes(terminal.backend_mut())?;
     crossterm::terminal::enable_raw_mode()?;
     terminal.clear()?;
 

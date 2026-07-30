@@ -1,12 +1,6 @@
 #![allow(clippy::arc_with_non_send_sync)]
 
-use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-};
-use crossterm::execute;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::io;
@@ -44,12 +38,7 @@ fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            DisableBracketedPaste,
-            DisableMouseCapture,
-            LeaveAlternateScreen
-        );
+        let _ = wsx::ui::term_modes::leave_tui_modes(&mut io::stdout());
         // Children are killed via Drop on Session (sends SIGKILL via ChildKiller).
         default(info);
     }));
@@ -113,12 +102,7 @@ async fn main() -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste
-    )?;
+    wsx::ui::term_modes::enter_tui_modes(&mut stdout)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -128,12 +112,7 @@ async fn main() -> Result<()> {
     let _ = std::fs::remove_file(&ipc_socket);
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        DisableBracketedPaste,
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
+    wsx::ui::term_modes::leave_tui_modes(terminal.backend_mut())?;
     terminal.show_cursor()?;
 
     // Drop SessionManager (kills all children).

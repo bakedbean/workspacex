@@ -114,9 +114,16 @@ menu:
   `pr_field`), `●` when dirty, `+a -d` when either is non-zero, and
   `recap <age>` when the workspace has a recap by the definition above.
   Omitted entirely when no segment applies.
-- Indentation uses **U+00A0 (NBSP)**, not spaces — SwiftBar trims leading
-  whitespace from menu text. `ROW_FONT` (`SFMono-Regular size=12`) is
-  fixed-width, so the `goal:` / `state:` / `next:` labels align.
+- Indentation comes from a single `RECAP_INDENT` constant, initially two
+  U+00A0 (NBSP) — SwiftBar trims leading whitespace from menu text, and
+  NBSP is the usual way to survive that. But Swift's
+  `CharacterSet.whitespaces` *includes* U+00A0, so it may be trimmed too,
+  and only a running SwiftBar can settle it. Hence one constant with a
+  defined fallback: `"│ "` (box-drawing light vertical + space), which is
+  not whitespace, cannot be trimmed, and reads as a continuation gutter.
+  Unit tests assert against the constant, so they hold under either value.
+  `ROW_FONT` (`SFMono-Regular size=12`) is fixed-width, so the `goal:` /
+  `state:` / `next:` labels align regardless.
 - `-----` separates workspace blocks (a `---` separator at `--` depth).
   Whether SwiftBar honours this is the one thing that needs manual
   verification; the fallback is a `disabled=true` line containing a single
@@ -170,10 +177,17 @@ as a separator or submenu marker (`esc_text`).
 
 The existing `MAX_TEXT_LEN = 120` cap is too loose for this surface — NSMenu
 sizes itself to its widest item, so one long goal line widens the entire
-dropdown. Recap lines get `MAX_RECAP_LEN = 72`, applied with a trailing `…`
-when truncation occurs. Doctrine already specifies one-liners, so
-truncation should be rare. Param values (paths, URLs) remain uncapped, as
-today.
+dropdown. Recap lines get `MAX_RECAP_LEN = 72` **including** a trailing `…`
+when truncation occurs (71 chars + the ellipsis). Doctrine already specifies
+one-liners, so truncation should be rare. Param values (paths, URLs) remain
+uncapped, as today.
+
+The shared primitive is `esc_text_uncapped` — escaping and the leading-dash
+guard with no length limit. `esc_text` caps its result at `MAX_TEXT_LEN`
+with a plain truncation (unchanged behavior; an existing test pins it), and
+`pm.rs` owns the ellipsis rule on top of the same primitive. A single
+`esc_text_capped(s, max)` cannot serve both, because only one of the two
+callers wants an ellipsis.
 
 ## Time units
 
@@ -187,7 +201,7 @@ the very module it imports `RowInput` from.
 
 | File | Change |
 |---|---|
-| `src/menubar/escape.rs` | **New.** `esc_core`, `esc_text`, `quote_param`, and new `esc_text_capped(s, max)` (which `esc_text` delegates to with `MAX_TEXT_LEN`). Moved out of `plugin.rs` with their existing tests, so `pm.rs` can share them without `plugin.rs` becoming a utility module. |
+| `src/menubar/escape.rs` | **New.** `esc_core`, `esc_text`, `quote_param`, and new `esc_text_uncapped(s)` (which `esc_text` caps at `MAX_TEXT_LEN`). Moved out of `plugin.rs` with their existing tests, so `pm.rs` can share them without `plugin.rs` becoming a utility module. |
 | `src/menubar/pm.rs` | **New.** `PmCard`, `build_pm_cards`, `pm_section_lines`, `MAX_RECAP_LEN`, and the module's tests. |
 | `src/menubar/mod.rs` | Declare `escape` and `pm`. |
 | `src/workspace_rows.rs` | `RowInput` gains `id: WorkspaceId`. `collect_rows_cached` currently discards it, leaving nothing to join recaps against. Populated in both collect paths; the waybar formatter ignores it. |
@@ -213,15 +227,21 @@ Unit tests in `src/menubar/pm.rs`:
   treated identically to a missing row — `no recap yet`, no `recap <age>`,
   and no `updated_at` contribution to `signal_ms`.
 - A card with only some recap fields set renders only those lines.
-- Workspaces in every state (`Pending`, `Failed`, `Orphaned`) appear, matching
-  the main menu's membership.
+- The status *message* does not appear on the header line (it is already in
+  the workspace row's own action submenu).
+
+Membership needs no test: `RowInput` carries no workspace state, so there is
+no filter to assert the absence of. It is structurally guaranteed rather
+than verified.
 - Only the header line carries a `bash=` jump action; every other line is
   `disabled=true`.
 - A repo with no workspaces renders `(no workspaces)`.
 - Recap text containing `\n`, `|`, and a leading `-` is neutralized, and no
   submenu line contains a newline.
 - A 200-char goal is capped to `MAX_RECAP_LEN` with an ellipsis.
-- Recap lines are indented with NBSP, not ASCII spaces.
+- Recap and fact lines are indented with `RECAP_INDENT`, not ASCII spaces
+  (asserted against the constant, so the manual-test fallback doesn't
+  invalidate the test).
 
 In `src/menubar/plugin.rs`:
 
@@ -233,18 +253,28 @@ In `src/time.rs`: `format_age` keeps its existing behavior (the tests move
 with it).
 
 Manual test added to `docs/manual-tests/menubar.md`: open the menubar,
-confirm the `Project Manager` submenu opens, shows recaps in
-attention order, jumps on click, and — the one thing unit tests cannot
-answer — that `-----` renders as a separator inside the submenu rather than
-as literal text. If it renders literally, fall back to an NBSP
-`disabled=true` line.
+confirm the `Project Manager` submenu opens, shows recaps in attention
+order, and jumps on click. Plus the two things unit tests cannot answer,
+each with a defined fallback:
+
+1. Does `-----` render as a separator inside the submenu, or as literal
+   text? If literal, fall back to a `disabled=true` line containing a
+   single NBSP.
+2. Does SwiftBar trim the `RECAP_INDENT` NBSPs? If the recap lines are
+   flush with the header, change the constant to `"│ "`.
 
 ## Commits
 
-1. `refactor(menubar): extract SwiftBar escaping into escape.rs; carry workspace id on RowInput`
-2. `refactor: move format_age to time.rs`
-3. `feat(menubar): Project Manager submenu with per-workspace recaps`
-4. `docs: menubar PM submenu manual test + README note`
+See `docs/superpowers/plans/2026-07-31-menubar-pm-submenu.md` for the
+task-by-task breakdown. Seven commits, each independently testable:
+
+1. `refactor: move format_age to time.rs`
+2. `refactor(menubar): extract SwiftBar escaping into escape.rs`
+3. `refactor: carry the workspace id on RowInput`
+4. `feat(menubar): PM card model and attention ordering`
+5. `feat(menubar): render the PM section lines`
+6. `feat(menubar): Project Manager submenu in the SwiftBar document`
+7. `docs: menubar Project Manager submenu`
 
 ## Trade-offs accepted
 

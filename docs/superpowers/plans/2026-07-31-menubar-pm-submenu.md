@@ -390,19 +390,23 @@ callers nothing to join per-workspace tables against."
 
 ---
 
-### Task 4: PM card model and ordering
+### Task 4: The PM section (`pm.rs`)
 
-The data half of `pm.rs`: turn rows + recaps into ordered cards. No rendering yet.
+All of `pm.rs`: the card model, the ordering, and the line rendering. Built in two TDD cycles — data first, then rendering — but one task and one commit, because the two halves cannot compile-verify independently (the card model is unused, and warns as dead code, until the renderer calls it).
 
 **Files:**
 - Create: `src/menubar/pm.rs`
-- Modify: `src/menubar/mod.rs`
+- Modify: `src/menubar/mod.rs`, `src/menubar/plugin.rs:16` (widen `ROW_FONT`)
 
 **Interfaces:**
-- Consumes: `RowInput.id` (Task 3).
+- Consumes: `RowInput.id` (Task 3); `esc_text`, `esc_text_uncapped`, `quote_param` (Task 2); `crate::time::format_age` (Task 1).
 - Produces:
   - `pub(crate) struct PmCard<'a> { pub row: &'a RowInput, pub recap: Option<&'a WorkspaceRecap> }`
   - `pub(crate) fn cards_for_repo<'a>(rows: &'a [RowInput], recaps: &'a HashMap<WorkspaceId, WorkspaceRecap>, repo: &str) -> Vec<PmCard<'a>>`
+  - `pub(crate) fn pm_section_lines(repo_names: &[String], rows: &[RowInput], recaps: &HashMap<WorkspaceId, WorkspaceRecap>, wsx_bin: &str, now_ms: i64) -> Vec<String>`
+  - `pub(crate) const MAX_RECAP_LEN: usize`, `pub(crate) const RECAP_INDENT: &str`
+
+#### Cycle A — card model and ordering
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -658,38 +662,11 @@ pub(crate) fn cards_for_repo<'a>(
 Run: `cargo test --lib menubar::pm`
 Expected: PASS (8 tests).
 
-- [ ] **Step 5: Note the expected dead-code warning**
+At this point `cargo build` warns `dead_code` for `PmCard` and `cards_for_repo` — they are `pub(crate)` and only the test module calls them. That is expected mid-task; Cycle B adds the real caller. **Do not silence it** with `#[allow(dead_code)]`, and do not run the strict clippy gate until Step 9.
 
-Run: `cargo build`
-Expected: compiles, with a `dead_code` warning for `PmCard` and `cards_for_repo`. This is correct at this point — they are `pub(crate)` and only the test module calls them until Task 5 renders with them.
+#### Cycle B — line rendering
 
-**Do not silence it** with `#[allow(dead_code)]`; Task 5 removes it by adding the real caller. The strict `clippy -- -D warnings` gate runs at the end of Task 5, not here — CI sets `RUSTFLAGS: -D warnings`, so this warning must be gone before the branch is pushed, but it does not have to be gone mid-feature.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/menubar/pm.rs src/menubar/mod.rs
-git commit -m "feat(menubar): PM card model and attention ordering
-
-Joins recaps onto menu rows and orders them blocked -> waiting ->
-stalest-first, using max(status.reported_at, recap.updated_at) as the
-DB-side stand-in for the TUI's session-log activity tiebreak."
-```
-
----
-
-### Task 5: Render the PM section lines
-
-The rendering half of `pm.rs`. Still not wired into the document — this task is verifiable purely from its own tests.
-
-**Files:**
-- Modify: `src/menubar/pm.rs`
-
-**Interfaces:**
-- Consumes: `PmCard`, `cards_for_repo` (Task 4); `esc_text`, `esc_text_uncapped`, `quote_param` (Task 2); `crate::time::format_age` (Task 1).
-- Produces: `pub(crate) fn pm_section_lines(repo_names: &[String], rows: &[RowInput], recaps: &HashMap<WorkspaceId, WorkspaceRecap>, wsx_bin: &str, now_ms: i64) -> Vec<String>`
-
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 5: Write the failing rendering tests**
 
 Add these to the `tests` module in `src/menubar/pm.rs`:
 
@@ -912,12 +889,12 @@ Add these to the `tests` module in `src/menubar/pm.rs`:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 6: Run the tests to verify they fail**
 
 Run: `cargo test --lib menubar::pm`
 Expected: FAIL — compile errors, `cannot find function 'pm_section_lines'`, `cannot find value 'RECAP_INDENT'`, `cannot find value 'MAX_RECAP_LEN'`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 7: Write the implementation**
 
 Add to the top of `src/menubar/pm.rs`, extending the existing `use` block:
 
@@ -1062,36 +1039,39 @@ pub(crate) const ROW_FONT: &str = "font=SFMono-Regular size=12";
 
 (`pr_field` is already `pub(crate)`; leave it.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 8: Run the tests to verify they pass**
 
 Run: `cargo test --lib menubar::pm`
-Expected: PASS (20 tests — 8 from Task 4, 12 new).
+Expected: PASS (20 tests — 8 from Cycle A, 12 from Cycle B).
 
-- [ ] **Step 5: Check formatting and lints**
+- [ ] **Step 9: Check formatting and lints**
 
 Run: `cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings`
-Expected: clean.
+Expected: clean. The Cycle A dead-code warning is gone now that `pm_section_lines` calls `cards_for_repo`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add src/menubar/pm.rs src/menubar/plugin.rs
-git commit -m "feat(menubar): render the PM section lines
+git add src/menubar/pm.rs src/menubar/mod.rs src/menubar/plugin.rs
+git commit -m "feat(menubar): the Project Manager section renderer
 
-Each card is a clickable jump header, its goal/state/next recap lines,
-and a facts line (PR, dirty, diffstat, recap age). Recap fields get a
-72-char ellipsized cap because NSMenu sizes to its widest item."
+Joins recaps onto menu rows, orders them blocked -> waiting ->
+stalest-first using max(status.reported_at, recap.updated_at) as the
+DB-side stand-in for the TUI's session-log tiebreak, and renders each
+card as a clickable jump header plus its goal/state/next and fact
+lines. Recap fields get a 72-char ellipsized cap because NSMenu sizes
+itself to its widest item."
 ```
 
 ---
 
-### Task 6: Wire the PM section into the document
+### Task 5: Wire the PM section into the document
 
 **Files:**
 - Modify: `src/menubar/plugin.rs:159-199` (render / document / plugin_document), `:382-415` (tests)
 
 **Interfaces:**
-- Consumes: `pm_section_lines` (Task 5).
+- Consumes: `pm_section_lines` (Task 4).
 - Produces: `render` and `document` gain `recaps: &HashMap<WorkspaceId, WorkspaceRecap>` and `now_ms: i64` parameters.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1260,7 +1240,7 @@ footer. No subprocesses: the cache-only contract is unchanged."
 
 ---
 
-### Task 7: Documentation
+### Task 6: Documentation
 
 **Files:**
 - Modify: `docs/manual-tests/menubar.md`, `README.md:67-85`

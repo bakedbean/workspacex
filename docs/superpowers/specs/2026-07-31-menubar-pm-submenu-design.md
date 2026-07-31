@@ -266,15 +266,18 @@ each with a defined fallback:
 ## Commits
 
 See `docs/superpowers/plans/2026-07-31-menubar-pm-submenu.md` for the
-task-by-task breakdown. Seven commits, each independently testable:
+task-by-task breakdown. Six commits, each independently testable:
 
 1. `refactor: move format_age to time.rs`
 2. `refactor(menubar): extract SwiftBar escaping into escape.rs`
 3. `refactor: carry the workspace id on RowInput`
-4. `feat(menubar): PM card model and attention ordering`
-5. `feat(menubar): render the PM section lines`
-6. `feat(menubar): Project Manager submenu in the SwiftBar document`
-7. `docs: menubar Project Manager submenu`
+4. `feat(menubar): the Project Manager section renderer`
+5. `feat(menubar): Project Manager submenu in the SwiftBar document`
+6. `docs: menubar Project Manager submenu`
+
+The card model and the renderer are one commit: `pm.rs`'s two halves
+cannot compile-verify independently, since the card model warns as dead
+code until the renderer calls it.
 
 ## Trade-offs accepted
 

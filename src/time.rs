@@ -33,3 +33,31 @@ pub fn now_secs() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
+
+/// Human-readable age from a millisecond delta: `45s`, `12m`, `3h`.
+/// Negative deltas (clock skew) clamp to `0s`.
+pub fn format_age(delta_ms: i64) -> String {
+    let secs = (delta_ms / 1000).max(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_age_buckets_by_magnitude() {
+        assert_eq!(format_age(0), "0s");
+        assert_eq!(format_age(59_999), "59s");
+        assert_eq!(format_age(60_000), "1m");
+        assert_eq!(format_age(3_599_000), "59m");
+        assert_eq!(format_age(3_600_000), "1h");
+        assert_eq!(format_age(-500), "0s"); // negative delta clamps
+    }
+}

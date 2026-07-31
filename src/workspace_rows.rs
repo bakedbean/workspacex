@@ -30,11 +30,14 @@ pub fn is_stale(fetched_at: Option<i64>, now: i64, throttle_secs: i64) -> bool {
     }
 }
 
-/// Collapse control characters (incl. '\n', '\t') to a single space so a
+/// Replace each control character (incl. '\n', '\t') with a space so a
 /// value with embedded newlines can't inject fake rows into the picker.
+/// One-for-one, not coalescing: a run of controls becomes a run of spaces,
+/// which is fine here — the goal is that no line break survives, not that
+/// the result is tidy.
 ///
 /// `char::is_control` covers General_Category Cc only, so U+2028 LINE
-/// SEPARATOR and U+2029 PARAGRAPH SEPARATOR (Zl/Zp) are collapsed
+/// SEPARATOR and U+2029 PARAGRAPH SEPARATOR (Zl/Zp) are replaced
 /// explicitly: Swift treats both as line breaks, so leaving them intact
 /// would let agent-authored text open a new SwiftBar menu row.
 pub fn sanitize(s: &str) -> String {

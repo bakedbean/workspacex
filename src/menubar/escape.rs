@@ -10,11 +10,12 @@ use crate::workspace_rows::sanitize;
 /// action they drive (open path, open URL) breaks.
 pub(crate) const MAX_TEXT_LEN: usize = 120;
 
-/// Injection barrier shared by display text and param values: control chars
-/// collapse (via sanitize) and the protocol's text/params separator '|'
-/// becomes a broken bar, so no user-controlled string can smuggle params or
-/// extra rows. Uncapped and no dash guard — safe for param values (quoted,
-/// not line-initial) where truncation would corrupt a real path or URL.
+/// Injection barrier shared by display text and param values: each control
+/// char becomes a space (via sanitize) and the protocol's text/params
+/// separator '|' becomes a broken bar, so no user-controlled string can
+/// smuggle params or extra rows. Uncapped and no dash guard — safe for param
+/// values (quoted, not line-initial) where truncation would corrupt a real
+/// path or URL.
 pub(crate) fn esc_core(s: &str) -> String {
     sanitize(s).replace('|', "\u{00a6}")
 }

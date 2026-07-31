@@ -75,3 +75,37 @@ the db (`mv ~/.local/state/wsx/state.db{.bak,}`) afterward.
 A repo or slug with a space or `|` in it, and a status message with the
 same, should render without breaking rows or `bash=`/`param=` values in the
 menu.
+
+## Test 10: Project Manager submenu
+
+Prereq: at least one workspace with a recap. Set one with:
+
+```
+wsx recap set --goal "try the PM submenu" --state "checking rendering" --next "read the menu"
+```
+
+Click the menubar item and hover `Project Manager` (below the workspace
+list, above `Refresh`).
+
+Expected:
+
+- The submenu opens and lists repos as headers, with each workspace's
+  `goal:` / `state:` / `next:` lines beneath its name, and a facts line
+  (`#12 draft · ● · +45 -12 · recap 2m`).
+- Workspaces with no recap show `no recap yet`.
+- Ordering differs from the list above: blocked first, then waiting, then
+  the rest oldest-signal-first.
+- Clicking a workspace's header line jumps to it, exactly like the
+  top-level row.
+- With many workspaces, the submenu scrolls rather than overflowing the
+  screen.
+
+Two rendering details cannot be unit-tested — check them explicitly:
+
+1. **Separators.** The `-----` lines between workspaces must render as
+   separator rules, not as literal `-----` text. If they render literally,
+   change them in `pm_section_lines` to a `disabled=true` line containing a
+   single NBSP.
+2. **Indentation.** The recap and fact lines must sit indented under their
+   workspace name. If they are flush left, SwiftBar trimmed the NBSPs —
+   change `RECAP_INDENT` in `src/menubar/pm.rs` to `"\u{2502} "`.

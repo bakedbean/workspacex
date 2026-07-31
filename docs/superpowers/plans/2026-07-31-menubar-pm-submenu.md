@@ -390,9 +390,11 @@ callers nothing to join per-workspace tables against."
 
 ---
 
-### Task 4: The PM section (`pm.rs`)
+### Task 4: The PM section (`pm.rs`) and its wiring
 
-All of `pm.rs`: the card model, the ordering, and the line rendering. Built in two TDD cycles — data first, then rendering — but one task and one commit, because the two halves cannot compile-verify independently (the card model is unused, and warns as dead code, until the renderer calls it).
+All of `pm.rs` — card model, ordering, line rendering — **plus** the document wiring from Task 5. Built in three cycles (data, rendering, wiring) but one task and one commit.
+
+**Why one commit:** the pieces cannot compile-verify independently. `cards_for_repo` is dead code until `pm_section_lines` calls it, and `pm_section_lines` is dead code until `render()` calls it. With `RUSTFLAGS: -D warnings` in CI, there is no way to land a `pm.rs` commit that passes the lint gate without the full chain `plugin_document -> document -> render -> pm_section_lines -> cards_for_repo` present. This was discovered during execution: an earlier merge of the card model and the renderer only relocated the dead-code boundary rather than removing it.
 
 **Files:**
 - Create: `src/menubar/pm.rs`
@@ -407,6 +409,8 @@ All of `pm.rs`: the card model, the ordering, and the line rendering. Built in t
   - `pub(crate) const MAX_RECAP_LEN: usize`, `pub(crate) const RECAP_INDENT: &str`
 
 #### Cycle A — card model and ordering
+
+**Lifetime note:** `cards_for_repo<'a>` borrows `recaps` for `'a` and returns `Vec<PmCard<'a>>`, so an inline `&HashMap::new()` argument is a temporary dropped at the end of the statement while the result still borrows it (E0716). In tests that pass an empty map, bind it first — `let empty = HashMap::new();` then `cards_for_repo(&rows, &empty, "alpha")`. Semantically identical; required to compile.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -831,9 +835,17 @@ Add these to the `tests` module in `src/menubar/pm.rs`:
         for l in &lines {
             assert!(!l.contains('\n'), "{l}");
         }
+        // The property is that hostile text cannot be PARSED as params —
+        // not that its characters vanish. SwiftBar splits a line on " | ",
+        // so what matters is that no raw pipe survives into the text
+        // segment; `bash=` and the quotes remain as inert display text.
+        // (`esc_core` deliberately never touches `"` — param values are
+        // real paths and URLs that must survive intact.)
         let goal = lines.iter().find(|l| l.contains("goal:")).unwrap();
-        assert!(goal.contains('\u{00a6}'), "pipe not neutralized: {goal}");
-        assert!(!goal.contains("bash=\"/bin/rm\""), "{goal}");
+        let (text, params) = goal.split_once(" | ").expect("line has params");
+        assert!(!text.contains('|'), "raw pipe survived into text: {text}");
+        assert!(text.contains('\u{00a6}'), "pipe not neutralized: {text}");
+        assert_eq!(params, format!("disabled=true {ROW_FONT}"));
     }
 
     #[test]
@@ -1044,28 +1056,43 @@ pub(crate) const ROW_FONT: &str = "font=SFMono-Regular size=12";
 Run: `cargo test --lib menubar::pm`
 Expected: PASS (20 tests — 8 from Cycle A, 12 from Cycle B).
 
-- [ ] **Step 9: Check formatting and lints**
+At this point `pm_section_lines` still has no external caller, so `cargo build --lib` reports `dead_code` for it and everything it reaches. Do **not** run the strict clippy gate or commit yet — Cycle C supplies the caller.
+
+#### Cycle C — wiring
+
+- [ ] **Step 9: Do the wiring**
+
+Work through the steps in the "Wire the PM section into the document" section below (its Steps 1-7): write its three failing tests, thread `recaps: &HashMap<WorkspaceId, WorkspaceRecap>` and `now_ms: i64` through `render` / `document` / `plugin_document`, update the three pre-existing test call sites, and run its by-hand `cargo run -- menubar plugin` check.
+
+- [ ] **Step 10: Check formatting and lints**
 
 Run: `cargo fmt --all && cargo clippy --all-targets --all-features -- -D warnings`
-Expected: clean. The Cycle A dead-code warning is gone now that `pm_section_lines` calls `cards_for_repo`.
+Expected: clean. Every item now has a real caller through `plugin_document -> document -> render -> pm_section_lines -> cards_for_repo`. If any `dead_code` remains, report it rather than adding `#[allow]`.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add src/menubar/pm.rs src/menubar/mod.rs src/menubar/plugin.rs
-git commit -m "feat(menubar): the Project Manager section renderer
+git commit -m "feat(menubar): Project Manager submenu with per-workspace recaps
 
-Joins recaps onto menu rows, orders them blocked -> waiting ->
-stalest-first using max(status.reported_at, recap.updated_at) as the
-DB-side stand-in for the TUI's session-log tiebreak, and renders each
-card as a clickable jump header plus its goal/state/next and fact
-lines. Recap fields get a 72-char ellipsized cap because NSMenu sizes
-itself to its widest item."
+Adds src/menubar/pm.rs: joins agent-authored recaps onto menu rows,
+orders them blocked -> waiting -> stalest-first using
+max(status.reported_at, recap.updated_at) as the DB-side stand-in for
+the TUI's session-log tiebreak, and renders each card as a clickable
+jump header plus its goal/state/next and fact lines. Recap fields get a
+72-char ellipsized cap because NSMenu sizes itself to its widest item.
+
+Wires it into the SwiftBar document between the workspace rows and the
+Refresh footer. Adds one SQLite query (all_workspace_recaps) to the
+render path; no subprocesses, so the plugin's cache-only contract is
+unchanged."
 ```
 
 ---
 
-### Task 5: Wire the PM section into the document
+### Wiring the PM section into the document (Task 4, Cycle C)
+
+**Absorbed into Task 4** — this was a separate task until execution showed it cannot be split off. Its steps run as Task 4's Cycle C; its Step 8 commit is superseded by Task 4's Step 11.
 
 **Files:**
 - Modify: `src/menubar/plugin.rs:159-199` (render / document / plugin_document), `:382-415` (tests)
@@ -1240,7 +1267,7 @@ footer. No subprocesses: the cache-only contract is unchanged."
 
 ---
 
-### Task 6: Documentation
+### Task 5: Documentation
 
 **Files:**
 - Modify: `docs/manual-tests/menubar.md`, `README.md:67-85`

@@ -10,7 +10,8 @@ use crate::data::scm_cache::ScmCacheRow;
 use crate::data::store::{ReportedState, Store};
 use crate::error::Result;
 use crate::git::forge::BranchLifecycle;
-use crate::workspace_rows::{RowInput, attention_rank, collect_rows_cached, sanitize, state_glyph};
+use crate::menubar::escape::{esc_text, quote_param};
+use crate::workspace_rows::{RowInput, attention_rank, collect_rows_cached, state_glyph};
 
 const SF_SYMBOL: &str = "arrow.triangle.branch";
 const ROW_FONT: &str = "font=SFMono-Regular size=12";
@@ -23,48 +24,6 @@ fn sfcolor(state: ReportedState) -> &'static str {
         ReportedState::Waiting => "#b08800,#ffd43b",
         ReportedState::Working | ReportedState::Busy => "#1971c2,#4dabf7",
     }
-}
-
-/// Cap on a rendered line's *display text* segment, in chars. Named per the
-/// spec's "length-capped" sanitization bullet — keeps one hostile/huge
-/// status message from ballooning the SwiftBar document. Never applied to
-/// param values (paths, URLs) — those must survive intact or the action
-/// they drive (open path, open URL) breaks.
-const MAX_TEXT_LEN: usize = 120;
-
-/// Injection barrier shared by display text and param values: control
-/// chars collapse (via sanitize) and the protocol's text/params separator
-/// '|' becomes a broken bar, so no user-controlled string can smuggle
-/// params or extra rows. Uncapped and no dash guard — safe for param
-/// values (quoted, not line-initial) where truncation would corrupt a
-/// real path or URL.
-fn esc_core(s: &str) -> String {
-    sanitize(s).replace('|', "\u{00a6}")
-}
-
-/// Display-text sanitizer built on `esc_core`: additionally guards a
-/// leading '-' (so the string can't read as a '---' separator or '--'
-/// submenu marker) and length-caps the result. Only for text that renders
-/// directly on a menu line — never for param values.
-fn esc_text(s: &str) -> String {
-    let mut out = esc_core(s);
-    if out.starts_with('-') {
-        out.replace_range(0..1, "\u{2011}");
-    }
-    if out.chars().count() > MAX_TEXT_LEN {
-        out = out.chars().take(MAX_TEXT_LEN).collect();
-    }
-    out
-}
-
-/// All bash=/paramN=/href= values are double-quoted; interior quotes
-/// degrade to '\'' (a path with a double quote is pathological — keeping
-/// the protocol unbreakable beats preserving it). Uses the uncapped,
-/// unguarded `esc_core` — param values are real paths/URLs consumed by the
-/// action they drive (Jump, Reveal in Finder, Open PR), not display text,
-/// so they must never be truncated or dash-shifted.
-fn quote_param(s: &str) -> String {
-    format!("\"{}\"", esc_core(s).replace('"', "'"))
 }
 
 pub(crate) fn error_header() -> String {
@@ -415,14 +374,6 @@ mod plugin_tests {
     }
 
     #[test]
-    fn esc_text_caps_length() {
-        let huge = "x".repeat(1000);
-        let capped = esc_text(&huge);
-        assert_eq!(capped.chars().count(), MAX_TEXT_LEN);
-        assert_eq!(capped, "x".repeat(MAX_TEXT_LEN));
-    }
-
-    #[test]
     fn huge_status_message_caps_rendered_subtitle() {
         let huge = "x".repeat(1000);
         let mut r = row("r", "w");
@@ -463,13 +414,7 @@ mod plugin_tests {
     }
 
     #[test]
-    fn esc_text_guards_leading_dash() {
-        // A repo named "---evil" must not render a line that IS a bare
-        // separator once escaped.
-        let escaped = esc_text("---evil");
-        assert_ne!(escaped, "---");
-        assert!(!escaped.starts_with('-'), "{escaped}");
-
+    fn leading_dash_status_stays_inside_its_subtitle_line() {
         // A status message starting with "-- " must stay embedded inside
         // its single subtitle line, not spawn an extra menu row.
         let mut r = row("r", "w");

@@ -89,6 +89,12 @@ than `{cmd}` — if you use that shortcut, prefer leaving `terminal_cmd`
 unset on macOS and letting jump auto-detect iTerm2/Terminal. These commands
 are macOS-only and error on other platforms.
 
+Below the workspace list, a **Project Manager** submenu shows each
+workspace's agent-authored recap — the `goal` / `state` / `next` one-liners
+maintained via `wsx recap set` — ordered blocked → waiting → least-recently
+active. It is the menubar counterpart of the TUI's `p` view, rendered from
+the same SQLite data, and clicking a workspace's line jumps to it.
+
 ## Development
 
 Build and test with `cargo build` / `cargo test`. See the

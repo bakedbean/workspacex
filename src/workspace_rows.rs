@@ -30,11 +30,25 @@ pub fn is_stale(fetched_at: Option<i64>, now: i64, throttle_secs: i64) -> bool {
     }
 }
 
-/// Collapse control characters (incl. '\n', '\t') to a single space so a
+/// Replace each control character (incl. '\n', '\t') with a space so a
 /// value with embedded newlines can't inject fake rows into the picker.
+/// One-for-one, not coalescing: a run of controls becomes a run of spaces,
+/// which is fine here — the goal is that no line break survives, not that
+/// the result is tidy.
+///
+/// `char::is_control` covers General_Category Cc only, so U+2028 LINE
+/// SEPARATOR and U+2029 PARAGRAPH SEPARATOR (Zl/Zp) are replaced
+/// explicitly: Swift treats both as line breaks, so leaving them intact
+/// would let agent-authored text open a new SwiftBar menu row.
 pub fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -59,6 +73,7 @@ pub fn state_glyph(state: Option<ReportedState>) -> &'static str {
 }
 
 pub struct RowInput {
+    pub id: crate::data::store::WorkspaceId,
     pub repo_name: String,
     pub slug: String,
     pub branch: String,
@@ -119,6 +134,7 @@ pub fn collect_rows_cached(store: &Store) -> Result<Vec<RowInput>> {
     Ok(workspace_metas(store)?
         .into_iter()
         .map(|m| RowInput {
+            id: m.id,
             status: statuses.get(&m.id).cloned(),
             cache: caches.remove(&m.id).unwrap_or_default(),
             repo_name: m.repo_name,
@@ -166,6 +182,7 @@ pub async fn collect_rows_fresh(store: &Store) -> Result<Vec<RowInput>> {
             cache.deletions = None;
         }
         rows.push(RowInput {
+            id: m.id,
             repo_name: m.repo_name,
             slug: m.slug,
             branch: m.branch,
@@ -253,6 +270,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sanitize_collapses_unicode_line_separators() {
+        // U+2028/U+2029 are Zl/Zp, not Cc, so `is_control` misses them —
+        // but Swift treats both as line breaks, which would let agent
+        // text open a new SwiftBar row.
+        assert_eq!(sanitize("a\u{2028}b"), "a b");
+        assert_eq!(sanitize("a\u{2029}b"), "a b");
+        assert_eq!(sanitize("a\nb\tc"), "a b c");
+        // Ordinary text, including other Unicode whitespace, is untouched.
+        assert_eq!(sanitize("a\u{00a0}b"), "a\u{00a0}b");
+    }
+
+    #[test]
     fn staleness_decision() {
         assert!(is_stale(None, 1000, 120));
         assert!(is_stale(Some(880), 1000, 120));
@@ -285,6 +314,9 @@ mod tests {
 
         let rows = collect_rows_cached(&store).unwrap();
         assert_eq!(rows.len(), 1);
+        // The id is what lets callers join per-workspace tables (recaps,
+        // status) onto a row.
+        assert_eq!(rows[0].id, id);
         // Cache values pass through untouched — fresh mode would have
         // suppressed them because git fails on the missing worktree.
         assert_eq!(rows[0].cache.dirty, Some(true));

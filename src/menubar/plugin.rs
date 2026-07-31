@@ -10,10 +10,11 @@ use crate::data::scm_cache::ScmCacheRow;
 use crate::data::store::{ReportedState, Store};
 use crate::error::Result;
 use crate::git::forge::BranchLifecycle;
-use crate::workspace_rows::{RowInput, attention_rank, collect_rows_cached, sanitize, state_glyph};
+use crate::menubar::escape::{esc_text, quote_param};
+use crate::workspace_rows::{RowInput, attention_rank, collect_rows_cached, state_glyph};
 
 const SF_SYMBOL: &str = "arrow.triangle.branch";
-const ROW_FONT: &str = "font=SFMono-Regular size=12";
+pub(crate) const ROW_FONT: &str = "font=SFMono-Regular size=12";
 
 /// light,dark hex pairs for SwiftBar's per-appearance sfcolor.
 fn sfcolor(state: ReportedState) -> &'static str {
@@ -23,48 +24,6 @@ fn sfcolor(state: ReportedState) -> &'static str {
         ReportedState::Waiting => "#b08800,#ffd43b",
         ReportedState::Working | ReportedState::Busy => "#1971c2,#4dabf7",
     }
-}
-
-/// Cap on a rendered line's *display text* segment, in chars. Named per the
-/// spec's "length-capped" sanitization bullet — keeps one hostile/huge
-/// status message from ballooning the SwiftBar document. Never applied to
-/// param values (paths, URLs) — those must survive intact or the action
-/// they drive (open path, open URL) breaks.
-const MAX_TEXT_LEN: usize = 120;
-
-/// Injection barrier shared by display text and param values: control
-/// chars collapse (via sanitize) and the protocol's text/params separator
-/// '|' becomes a broken bar, so no user-controlled string can smuggle
-/// params or extra rows. Uncapped and no dash guard — safe for param
-/// values (quoted, not line-initial) where truncation would corrupt a
-/// real path or URL.
-fn esc_core(s: &str) -> String {
-    sanitize(s).replace('|', "\u{00a6}")
-}
-
-/// Display-text sanitizer built on `esc_core`: additionally guards a
-/// leading '-' (so the string can't read as a '---' separator or '--'
-/// submenu marker) and length-caps the result. Only for text that renders
-/// directly on a menu line — never for param values.
-fn esc_text(s: &str) -> String {
-    let mut out = esc_core(s);
-    if out.starts_with('-') {
-        out.replace_range(0..1, "\u{2011}");
-    }
-    if out.chars().count() > MAX_TEXT_LEN {
-        out = out.chars().take(MAX_TEXT_LEN).collect();
-    }
-    out
-}
-
-/// All bash=/paramN=/href= values are double-quoted; interior quotes
-/// degrade to '\'' (a path with a double quote is pathological — keeping
-/// the protocol unbreakable beats preserving it). Uses the uncapped,
-/// unguarded `esc_core` — param values are real paths/URLs consumed by the
-/// action they drive (Jump, Reveal in Finder, Open PR), not display text,
-/// so they must never be truncated or dash-shifted.
-fn quote_param(s: &str) -> String {
-    format!("\"{}\"", esc_core(s).replace('"', "'"))
 }
 
 pub(crate) fn error_header() -> String {
@@ -156,7 +115,16 @@ pub(crate) fn submenu_lines(r: &RowInput, wsx_bin: &str) -> Vec<String> {
     out
 }
 
-pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) -> String {
+pub(crate) fn render(
+    repo_names: &[String],
+    rows: &[RowInput],
+    recaps: &std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::store::WorkspaceRecap,
+    >,
+    wsx_bin: &str,
+    now_ms: i64,
+) -> String {
     let best = rows
         .iter()
         .filter_map(|r| r.status.as_ref().map(|s| s.state))
@@ -175,6 +143,11 @@ pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) ->
         }
     }
     lines.push("---".into());
+    lines.push("Project Manager".into());
+    lines.extend(crate::menubar::pm::pm_section_lines(
+        repo_names, rows, recaps, wsx_bin, now_ms,
+    ));
+    lines.push("---".into());
     lines.push("Refresh | refresh=true".into());
     lines.join("\n")
 }
@@ -183,11 +156,20 @@ pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) ->
 /// same icon-only header as an error (no `---`, no footer — SwiftBar shows
 /// a bare menubar item with no dropdown content), otherwise the composed
 /// header + menu body.
-fn document(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) -> String {
+fn document(
+    repo_names: &[String],
+    rows: &[RowInput],
+    recaps: &std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::store::WorkspaceRecap,
+    >,
+    wsx_bin: &str,
+    now_ms: i64,
+) -> String {
     if repo_names.is_empty() {
         return error_header();
     }
-    render(repo_names, rows, wsx_bin)
+    render(repo_names, rows, recaps, wsx_bin, now_ms)
 }
 
 fn plugin_document(store: &Store, wsx_bin: &str) -> Result<String> {
@@ -195,7 +177,16 @@ fn plugin_document(store: &Store, wsx_bin: &str) -> Result<String> {
     repos.sort_by(|a, b| a.name.cmp(&b.name));
     let names: Vec<String> = repos.into_iter().map(|r| r.name).collect();
     let rows = collect_rows_cached(store)?;
-    Ok(document(&names, &rows, wsx_bin))
+    // A recap read failure must not blank the whole menu — degrade to
+    // "no recap yet" and keep every workspace row. Mirrors app.rs.
+    let recaps = store.all_workspace_recaps().unwrap_or_default();
+    Ok(document(
+        &names,
+        &rows,
+        &recaps,
+        wsx_bin,
+        crate::time::now_ms(),
+    ))
 }
 
 /// Fire-and-forget `wsx menubar refresh` so indicators self-heal by a
@@ -240,6 +231,7 @@ mod plugin_tests {
 
     fn row(repo: &str, slug: &str) -> RowInput {
         RowInput {
+            id: crate::data::store::WorkspaceId(0),
             repo_name: repo.into(),
             slug: slug.into(),
             branch: format!("x/{slug}"),
@@ -379,12 +371,70 @@ mod plugin_tests {
     }
 
     #[test]
+    fn pm_section_sits_between_the_repos_and_the_footer() {
+        let rows = vec![row("alpha", "one")];
+        let doc = render(
+            &["alpha".into()],
+            &rows,
+            &std::collections::HashMap::new(),
+            "/bin/wsx",
+            0,
+        );
+        let lines: Vec<&str> = doc.lines().collect();
+        let pm = lines.iter().position(|l| *l == "Project Manager").unwrap();
+        let last_repo_row = lines
+            .iter()
+            .rposition(|l| l.starts_with("\u{b7} one"))
+            .unwrap();
+        let footer = lines
+            .iter()
+            .position(|l| *l == "Refresh | refresh=true")
+            .unwrap();
+        assert!(last_repo_row < pm && pm < footer, "{doc}");
+        // Its own separator above, the footer's separator below.
+        assert_eq!(lines[pm - 1], "---");
+        assert_eq!(lines[footer - 1], "---");
+        // The parent item is not disabled — a greyed submenu parent reads
+        // as broken.
+        assert!(!lines[pm].contains("disabled=true"), "{doc}");
+        // And the body is present, at submenu depth.
+        assert!(lines[pm + 1].starts_with("-- "), "{doc}");
+    }
+
+    #[test]
+    fn pm_section_shows_recap_text_from_the_store_map() {
+        let mut rows = vec![row("alpha", "one")];
+        rows[0].id = crate::data::store::WorkspaceId(7);
+        let mut recaps = std::collections::HashMap::new();
+        recaps.insert(
+            crate::data::store::WorkspaceId(7),
+            crate::data::store::WorkspaceRecap {
+                goal: Some("ship the thing".into()),
+                state: None,
+                next: None,
+                updated_at: 0,
+            },
+        );
+        let doc = render(&["alpha".into()], &rows, &recaps, "/bin/wsx", 0);
+        assert!(doc.contains("goal:  ship the thing"), "{doc}");
+    }
+
+    #[test]
+    fn empty_repo_list_still_has_no_pm_section() {
+        let doc = document(&[], &[], &std::collections::HashMap::new(), "/bin/wsx", 0);
+        assert_eq!(doc, error_header());
+        assert!(!doc.contains("Project Manager"), "{doc}");
+    }
+
+    #[test]
     fn render_groups_by_repo_and_lists_empty_repos() {
         let rows = vec![row("alpha", "one"), row("alpha", "two"), row("beta", "b1")];
         let doc = render(
             &["alpha".into(), "beta".into(), "empty".into()],
             &rows,
+            &std::collections::HashMap::new(),
             "/bin/wsx",
+            0,
         );
         let lines: Vec<&str> = doc.lines().collect();
         assert_eq!(lines[0], "3 | sfimage=arrow.triangle.branch");
@@ -411,15 +461,10 @@ mod plugin_tests {
     fn empty_repo_list_is_icon_only_document() {
         // No registered repos or any error → icon-only header alone: no
         // `---`, no footer, nothing for SwiftBar to render as a dropdown.
-        assert_eq!(document(&[], &[], "/bin/wsx"), error_header());
-    }
-
-    #[test]
-    fn esc_text_caps_length() {
-        let huge = "x".repeat(1000);
-        let capped = esc_text(&huge);
-        assert_eq!(capped.chars().count(), MAX_TEXT_LEN);
-        assert_eq!(capped, "x".repeat(MAX_TEXT_LEN));
+        assert_eq!(
+            document(&[], &[], &std::collections::HashMap::new(), "/bin/wsx", 0),
+            error_header()
+        );
     }
 
     #[test]
@@ -463,13 +508,7 @@ mod plugin_tests {
     }
 
     #[test]
-    fn esc_text_guards_leading_dash() {
-        // A repo named "---evil" must not render a line that IS a bare
-        // separator once escaped.
-        let escaped = esc_text("---evil");
-        assert_ne!(escaped, "---");
-        assert!(!escaped.starts_with('-'), "{escaped}");
-
+    fn leading_dash_status_stays_inside_its_subtitle_line() {
         // A status message starting with "-- " must stay embedded inside
         // its single subtitle line, not spawn an extra menu row.
         let mut r = row("r", "w");

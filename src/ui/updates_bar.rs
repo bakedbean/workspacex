@@ -301,17 +301,10 @@ pub fn format_attention_line(
     Some(out)
 }
 
-/// Format a millisecond delta as `<n>s` for <60s, `<n>m` for <60m, `<n>h` otherwise.
-pub fn format_age(delta_ms: i64) -> String {
-    let secs = (delta_ms / 1000).max(0);
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else {
-        format!("{}h", secs / 3600)
-    }
-}
+// Moved to `crate::time` so non-TUI callers (the macOS menubar) can use it
+// without depending on ratatui widget code. Re-exported here because the
+// updates bar, the updates panel, and the PM digest all reach it by this path.
+pub use crate::time::format_age;
 
 #[cfg(test)]
 mod tests {
@@ -542,16 +535,6 @@ mod tests {
         }];
         let line = format_attention_line(&entries, 5_000, 80).expect("line");
         assert!(line.starts_with("⚠ demo/alpha"), "got: {line}");
-    }
-
-    #[test]
-    fn format_age_thresholds() {
-        assert_eq!(format_age(0), "0s");
-        assert_eq!(format_age(59_999), "59s");
-        assert_eq!(format_age(60_000), "1m");
-        assert_eq!(format_age(3_599_000), "59m");
-        assert_eq!(format_age(3_600_000), "1h");
-        assert_eq!(format_age(-500), "0s"); // negative delta clamps
     }
 
     #[test]

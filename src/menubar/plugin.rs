@@ -199,6 +199,7 @@ mod plugin_tests {
 
     fn row(repo: &str, slug: &str) -> RowInput {
         RowInput {
+            id: crate::data::store::WorkspaceId(0),
             repo_name: repo.into(),
             slug: slug.into(),
             branch: format!("x/{slug}"),

@@ -59,6 +59,7 @@ pub fn state_glyph(state: Option<ReportedState>) -> &'static str {
 }
 
 pub struct RowInput {
+    pub id: crate::data::store::WorkspaceId,
     pub repo_name: String,
     pub slug: String,
     pub branch: String,
@@ -119,6 +120,7 @@ pub fn collect_rows_cached(store: &Store) -> Result<Vec<RowInput>> {
     Ok(workspace_metas(store)?
         .into_iter()
         .map(|m| RowInput {
+            id: m.id,
             status: statuses.get(&m.id).cloned(),
             cache: caches.remove(&m.id).unwrap_or_default(),
             repo_name: m.repo_name,
@@ -166,6 +168,7 @@ pub async fn collect_rows_fresh(store: &Store) -> Result<Vec<RowInput>> {
             cache.deletions = None;
         }
         rows.push(RowInput {
+            id: m.id,
             repo_name: m.repo_name,
             slug: m.slug,
             branch: m.branch,
@@ -285,6 +288,9 @@ mod tests {
 
         let rows = collect_rows_cached(&store).unwrap();
         assert_eq!(rows.len(), 1);
+        // The id is what lets callers join per-workspace tables (recaps,
+        // status) onto a row.
+        assert_eq!(rows[0].id, id);
         // Cache values pass through untouched — fresh mode would have
         // suppressed them because git fails on the missing worktree.
         assert_eq!(rows[0].cache.dirty, Some(true));

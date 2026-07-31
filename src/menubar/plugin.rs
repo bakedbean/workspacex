@@ -14,7 +14,7 @@ use crate::menubar::escape::{esc_text, quote_param};
 use crate::workspace_rows::{RowInput, attention_rank, collect_rows_cached, state_glyph};
 
 const SF_SYMBOL: &str = "arrow.triangle.branch";
-const ROW_FONT: &str = "font=SFMono-Regular size=12";
+pub(crate) const ROW_FONT: &str = "font=SFMono-Regular size=12";
 
 /// light,dark hex pairs for SwiftBar's per-appearance sfcolor.
 fn sfcolor(state: ReportedState) -> &'static str {
@@ -115,7 +115,16 @@ pub(crate) fn submenu_lines(r: &RowInput, wsx_bin: &str) -> Vec<String> {
     out
 }
 
-pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) -> String {
+pub(crate) fn render(
+    repo_names: &[String],
+    rows: &[RowInput],
+    recaps: &std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::store::WorkspaceRecap,
+    >,
+    wsx_bin: &str,
+    now_ms: i64,
+) -> String {
     let best = rows
         .iter()
         .filter_map(|r| r.status.as_ref().map(|s| s.state))
@@ -134,6 +143,11 @@ pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) ->
         }
     }
     lines.push("---".into());
+    lines.push("Project Manager".into());
+    lines.extend(crate::menubar::pm::pm_section_lines(
+        repo_names, rows, recaps, wsx_bin, now_ms,
+    ));
+    lines.push("---".into());
     lines.push("Refresh | refresh=true".into());
     lines.join("\n")
 }
@@ -142,11 +156,20 @@ pub(crate) fn render(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) ->
 /// same icon-only header as an error (no `---`, no footer — SwiftBar shows
 /// a bare menubar item with no dropdown content), otherwise the composed
 /// header + menu body.
-fn document(repo_names: &[String], rows: &[RowInput], wsx_bin: &str) -> String {
+fn document(
+    repo_names: &[String],
+    rows: &[RowInput],
+    recaps: &std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::store::WorkspaceRecap,
+    >,
+    wsx_bin: &str,
+    now_ms: i64,
+) -> String {
     if repo_names.is_empty() {
         return error_header();
     }
-    render(repo_names, rows, wsx_bin)
+    render(repo_names, rows, recaps, wsx_bin, now_ms)
 }
 
 fn plugin_document(store: &Store, wsx_bin: &str) -> Result<String> {
@@ -154,7 +177,14 @@ fn plugin_document(store: &Store, wsx_bin: &str) -> Result<String> {
     repos.sort_by(|a, b| a.name.cmp(&b.name));
     let names: Vec<String> = repos.into_iter().map(|r| r.name).collect();
     let rows = collect_rows_cached(store)?;
-    Ok(document(&names, &rows, wsx_bin))
+    let recaps = store.all_workspace_recaps()?;
+    Ok(document(
+        &names,
+        &rows,
+        &recaps,
+        wsx_bin,
+        crate::time::now_ms(),
+    ))
 }
 
 /// Fire-and-forget `wsx menubar refresh` so indicators self-heal by a
@@ -339,12 +369,70 @@ mod plugin_tests {
     }
 
     #[test]
+    fn pm_section_sits_between_the_repos_and_the_footer() {
+        let rows = vec![row("alpha", "one")];
+        let doc = render(
+            &["alpha".into()],
+            &rows,
+            &std::collections::HashMap::new(),
+            "/bin/wsx",
+            0,
+        );
+        let lines: Vec<&str> = doc.lines().collect();
+        let pm = lines.iter().position(|l| *l == "Project Manager").unwrap();
+        let last_repo_row = lines
+            .iter()
+            .rposition(|l| l.starts_with("\u{b7} one"))
+            .unwrap();
+        let footer = lines
+            .iter()
+            .position(|l| *l == "Refresh | refresh=true")
+            .unwrap();
+        assert!(last_repo_row < pm && pm < footer, "{doc}");
+        // Its own separator above, the footer's separator below.
+        assert_eq!(lines[pm - 1], "---");
+        assert_eq!(lines[footer - 1], "---");
+        // The parent item is not disabled — a greyed submenu parent reads
+        // as broken.
+        assert!(!lines[pm].contains("disabled=true"), "{doc}");
+        // And the body is present, at submenu depth.
+        assert!(lines[pm + 1].starts_with("-- "), "{doc}");
+    }
+
+    #[test]
+    fn pm_section_shows_recap_text_from_the_store_map() {
+        let mut rows = vec![row("alpha", "one")];
+        rows[0].id = crate::data::store::WorkspaceId(7);
+        let mut recaps = std::collections::HashMap::new();
+        recaps.insert(
+            crate::data::store::WorkspaceId(7),
+            crate::data::store::WorkspaceRecap {
+                goal: Some("ship the thing".into()),
+                state: None,
+                next: None,
+                updated_at: 0,
+            },
+        );
+        let doc = render(&["alpha".into()], &rows, &recaps, "/bin/wsx", 0);
+        assert!(doc.contains("goal:  ship the thing"), "{doc}");
+    }
+
+    #[test]
+    fn empty_repo_list_still_has_no_pm_section() {
+        let doc = document(&[], &[], &std::collections::HashMap::new(), "/bin/wsx", 0);
+        assert_eq!(doc, error_header());
+        assert!(!doc.contains("Project Manager"), "{doc}");
+    }
+
+    #[test]
     fn render_groups_by_repo_and_lists_empty_repos() {
         let rows = vec![row("alpha", "one"), row("alpha", "two"), row("beta", "b1")];
         let doc = render(
             &["alpha".into(), "beta".into(), "empty".into()],
             &rows,
+            &std::collections::HashMap::new(),
             "/bin/wsx",
+            0,
         );
         let lines: Vec<&str> = doc.lines().collect();
         assert_eq!(lines[0], "3 | sfimage=arrow.triangle.branch");
@@ -371,7 +459,10 @@ mod plugin_tests {
     fn empty_repo_list_is_icon_only_document() {
         // No registered repos or any error → icon-only header alone: no
         // `---`, no footer, nothing for SwiftBar to render as a dropdown.
-        assert_eq!(document(&[], &[], "/bin/wsx"), error_header());
+        assert_eq!(
+            document(&[], &[], &std::collections::HashMap::new(), "/bin/wsx", 0),
+            error_header()
+        );
     }
 
     #[test]

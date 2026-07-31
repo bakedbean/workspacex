@@ -32,9 +32,20 @@ pub fn is_stale(fetched_at: Option<i64>, now: i64, throttle_secs: i64) -> bool {
 
 /// Collapse control characters (incl. '\n', '\t') to a single space so a
 /// value with embedded newlines can't inject fake rows into the picker.
+///
+/// `char::is_control` covers General_Category Cc only, so U+2028 LINE
+/// SEPARATOR and U+2029 PARAGRAPH SEPARATOR (Zl/Zp) are collapsed
+/// explicitly: Swift treats both as line breaks, so leaving them intact
+/// would let agent-authored text open a new SwiftBar menu row.
 pub fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -254,6 +265,18 @@ pub async fn run_refresh_prs(store: &Store) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_collapses_unicode_line_separators() {
+        // U+2028/U+2029 are Zl/Zp, not Cc, so `is_control` misses them —
+        // but Swift treats both as line breaks, which would let agent
+        // text open a new SwiftBar row.
+        assert_eq!(sanitize("a\u{2028}b"), "a b");
+        assert_eq!(sanitize("a\u{2029}b"), "a b");
+        assert_eq!(sanitize("a\nb\tc"), "a b c");
+        // Ordinary text, including other Unicode whitespace, is untouched.
+        assert_eq!(sanitize("a\u{00a0}b"), "a\u{00a0}b");
+    }
 
     #[test]
     fn staleness_decision() {

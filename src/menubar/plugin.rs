@@ -177,7 +177,9 @@ fn plugin_document(store: &Store, wsx_bin: &str) -> Result<String> {
     repos.sort_by(|a, b| a.name.cmp(&b.name));
     let names: Vec<String> = repos.into_iter().map(|r| r.name).collect();
     let rows = collect_rows_cached(store)?;
-    let recaps = store.all_workspace_recaps()?;
+    // A recap read failure must not blank the whole menu — degrade to
+    // "no recap yet" and keep every workspace row. Mirrors app.rs.
+    let recaps = store.all_workspace_recaps().unwrap_or_default();
     Ok(document(
         &names,
         &rows,

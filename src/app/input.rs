@@ -1462,7 +1462,8 @@ async fn handle_key_modal(
                     let new_sel = (selected_now + 1).min(max);
                     app.modal = Some(Modal::UpdatesPanel { selected: new_sel });
                 }
-                KeyCode::Enter => {
+                // 'l' mirrors the dashboard's vim-style attach binding.
+                KeyCode::Enter | KeyCode::Char('l') => {
                     if let Some(ws_id) = order.get(selected_now).copied() {
                         // Mirror the dashboard-attach flow: clear the
                         // alert, spawn (or resume) the PTY, switch view.

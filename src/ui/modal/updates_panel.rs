@@ -1,6 +1,28 @@
 //! Extracted from ui/modal.rs.
 
 use super::*;
+use crate::ui::text::{truncate, truncate_pad};
+
+/// Cap on the workspace-name column so one very long name can't starve the
+/// status column of the entire panel.
+const NAME_COL_MAX: usize = 28;
+
+/// Chars consumed left of the name column: 2-space indent + glyph + space.
+const ROW_PREFIX_W: usize = 4;
+
+/// Gap between adjacent columns (name→status, status→age).
+const COL_GAP_W: usize = 2;
+
+/// Width of the shared workspace-name column: as wide as the longest name,
+/// capped at [`NAME_COL_MAX`]. Shared across every repo section so status
+/// texts start at one fixed column for the whole panel.
+fn name_col_width<'a>(names: impl Iterator<Item = &'a str>) -> usize {
+    names
+        .map(|n| n.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(NAME_COL_MAX)
+}
 
 /// Compute the order in which workspaces appear in the updates panel.
 /// Returns workspace IDs in the same order the renderer walks them —
@@ -98,6 +120,16 @@ pub fn render_updates_panel(
     let pos_of: HashMap<crate::data::store::WorkspaceId, usize> =
         order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
 
+    // One shared name column for the whole panel so every status text starts
+    // at the same column regardless of which repo section a row is in.
+    let name_col = name_col_width(
+        workspaces
+            .iter()
+            .filter(|(_, w)| pos_of.contains_key(&w.id))
+            .map(|(_, w)| w.name.as_str()),
+    );
+    let row_width = body_area.width as usize;
+
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
     for repo in repos {
@@ -113,10 +145,10 @@ pub fn render_updates_panel(
         if ws_for_repo.is_empty() {
             continue;
         }
-        lines.push(Line::from(Span::styled(
-            repo.name.clone(),
-            theme.header_style(),
-        )));
+        lines.push(Line::from(vec![
+            Span::styled(repo.name.clone(), theme.header_style()),
+            Span::styled(format!("  ({})", ws_for_repo.len()), theme.dim_style()),
+        ]));
         // Already pre-sorted in `order`; preserve that ordering here too.
         let mut ws_sorted = ws_for_repo;
         ws_sorted.sort_by_key(|w| pos_of.get(&w.id).copied().unwrap_or(usize::MAX));
@@ -137,6 +169,8 @@ pub fn render_updates_panel(
                 status,
                 lifecycle,
                 now_ms,
+                name_col,
+                row_width,
                 theme,
             ));
         }
@@ -202,6 +236,8 @@ fn workspace_row<'a>(
     status: Status,
     lifecycle: Option<BranchLifecycle>,
     now_ms: i64,
+    name_col: usize,
+    row_width: usize,
     theme: &Theme,
 ) -> Line<'a> {
     use crate::ui::updates_bar::{ActivityState, format_age, glyph_for_activity};
@@ -257,10 +293,6 @@ fn workspace_row<'a>(
         ("no session".to_string(), None)
     };
     let age = age_anchor_ms.map(|t| format_age(now_ms.saturating_sub(t)));
-    let suffix = match age {
-        Some(a) => format!(" ({a})"),
-        None => String::new(),
-    };
 
     // Failed overrides the canonical status hue with `err` — a failed
     // workspace is the same urgency signal regardless of its prior status.
@@ -279,13 +311,29 @@ fn workspace_row<'a>(
         .unwrap_or_else(|| Style::default().fg(ratatui::style::Color::Reset))
         .add_modifier(Modifier::BOLD);
 
-    let name_padded = format!("{:<20}", w.name);
-    let spans = vec![
+    // Column layout: indent+glyph | name | status | right-aligned age.
+    // The status text is truncated so it can never collide with the age
+    // column, and the row is padded to exactly `row_width` so the selection
+    // background spans the full row.
+    let age_w = age.as_ref().map(|a| a.chars().count()).unwrap_or(0);
+    let age_reserved = if age_w > 0 { age_w + COL_GAP_W } else { 0 };
+    let status_budget =
+        row_width.saturating_sub(ROW_PREFIX_W + name_col + COL_GAP_W + age_reserved);
+    let status_txt = truncate(&status_text, status_budget);
+    let pad_w = row_width
+        .saturating_sub(ROW_PREFIX_W + name_col + COL_GAP_W + status_txt.chars().count() + age_w);
+
+    let mut spans = vec![
         Span::raw("  "),
         Span::styled(format!("{glyph} "), status_fg),
-        Span::styled(name_padded, name_style),
-        Span::styled(format!(" {status_text}{suffix}"), status_fg),
+        Span::styled(truncate_pad(&w.name, name_col), name_style),
+        Span::raw(" ".repeat(COL_GAP_W)),
+        Span::styled(status_txt, status_fg),
+        Span::raw(" ".repeat(pad_w)),
     ];
+    if let Some(a) = age {
+        spans.push(Span::styled(a, theme.dim_style()));
+    }
 
     let mut line = Line::from(spans);
     if is_selected {
@@ -400,6 +448,8 @@ mod workspace_row_tests {
             Status::Question,
             None,
             10_000,
+            20,
+            78,
             &theme,
         );
         let body = line_text(&line);
@@ -424,6 +474,8 @@ mod workspace_row_tests {
             Status::Complete,
             None,
             10_000,
+            20,
+            78,
             &theme,
         );
         let body = line_text(&line);
@@ -449,6 +501,8 @@ mod workspace_row_tests {
             Status::Question,
             None,
             10_000,
+            20,
+            78,
             &theme,
         );
         let body = line_text(&line);
@@ -512,6 +566,8 @@ mod workspace_row_tests {
                 status,
                 None,
                 10_000,
+                20,
+                78,
                 &theme,
             );
             let glyph_span = &line.spans[1];
@@ -546,6 +602,8 @@ mod workspace_row_tests {
             Status::Idle, // classifier might say anything; failed wins
             None,
             10_000,
+            20,
+            78,
             &theme,
         );
         let glyph_span = &line.spans[1];
@@ -586,6 +644,8 @@ mod workspace_row_tests {
                 Status::Idle,
                 lifecycle,
                 10_000,
+                20,
+                78,
                 &theme,
             );
             let name_span = span_containing(&line, "alpha");
@@ -598,6 +658,158 @@ mod workspace_row_tests {
                 "name should be bold for lifecycle {lifecycle:?}"
             );
         }
+    }
+
+    /// Status texts must start at the same column regardless of name length —
+    /// the whole point of the shared name column.
+    #[test]
+    fn workspace_row_aligns_status_column_across_name_lengths() {
+        let theme = Theme::ansi();
+        let short = fixture_workspace("a");
+        let long = fixture_workspace("a-much-longer-name");
+        let row = |w: &Workspace| {
+            let line = workspace_row(
+                w,
+                None,
+                None,
+                false,
+                None,
+                false,
+                Status::Idle,
+                None,
+                10_000,
+                20,
+                78,
+                &theme,
+            );
+            line_text(&line)
+        };
+        let col_short = row(&short).find("no session").unwrap();
+        let col_long = row(&long).find("no session").unwrap();
+        assert_eq!(col_short, col_long, "status must start at a fixed column");
+    }
+
+    /// Names wider than the name column truncate with an ellipsis instead of
+    /// pushing the status column out of alignment.
+    #[test]
+    fn workspace_row_truncates_overlong_name_keeping_column() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("this-name-is-way-past-the-column");
+        let line = workspace_row(
+            &w,
+            None,
+            None,
+            false,
+            None,
+            false,
+            Status::Idle,
+            None,
+            10_000,
+            20,
+            78,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(body.contains('…'), "expected ellipsis in: {body}");
+        // Column position in chars, not bytes — the glyph and ellipsis are
+        // multi-byte.
+        let status_col = body[..body.find("no session").unwrap()].chars().count();
+        assert_eq!(
+            status_col,
+            4 + 20 + 2,
+            "status must start right after prefix + name column + gap"
+        );
+    }
+
+    /// The age lands right-aligned at the row edge as its own dim column, and
+    /// every row pads to exactly `row_width` so the selection background can
+    /// cover the full row.
+    #[test]
+    fn workspace_row_right_aligns_age_and_pads_to_row_width() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let awaiting = ("Bash".to_string(), 5_000i64);
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::Awaiting),
+            true,
+            Some(&awaiting),
+            false,
+            Status::Question,
+            None,
+            10_000,
+            20,
+            78,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert_eq!(body.chars().count(), 78, "row must fill row_width");
+        assert!(
+            body.ends_with("5s"),
+            "age must sit at the right edge: {body:?}"
+        );
+        let age_span = line.spans.last().unwrap();
+        assert_eq!(age_span.style, theme.dim_style(), "age renders dim");
+
+        // A row without an age still pads to the full width.
+        let no_age = workspace_row(
+            &w,
+            None,
+            None,
+            false,
+            None,
+            false,
+            Status::Idle,
+            None,
+            10_000,
+            20,
+            78,
+            &theme,
+        );
+        assert_eq!(line_text(&no_age).chars().count(), 78);
+    }
+
+    /// A long status text is truncated so it can never collide with the
+    /// right-aligned age column.
+    #[test]
+    fn workspace_row_truncates_status_before_age_column() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let awaiting = (
+            "SomeVeryLongToolName".repeat(4), // way past any budget
+            5_000i64,
+        );
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::Awaiting),
+            true,
+            Some(&awaiting),
+            false,
+            Status::Question,
+            None,
+            10_000,
+            20,
+            60,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert_eq!(body.chars().count(), 60, "row must not overflow row_width");
+        assert!(body.ends_with("5s"), "age survives truncation: {body:?}");
+        assert!(body.contains('…'), "status text truncates with ellipsis");
+    }
+
+    #[test]
+    fn name_col_width_tracks_longest_name_capped() {
+        assert_eq!(name_col_width(["ab", "abcd"].into_iter()), 4);
+        assert_eq!(name_col_width(std::iter::empty()), 0);
+        let long = "x".repeat(NAME_COL_MAX + 10);
+        assert_eq!(
+            name_col_width([long.as_str()].into_iter()),
+            NAME_COL_MAX,
+            "column caps at NAME_COL_MAX"
+        );
     }
 
     /// Selection should only set the row's background — per-span foregrounds
@@ -617,6 +829,8 @@ mod workspace_row_tests {
             Status::Complete,
             Some(crate::git::forge::BranchLifecycle::PrOpen),
             10_000,
+            20,
+            78,
             &theme,
         );
         // Line-level style carries only the selected bg, not a foreground.

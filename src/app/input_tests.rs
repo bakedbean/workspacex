@@ -653,6 +653,64 @@ mod pm_state_tests {
         );
     }
 
+    /// 'l' is the vim-style alias for Enter — same attach flow as the
+    /// dashboard's 'l' binding.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_modal_l_switches_view_like_enter() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        let mut env = EnvGuard::new();
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "blocked",
+                branch: "repo/blocked",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.workspace_needs_attention.insert(ws_id);
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "'l' should close the modal");
+        assert!(
+            matches!(&app.view, crate::ui::View::Attached(s) if s.focused_target().map(|t| t.workspace_id) == Some(ws_id)),
+            "'l' should switch view to the selected workspace; got {:?}",
+            app.view
+        );
+        assert!(
+            !app.workspace_needs_attention.contains(&ws_id),
+            "attention flag should clear on 'l'"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_v_splits_attached_view_vertically() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};

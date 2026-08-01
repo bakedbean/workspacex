@@ -14,14 +14,13 @@ const ROW_PREFIX_W: usize = 4;
 const COL_GAP_W: usize = 2;
 
 /// Width of the shared workspace-name column: as wide as the longest name,
-/// capped at [`NAME_COL_MAX`]. Shared across every repo section so status
-/// texts start at one fixed column for the whole panel.
-fn name_col_width<'a>(names: impl Iterator<Item = &'a str>) -> usize {
-    names
-        .map(|n| n.chars().count())
-        .max()
-        .unwrap_or(0)
-        .min(NAME_COL_MAX)
+/// capped at [`NAME_COL_MAX`] and clamped so prefix + name + gap always
+/// leave at least one char of status text in the narrowest panel. Shared
+/// across every repo section so status texts start at one fixed column for
+/// the whole panel.
+fn name_col_width<'a>(names: impl Iterator<Item = &'a str>, row_width: usize) -> usize {
+    let cap = NAME_COL_MAX.min(row_width.saturating_sub(ROW_PREFIX_W + COL_GAP_W + 1));
+    names.map(|n| n.chars().count()).max().unwrap_or(0).min(cap)
 }
 
 /// Compute the order in which workspaces appear in the updates panel.
@@ -122,13 +121,14 @@ pub fn render_updates_panel(
 
     // One shared name column for the whole panel so every status text starts
     // at the same column regardless of which repo section a row is in.
+    let row_width = body_area.width as usize;
     let name_col = name_col_width(
         workspaces
             .iter()
             .filter(|(_, w)| pos_of.contains_key(&w.id))
             .map(|(_, w)| w.name.as_str()),
+        row_width,
     );
-    let row_width = body_area.width as usize;
 
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
@@ -197,7 +197,7 @@ pub fn render_updates_panel(
     f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
         Paragraph::new(
-            "[\u{2191}/\u{2193}] move   [enter] switch   [v] vsplit   [s] hsplit   [esc] close",
+            "[\u{2191}/\u{2193}] move   [enter/l] switch   [v] vsplit   [s] hsplit   [esc] close",
         )
         .style(theme.dim_style()),
         footer_area,
@@ -315,10 +315,13 @@ fn workspace_row<'a>(
     // The status text is truncated so it can never collide with the age
     // column, and the row is padded to exactly `row_width` so the selection
     // background spans the full row.
+    let avail = row_width.saturating_sub(ROW_PREFIX_W + name_col + COL_GAP_W);
+    // Drop the age column when it (plus its gap) wouldn't leave at least one
+    // char of status text — a clipped age is worse than no age.
+    let age = age.filter(|a| a.chars().count() + COL_GAP_W < avail);
     let age_w = age.as_ref().map(|a| a.chars().count()).unwrap_or(0);
     let age_reserved = if age_w > 0 { age_w + COL_GAP_W } else { 0 };
-    let status_budget =
-        row_width.saturating_sub(ROW_PREFIX_W + name_col + COL_GAP_W + age_reserved);
+    let status_budget = avail.saturating_sub(age_reserved);
     let status_txt = truncate(&status_text, status_budget);
     let pad_w = row_width
         .saturating_sub(ROW_PREFIX_W + name_col + COL_GAP_W + status_txt.chars().count() + age_w);
@@ -802,13 +805,55 @@ mod workspace_row_tests {
 
     #[test]
     fn name_col_width_tracks_longest_name_capped() {
-        assert_eq!(name_col_width(["ab", "abcd"].into_iter()), 4);
-        assert_eq!(name_col_width(std::iter::empty()), 0);
+        assert_eq!(name_col_width(["ab", "abcd"].into_iter(), 78), 4);
+        assert_eq!(name_col_width(std::iter::empty(), 78), 0);
         let long = "x".repeat(NAME_COL_MAX + 10);
         assert_eq!(
-            name_col_width([long.as_str()].into_iter()),
+            name_col_width([long.as_str()].into_iter(), 78),
             NAME_COL_MAX,
             "column caps at NAME_COL_MAX"
+        );
+        // Narrow panel: the column also clamps so prefix + name + gap leave
+        // at least one status char. Inner width 18 (narrowest panel) → 11.
+        assert_eq!(
+            name_col_width([long.as_str()].into_iter(), 18),
+            18 - ROW_PREFIX_W - COL_GAP_W - 1,
+            "column clamps to the row width in narrow panels"
+        );
+    }
+
+    /// In the narrowest panel (inner width 18) a long name plus an age must
+    /// not overflow the row: the name column clamps, the age drops when it
+    /// can't fit alongside status text, and the row stays within row_width.
+    #[test]
+    fn workspace_row_never_overflows_narrow_panel() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("a-very-long-workspace-name");
+        let row_width = 18;
+        let name_col = name_col_width([w.name.as_str()].into_iter(), row_width);
+        let awaiting = ("Bash".to_string(), 5_000i64);
+        let line = workspace_row(
+            &w,
+            None,
+            Some(ActivityState::Awaiting),
+            true,
+            Some(&awaiting),
+            false,
+            Status::Question,
+            None,
+            10_000,
+            name_col,
+            row_width,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(
+            body.chars().count() <= row_width,
+            "row must not overflow: {body:?}"
+        );
+        assert!(
+            !body.ends_with("5s"),
+            "age must drop when there is no room for status text: {body:?}"
         );
     }
 

@@ -24,7 +24,7 @@ pub use agents_panel::render_agents_panel;
 pub use process_list::render_process_list;
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
-pub use updates_panel::{ordered_workspaces_for_panel, render_updates_panel};
+pub use updates_panel::{UpdatesSort, ordered_workspaces_for_panel, render_updates_panel};
 pub use usage_picker::render_usage_window_picker;
 
 /// Which phase of `workspace::archive_with_app` is currently running.

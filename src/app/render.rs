@@ -748,6 +748,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &app.pr_lifecycle,
                     *selected,
                     now_ms,
+                    crate::ui::modal::UpdatesSort::Default,
                     &app.theme,
                 );
             }

@@ -1442,12 +1442,23 @@ async fn handle_key_modal(
                 .iter()
                 .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
                 .collect();
+            let statuses: std::collections::HashMap<
+                crate::data::store::WorkspaceId,
+                crate::ui::dashboard::status::Status,
+            > = app
+                .workspaces
+                .iter()
+                .map(|(_, w)| (w.id, app.classify_status(w)))
+                .collect();
             let order = crate::ui::modal::ordered_workspaces_for_panel(
                 &app.repos,
                 &app.workspaces,
                 &app.workspace_events,
                 &activity_translated,
                 &app.workspace_needs_attention,
+                &statuses,
+                &app.pr_lifecycle,
+                crate::ui::modal::UpdatesSort::Default,
             );
             match k.code {
                 KeyCode::Esc => {

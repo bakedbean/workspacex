@@ -812,6 +812,9 @@ mod pm_state_tests {
             &app.workspace_events,
             &std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            crate::ui::modal::UpdatesSort::Default,
         );
         let target_idx = order.iter().position(|id| *id == second_id).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
@@ -1631,12 +1634,23 @@ mod pm_state_tests {
             .iter()
             .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
             .collect();
+        let statuses: std::collections::HashMap<
+            crate::data::store::WorkspaceId,
+            crate::ui::dashboard::status::Status,
+        > = app
+            .workspaces
+            .iter()
+            .map(|(_, w)| (w.id, app.classify_status(w)))
+            .collect();
         let order = crate::ui::modal::ordered_workspaces_for_panel(
             &app.repos,
             &app.workspaces,
             &app.workspace_events,
             &activity_translated,
             &app.workspace_needs_attention,
+            &statuses,
+            &app.pr_lifecycle,
+            crate::ui::modal::UpdatesSort::Default,
         );
         assert!(
             order.len() >= 40,

@@ -61,7 +61,7 @@ wsx status set done    --message "implemented and tests green"
 - `waiting` — when parked on something external (a build, CI, a long-running command).
 - `done` — when the task is complete.
 
-The `--message` is a short one-liner shown in the PM pane and workspace-updates modal. Claude Code hooks also report coarse state automatically, but an explicit `set` with a message is always clearer — prefer it at the transitions above.
+The `--message` is a short one-liner shown in the PM pane and the waybar menu subtext. Claude Code hooks also report coarse state automatically, but an explicit `set` with a message is always clearer — prefer it at the transitions above.
 
 ## Maintaining the workspace recap
 

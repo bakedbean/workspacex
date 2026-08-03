@@ -216,16 +216,8 @@ pub fn render(
     // 5: PR chip — the same glyph/label/color pairing as the detail-bar
     // chip (`⏺ #123 open`) so the row and the bar can't drift. Blank when
     // the branch has no PR or the lifecycle hasn't been fetched yet.
-    let chip = inputs
-        .lifecycle
-        .map(crate::ui::theme::lifecycle_chip)
-        .filter(|(glyph, _)| !glyph.is_empty());
-    match chip {
-        Some((glyph, label)) => {
-            let chip_text = match inputs.pr_number {
-                Some(n) => format!("{glyph} #{n} {label}"),
-                None => format!("{glyph} {label}"),
-            };
+    match pr_chip_text(inputs) {
+        Some(chip_text) => {
             let chip_style = theme
                 .lifecycle_style(inputs.lifecycle)
                 .unwrap_or_else(|| theme.dim_style());
@@ -311,6 +303,32 @@ pub fn render(
     spans.push(Span::styled(ago_padded, theme.dim_style()));
 
     Line::from(spans)
+}
+
+/// The PR chip's cell text (`⏺ #123 open`), unpadded, or `None` when the
+/// chip cell renders blank. Shared by `render` and `pr_chip_hit_span` so
+/// the painted chip and its click target can't drift.
+fn pr_chip_text(inputs: &RowInputs) -> Option<String> {
+    let (glyph, label) = inputs
+        .lifecycle
+        .map(crate::ui::theme::lifecycle_chip)
+        .filter(|(glyph, _)| !glyph.is_empty())?;
+    Some(match inputs.pr_number {
+        Some(n) => format!("{glyph} #{n} {label}"),
+        None => format!("{glyph} {label}"),
+    })
+}
+
+/// Char-offset and char-width of the clickable PR chip within a workspace
+/// row, or `None` when the chip cell is blank. Offsets are relative to the
+/// row's left edge; the caller adds the list area origin (and the row's y)
+/// to build a screen rect. Padding to the chip cell's right is excluded so
+/// clicks on blank space don't open a browser.
+pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16, u16)> {
+    let text = pr_chip_text(inputs)?;
+    let x = AGENT_WIDTH + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
+    let width = truncate(&text, widths.pr).chars().count();
+    Some((x as u16, width as u16))
 }
 
 fn right_pad(s: &str, target: usize) -> String {
@@ -845,6 +863,58 @@ mod tests {
                 "procs column must not shift with chip presence:\n  {blank:?}\n  {chipped:?}"
             );
         }
+    }
+
+    #[test]
+    fn pr_chip_hit_span_matches_rendered_chip_position() {
+        // The clickable span must land exactly on the chip characters the
+        // row paints, or clicks would open PRs from blank space (or miss
+        // the chip entirely).
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        inputs.pr_number = Some(262);
+        let widths = ColumnWidths::default();
+        let (x, w) = pr_chip_hit_span(&inputs, widths).expect("chip present");
+        let text = line_text(&render(&inputs, widths, 0, &theme, 120));
+        let chip_start = text.chars().position(|c| c == '⏺').expect("chip rendered");
+        assert_eq!(x as usize, chip_start, "span starts at the chip glyph");
+        assert_eq!(w as usize, "⏺ #262 open".chars().count());
+        // A resized branch column shifts the chip; the span must follow.
+        let wide = ColumnWidths::clamped(40, 20);
+        let (x_wide, _) = pr_chip_hit_span(&inputs, wide).expect("chip present");
+        let text = line_text(&render(&inputs, wide, 0, &theme, 120));
+        let chip_start = text.chars().position(|c| c == '⏺').expect("chip rendered");
+        assert_eq!(x_wide as usize, chip_start);
+    }
+
+    #[test]
+    fn pr_chip_hit_span_absent_when_chip_blank() {
+        let widths = ColumnWidths::default();
+        for lifecycle in [None, Some(BranchLifecycle::NoPr)] {
+            let mut inputs = base();
+            inputs.lifecycle = lifecycle;
+            assert_eq!(
+                pr_chip_hit_span(&inputs, widths),
+                None,
+                "blank chip cell must not be clickable ({lifecycle:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn pr_chip_hit_span_width_clamps_to_column() {
+        // A long chip truncates to the PR column width; the click target
+        // must not spill into the procs column.
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrConflicted);
+        inputs.pr_number = Some(1234567);
+        let widths = ColumnWidths::clamped(28, MIN_PR_WIDTH);
+        let (_, w) = pr_chip_hit_span(&inputs, widths).expect("chip present");
+        assert!(
+            (w as usize) <= MIN_PR_WIDTH,
+            "span width {w} must fit the {MIN_PR_WIDTH}-wide column"
+        );
     }
 
     #[test]

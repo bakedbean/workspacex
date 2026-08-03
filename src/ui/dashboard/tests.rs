@@ -106,6 +106,87 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
         .collect()
 }
 
+/// Render `render_without_footer` with every fixture workspace given an open
+/// PR, and assert each returned PR-chip rect lands exactly on the chip text
+/// painted in the buffer. Shared by the per-group-mode and scrolled tests.
+fn assert_pr_rects_match_buffer(group: GroupMode, height: u16, select_last: bool) {
+    let fixtures = fixture::repos();
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    let (repo_refs, mut workspaces) = build_inputs(&fixtures, &repos);
+    for w in &mut workspaces {
+        w.row.lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
+        w.row.pr_number = Some(100 + w.workspace_id.0 as u32);
+    }
+    // One chipless row: its workspace must not get a click rect.
+    let no_pr_id = workspaces[0].workspace_id;
+    workspaces[0].row.lifecycle = None;
+    workspaces[0].row.pr_number = None;
+    let last_id = workspaces.last().unwrap().workspace_id;
+    let activity: Vec<u32> = (0..24).collect();
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+    };
+    let mut state = DashboardState {
+        group_mode: group,
+        ..Default::default()
+    };
+    if select_last {
+        // Selecting the last row forces the list to scroll on a short
+        // terminal, so the rects must survive a non-zero list offset.
+        state.selection = Some(SelectionTarget::Workspace(last_id));
+    }
+    let theme = Theme::wsx();
+    let backend = TestBackend::new(160, height);
+    let mut term = Terminal::new(backend).unwrap();
+    let mut rects: Vec<(WorkspaceId, Rect)> = Vec::new();
+    term.draw(|f| rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme))
+        .unwrap();
+    let buf = term.backend().buffer().clone();
+    assert!(!rects.is_empty(), "chip rects returned ({group:?})");
+    assert!(
+        !rects.iter().any(|(id, _)| *id == no_pr_id),
+        "a chipless row must not be clickable ({group:?})"
+    );
+    for (ws_id, r) in &rects {
+        let text: String = (r.x..r.x + r.width)
+            .map(|x| buf[(x, r.y)].symbol().to_string())
+            .collect();
+        let expected = format!("⏺ #{} open", 100 + ws_id.0);
+        assert_eq!(
+            text, expected,
+            "rect for workspace {ws_id:?} must cover its chip ({group:?})"
+        );
+    }
+    if select_last {
+        assert!(
+            state.list_state.offset() > 0,
+            "short terminal + last-row selection should scroll the list"
+        );
+        assert!(
+            rects.iter().any(|(id, _)| *id == last_id),
+            "the scrolled-to row's chip must be clickable"
+        );
+    }
+}
+
+#[test]
+fn pr_chip_rects_land_on_rendered_chips_in_both_group_modes() {
+    assert_pr_rects_match_buffer(GroupMode::Repo, 40, false);
+    assert_pr_rects_match_buffer(GroupMode::Attention, 40, false);
+}
+
+#[test]
+fn pr_chip_rects_survive_list_scroll() {
+    assert_pr_rects_match_buffer(GroupMode::Repo, 12, true);
+}
+
 #[test]
 fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
     let lines = render_to_strings(GroupMode::Repo);

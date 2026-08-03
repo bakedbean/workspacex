@@ -88,6 +88,9 @@ pub enum Modal {
         /// Index into the modal's ordered workspace list. Up/Down adjust
         /// it; Enter switches `app.view` to that workspace.
         selected: usize,
+        /// Active sort mode; `o` cycles it. Not persisted — reset to
+        /// `Default` on every open.
+        sort: UpdatesSort,
     },
     ProcessList {
         workspace_id: crate::data::store::WorkspaceId,

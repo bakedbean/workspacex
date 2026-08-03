@@ -383,7 +383,10 @@ mod pm_state_tests {
     async fn updates_panel_modal_esc_closes() {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
         let shared = Arc::new(Mutex::new(
             App::new(
                 Store::open_in_memory().unwrap(),
@@ -429,7 +432,10 @@ mod pm_state_tests {
                 .unwrap();
         }
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
         let shared = Arc::new(Mutex::new(
             App::new(
                 Store::open_in_memory().unwrap(),
@@ -445,7 +451,7 @@ mod pm_state_tests {
         .await
         .unwrap();
         match app.modal {
-            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, .. }) => {
                 assert_eq!(selected, 1, "Down should advance to index 1");
             }
             other => panic!("unexpected modal state: {other:?}"),
@@ -459,7 +465,7 @@ mod pm_state_tests {
         .await
         .unwrap();
         match app.modal {
-            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, .. }) => {
                 assert_eq!(selected, 1, "Down past last clamps at max");
             }
             other => panic!("unexpected modal state: {other:?}"),
@@ -473,7 +479,7 @@ mod pm_state_tests {
         .await
         .unwrap();
         match app.modal {
-            Some(crate::ui::modal::Modal::UpdatesPanel { selected }) => {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, .. }) => {
                 assert_eq!(selected, 0, "Up should retreat to 0");
             }
             other => panic!("unexpected modal state: {other:?}"),
@@ -507,7 +513,10 @@ mod pm_state_tests {
                 .unwrap();
         }
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
         let shared = Arc::new(Mutex::new(
             App::new(
                 Store::open_in_memory().unwrap(),
@@ -525,7 +534,7 @@ mod pm_state_tests {
         assert!(
             matches!(
                 app.modal,
-                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 1 })
+                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 1, .. })
             ),
             "j should advance like Down; got {:?}",
             app.modal
@@ -540,7 +549,7 @@ mod pm_state_tests {
         assert!(
             matches!(
                 app.modal,
-                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 })
+                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0, .. })
             ),
             "k should retreat like Up; got {:?}",
             app.modal
@@ -626,7 +635,10 @@ mod pm_state_tests {
 
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.workspace_needs_attention.insert(ws_id);
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
         let shared = Arc::new(Mutex::new(
             App::new(
                 Store::open_in_memory().unwrap(),
@@ -684,7 +696,10 @@ mod pm_state_tests {
 
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         app.workspace_needs_attention.insert(ws_id);
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
         let shared = Arc::new(Mutex::new(
             App::new(
                 Store::open_in_memory().unwrap(),
@@ -802,7 +817,10 @@ mod pm_state_tests {
         app.view = crate::ui::View::Attached(AttachedState::single(first_target));
 
         // Open Updates panel, point at the second workspace, press 'v'.
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
         // The renderer's order is grouped/sorted; in this minimal setup both
         // workspaces are in `repo`. Find the index of `second_id` from the
         // module's ordering helper.
@@ -819,6 +837,7 @@ mod pm_state_tests {
         let target_idx = order.iter().position(|id| *id == second_id).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: target_idx,
+            sort: crate::ui::modal::UpdatesSort::Default,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -1387,7 +1406,10 @@ mod pm_state_tests {
     async fn updates_panel_modal_swallows_other_keys() {
         let store = Store::open_in_memory().unwrap();
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
         let shared = Arc::new(Mutex::new(
             App::new(
                 Store::open_in_memory().unwrap(),
@@ -1404,6 +1426,86 @@ mod pm_state_tests {
         .unwrap();
         assert!(app.modal.is_some(), "q should not dismiss UpdatesPanel");
         assert!(!app.quit, "q should not propagate to App::quit");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_o_cycles_sort_and_follows_selection() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        use crate::git::forge::BranchLifecycle;
+        use crate::ui::modal::UpdatesSort;
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let mut ids = Vec::new();
+        for (name, branch, path) in [
+            ("alpha", "repo/alpha", "/tmp/wsx-test/alpha"),
+            ("beta", "repo/beta", "/tmp/wsx-test/beta"),
+        ] {
+            let id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name,
+                    branch,
+                    worktree_path: std::path::Path::new(path),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            store
+                .set_workspace_state(id, WorkspaceState::Ready)
+                .unwrap();
+            ids.push(id);
+        }
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // beta has an open PR, alpha none — under PrStatus beta sorts first,
+        // flipping the two rows relative to Default/Status order.
+        app.pr_lifecycle.insert(ids[1], BranchLifecycle::PrOpen);
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0, // alpha
+            sort: UpdatesSort::Default,
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        let press_o = KeyEvent::new(crossterm::event::KeyCode::Char('o'), KeyModifiers::NONE);
+
+        // Default → Status: both workspaces are Idle, order unchanged,
+        // selection stays on alpha at index 0.
+        handle_key_modal(&mut app, &shared, press_o).await.unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort }) => {
+                assert_eq!(sort, UpdatesSort::Status);
+                assert_eq!(selected, 0, "selection stays on alpha");
+            }
+            ref other => panic!("unexpected modal state: {other:?}"),
+        }
+
+        // Status → PrStatus: beta (open PR) jumps to index 0; the cursor
+        // must follow alpha to index 1 rather than staying on row 0.
+        handle_key_modal(&mut app, &shared, press_o).await.unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort }) => {
+                assert_eq!(sort, UpdatesSort::PrStatus);
+                assert_eq!(selected, 1, "cursor follows alpha to its new row");
+            }
+            ref other => panic!("unexpected modal state: {other:?}"),
+        }
+
+        // PrStatus → Default: back to the original order and back to row 0.
+        handle_key_modal(&mut app, &shared, press_o).await.unwrap();
+        match app.modal {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort }) => {
+                assert_eq!(sort, UpdatesSort::Default);
+                assert_eq!(selected, 0, "cursor follows alpha back to row 0");
+            }
+            ref other => panic!("unexpected modal state: {other:?}"),
+        }
     }
 
     #[test]
@@ -1449,7 +1551,10 @@ mod pm_state_tests {
             .unwrap();
 
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
 
         let backend = TestBackend::new(100, 30);
         let mut term = Terminal::new(backend).unwrap();
@@ -1515,7 +1620,10 @@ mod pm_state_tests {
             .unwrap();
 
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
 
         let backend = TestBackend::new(100, 30);
         let mut term = Terminal::new(backend).unwrap();
@@ -1560,7 +1668,10 @@ mod pm_state_tests {
             .unwrap();
 
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+        });
 
         let backend = TestBackend::new(100, 30);
         let mut term = Terminal::new(backend).unwrap();
@@ -1670,6 +1781,7 @@ mod pm_state_tests {
 
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: last_selected,
+            sort: crate::ui::modal::UpdatesSort::Default,
         });
 
         let backend = TestBackend::new(100, 30);

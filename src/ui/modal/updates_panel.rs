@@ -163,6 +163,16 @@ fn sort_key(
     (attention, failed, activity_rank, recency)
 }
 
+/// Footer hint line. `v`/`s` collapse into one `[v/s] split` chip so the
+/// line still fits the widest panel (80 cols − 2 border = 78) with the
+/// sort mode shown.
+fn footer_text(sort: UpdatesSort) -> String {
+    format!(
+        "[\u{2191}/\u{2193}] move  [enter/l] switch  [v/s] split  [o] sort:{}  [esc] close",
+        sort.footer_label()
+    )
+}
+
 /// Render the floating workspace-updates panel. Reads live App state via
 /// borrowed slices so the panel updates on every render tick.
 #[allow(clippy::too_many_arguments)]
@@ -285,10 +295,7 @@ pub fn render_updates_panel(
     // when lifecycle is unknown.
     f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
-        Paragraph::new(
-            "[\u{2191}/\u{2193}] move   [enter/l] switch   [v] vsplit   [s] hsplit   [esc] close",
-        )
-        .style(theme.dim_style()),
+        Paragraph::new(footer_text(sort)).style(theme.dim_style()),
         footer_area,
     );
 }
@@ -1196,5 +1203,22 @@ mod ordering_tests {
             vec![WorkspaceId(1), WorkspaceId(2)],
             "repo 1's workspaces list before repo 2's regardless of rank"
         );
+    }
+
+    #[test]
+    fn footer_shows_active_sort_mode_and_fits_panel() {
+        for (sort, label) in [
+            (UpdatesSort::Default, "sort:default"),
+            (UpdatesSort::Status, "sort:status"),
+            (UpdatesSort::PrStatus, "sort:pr"),
+        ] {
+            let f = footer_text(sort);
+            assert!(f.contains(label), "footer {f:?} must contain {label:?}");
+            assert!(f.contains("[o]"), "footer must advertise the o key");
+            assert!(
+                f.chars().count() <= 78,
+                "footer must fit the widest panel (80 - 2 border): {f:?}"
+            );
+        }
     }
 }

@@ -940,7 +940,10 @@ async fn dispatch_leader_action(
             Ok(())
         }
         KeyCode::Char('u') => {
-            app.modal = Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0 });
+            app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+                selected: 0,
+                sort: crate::ui::modal::UpdatesSort::default(),
+            });
             Ok(())
         }
         KeyCode::Char('a') => {
@@ -1430,7 +1433,7 @@ async fn handle_key_modal(
             // Everything else is inert while the card is open.
             _ => {}
         },
-        Modal::UpdatesPanel { selected } => {
+        Modal::UpdatesPanel { selected, sort } => {
             let selected_now = selected;
             // Build the same ordered workspace list the renderer uses, so
             // arrow keys and Enter operate on the same indices.
@@ -1458,7 +1461,7 @@ async fn handle_key_modal(
                 &app.workspace_needs_attention,
                 &statuses,
                 &app.pr_lifecycle,
-                crate::ui::modal::UpdatesSort::Default,
+                sort,
             );
             match k.code {
                 KeyCode::Esc => {
@@ -1466,12 +1469,42 @@ async fn handle_key_modal(
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     let new_sel = selected_now.saturating_sub(1);
-                    app.modal = Some(Modal::UpdatesPanel { selected: new_sel });
+                    app.modal = Some(Modal::UpdatesPanel {
+                        selected: new_sel,
+                        sort,
+                    });
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let max = order.len().saturating_sub(1);
                     let new_sel = (selected_now + 1).min(max);
-                    app.modal = Some(Modal::UpdatesPanel { selected: new_sel });
+                    app.modal = Some(Modal::UpdatesPanel {
+                        selected: new_sel,
+                        sort,
+                    });
+                }
+                // 'o' (order) cycles the sort mode. The cursor follows the
+                // selected workspace to its new row rather than staying on
+                // the same index.
+                KeyCode::Char('o') => {
+                    let selected_id = order.get(selected_now).copied();
+                    let new_sort = sort.cycle();
+                    let new_order = crate::ui::modal::ordered_workspaces_for_panel(
+                        &app.repos,
+                        &app.workspaces,
+                        &app.workspace_events,
+                        &activity_translated,
+                        &app.workspace_needs_attention,
+                        &statuses,
+                        &app.pr_lifecycle,
+                        new_sort,
+                    );
+                    let new_sel = selected_id
+                        .and_then(|id| new_order.iter().position(|w| *w == id))
+                        .unwrap_or(0);
+                    app.modal = Some(Modal::UpdatesPanel {
+                        selected: new_sel,
+                        sort: new_sort,
+                    });
                 }
                 // 'l' mirrors the dashboard's vim-style attach binding.
                 KeyCode::Enter | KeyCode::Char('l') => {

@@ -378,12 +378,11 @@ pub fn reconcile_selection(
     }
 }
 
-/// Case-insensitive substring match against the workspace name, branch,
-/// owning repo name, and the row's status-adaptive column text (when present).
+/// Case-insensitive substring match against the workspace branch, owning
+/// repo name, and the row's status-adaptive column text (when present).
 fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
     let needle = filter.to_lowercase();
-    w.row.name.to_lowercase().contains(&needle)
-        || w.row.branch.to_lowercase().contains(&needle)
+    w.row.branch.to_lowercase().contains(&needle)
         || w.repo.name.to_lowercase().contains(&needle)
         || w.row
             .column

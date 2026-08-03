@@ -44,8 +44,8 @@ fn build_inputs<'a>(
                 row: row::RowInputs {
                     agent: crate::pty::session::AgentKind::Claude,
                     status: w.status,
-                    name: w.name.clone(),
                     branch: w.branch.clone(),
+                    pr_number: None,
                     procs: w.procs,
                     diff: Some(crate::git::DiffStats {
                         added: w.diff_added,
@@ -177,8 +177,9 @@ fn by_attention_render_emits_section_headers() {
     assert!(joined.contains("✓ RECENT"), "{joined}");
     assert!(joined.contains("  QUIET REPOS"), "{joined}");
     assert!(
-        joined.contains("wsx/theme-tokens") || joined.contains("wsx/repo-overview"),
-        "flat row repo/name format"
+        joined.contains("wsx/bakedbean/theme-tokens")
+            || joined.contains("wsx/bakedbean/repo-overview"),
+        "flat row repo/branch format"
     );
 }
 
@@ -193,7 +194,7 @@ fn render_sets_list_state_to_selected_workspace_index() {
     let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
     let target = workspaces
         .iter()
-        .find(|w| w.row.name == "theme-tokens")
+        .find(|w| w.row.branch == "bakedbean/theme-tokens")
         .map(|w| crate::app::SelectionTarget::Workspace(w.workspace_id))
         .unwrap();
     let activity: Vec<u32> = vec![1; 24];
@@ -235,7 +236,7 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
     let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
     let target_id = workspaces
         .iter()
-        .find(|w| w.row.name == "theme-tokens")
+        .find(|w| w.row.branch == "bakedbean/theme-tokens")
         .map(|w| w.workspace_id)
         .unwrap();
     let target = crate::app::SelectionTarget::Workspace(target_id);
@@ -290,10 +291,10 @@ fn visible_targets_by_repo_matches_render_order() {
         repo.sort_order = (n - 1 - i as i64) * 10;
     }
     let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
-    // Map workspace name → workspace_id so we can assert on names.
+    // Map workspace branch → workspace_id so we can assert on rows.
     let id_for: std::collections::HashMap<String, crate::data::store::WorkspaceId> = workspaces
         .iter()
-        .map(|w| (w.row.name.clone(), w.workspace_id))
+        .map(|w| (w.row.branch.clone(), w.workspace_id))
         .collect();
     let activity: Vec<u32> = vec![1; 24];
     let inputs = DashboardInputs {
@@ -382,12 +383,12 @@ fn visible_targets_by_repo_matches_render_order() {
     // Expect: header, then 4 workspaces in priority order.
     assert_eq!(
         targets[wsx_header_pos + 1],
-        SelectionTarget::Workspace(id_for["theme-tokens"]),
+        SelectionTarget::Workspace(id_for["bakedbean/theme-tokens"]),
         "stalled first"
     );
     assert_eq!(
         targets[wsx_header_pos + 2],
-        SelectionTarget::Workspace(id_for["repo-overview"]),
+        SelectionTarget::Workspace(id_for["bakedbean/repo-overview"]),
         "question second"
     );
 }

@@ -444,7 +444,7 @@ pub(crate) fn build_header_strip(
     spans.push(Span::styled(branch_text, theme.dim_style()));
 
     if let Some(lc) = lifecycle {
-        let (glyph, label) = lifecycle_chip(lc);
+        let (glyph, label) = crate::ui::theme::lifecycle_chip(lc);
         if !glyph.is_empty() {
             col += 2;
             spans.push(Span::raw("  ".to_string()));
@@ -516,17 +516,6 @@ pub(crate) fn build_header_strip(
     // running char-offset. Both are intentionally unused for now.
     let _ = (width, col);
     (Line::from(spans), pr_chip)
-}
-
-pub(crate) fn lifecycle_chip(lc: BranchLifecycle) -> (&'static str, &'static str) {
-    match lc {
-        BranchLifecycle::PrOpen => ("⏺", "open"),
-        BranchLifecycle::PrDraft => ("⏷", "draft"),
-        BranchLifecycle::PrMerged => ("⏺", "merged"),
-        BranchLifecycle::PrClosed => ("⏸", "closed"),
-        BranchLifecycle::PrConflicted => ("⏺", "conflict"),
-        BranchLifecycle::NoPr => ("", ""),
-    }
 }
 
 fn format_ago_short(secs: Option<u64>) -> String {

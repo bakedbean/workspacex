@@ -6,8 +6,8 @@
 //!   1ch  ▎ gutter (status color)
 //!   3ch  ├  elbow (faint, centered)
 //!   2ch  status glyph or spinner frame
-//!   24ch name (left-aligned, ellipsized)
-//!   28ch ⎇ branch
+//!   28ch ⎇ branch (left-aligned, ellipsized)
+//!   16ch ⏺ #N pr-lifecycle chip (blank when no PR)
 //!   6ch  ● Np procs (or faint dot when zero)
 //!   12ch +N −N diff
 //!   flex └ message (or em-dash)
@@ -24,12 +24,12 @@ use crate::ui::theme::Theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-pub const DEFAULT_NAME_WIDTH: usize = 24;
 pub const DEFAULT_BRANCH_WIDTH: usize = 28;
-pub const MIN_NAME_WIDTH: usize = 10;
+pub const DEFAULT_PR_WIDTH: usize = 16;
 pub const MIN_BRANCH_WIDTH: usize = 10;
-pub const MAX_NAME_WIDTH: usize = 60;
+pub const MIN_PR_WIDTH: usize = 8;
 pub const MAX_BRANCH_WIDTH: usize = 80;
+pub const MAX_PR_WIDTH: usize = 24;
 const PROCS_WIDTH: usize = 6;
 const DIFF_WIDTH: usize = 12;
 const AGE_WIDTH: usize = 10;
@@ -43,15 +43,15 @@ const AGENT_WIDTH: usize = 1;
 /// renderer never has to defend itself against pathological inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColumnWidths {
-    pub name: usize,
     pub branch: usize,
+    pub pr: usize,
 }
 
 impl ColumnWidths {
-    pub fn clamped(name: usize, branch: usize) -> Self {
+    pub fn clamped(branch: usize, pr: usize) -> Self {
         Self {
-            name: name.clamp(MIN_NAME_WIDTH, MAX_NAME_WIDTH),
             branch: branch.clamp(MIN_BRANCH_WIDTH, MAX_BRANCH_WIDTH),
+            pr: pr.clamp(MIN_PR_WIDTH, MAX_PR_WIDTH),
         }
     }
 }
@@ -59,8 +59,8 @@ impl ColumnWidths {
 impl Default for ColumnWidths {
     fn default() -> Self {
         Self {
-            name: DEFAULT_NAME_WIDTH,
             branch: DEFAULT_BRANCH_WIDTH,
+            pr: DEFAULT_PR_WIDTH,
         }
     }
 }
@@ -71,8 +71,8 @@ impl Default for ColumnWidths {
 pub struct RowInputs {
     pub agent: AgentKind,
     pub status: Status,
-    pub name: String,
     pub branch: String,
+    pub pr_number: Option<u32>,
     pub procs: u32,
     pub diff: Option<DiffStats>,
     pub column: Option<RowColumn>,
@@ -102,8 +102,8 @@ pub fn render(
     theme: &Theme,
     total_width: usize,
 ) -> Line<'static> {
-    let name_width = widths.name;
     let branch_width = widths.branch;
+    let pr_width = widths.pr;
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     // 0: agent identity bar — a fixed per-agent color, independent of
@@ -142,34 +142,13 @@ pub fn render(
         theme.status_style(inputs.status),
     ));
 
-    // 4: name (with setup-failed badge and YOLO styling). The badge
-    // sits IMMEDIATELY after the visible name characters (then trailing
-    // padding fills the rest of `name_width`) so it stays attached to
-    // the name even when the name is short or truncated to `…`. The
-    // multi-pane-layout glyph used to live here too, but on narrow
-    // displays the name truncated to `…` AND the glyph could be
-    // clipped by the column edge. It now lives at the START of the
-    // branch column where it never has to fight name truncation for
-    // space.
-    let setup_badge_width = if inputs.setup_failed { 3 } else { 0 };
-    let name_target = name_width.saturating_sub(setup_badge_width).max(1);
-    let name_truncated = truncate(&inputs.name, name_target);
-    let name_visible_width = name_truncated.chars().count();
-    let mut name_style = Style::default().add_modifier(Modifier::BOLD);
-    if inputs.yolo {
-        name_style = name_style.fg(theme.warn);
-    }
-    spans.push(Span::styled(name_truncated, name_style));
-    if inputs.setup_failed {
-        spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
-    }
-    let consumed = name_visible_width + setup_badge_width;
-    if consumed < name_width {
-        spans.push(Span::raw(" ".repeat(name_width - consumed)));
-    }
-
-    // 5: branch — optionally prefixed by the multi-pane-layout glyph.
-    // The nf-fa-columns glyph (U+F0DB) renders as a 1-cell glyph in
+    // 4: branch — the row's identity column (the workspace name never
+    // diverged from the branch in practice, so the branch alone carries
+    // identity). Bold like the name column it replaced, warn-colored when
+    // YOLO; the PR-lifecycle COLOR now lives in the chip column that
+    // follows, though the branch glyph shape still varies by lifecycle.
+    // Optionally prefixed by the multi-pane-layout glyph: the
+    // nf-fa-columns glyph (U+F0DB) renders as a 1-cell glyph in
     // most nerd-font terminals, so the prefix consumes 2 display
     // cells: 1 for the glyph + 1 trailing space. The branch text
     // target shrinks by that amount so the total span width still
@@ -209,16 +188,51 @@ pub fn render(
         };
         spans.push(Span::styled(badge.to_string(), badge_style));
     }
+    // The setup-failed badge sits IMMEDIATELY after the visible branch
+    // characters (then trailing padding fills the rest of `branch_width`)
+    // so it stays attached to the branch even when truncated to `…`.
+    let setup_badge_width = if inputs.setup_failed { 3 } else { 0 };
     let branch_glyph = crate::ui::theme::branch_glyph(inputs.lifecycle, inputs.nerd_fonts);
     let branch_text = format!("{} {}", branch_glyph, inputs.branch);
     let branch_target = branch_width
-        .saturating_sub(layout_badge_width + shared_badge_width)
+        .saturating_sub(layout_badge_width + shared_badge_width + setup_badge_width)
         .max(1);
-    let branch_padded = truncate_pad(&branch_text, branch_target);
-    let branch_style = theme
-        .lifecycle_style(inputs.lifecycle)
-        .unwrap_or_else(|| theme.dim_style());
-    spans.push(Span::styled(branch_padded, branch_style));
+    let branch_truncated = truncate(&branch_text, branch_target);
+    let branch_visible_width = branch_truncated.chars().count();
+    let mut branch_style = Style::default().add_modifier(Modifier::BOLD);
+    if inputs.yolo {
+        branch_style = branch_style.fg(theme.warn);
+    }
+    spans.push(Span::styled(branch_truncated, branch_style));
+    if inputs.setup_failed {
+        spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
+    }
+    let consumed =
+        layout_badge_width + shared_badge_width + branch_visible_width + setup_badge_width;
+    if consumed < branch_width {
+        spans.push(Span::raw(" ".repeat(branch_width - consumed)));
+    }
+
+    // 5: PR chip — the same glyph/label/color pairing as the detail-bar
+    // chip (`⏺ #123 open`) so the row and the bar can't drift. Blank when
+    // the branch has no PR or the lifecycle hasn't been fetched yet.
+    let chip = inputs
+        .lifecycle
+        .map(crate::ui::theme::lifecycle_chip)
+        .filter(|(glyph, _)| !glyph.is_empty());
+    match chip {
+        Some((glyph, label)) => {
+            let chip_text = match inputs.pr_number {
+                Some(n) => format!("{glyph} #{n} {label}"),
+                None => format!("{glyph} {label}"),
+            };
+            let chip_style = theme
+                .lifecycle_style(inputs.lifecycle)
+                .unwrap_or_else(|| theme.dim_style());
+            spans.push(Span::styled(truncate_pad(&chip_text, pr_width), chip_style));
+        }
+        None => spans.push(Span::raw(" ".repeat(pr_width))),
+    }
 
     // 6: procs
     let procs_cell = if inputs.procs > 0 {
@@ -258,8 +272,8 @@ pub fn render(
         + GUTTER_WIDTH
         + ELBOW_WIDTH
         + GLYPH_WIDTH
-        + name_width
         + branch_width
+        + pr_width
         + PROCS_WIDTH
         + DIFF_WIDTH;
     let right_consumed = AGE_WIDTH;
@@ -343,8 +357,8 @@ mod tests {
         RowInputs {
             agent: AgentKind::Claude,
             status: Status::Question,
-            name: "repo-overview".into(),
             branch: "bakedbean/repo-overview".into(),
+            pr_number: None,
             procs: 2,
             diff: Some(DiffStats {
                 added: 12,
@@ -512,7 +526,6 @@ mod tests {
         let text = line_text(&line);
         assert!(text.starts_with("▎"), "agent bar first: {text:?}");
         assert!(text.contains("? "), "static glyph for non-live status");
-        assert!(text.contains("repo-overview"), "name present");
         assert!(
             text.contains("⎇ bakedbean/repo-overview"),
             "branch with glyph"
@@ -701,8 +714,8 @@ mod tests {
 
     #[test]
     fn unicode_mode_keeps_generic_glyph_for_merged() {
-        // No good Unicode equivalent to a git-merge icon — color carries
-        // the lifecycle signal in plain-Unicode mode.
+        // No good Unicode equivalent to a git-merge icon — the PR chip
+        // column carries the lifecycle signal in plain-Unicode mode.
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.nerd_fonts = false;
@@ -768,16 +781,98 @@ mod tests {
     }
 
     #[test]
+    fn pr_chip_shows_number_and_label_in_lifecycle_color() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        inputs.pr_number = Some(262);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("⏺ #262 open"), "chip present: {text:?}");
+        let chip = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref().starts_with("⏺ #262 open"))
+            .expect("chip span present");
+        assert_eq!(
+            chip.style.fg,
+            theme
+                .lifecycle_style(Some(BranchLifecycle::PrOpen))
+                .unwrap()
+                .fg,
+            "chip uses the lifecycle color"
+        );
+    }
+
+    #[test]
+    fn pr_chip_without_number_shows_label_only() {
+        // The lifecycle can arrive before the PR number has been fetched
+        // (or persisted from an older cache row without one) — mirror the
+        // detail bar and show just `⏺ open`.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrMerged);
+        inputs.pr_number = None;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("⏺ merged"), "label-only chip: {text:?}");
+        assert!(!text.contains('#'), "no number rendered: {text:?}");
+    }
+
+    #[test]
+    fn no_pr_leaves_chip_column_blank_and_columns_aligned() {
+        let theme = Theme::wsx();
+        let procs_col = |s: &str| s.chars().position(|c| c == '●');
+        // NoPr and not-yet-fetched (None) both render an empty chip cell.
+        for lifecycle in [None, Some(BranchLifecycle::NoPr)] {
+            let mut inputs = base();
+            inputs.lifecycle = lifecycle;
+            inputs.pr_number = None;
+            let blank = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+            assert!(
+                !blank.contains("open") && !blank.contains('⏺') && !blank.contains('#'),
+                "no chip content without a PR ({lifecycle:?}): {blank:?}"
+            );
+            // The empty cell still consumes the column width, so procs
+            // stay aligned with a row that has a chip.
+            let mut with_chip = base();
+            with_chip.lifecycle = Some(BranchLifecycle::PrOpen);
+            with_chip.pr_number = Some(7);
+            let chipped = line_text(&render(&with_chip, ColumnWidths::default(), 0, &theme, 120));
+            assert_eq!(
+                procs_col(&blank),
+                procs_col(&chipped),
+                "procs column must not shift with chip presence:\n  {blank:?}\n  {chipped:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn yolo_colors_branch_warn_and_bold() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.yolo = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let branch_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref().contains("bakedbean/repo-overview"))
+            .expect("branch span present");
+        assert_eq!(branch_span.style.fg, Some(theme.warn));
+        assert!(branch_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
     fn column_widths_clamp_outside_range() {
         let tight = ColumnWidths::clamped(2, 2);
-        assert_eq!(tight.name, MIN_NAME_WIDTH);
         assert_eq!(tight.branch, MIN_BRANCH_WIDTH);
+        assert_eq!(tight.pr, MIN_PR_WIDTH);
         let huge = ColumnWidths::clamped(1000, 1000);
-        assert_eq!(huge.name, MAX_NAME_WIDTH);
         assert_eq!(huge.branch, MAX_BRANCH_WIDTH);
-        let mid = ColumnWidths::clamped(30, 40);
-        assert_eq!(mid.name, 30);
+        assert_eq!(huge.pr, MAX_PR_WIDTH);
+        let mid = ColumnWidths::clamped(40, 20);
         assert_eq!(mid.branch, 40);
+        assert_eq!(mid.pr, 20);
     }
 
     #[test]
@@ -819,30 +914,6 @@ mod tests {
         let text = line_text(&line);
         assert!(text.contains("⚙!"), "setup badge present: {text:?}");
         assert!(text.contains("\u{f0db}"), "layout badge present: {text:?}");
-    }
-
-    #[test]
-    fn name_column_is_not_shrunk_by_layout_badge() {
-        // The layout badge lives in the branch column now, so the name
-        // column gets its full width even when the badge is showing.
-        // This is the whole point of the move: on narrow displays the
-        // name no longer has to give up cells (and then truncate to
-        // `…`) just so the glyph can fit.
-        let theme = Theme::wsx();
-        let mut inputs = base();
-        inputs.nerd_fonts = true;
-        inputs.has_multi_pane_layout = true;
-        inputs.name = "exactly-24-characterz!!!".into(); // 24 chars = DEFAULT_NAME_WIDTH
-        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
-        let text = line_text(&line);
-        assert!(
-            text.contains("exactly-24-characterz!!!"),
-            "full name fits when badge is in branch col: {text:?}"
-        );
-        assert!(
-            !text.contains("exactly-24-characterz!!…"),
-            "name should not be truncated to make room for badge: {text:?}"
-        );
     }
 
     #[test]
@@ -898,8 +969,8 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.branch = "very-long-branch-name-that-takes-space".into();
-        let narrow = render(&inputs, ColumnWidths::clamped(24, 16), 0, &theme, 160);
-        let wide = render(&inputs, ColumnWidths::clamped(24, 50), 0, &theme, 160);
+        let narrow = render(&inputs, ColumnWidths::clamped(16, 16), 0, &theme, 160);
+        let wide = render(&inputs, ColumnWidths::clamped(50, 16), 0, &theme, 160);
         // Both end with "29s ago" (right-aligned at total_width).
         let narrow_text = line_text(&narrow);
         let wide_text = line_text(&wide);

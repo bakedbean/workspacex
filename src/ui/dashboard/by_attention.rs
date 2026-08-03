@@ -9,8 +9,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::ListItem;
 
-/// One flat row with the repo carried alongside so the name column can
-/// render `<repo>/<workspace>`.
+/// One flat row with the repo carried alongside so the branch column can
+/// render `<repo>/<branch>`.
 #[derive(Debug, Clone)]
 pub struct FlatRow {
     pub repo_name: String,
@@ -136,11 +136,12 @@ fn flat_row_line(
     theme: &Theme,
     width: usize,
 ) -> Line<'static> {
-    // Reuse the same composer but rewrite the name field to "<repo>/<name>"
-    // so we keep alignment math centralized. The composer's name column
-    // truncates; we leave that as-is for v1.
+    // Reuse the same composer but prefix the branch with "<repo>/" so the
+    // flattened view keeps repo context while the alignment math stays
+    // centralized. The composer's branch column truncates; we leave that
+    // as-is for v1.
     let mut adjusted = fr.row.clone();
-    adjusted.name = format!("{}/{}", fr.repo_name, fr.row.name);
+    adjusted.branch = format!("{}/{}", fr.repo_name, fr.row.branch);
     row::render(&adjusted, widths, tick, theme, width)
 }
 
@@ -237,8 +238,8 @@ mod tests {
                     row: RowInputs {
                         agent: crate::pty::session::AgentKind::Claude,
                         status: w.status,
-                        name: w.name.clone(),
                         branch: w.branch.clone(),
+                        pr_number: None,
                         procs: w.procs,
                         diff: Some(DiffStats {
                             added: w.diff_added,
@@ -290,7 +291,7 @@ mod tests {
         let quiet = make_quiet();
         let data = partition(rows, quiet);
         // theme-tokens (stalled) > anything else in needs.
-        assert_eq!(data.needs_attention[0].row.name, "theme-tokens");
+        assert_eq!(data.needs_attention[0].row.branch, "bakedbean/theme-tokens");
         // The next is question-statuses, then waiting.
         let next = &data.needs_attention[1].row.status;
         assert_eq!(*next, Status::Question);
@@ -303,15 +304,22 @@ mod tests {
         let rows = make_rows();
         let quiet = make_quiet();
         let data = partition(rows, quiet);
-        let recent_names: Vec<&str> = data.recent.iter().map(|r| r.row.name.as_str()).collect();
+        let recent_names: Vec<&str> = data.recent.iter().map(|r| r.row.branch.as_str()).collect();
         assert_eq!(
             recent_names,
-            vec!["tech-stack-question", "brave-cedar", "rate-limit"],
+            vec![
+                "bakedbean/tech-stack-question",
+                "eben/brave-cedar",
+                "eben/rate-limit"
+            ],
         );
         // WORKING: recipe-importer (11s) is newer than quiet-fennel (4s)?
         // No — quiet-fennel @ 4s is more recent than recipe-importer @ 11s.
-        let working_names: Vec<&str> = data.working.iter().map(|r| r.row.name.as_str()).collect();
-        assert_eq!(working_names, vec!["quiet-fennel", "recipe-importer"]);
+        let working_names: Vec<&str> = data.working.iter().map(|r| r.row.branch.as_str()).collect();
+        assert_eq!(
+            working_names,
+            vec!["eben/quiet-fennel", "eben/recipe-importer"]
+        );
     }
 
     #[test]
@@ -325,9 +333,12 @@ mod tests {
             .needs_attention
             .iter()
             .filter(|r| r.row.status == Status::Question)
-            .map(|r| r.row.name.as_str())
+            .map(|r| r.row.branch.as_str())
             .collect();
-        assert_eq!(question_names, vec!["repo-overview", "driver-map-v2"]);
+        assert_eq!(
+            question_names,
+            vec!["bakedbean/repo-overview", "eben/driver-map-v2"]
+        );
     }
 
     #[test]
@@ -392,15 +403,15 @@ mod tests {
     }
 
     #[test]
-    fn flat_row_renders_repo_slash_workspace_in_name() {
+    fn flat_row_renders_repo_slash_branch() {
         let theme = Theme::wsx();
         let row = FlatRow {
             repo_name: "wsx".into(),
             row: RowInputs {
                 agent: crate::pty::session::AgentKind::Claude,
                 status: Status::Question,
-                name: "repo-overview".into(),
                 branch: "bakedbean/repo-overview".into(),
+                pr_number: None,
                 procs: 2,
                 diff: Some(DiffStats {
                     added: 12,
@@ -422,8 +433,11 @@ mod tests {
                 has_multi_pane_layout: false,
             },
         };
-        let line = flat_row_line(&row, row::ColumnWidths::default(), 0, &theme, 120);
+        // A branch column wide enough for the repo prefix — the default 28
+        // would truncate this 27-char branch (glyph + space leave 26).
+        let widths = row::ColumnWidths::clamped(40, row::DEFAULT_PR_WIDTH);
+        let line = flat_row_line(&row, widths, 0, &theme, 120);
         let t: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(t.contains("wsx/repo-overview"));
+        assert!(t.contains("wsx/bakedbean/repo-overview"), "{t:?}");
     }
 }

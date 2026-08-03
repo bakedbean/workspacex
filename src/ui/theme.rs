@@ -392,6 +392,25 @@ pub(crate) fn branch_glyph(
     }
 }
 
+/// The glyph + short label for a PR-lifecycle chip (`⏺ #123 open`). Shared
+/// by the dashboard detail header, the attached chip row, and the dashboard
+/// row's PR column so the three can't drift. `NoPr` yields empty strings —
+/// callers skip the chip entirely. Color comes from
+/// [`Theme::lifecycle_style`], not from here.
+pub(crate) fn lifecycle_chip(
+    lc: crate::git::forge::BranchLifecycle,
+) -> (&'static str, &'static str) {
+    use crate::git::forge::BranchLifecycle::*;
+    match lc {
+        PrOpen => ("⏺", "open"),
+        PrDraft => ("⏷", "draft"),
+        PrMerged => ("⏺", "merged"),
+        PrClosed => ("⏸", "closed"),
+        PrConflicted => ("⏺", "conflict"),
+        NoPr => ("", ""),
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::wsx()

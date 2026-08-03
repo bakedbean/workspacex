@@ -174,8 +174,8 @@ mod tests {
             .map(|(i, w)| RowInputs {
                 agent: crate::pty::session::AgentKind::Claude,
                 status: w.status,
-                name: w.name.clone(),
                 branch: w.branch.clone(),
+                pr_number: None,
                 procs: w.procs,
                 diff: Some(crate::git::DiffStats {
                     added: w.diff_added,
@@ -390,8 +390,8 @@ mod tests {
         let repos = fixture::repos();
         let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
         let view = make_view(wsx, 1, true);
-        let names: Vec<&str> = view.workspaces.iter().map(|w| w.name.as_str()).collect();
-        assert_eq!(names[0], "theme-tokens", "stalled first");
-        assert_eq!(names[1], "repo-overview", "question second");
+        let names: Vec<&str> = view.workspaces.iter().map(|w| w.branch.as_str()).collect();
+        assert_eq!(names[0], "bakedbean/theme-tokens", "stalled first");
+        assert_eq!(names[1], "bakedbean/repo-overview", "question second");
     }
 }

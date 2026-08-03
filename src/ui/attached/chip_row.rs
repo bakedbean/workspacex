@@ -9,7 +9,7 @@ use crate::ui::dashboard::status::Status;
 /// `None` when there's no PR or the lifecycle has no glyph (e.g. `NoPr`).
 fn pr_chip_parts(pr: Option<(BranchLifecycle, u32)>, theme: &Theme) -> Option<(String, Style)> {
     let (lc, number) = pr?;
-    let (glyph, label) = crate::ui::dashboard::detail::lifecycle_chip(lc);
+    let (glyph, label) = crate::ui::theme::lifecycle_chip(lc);
     if glyph.is_empty() {
         return None;
     }

@@ -110,8 +110,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     let row = crate::ui::dashboard::row::RowInputs {
                         agent: ws.agent,
                         status,
-                        name: ws.name.clone(),
                         branch: ws.branch.clone(),
+                        pr_number: app.pr_number.get(&ws.id).copied(),
                         procs: app
                             .workspace_processes
                             .get(&ws.id)
@@ -939,22 +939,22 @@ fn notifications_enabled(store: &Store) -> bool {
 
 /// Resolve the dashboard's user-tunable column widths from settings,
 /// clamped to safe min/max. Unset or unparseable values fall back to the
-/// V5 defaults (24 / 28).
+/// defaults (28 / 16).
 fn read_column_widths(store: &Store) -> ColumnWidths {
-    use crate::ui::dashboard::row::{ColumnWidths, DEFAULT_BRANCH_WIDTH, DEFAULT_NAME_WIDTH};
-    let name = store
-        .get_setting("dashboard_name_width")
-        .ok()
-        .flatten()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_NAME_WIDTH);
+    use crate::ui::dashboard::row::{ColumnWidths, DEFAULT_BRANCH_WIDTH, DEFAULT_PR_WIDTH};
     let branch = store
         .get_setting("dashboard_branch_width")
         .ok()
         .flatten()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .unwrap_or(DEFAULT_BRANCH_WIDTH);
-    ColumnWidths::clamped(name, branch)
+    let pr = store
+        .get_setting("dashboard_pr_width")
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_PR_WIDTH);
+    ColumnWidths::clamped(branch, pr)
 }
 
 fn compute_attention_line(

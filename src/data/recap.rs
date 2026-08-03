@@ -9,6 +9,10 @@ use rusqlite::OptionalExtension;
 impl Store {
     /// Partial upsert: only provided fields change (a `None` leaves the
     /// stored value untouched); `updated_at` always bumps.
+    // Six parallel recap fields (long + short form of goal/state/next) plus
+    // id keep this at 7 args; a struct/builder would be overkill for a
+    // single internal upsert call site.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_workspace_recap(
         &self,
         id: WorkspaceId,

@@ -7,7 +7,6 @@ use crate::ui::dashboard::status::Status;
 
 #[derive(Debug, Clone)]
 pub struct FixtureWorkspace {
-    pub name: String,
     pub branch: String,
     pub procs: u32,
     pub status: Status,
@@ -28,9 +27,7 @@ pub fn repos() -> Vec<FixtureRepo> {
     use Status::*;
     // This test fixture builder takes one arg per workspace field on purpose; a
     // params struct would not improve clarity here.
-    #[allow(clippy::too_many_arguments)]
     fn ws(
-        name: &str,
         branch: &str,
         procs: u32,
         status: Status,
@@ -40,7 +37,6 @@ pub fn repos() -> Vec<FixtureRepo> {
         ago: Option<u64>,
     ) -> FixtureWorkspace {
         FixtureWorkspace {
-            name: name.into(),
             branch: branch.into(),
             procs,
             status,
@@ -55,29 +51,10 @@ pub fn repos() -> Vec<FixtureRepo> {
             name: "ssk".into(),
             path: "/home/eben/ssk/ssk-web".into(),
             workspaces: vec![
+                ws("eben/wobbly-peony", 0, Idle, None, 0, 0, None),
+                ws("eben/woven-parsley", 0, Idle, None, 0, 0, None),
+                ws("eben/eager-ivy", 0, Idle, None, 0, 0, None),
                 ws(
-                    "wobbly-peony",
-                    "eben/wobbly-peony",
-                    0,
-                    Idle,
-                    None,
-                    0,
-                    0,
-                    None,
-                ),
-                ws(
-                    "woven-parsley",
-                    "eben/woven-parsley",
-                    0,
-                    Idle,
-                    None,
-                    0,
-                    0,
-                    None,
-                ),
-                ws("eager-ivy", "eben/eager-ivy", 0, Idle, None, 0, 0, None),
-                ws(
-                    "quiet-fennel",
                     "eben/quiet-fennel",
                     2,
                     Thinking,
@@ -87,7 +64,6 @@ pub fn repos() -> Vec<FixtureRepo> {
                     Some(4),
                 ),
                 ws(
-                    "brave-cedar",
                     "eben/brave-cedar",
                     1,
                     Complete,
@@ -103,7 +79,6 @@ pub fn repos() -> Vec<FixtureRepo> {
             path: "/home/eben/workspace/wsx".into(),
             workspaces: vec![
                 ws(
-                    "tech-stack-question",
                     "bakedbean/tech-stack-question",
                     1,
                     Complete,
@@ -113,7 +88,6 @@ pub fn repos() -> Vec<FixtureRepo> {
                     Some(34),
                 ),
                 ws(
-                    "repo-overview",
                     "bakedbean/repo-overview",
                     2,
                     Question,
@@ -123,7 +97,6 @@ pub fn repos() -> Vec<FixtureRepo> {
                     Some(29),
                 ),
                 ws(
-                    "list-virtualization",
                     "bakedbean/list-virt",
                     2,
                     Waiting,
@@ -133,7 +106,6 @@ pub fn repos() -> Vec<FixtureRepo> {
                     Some(2 * 60),
                 ),
                 ws(
-                    "theme-tokens",
                     "bakedbean/theme-tokens",
                     1,
                     Stalled,
@@ -148,7 +120,6 @@ pub fn repos() -> Vec<FixtureRepo> {
             name: "backend".into(),
             path: "/home/eben/meals/backend".into(),
             workspaces: vec![ws(
-                "recipe-importer",
                 "eben/recipe-importer",
                 2,
                 Thinking,
@@ -168,7 +139,6 @@ pub fn repos() -> Vec<FixtureRepo> {
             path: "/home/eben/ridesnridesnrides/api".into(),
             workspaces: vec![
                 ws(
-                    "rate-limit",
                     "eben/rate-limit",
                     0,
                     Complete,
@@ -177,23 +147,13 @@ pub fn repos() -> Vec<FixtureRepo> {
                     83,
                     Some(3600),
                 ),
-                ws(
-                    "webhook-retry",
-                    "eben/webhook-retry",
-                    0,
-                    Idle,
-                    None,
-                    0,
-                    0,
-                    None,
-                ),
+                ws("eben/webhook-retry", 0, Idle, None, 0, 0, None),
             ],
         },
         FixtureRepo {
             name: "ui".into(),
             path: "/home/eben/ridesnridesnrides/ui".into(),
             workspaces: vec![ws(
-                "driver-map-v2",
                 "eben/driver-map-v2",
                 1,
                 Question,
@@ -207,7 +167,6 @@ pub fn repos() -> Vec<FixtureRepo> {
             name: "scp-admin".into(),
             path: "/home/eben/cci/scp-admin".into(),
             workspaces: vec![ws(
-                "auth-refactor",
                 "eben/auth-refactor",
                 1,
                 Waiting,

@@ -1072,14 +1072,13 @@ impl App {
         // output" — otherwise a permission prompt that fires before the
         // first PTY byte would be misclassified as Thinking.
         let secs = session.as_ref().and_then(|s| s.idle_secs());
-        // `has_prior_session` does filesystem I/O (canonicalize +
-        // read_dir); skip it when we already have a live session, since
-        // the classifier only looks at it in the no-session branch.
-        let has_prior = if running {
-            false
-        } else {
-            crate::pty::session::has_prior_session_for(&ws.worktree_path, ws.agent)
-        };
+        // `has_prior_session` is dead input in V5: `Status::classify`
+        // collapses prior-session and no-session to Idle either way, so
+        // don't pay `has_prior_session_for`'s filesystem I/O (canonicalize
+        // + read_dir) per workspace here — this classifier runs on every
+        // render tick and every updates-panel keypress. Spawn-mode
+        // detection (`build_spawn_info`) still probes the filesystem itself.
+        let has_prior = false;
         let now_ms = crate::time::now_ms();
         let stopped_kind = self
             .workspace_events

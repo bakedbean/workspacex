@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::data::store::{Repo, RepoId, WorkspaceId};
-use crate::ui::dashboard::column_content::{ColumnEmphasis, RowColumn};
+use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn};
 use crate::ui::dashboard::fixture;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::theme::Theme;
@@ -52,8 +52,12 @@ fn build_inputs<'a>(
                         removed: w.diff_removed,
                     }),
                     column: w.last_message.clone().map(|t| RowColumn {
-                        text: t,
-                        emphasis: ColumnEmphasis::Dim,
+                        token: "idle".to_string(),
+                        reported: false,
+                        body: ColumnBody::Fallback {
+                            text: t,
+                            emphasis: ColumnEmphasis::Dim,
+                        },
                     }),
                     ago_secs: w.ago_secs,
                     selected: false,

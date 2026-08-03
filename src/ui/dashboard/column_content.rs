@@ -3,15 +3,41 @@
 //! over `WorkspaceEvents` + `Status`; no rendering, no wall-clock reads.
 
 use crate::activity::events::{ToolUseCounts, WorkspaceEvents};
+use crate::data::store::{ReportedStatus, WorkspaceRecap};
 use crate::ui::dashboard::status::Status;
+use crate::ui::pm_pane::RECAP_STALE_SLACK_MS;
+use crate::ui::text::truncate;
+
+/// Chars a full recap field is clipped to when its short form is absent.
+pub const RECAP_FIELD_CLIP: usize = 32;
 
 /// Precomputed flex-column content for one workspace row, chosen by the
-/// caller from the workspace's status + events. `None` renders as the
-/// em-dash placeholder.
+/// caller from the workspace's status + events + recap + reported state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowColumn {
-    pub text: String,
-    pub emphasis: ColumnEmphasis,
+    /// Status word rendered first, always present: a fresh agent-pushed state
+    /// (`working`/`blocked`/…) or the derived label (`asking`/`stalled`/…).
+    pub token: String,
+    /// Token came from a fresh push — the renderer uses the `▸ ` prefix.
+    pub reported: bool,
+    pub body: ColumnBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColumnBody {
+    /// Agent-authored recap segments (goal/state/next, short forms preferred),
+    /// greedy-fitted by the renderer. `stale`: activity outran `updated_at`.
+    Recap {
+        segments: Vec<String>,
+        stale: bool,
+    },
+    /// No recap — the pre-recap heuristic text (question topic, tool trace,
+    /// last turn text…), already stripped of the status word the token carries.
+    Fallback {
+        text: String,
+        emphasis: ColumnEmphasis,
+    },
+    Empty,
 }
 
 /// How the row renderer should color the column body. The leading prefix
@@ -24,93 +50,124 @@ pub enum ColumnEmphasis {
     Status,
     /// `Stalled` — paint the body in the warn color.
     Warn,
-    /// Agent-authored push (`wsx status set --message`). Painted in the row's
-    /// status color with a distinct prefix, to read as deliberate/current
-    /// rather than the dim heuristic recap.
-    Reported,
+}
+
+fn token_for(status: Status) -> &'static str {
+    match status {
+        Status::Question => "asking",
+        Status::Complete => "done",
+        other => other.label(),
+    }
 }
 
 /// Build the status-adaptive flex-column content for one workspace row.
 /// `now_ms` is the shared epoch-ms time base (same one `app.rs` uses), so
-/// stall durations match the detail bar. Returns `None` when there is no
-/// meaningful content (the caller renders the em-dash).
+/// stall durations match the detail bar.
 ///
-/// `reported_message` is the freshness-gated agent-pushed message from
-/// `App::fresh_reported_status`. When non-empty it always wins over the
-/// heuristic recap — the short-circuit is before `events?` so it shows
-/// even when there is no session or events yet.
+/// `reported` is the freshness-gated agent-pushed status from
+/// `App::fresh_reported_status`; when present its state word becomes the
+/// token (the pushed message text is no longer shown — the recap carries
+/// detail now). `recap` is the workspace's latest `wsx recap set` digest;
+/// when it has any short/full field it wins over the heuristic fallback body.
 pub fn row_column(
     status: Status,
     events: Option<&WorkspaceEvents>,
     now_ms: i64,
-    reported_message: Option<&str>,
-) -> Option<RowColumn> {
-    if let Some(msg) = reported_message.map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(RowColumn {
-            text: collapse_ws(msg),
-            emphasis: ColumnEmphasis::Reported,
-        });
+    reported: Option<&ReportedStatus>,
+    recap: Option<&WorkspaceRecap>,
+) -> RowColumn {
+    let (token, is_reported) = match reported {
+        Some(r) => (r.state.as_str().to_string(), true),
+        None => (token_for(status).to_string(), false),
+    };
+    let segments = recap.map(recap_segments).unwrap_or_default();
+    let body = if !segments.is_empty() {
+        let last_activity = events.map(|e| e.last_log_activity_ms).unwrap_or(0);
+        let stale = recap
+            .map(|r| last_activity > r.updated_at + RECAP_STALE_SLACK_MS)
+            .unwrap_or(false);
+        ColumnBody::Recap { segments, stale }
+    } else {
+        match fallback_text(status, events, now_ms) {
+            Some((text, emphasis)) => ColumnBody::Fallback { text, emphasis },
+            None => ColumnBody::Empty,
+        }
+    };
+    RowColumn {
+        token,
+        reported: is_reported,
+        body,
     }
+}
+
+/// Short form preferred, full field clipped to `RECAP_FIELD_CLIP` otherwise,
+/// absent fields skipped. Order: goal, state, next.
+fn recap_segments(r: &WorkspaceRecap) -> Vec<String> {
+    [
+        (&r.goal_short, &r.goal),
+        (&r.state_short, &r.state),
+        (&r.next_short, &r.next),
+    ]
+    .into_iter()
+    .filter_map(|(short, full)| {
+        non_empty_trimmed(short.as_deref())
+            .map(collapse_ws)
+            .or_else(|| {
+                non_empty_trimmed(full.as_deref())
+                    .map(|f| truncate(&collapse_ws(f), RECAP_FIELD_CLIP))
+            })
+    })
+    .collect()
+}
+
+/// The pre-recap heuristic body, minus the status word (the token carries it):
+/// the old `Question` arm's "asking: X" becomes "X", the old `Stalled` arm's
+/// "stalled · 3m quiet" becomes "3m quiet", and the `{label}…` fillers vanish.
+fn fallback_text(
+    status: Status,
+    events: Option<&WorkspaceEvents>,
+    now_ms: i64,
+) -> Option<(String, ColumnEmphasis)> {
     let evt = events?;
     match status {
         Status::Question => {
             let body = match evt.pending_question_tool() {
-                Some("ExitPlanMode") => "asking: review plan".to_string(),
-                Some(_) => match evt.pending_question_text.as_deref() {
-                    Some(t) if !t.trim().is_empty() => format!("asking: {}", collapse_ws(t)),
-                    _ => "asking…".to_string(),
-                },
+                Some("ExitPlanMode") => Some("review plan".to_string()),
+                Some(_) => non_empty_trimmed(evt.pending_question_text.as_deref()).map(collapse_ws),
                 None => evt
                     .pending_permission_tool(now_ms, 3_000)
-                    .map(|(n, _)| format!("awaiting: {n}"))
-                    .unwrap_or_else(|| "question".to_string()),
+                    .map(|(n, _)| format!("awaiting: {n}")),
             };
-            Some(RowColumn {
-                text: body,
-                emphasis: ColumnEmphasis::Status,
-            })
+            body.map(|t| (t, ColumnEmphasis::Status))
         }
-        Status::Stalled => Some(RowColumn {
-            text: format_state_line(status, evt, now_ms),
-            emphasis: ColumnEmphasis::Warn,
-        }),
+        Status::Stalled => {
+            if evt.last_log_activity_ms > 0 {
+                let quiet_secs =
+                    now_ms.saturating_sub(evt.last_log_activity_ms).max(0) as u64 / 1000;
+                Some((
+                    format!("{} quiet", format_ago_short(Some(quiet_secs))),
+                    ColumnEmphasis::Warn,
+                ))
+            } else {
+                None
+            }
+        }
         Status::Thinking | Status::Waiting => {
             let trace = format_tool_trace(&evt.tool_use_counts);
-            let live = evt
-                .current_action
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty());
+            let live = non_empty_trimmed(evt.current_action.as_deref());
             let text = match (trace.is_empty(), live) {
                 (false, Some(l)) => format!("{trace} · {l}"),
                 (false, None) => trace,
                 (true, Some(l)) => l.to_string(),
-                (true, None) => format!("{}…", status.label()),
+                (true, None) => return None,
             };
-            Some(RowColumn {
-                text,
-                emphasis: ColumnEmphasis::Dim,
-            })
+            Some((text, ColumnEmphasis::Dim))
         }
-        Status::Complete => {
-            // Trim/empty-check each candidate independently so a
-            // whitespace-only recap still falls back to the prompt rather
-            // than blocking it (an `.or()` before trimming would keep the
-            // blank recap and render the em-dash).
-            let body = non_empty_trimmed(evt.last_completed_turn_text.as_deref())
-                .or_else(|| non_empty_trimmed(evt.first_user_text.as_deref()))?;
-            Some(RowColumn {
-                text: collapse_ws(body),
-                emphasis: ColumnEmphasis::Dim,
-            })
-        }
-        Status::Idle => {
-            let body = non_empty_trimmed(evt.first_user_text.as_deref())?;
-            Some(RowColumn {
-                text: collapse_ws(body),
-                emphasis: ColumnEmphasis::Dim,
-            })
-        }
+        Status::Complete => non_empty_trimmed(evt.last_completed_turn_text.as_deref())
+            .or_else(|| non_empty_trimmed(evt.first_user_text.as_deref()))
+            .map(|t| (collapse_ws(t), ColumnEmphasis::Dim)),
+        Status::Idle => non_empty_trimmed(evt.first_user_text.as_deref())
+            .map(|t| (collapse_ws(t), ColumnEmphasis::Dim)),
     }
 }
 
@@ -228,48 +285,161 @@ fn plural(noun: &str, n: u32) -> String {
 mod tests {
     use super::*;
     use crate::activity::events::WorkspaceEvents;
+    use crate::data::store::ReportedState;
     use std::collections::HashMap;
 
     fn evt() -> WorkspaceEvents {
         WorkspaceEvents::default()
     }
 
-    #[test]
-    fn none_events_yields_none() {
-        assert!(row_column(Status::Idle, None, 0, None).is_none());
+    fn recap_with(
+        goal: Option<&str>,
+        goal_short: Option<&str>,
+        state_short: Option<&str>,
+        next_short: Option<&str>,
+        updated_at: i64,
+    ) -> WorkspaceRecap {
+        WorkspaceRecap {
+            goal: goal.map(String::from),
+            goal_short: goal_short.map(String::from),
+            state_short: state_short.map(String::from),
+            next_short: next_short.map(String::from),
+            updated_at,
+            ..Default::default()
+        }
+    }
+
+    fn reported(state: ReportedState) -> ReportedStatus {
+        ReportedStatus {
+            state,
+            message: Some("ignored by the column now".into()),
+            source: "model".into(),
+            reported_at: 0,
+        }
     }
 
     #[test]
-    fn question_with_topic_renders_asking_topic() {
+    fn token_derives_from_status_when_no_push() {
+        let c = row_column(Status::Question, Some(&evt()), 0, None, None);
+        assert_eq!(c.token, "asking");
+        assert!(!c.reported);
+        let c = row_column(Status::Complete, Some(&evt()), 0, None, None);
+        assert_eq!(c.token, "done");
+    }
+
+    #[test]
+    fn fresh_push_sets_token_and_reported_flag() {
+        let r = reported(ReportedState::Blocked);
+        let c = row_column(Status::Waiting, Some(&evt()), 0, Some(&r), None);
+        assert_eq!(c.token, "blocked");
+        assert!(c.reported);
+    }
+
+    #[test]
+    fn pushed_message_text_no_longer_appears() {
+        let r = reported(ReportedState::Working);
+        let c = row_column(Status::Waiting, None, 0, Some(&r), None);
+        assert!(matches!(c.body, ColumnBody::Empty));
+    }
+
+    #[test]
+    fn recap_prefers_short_forms_in_order() {
+        let rc = recap_with(
+            None,
+            Some("Audit V2 #2835"),
+            Some("3/12 done"),
+            Some("fix drift"),
+            0,
+        );
+        let c = row_column(Status::Waiting, Some(&evt()), 0, None, Some(&rc));
+        match c.body {
+            ColumnBody::Recap { segments, stale } => {
+                assert_eq!(segments, vec!["Audit V2 #2835", "3/12 done", "fix drift"]);
+                assert!(!stale);
+            }
+            other => panic!("expected Recap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_short_falls_back_to_clipped_full_field() {
+        let long = "Audit all V2 invoices auto-issued today for the CV-04964 amount-drift bug";
+        let rc = recap_with(Some(long), None, Some("3/12 done"), None, 0);
+        let c = row_column(Status::Waiting, Some(&evt()), 0, None, Some(&rc));
+        match c.body {
+            ColumnBody::Recap { segments, .. } => {
+                assert_eq!(
+                    segments.len(),
+                    2,
+                    "absent next is skipped, not placeholder'd"
+                );
+                assert_eq!(segments[0].chars().count(), 32);
+                assert!(segments[0].ends_with('…'));
+            }
+            other => panic!("expected Recap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn all_empty_recap_behaves_as_no_recap() {
+        let rc = recap_with(None, None, None, None, 0);
+        let e = WorkspaceEvents {
+            first_user_text: Some("migrate auth".into()),
+            ..WorkspaceEvents::default()
+        };
+        let c = row_column(Status::Idle, Some(&e), 0, None, Some(&rc));
+        assert!(matches!(c.body, ColumnBody::Fallback { .. }));
+    }
+
+    #[test]
+    fn recap_stale_when_activity_outruns_updated_at() {
+        let rc = recap_with(None, Some("g"), None, None, 1_000);
+        let e = WorkspaceEvents {
+            last_log_activity_ms: 1_000 + crate::ui::pm_pane::RECAP_STALE_SLACK_MS + 1,
+            ..WorkspaceEvents::default()
+        };
+        let c = row_column(Status::Waiting, Some(&e), 0, None, Some(&rc));
+        assert!(matches!(c.body, ColumnBody::Recap { stale: true, .. }));
+    }
+
+    #[test]
+    fn question_fallback_drops_asking_prefix() {
+        // Token already says "asking"; the fallback body is the bare topic.
         let mut e = evt();
         e.pending_tool_uses
             .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
         e.pending_question_text = Some("Auth method".into());
-        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
-        assert_eq!(c.text, "asking: Auth method");
-        assert_eq!(c.emphasis, ColumnEmphasis::Status);
+        let c = row_column(Status::Question, Some(&e), 10_000, None, None);
+        assert_eq!(c.token, "asking");
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "Auth method");
+                assert_eq!(emphasis, ColumnEmphasis::Status);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
-    fn question_without_topic_renders_asking_ellipsis() {
+    fn question_without_topic_renders_asking_only_via_empty_body() {
         let mut e = evt();
         e.pending_tool_uses
             .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
-        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
-        assert_eq!(c.text, "asking…");
-        assert_eq!(c.emphasis, ColumnEmphasis::Status);
+        let c = row_column(Status::Question, Some(&e), 10_000, None, None);
+        assert_eq!(c.token, "asking");
+        assert!(matches!(c.body, ColumnBody::Empty));
     }
 
     #[test]
-    fn question_blank_topic_falls_back_to_ellipsis() {
-        // A whitespace-only topic must not render as "asking:  "; it falls
-        // through to the ellipsis like an absent topic.
+    fn question_blank_topic_falls_back_to_empty_body() {
+        // A whitespace-only topic must not render as a body; it falls
+        // through to Empty like an absent topic.
         let mut e = evt();
         e.pending_tool_uses
             .insert("tu_q".into(), ("AskUserQuestion".into(), 0));
         e.pending_question_text = Some("   ".into());
-        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
-        assert_eq!(c.text, "asking…");
+        let c = row_column(Status::Question, Some(&e), 10_000, None, None);
+        assert!(matches!(c.body, ColumnBody::Empty));
     }
 
     #[test]
@@ -277,9 +447,14 @@ mod tests {
         let mut e = evt();
         e.pending_tool_uses
             .insert("tu_p".into(), ("ExitPlanMode".into(), 0));
-        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
-        assert_eq!(c.text, "asking: review plan");
-        assert_eq!(c.emphasis, ColumnEmphasis::Status);
+        let c = row_column(Status::Question, Some(&e), 10_000, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "review plan");
+                assert_eq!(emphasis, ColumnEmphasis::Status);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
@@ -291,28 +466,38 @@ mod tests {
             pending_tool_uses: pending,
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Question, Some(&e), 10_000, None).unwrap();
-        assert_eq!(c.text, "awaiting: Bash");
-        assert_eq!(c.emphasis, ColumnEmphasis::Status);
+        let c = row_column(Status::Question, Some(&e), 10_000, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "awaiting: Bash");
+                assert_eq!(emphasis, ColumnEmphasis::Status);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
-    fn question_with_no_pending_tool_uses_bare_label() {
-        let c = row_column(Status::Question, Some(&evt()), 10_000, None).unwrap();
-        assert_eq!(c.text, "question");
-        assert_eq!(c.emphasis, ColumnEmphasis::Status);
+    fn question_with_no_pending_tool_uses_empty_body() {
+        let c = row_column(Status::Question, Some(&evt()), 10_000, None, None);
+        assert_eq!(c.token, "asking");
+        assert!(matches!(c.body, ColumnBody::Empty));
     }
 
     #[test]
-    fn stalled_shows_quiet_duration_with_warn_emphasis() {
+    fn stalled_fallback_is_quiet_detail_only() {
         let e = WorkspaceEvents {
             last_log_activity_ms: 1,
             ..WorkspaceEvents::default()
         };
-        // now_ms = 240_000, last_log_activity_ms = 1 → (240_000-1)/1000 = 239s → "3m quiet"
-        let c = row_column(Status::Stalled, Some(&e), 240_000, None).unwrap();
-        assert_eq!(c.text, "stalled · 3m quiet");
-        assert_eq!(c.emphasis, ColumnEmphasis::Warn);
+        let c = row_column(Status::Stalled, Some(&e), 240_000, None, None);
+        assert_eq!(c.token, "stalled");
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "3m quiet");
+                assert_eq!(emphasis, ColumnEmphasis::Warn);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
@@ -320,21 +505,28 @@ mod tests {
         let mut e = evt();
         e.tool_use_counts.bash = 2;
         e.tool_use_counts.edit = 3;
-        let c = row_column(Status::Thinking, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "edited 3 files, ran 2 commands");
-        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+        let c = row_column(Status::Thinking, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "edited 3 files, ran 2 commands");
+                assert_eq!(emphasis, ColumnEmphasis::Dim);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
-    fn thinking_with_no_tools_yet_shows_ellipsis_label() {
-        let c = row_column(Status::Thinking, Some(&evt()), 0, None).unwrap();
-        assert_eq!(c.text, "thinking…");
+    fn thinking_with_no_tools_yet_is_empty_body() {
+        let c = row_column(Status::Thinking, Some(&evt()), 0, None, None);
+        assert_eq!(c.token, "thinking");
+        assert!(matches!(c.body, ColumnBody::Empty));
     }
 
     #[test]
-    fn waiting_with_no_tools_yet_shows_ellipsis_label() {
-        let c = row_column(Status::Waiting, Some(&evt()), 0, None).unwrap();
-        assert_eq!(c.text, "waiting…");
+    fn waiting_with_no_tools_yet_is_empty_body() {
+        let c = row_column(Status::Waiting, Some(&evt()), 0, None, None);
+        assert_eq!(c.token, "waiting");
+        assert!(matches!(c.body, ColumnBody::Empty));
     }
 
     #[test]
@@ -342,9 +534,14 @@ mod tests {
         let mut e = evt();
         e.tool_use_counts.edit = 3;
         e.current_action = Some("now column_content.rs".into());
-        let c = row_column(Status::Thinking, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "edited 3 files · now column_content.rs");
-        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+        let c = row_column(Status::Thinking, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "edited 3 files · now column_content.rs");
+                assert_eq!(emphasis, ColumnEmphasis::Dim);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
@@ -352,16 +549,26 @@ mod tests {
         let mut e = evt();
         e.tool_use_counts.bash = 5;
         e.current_action = Some("cargo test --lib".into());
-        let c = row_column(Status::Thinking, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "ran 5 commands · cargo test --lib");
+        let c = row_column(Status::Thinking, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, .. } => {
+                assert_eq!(text, "ran 5 commands · cargo test --lib");
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
     fn thinking_shows_action_alone_when_no_counts_yet() {
         let mut e = evt();
         e.current_action = Some("now column_content.rs".into());
-        let c = row_column(Status::Thinking, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "now column_content.rs");
+        let c = row_column(Status::Thinking, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, .. } => {
+                assert_eq!(text, "now column_content.rs");
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
@@ -371,9 +578,14 @@ mod tests {
         let mut e = evt();
         e.tool_use_counts.bash = 5;
         e.current_action = Some("cargo test --lib".into());
-        let c = row_column(Status::Waiting, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "ran 5 commands · cargo test --lib");
-        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+        let c = row_column(Status::Waiting, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "ran 5 commands · cargo test --lib");
+                assert_eq!(emphasis, ColumnEmphasis::Dim);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
@@ -383,9 +595,14 @@ mod tests {
             first_user_text: Some("do the thing".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Complete, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "split the quick-start into two");
-        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+        let c = row_column(Status::Complete, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "split the quick-start into two");
+                assert_eq!(emphasis, ColumnEmphasis::Dim);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
@@ -394,13 +611,17 @@ mod tests {
             first_user_text: Some("migrate auth".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Complete, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "migrate auth");
+        let c = row_column(Status::Complete, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, .. } => assert_eq!(text, "migrate auth"),
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
-    fn complete_with_nothing_is_none() {
-        assert!(row_column(Status::Complete, Some(&evt()), 0, None).is_none());
+    fn complete_with_nothing_is_empty_body() {
+        let c = row_column(Status::Complete, Some(&evt()), 0, None, None);
+        assert!(matches!(c.body, ColumnBody::Empty));
     }
 
     #[test]
@@ -413,8 +634,11 @@ mod tests {
             first_user_text: Some("migrate auth".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Complete, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "migrate auth");
+        let c = row_column(Status::Complete, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, .. } => assert_eq!(text, "migrate auth"),
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
@@ -423,14 +647,20 @@ mod tests {
             first_user_text: Some("backfill the 003 migration".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Idle, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "backfill the 003 migration");
-        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+        let c = row_column(Status::Idle, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, emphasis } => {
+                assert_eq!(text, "backfill the 003 migration");
+                assert_eq!(emphasis, ColumnEmphasis::Dim);
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
-    fn idle_with_no_prompt_is_none() {
-        assert!(row_column(Status::Idle, Some(&evt()), 0, None).is_none());
+    fn idle_with_no_prompt_is_empty_body() {
+        let c = row_column(Status::Idle, Some(&evt()), 0, None, None);
+        assert!(matches!(c.body, ColumnBody::Empty));
     }
 
     #[test]
@@ -439,9 +669,14 @@ mod tests {
             first_user_text: Some("migrate auth\n\nto the new token flow".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Idle, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "migrate auth to the new token flow");
-        assert!(!c.text.contains('\n'));
+        let c = row_column(Status::Idle, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, .. } => {
+                assert_eq!(text, "migrate auth to the new token flow");
+                assert!(!text.contains('\n'));
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
@@ -450,61 +685,20 @@ mod tests {
             last_completed_turn_text: Some("split the quick-start\n  into two   sections".into()),
             ..WorkspaceEvents::default()
         };
-        let c = row_column(Status::Complete, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "split the quick-start into two sections");
-        assert!(!c.text.contains('\n'));
-    }
-
-    // ── reported_message tests ─────────────────────────────────────────────
-
-    #[test]
-    fn reported_message_overrides_heuristic_recap() {
-        // Events that WOULD produce a recap for Complete status.
-        let e = WorkspaceEvents {
-            last_completed_turn_text: Some("split the quick-start into two".into()),
-            first_user_text: Some("do the thing".into()),
-            ..WorkspaceEvents::default()
-        };
-        let c = row_column(
-            Status::Complete,
-            Some(&e),
-            0,
-            Some("running the test suite"),
-        )
-        .unwrap();
-        assert_eq!(c.text, "running the test suite");
-        assert_eq!(c.emphasis, ColumnEmphasis::Reported);
+        let c = row_column(Status::Complete, Some(&e), 0, None, None);
+        match c.body {
+            ColumnBody::Fallback { text, .. } => {
+                assert_eq!(text, "split the quick-start into two sections");
+                assert!(!text.contains('\n'));
+            }
+            other => panic!("expected Fallback, got {other:?}"),
+        }
     }
 
     #[test]
-    fn reported_message_shows_even_without_events() {
-        // Short-circuit is BEFORE `events?` — message shows with no events at all.
-        let c = row_column(Status::Idle, None, 0, Some("blocked on auth")).unwrap();
-        assert_eq!(c.text, "blocked on auth");
-        assert_eq!(c.emphasis, ColumnEmphasis::Reported);
-    }
-
-    #[test]
-    fn empty_reported_message_falls_back_to_heuristic() {
-        // Whitespace-only message behaves as None — falls back to status logic.
-        let e = WorkspaceEvents {
-            first_user_text: Some("backfill the migration".into()),
-            ..WorkspaceEvents::default()
-        };
-        let c = row_column(Status::Idle, Some(&e), 0, Some("   ")).unwrap();
-        assert_eq!(c.text, "backfill the migration");
-        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
-    }
-
-    #[test]
-    fn no_reported_message_is_unchanged() {
-        // Passing None yields the same result as old 3-arg behavior.
-        let e = WorkspaceEvents {
-            first_user_text: Some("migrate auth".into()),
-            ..WorkspaceEvents::default()
-        };
-        let c = row_column(Status::Idle, Some(&e), 0, None).unwrap();
-        assert_eq!(c.text, "migrate auth");
-        assert_eq!(c.emphasis, ColumnEmphasis::Dim);
+    fn no_events_no_recap_is_token_only() {
+        let c = row_column(Status::Idle, None, 0, None, None);
+        assert_eq!(c.token, "idle");
+        assert!(matches!(c.body, ColumnBody::Empty));
     }
 }

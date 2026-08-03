@@ -68,12 +68,13 @@ The `--message` is a short one-liner shown on the dashboard. Claude Code hooks a
 Alongside status, maintain the workspace recap — the dashboard's project-manager digest renders these three one-liners:
 
 ```sh
-wsx recap set --goal "cookie expiry bug from #42"   # once, when scope is clear
-wsx recap set --state "tests added but failing" --next "debug session token regex"
+wsx recap set --goal "cookie expiry bug from #42" --goal-short "cookie expiry, #42"   # once, when scope is clear
+wsx recap set --state "tests added but failing" --state-short "tests failing" \
+              --next "debug session token regex" --next-short "debug token regex"
 wsx recap show
 ```
 
-Fields update independently; set `--goal` once and refresh `--state`/`--next` as work progresses.
+Fields update independently; set `--goal`/`--goal-short` once and refresh the state/next pairs as work progresses. Short forms are keyword distillations for the dashboard row — identifiers and ticket/PR numbers, no filler; aim for ≤40 chars (goal) / ≤24 chars (state, next).
 
 ## Slug rules (read before typing --name)
 

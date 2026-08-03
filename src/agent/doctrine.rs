@@ -38,8 +38,13 @@ const CLAUSE_STATUS: &str = "- Report your status as you go with `wsx status set
 const CLAUSE_RECAP: &str = "- Maintain the workspace recap with `wsx recap set`: run \
     `wsx recap set --goal \"<one line>\"` once you understand the task's scope, and \
     update `--state \"<one line>\"` and `--next \"<one line>\"` whenever you set status \
-    and whenever you end a turn with the task unfinished. The dashboard's \
-    project-manager digest renders these three lines for this workspace.";
+    and whenever you end a turn with the task unfinished. Alongside each full field, \
+    keep keyword short forms for the dashboard row: `--goal-short` (≤40 chars), \
+    `--state-short` and `--next-short` (≤24 chars) — identifiers and ticket/PR numbers, \
+    no filler. Example: --goal \"Audit all V2 invoices auto-issued today for the \
+    CV-04964 amount-drift bug fixed in PR #2835\" --goal-short \"Audit V2 invoices, \
+    CV-04964, bug #2835\". The project-manager digest renders the full lines; the \
+    dashboard row renders the short forms.";
 
 /// Values for the `process_doctrine` setting that disable doctrine injection
 /// entirely (matched case-insensitively against the trimmed value).
@@ -164,6 +169,22 @@ mod tests {
             assert!(
                 d.contains("wsx recap set"),
                 "doctrine must tell {agent:?} to maintain the recap: {d}"
+            );
+        }
+    }
+
+    #[test]
+    fn doctrine_mentions_recap_short_forms() {
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Pi,
+            AgentKind::Hermes,
+            AgentKind::Codex,
+        ] {
+            let d = process_doctrine(agent).to_lowercase();
+            assert!(
+                d.contains("--goal-short"),
+                "doctrine must teach {agent:?} the short-form flags: {d}"
             );
         }
     }

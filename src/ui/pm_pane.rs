@@ -507,6 +507,7 @@ mod render_tests {
             state: Some("tests failing".into()),
             next: Some("debug regex".into()),
             updated_at: 1_000,
+            ..Default::default()
         });
         c.recap_stale = true;
         c.status = Some(crate::data::store::ReportedStatus {
@@ -733,6 +734,7 @@ mod digest_tests {
             state: Some("s".into()),
             next: Some("n".into()),
             updated_at: t,
+            ..Default::default()
         };
         recaps.insert(WorkspaceId(1), recap(1_000));
         recaps.insert(WorkspaceId(2), recap(1_000));

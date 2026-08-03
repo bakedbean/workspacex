@@ -119,13 +119,13 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             .map(|v| v.len() as u32)
                             .unwrap_or(0),
                         diff: app.workspace_diff.get(&ws.id).copied(),
-                        column: crate::ui::dashboard::column_content::row_column(
+                        column: Some(crate::ui::dashboard::column_content::row_column(
                             status,
                             app.workspace_events.get(&ws.id),
                             now_ms,
-                            app.fresh_reported_status(ws.id)
-                                .and_then(|r| r.message.as_deref()),
-                        ),
+                            app.fresh_reported_status(ws.id),
+                            app.recaps.get(&ws.id),
+                        )),
                         ago_secs: secs,
                         selected: matches!(app.selected_target(),
                             Some(SelectionTarget::Workspace(id)) if id == ws.id),

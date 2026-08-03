@@ -413,6 +413,7 @@ mod plugin_tests {
                 state: None,
                 next: None,
                 updated_at: 0,
+                ..Default::default()
             },
         );
         let doc = render(&["alpha".into()], &rows, &recaps, "/bin/wsx", 0);

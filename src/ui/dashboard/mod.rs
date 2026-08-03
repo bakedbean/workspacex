@@ -416,16 +416,27 @@ pub fn reconcile_selection(
 }
 
 /// Case-insensitive substring match against the workspace branch, owning
-/// repo name, and the row's status-adaptive column text (when present).
+/// repo name, and the row's status-adaptive column (status token, recap
+/// segments, or fallback text — whichever the column carries).
 fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
     let needle = filter.to_lowercase();
-    w.row.branch.to_lowercase().contains(&needle)
-        || w.repo.name.to_lowercase().contains(&needle)
-        || w.row
-            .column
-            .as_ref()
-            .map(|c| c.text.to_lowercase().contains(&needle))
-            .unwrap_or(false)
+    if w.row.branch.to_lowercase().contains(&needle) || w.repo.name.to_lowercase().contains(&needle)
+    {
+        return true;
+    }
+    let Some(col) = w.row.column.as_ref() else {
+        return false;
+    };
+    if col.token.to_lowercase().contains(&needle) {
+        return true;
+    }
+    match &col.body {
+        column_content::ColumnBody::Recap { segments, .. } => {
+            segments.iter().any(|s| s.to_lowercase().contains(&needle))
+        }
+        column_content::ColumnBody::Fallback { text, .. } => text.to_lowercase().contains(&needle),
+        column_content::ColumnBody::Empty => false,
+    }
 }
 
 fn render_by_repo<'a>(

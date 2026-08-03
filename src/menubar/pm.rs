@@ -235,6 +235,7 @@ mod tests {
             state: Some("s".into()),
             next: Some("n".into()),
             updated_at: at,
+            ..Default::default()
         }
     }
 
@@ -323,6 +324,7 @@ mod tests {
                 state: Some(String::new()), // present but empty
                 next: None,
                 updated_at: 9_000,
+                ..Default::default()
             },
         );
         let cards = cards_for_repo(&rows, &recaps, "alpha");
@@ -340,6 +342,7 @@ mod tests {
                 state: None,
                 next: None,
                 updated_at: 9_000,
+                ..Default::default()
             },
         );
         let cards = cards_for_repo(&rows, &recaps, "alpha");
@@ -360,6 +363,7 @@ mod tests {
                 state: None,
                 next: None,
                 updated_at: 9_000,
+                ..Default::default()
             },
         );
         let cards = cards_for_repo(&rows, &recaps, "alpha");
@@ -489,6 +493,7 @@ mod tests {
                 state: None,
                 next: None,
                 updated_at: 0,
+                ..Default::default()
             },
         );
         let joined = section(&rows, &recaps).join("\n");
@@ -547,6 +552,7 @@ mod tests {
                 state: None,
                 next: None,
                 updated_at: 0,
+                ..Default::default()
             },
         );
         let lines = section(&rows, &recaps);
@@ -577,6 +583,7 @@ mod tests {
                 state: None,
                 next: None,
                 updated_at: 0,
+                ..Default::default()
             },
         );
         let joined = section(&rows, &recaps).join("\n");

@@ -211,8 +211,10 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Maintain the agent-authored workspace recap",
         commands: &[
             CmdInfo {
-                usage: "set [--goal <text>] [--state <text>] [--next <text>]",
-                blurb: "Update recap fields (partial; at least one flag)",
+                usage: "set [--goal|--state|--next <text>] [--goal-short|--state-short|--next-short <text>]",
+                blurb: "Update recap fields (partial; at least one flag). *-short: keyword \
+                        distillation for the dashboard row — identifiers, ticket/PR numbers, \
+                        no filler (e.g. \"Audit V2 invoices, CV-04964, bug from #2835\")",
             },
             CmdInfo {
                 usage: "show",
@@ -511,6 +513,9 @@ pub enum CliAction {
         goal: Option<String>,
         state: Option<String>,
         next: Option<String>,
+        goal_short: Option<String>,
+        state_short: Option<String>,
+        next_short: Option<String>,
     },
     RecapShow,
     RecapClear,
@@ -1294,11 +1299,17 @@ fn parse_recap(it: &mut Args) -> Result<CliAction> {
             let mut goal = None;
             let mut state = None;
             let mut next = None;
+            let mut goal_short = None;
+            let mut state_short = None;
+            let mut next_short = None;
             while let Some(arg) = it.next() {
                 let slot = match arg.as_str() {
                     "--goal" => &mut goal,
                     "--state" => &mut state,
                     "--next" => &mut next,
+                    "--goal-short" => &mut goal_short,
+                    "--state-short" => &mut state_short,
+                    "--next-short" => &mut next_short,
                     _ => {
                         return Err(Error::Usage {
                             group: None,
@@ -1311,14 +1322,25 @@ fn parse_recap(it: &mut Args) -> Result<CliAction> {
                     msg: format!("{arg} requires a value"),
                 })?);
             }
-            if goal.is_none() && state.is_none() && next.is_none() {
+            if [&goal, &state, &next, &goal_short, &state_short, &next_short]
+                .iter()
+                .all(|o| o.is_none())
+            {
                 return Err(Error::Usage {
                     group: None,
-                    msg: "usage: wsx recap set [--goal <text>] [--state <text>] [--next <text>] (at least one)"
+                    msg: "usage: wsx recap set [--goal|--state|--next <text>] \
+                          [--goal-short|--state-short|--next-short <text>] (at least one)"
                         .into(),
                 });
             }
-            Ok(CliAction::RecapSet { goal, state, next })
+            Ok(CliAction::RecapSet {
+                goal,
+                state,
+                next,
+                goal_short,
+                state_short,
+                next_short,
+            })
         }
         Some("show") => Ok(CliAction::RecapShow),
         Some("clear") => Ok(CliAction::RecapClear),
@@ -1946,18 +1968,36 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
             // Always succeed.
         }
-        CliAction::RecapSet { goal, state, next } => {
+        CliAction::RecapSet {
+            goal,
+            state,
+            next,
+            goal_short,
+            state_short,
+            next_short,
+        } => {
             let ws = resolve_current_workspace(&store)?;
-            store.set_workspace_recap(ws.id, goal.as_deref(), state.as_deref(), next.as_deref())?;
+            store.set_workspace_recap(
+                ws.id,
+                goal.as_deref(),
+                state.as_deref(),
+                next.as_deref(),
+                goal_short.as_deref(),
+                state_short.as_deref(),
+                next_short.as_deref(),
+            )?;
             println!("recap updated");
         }
         CliAction::RecapShow => {
             let ws = resolve_current_workspace(&store)?;
             match store.workspace_recap(ws.id)? {
                 Some(r) => {
-                    println!("goal:  {}", r.goal.as_deref().unwrap_or("-"));
-                    println!("state: {}", r.state.as_deref().unwrap_or("-"));
-                    println!("next:  {}", r.next.as_deref().unwrap_or("-"));
+                    println!("goal:        {}", r.goal.as_deref().unwrap_or("-"));
+                    println!("state:       {}", r.state.as_deref().unwrap_or("-"));
+                    println!("next:        {}", r.next.as_deref().unwrap_or("-"));
+                    println!("goal-short:  {}", r.goal_short.as_deref().unwrap_or("-"));
+                    println!("state-short: {}", r.state_short.as_deref().unwrap_or("-"));
+                    println!("next-short:  {}", r.next_short.as_deref().unwrap_or("-"));
                 }
                 None => println!("no recap set"),
             }
@@ -3150,7 +3190,9 @@ mod tests {
         ])
         .unwrap();
         match a {
-            CliAction::RecapSet { goal, state, next } => {
+            CliAction::RecapSet {
+                goal, state, next, ..
+            } => {
                 assert_eq!(goal.as_deref(), Some("fix auth"));
                 assert_eq!(state.as_deref(), Some("tests failing"));
                 assert_eq!(next.as_deref(), Some("debug"));
@@ -3163,7 +3205,9 @@ mod tests {
     fn parses_recap_set_partial() {
         let a = parse(&["recap", "set", "--state", "tests green"]).unwrap();
         match a {
-            CliAction::RecapSet { goal, state, next } => {
+            CliAction::RecapSet {
+                goal, state, next, ..
+            } => {
                 assert_eq!(goal, None);
                 assert_eq!(state.as_deref(), Some("tests green"));
                 assert_eq!(next, None);
@@ -3180,6 +3224,41 @@ mod tests {
     #[test]
     fn recap_set_rejects_unknown_flag() {
         assert!(parse(&["recap", "set", "--bogus", "x"]).is_err());
+    }
+
+    #[test]
+    fn parses_recap_set_short_forms() {
+        let a = parse(&[
+            "recap",
+            "set",
+            "--goal-short",
+            "Audit V2 invoices, CV-04964",
+            "--state-short",
+            "3/12 done",
+            "--next-short",
+            "fix drift calc",
+        ])
+        .unwrap();
+        match a {
+            CliAction::RecapSet {
+                goal,
+                goal_short,
+                state_short,
+                next_short,
+                ..
+            } => {
+                assert_eq!(goal, None);
+                assert_eq!(goal_short.as_deref(), Some("Audit V2 invoices, CV-04964"));
+                assert_eq!(state_short.as_deref(), Some("3/12 done"));
+                assert_eq!(next_short.as_deref(), Some("fix drift calc"));
+            }
+            other => panic!("expected RecapSet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recap_set_short_flag_alone_satisfies_at_least_one() {
+        assert!(parse(&["recap", "set", "--goal-short", "x"]).is_ok());
     }
 
     #[test]

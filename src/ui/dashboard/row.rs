@@ -16,7 +16,7 @@
 use crate::git::DiffStats;
 use crate::git::forge::BranchLifecycle;
 use crate::pty::session::AgentKind;
-use crate::ui::dashboard::column_content::{ColumnEmphasis, RowColumn};
+use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn};
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
 use crate::ui::text::{truncate, truncate_pad};
@@ -273,25 +273,55 @@ pub fn render(
         .saturating_sub(left_consumed + right_consumed)
         .max(1);
     if let Some(col) = inputs.column.as_ref() {
-        let prefix = if matches!(col.emphasis, ColumnEmphasis::Reported) {
-            "▸ "
-        } else {
-            "└ "
-        };
+        let prefix = if col.reported { "▸ " } else { "└ " };
         let body_width = message_width.saturating_sub(prefix.chars().count());
-        let body = truncate(&col.text, body_width);
         spans.push(Span::styled(
             prefix.to_string(),
             theme.status_style(inputs.status),
         ));
-        let body_padded = right_pad(&body, body_width);
-        let body_style = match col.emphasis {
-            ColumnEmphasis::Dim => theme.dim_style(),
-            ColumnEmphasis::Status => theme.status_style(inputs.status),
-            ColumnEmphasis::Warn => theme.warn_style(),
-            ColumnEmphasis::Reported => theme.status_style(inputs.status),
+        let token = truncate(&col.token, body_width);
+        let token_style = if inputs.status == Status::Stalled && !col.reported {
+            theme.warn_style()
+        } else {
+            theme.status_style(inputs.status)
         };
-        spans.push(Span::styled(body_padded, body_style));
+        let mut used = token.chars().count();
+        spans.push(Span::styled(token, token_style));
+        let avail = body_width.saturating_sub(used);
+        let (rest, rest_style) = match &col.body {
+            ColumnBody::Recap { segments, stale } => {
+                let text = fit_segments(segments, avail);
+                let style = if *stale {
+                    theme.dim_style().add_modifier(Modifier::DIM)
+                } else {
+                    theme.dim_style()
+                };
+                (text, style)
+            }
+            ColumnBody::Fallback { text, emphasis } => {
+                let sep_len = SEG_SEP.chars().count();
+                let fitted = if avail > sep_len + 1 {
+                    format!("{SEG_SEP}{}", truncate(text, avail - sep_len))
+                } else {
+                    String::new()
+                };
+                let style = match emphasis {
+                    ColumnEmphasis::Dim => theme.dim_style(),
+                    ColumnEmphasis::Status => theme.status_style(inputs.status),
+                    ColumnEmphasis::Warn => theme.warn_style(),
+                };
+                (fitted, style)
+            }
+            ColumnBody::Empty => (String::new(), theme.dim_style()),
+        };
+        used += rest.chars().count();
+        if !rest.is_empty() {
+            spans.push(Span::styled(rest, rest_style));
+        }
+        spans.push(Span::styled(
+            " ".repeat(body_width.saturating_sub(used)),
+            theme.dim_style(),
+        ));
     } else {
         let body = truncate_pad("—", message_width);
         spans.push(Span::styled(body, theme.dim_style()));
@@ -331,15 +361,37 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
     Some((x as u16, width as u16))
 }
 
-fn right_pad(s: &str, target: usize) -> String {
-    let len = s.chars().count();
-    if len >= target {
-        s.to_string()
-    } else {
-        let mut out = s.to_string();
-        out.push_str(&" ".repeat(target - len));
-        out
+const SEG_SEP: &str = " · ";
+
+/// Greedy segment fitting for the recap body. The first segment (goal) is
+/// always included, truncated to what remains; later segments (state, next)
+/// are appended only when they fit whole — a segment that doesn't fit is
+/// dropped along with everything after it.
+fn fit_segments(segments: &[String], avail: usize) -> String {
+    let sep_len = SEG_SEP.chars().count();
+    let mut out = String::new();
+    let mut used = 0usize;
+    for (i, seg) in segments.iter().enumerate() {
+        if i == 0 {
+            if avail <= sep_len + 1 {
+                break;
+            }
+            let t = truncate(seg, avail - sep_len);
+            used = sep_len + t.chars().count();
+            out.push_str(SEG_SEP);
+            out.push_str(&t);
+        } else {
+            let seg_len = seg.chars().count();
+            if used + sep_len + seg_len <= avail {
+                out.push_str(SEG_SEP);
+                out.push_str(seg);
+                used += sep_len + seg_len;
+            } else {
+                break;
+            }
+        }
     }
+    out
 }
 
 fn left_pad(s: &str, target: usize) -> String {
@@ -383,8 +435,12 @@ mod tests {
                 removed: 3,
             }),
             column: Some(RowColumn {
-                text: "I have enough to give you a grounded tour.".into(),
-                emphasis: ColumnEmphasis::Dim,
+                token: "asking".to_string(),
+                reported: false,
+                body: ColumnBody::Fallback {
+                    text: "I have enough to give you a grounded tour.".into(),
+                    emphasis: ColumnEmphasis::Dim,
+                },
             }),
             ago_secs: Some(29),
             selected: false,
@@ -550,7 +606,10 @@ mod tests {
         );
         assert!(text.contains("● 2p"), "procs cell");
         assert!(text.contains("+12 −3"), "diff cell");
-        assert!(text.contains("└ I have enough"), "message prefix");
+        assert!(
+            text.contains("└ asking · I have enough"),
+            "message prefix with token: {text:?}"
+        );
         assert!(text.trim_end().ends_with("29s ago"), "ago at end: {text:?}");
     }
 
@@ -578,66 +637,142 @@ mod tests {
     }
 
     #[test]
-    fn column_emphasis_maps_to_body_style() {
+    fn column_body_emphasis_maps_to_style() {
         let theme = Theme::wsx();
-        // Helper that finds the body span following either prefix glyph.
-        let body_after_prefix = |line: &Line<'_>| -> Style {
-            let i = line
-                .spans
+        // Helper that finds the fallback-body span by its (unique) text
+        // content — the body now trails the token span, prefixed by
+        // `SEG_SEP`, so it is no longer at a fixed span index.
+        let find_body = |line: &Line<'_>, needle: &str| -> Style {
+            line.spans
                 .iter()
-                .position(|s| matches!(s.content.as_ref(), "└ " | "▸ "))
-                .expect("prefix span present");
-            line.spans[i + 1].style
+                .find(|s| s.content.contains(needle))
+                .unwrap_or_else(|| panic!("body span containing {needle:?} present"))
+                .style
         };
 
         // Warn emphasis → warn color.
         let mut inputs = base();
         inputs.status = Status::Stalled;
         inputs.column = Some(RowColumn {
-            text: "stalled · 4m quiet".into(),
-            emphasis: ColumnEmphasis::Warn,
+            token: "stalled".to_string(),
+            reported: false,
+            body: ColumnBody::Fallback {
+                text: "4m quiet".into(),
+                emphasis: ColumnEmphasis::Warn,
+            },
         });
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
-        assert_eq!(body_after_prefix(&line).fg, theme.warn_style().fg);
+        assert_eq!(find_body(&line, "4m quiet").fg, theme.warn_style().fg);
 
         // Status emphasis → the row's status color.
         inputs.status = Status::Question;
         inputs.column = Some(RowColumn {
-            text: "AskUserQuestion".into(),
-            emphasis: ColumnEmphasis::Status,
+            token: "asking".to_string(),
+            reported: false,
+            body: ColumnBody::Fallback {
+                text: "AskUserQuestion".into(),
+                emphasis: ColumnEmphasis::Status,
+            },
         });
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         assert_eq!(
-            body_after_prefix(&line).fg,
+            find_body(&line, "AskUserQuestion").fg,
             theme.status_style(Status::Question).fg
         );
 
         // Dim emphasis → dim color.
         inputs.status = Status::Idle;
         inputs.column = Some(RowColumn {
-            text: "backfill the migration".into(),
-            emphasis: ColumnEmphasis::Dim,
-        });
-        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
-        assert_eq!(body_after_prefix(&line).fg, theme.dim_style().fg);
-
-        // Reported emphasis → status color, ▸ prefix.
-        inputs.status = Status::Stalled;
-        inputs.column = Some(RowColumn {
-            text: "need your call on auth".into(),
-            emphasis: ColumnEmphasis::Reported,
+            token: "idle".to_string(),
+            reported: false,
+            body: ColumnBody::Fallback {
+                text: "backfill the migration".into(),
+                emphasis: ColumnEmphasis::Dim,
+            },
         });
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         assert_eq!(
-            body_after_prefix(&line).fg,
-            theme.status_style(Status::Stalled).fg
+            find_body(&line, "backfill the migration").fg,
+            theme.dim_style().fg
         );
+    }
+
+    #[test]
+    fn fit_segments_drops_then_truncates() {
+        let segs = vec![
+            "goal seg".to_string(),
+            "state".to_string(),
+            "next".to_string(),
+        ];
+        // everything fits: " · goal seg · state · next" = 26 chars
+        assert_eq!(fit_segments(&segs, 26), " · goal seg · state · next");
+        // next no longer fits whole → dropped
+        assert_eq!(fit_segments(&segs, 25), " · goal seg · state");
+        // state no longer fits whole → dropped
+        assert_eq!(fit_segments(&segs, 18), " · goal seg");
+        // goal itself doesn't fit → truncated with …
+        assert_eq!(fit_segments(&segs, 9), " · goal …");
+        // no room for anything meaningful
+        assert_eq!(fit_segments(&segs, 4), "");
+    }
+
+    #[test]
+    fn reported_token_gets_pointer_prefix() {
+        let mut inputs = base();
+        inputs.column = Some(RowColumn {
+            token: "working".to_string(),
+            reported: true,
+            body: ColumnBody::Empty,
+        });
+        let theme = Theme::wsx();
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 160);
         let text = line_text(&line);
-        assert!(text.contains("▸ "), "Reported uses ▸ prefix: {text:?}");
+        assert!(text.contains("▸ working"), "got: {text}");
         assert!(
             !text.contains("└ "),
-            "Reported does not use └ prefix: {text:?}"
+            "reported row must not use └ : {text:?}"
         );
+    }
+
+    #[test]
+    fn recap_segments_render_after_token() {
+        let mut inputs = base();
+        inputs.column = Some(RowColumn {
+            token: "working".to_string(),
+            reported: false,
+            body: ColumnBody::Recap {
+                segments: vec!["Audit V2 #2835".to_string(), "3/12 done".to_string()],
+                stale: false,
+            },
+        });
+        let theme = Theme::wsx();
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 160);
+        let text = line_text(&line);
+        assert!(
+            text.contains("working · Audit V2 #2835 · 3/12 done"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn stale_recap_body_renders_extra_dim() {
+        let mut inputs = base();
+        inputs.column = Some(RowColumn {
+            token: "idle".to_string(),
+            reported: false,
+            body: ColumnBody::Recap {
+                segments: vec!["Audit V2 #2835".to_string()],
+                stale: true,
+            },
+        });
+        let theme = Theme::wsx();
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 160);
+        let seg_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Audit V2"))
+            .expect("segment span present");
+        assert!(seg_span.style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

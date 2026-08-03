@@ -163,7 +163,7 @@ pub fn render_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::dashboard::column_content::{ColumnEmphasis, RowColumn};
+    use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn};
     use crate::ui::dashboard::fixture;
 
     fn make_view<'a>(r: &'a fixture::FixtureRepo, id: u64, expanded: bool) -> RepoView<'a> {
@@ -182,8 +182,12 @@ mod tests {
                     removed: w.diff_removed,
                 }),
                 column: w.last_message.clone().map(|t| RowColumn {
-                    text: t,
-                    emphasis: ColumnEmphasis::Dim,
+                    token: "idle".to_string(),
+                    reported: false,
+                    body: ColumnBody::Fallback {
+                        text: t,
+                        emphasis: ColumnEmphasis::Dim,
+                    },
                 }),
                 ago_secs: w.ago_secs,
                 selected: i == 0,

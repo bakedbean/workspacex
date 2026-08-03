@@ -23,19 +23,93 @@ fn name_col_width<'a>(names: impl Iterator<Item = &'a str>, row_width: usize) ->
     names.map(|n| n.chars().count()).max().unwrap_or(0).min(cap)
 }
 
+/// User-cyclable sort mode for the updates panel. Carried in the modal
+/// variant, so it resets to `Default` every time the panel opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UpdatesSort {
+    /// Today's ordering: (attention, failed, activity_rank, recency).
+    #[default]
+    Default,
+    /// Workspace-status urgency via `Status::priority()`; failed first.
+    Status,
+    /// PR lifecycle, actionable first: conflicted → open → draft →
+    /// merged → closed → no PR → unknown.
+    PrStatus,
+}
+
+impl UpdatesSort {
+    /// Next mode in the `o`-key cycle.
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Default => Self::Status,
+            Self::Status => Self::PrStatus,
+            Self::PrStatus => Self::Default,
+        }
+    }
+
+    /// Short mode name shown in the footer hint.
+    pub fn footer_label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Status => "status",
+            Self::PrStatus => "pr",
+        }
+    }
+}
+
+/// Status-mode rank: lower sorts first. Failed outranks every status —
+/// it's the loudest signal — then descending `Status::priority()`. The key
+/// is `(failed_first, Reverse(urgency))` rather than a subtraction, so
+/// there's no magic constant to fall out of sync if `Status::priority()`'s
+/// range ever grows.
+fn status_rank(
+    w: &crate::data::store::Workspace,
+    statuses: &HashMap<crate::data::store::WorkspaceId, Status>,
+) -> (u8, std::cmp::Reverse<u8>) {
+    let failed_first = if w.state == crate::data::store::WorkspaceState::Failed {
+        0
+    } else {
+        1
+    };
+    let urgency = statuses
+        .get(&w.id)
+        .copied()
+        .unwrap_or(Status::Idle)
+        .priority();
+    (failed_first, std::cmp::Reverse(urgency))
+}
+
+/// PrStatus-mode rank: actionable lifecycles first, unknown last.
+fn lifecycle_rank(lifecycle: Option<BranchLifecycle>) -> u8 {
+    match lifecycle {
+        Some(BranchLifecycle::PrConflicted) => 0,
+        Some(BranchLifecycle::PrOpen) => 1,
+        Some(BranchLifecycle::PrDraft) => 2,
+        Some(BranchLifecycle::PrMerged) => 3,
+        Some(BranchLifecycle::PrClosed) => 4,
+        Some(BranchLifecycle::NoPr) => 5,
+        None => 6,
+    }
+}
+
 /// Compute the order in which workspaces appear in the updates panel.
 /// Returns workspace IDs in the same order the renderer walks them —
 /// grouped by repo (in App's repo order), sorted within each repo by
-/// (attention, failed, activity_rank, recency).
+/// the active `UpdatesSort` mode, tie-broken by (attention, failed,
+/// activity_rank, recency).
 ///
 /// Used by both the renderer (to draw rows) and the key handler (to map
 /// the selected index back to a workspace id).
+#[allow(clippy::too_many_arguments)]
 pub fn ordered_workspaces_for_panel(
     repos: &[crate::data::store::Repo],
     workspaces: &[(RepoId, crate::data::store::Workspace)],
     events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
     activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
     needs_attention: &HashSet<crate::data::store::WorkspaceId>,
+    statuses: &HashMap<crate::data::store::WorkspaceId, Status>,
+    lifecycles: &HashMap<crate::data::store::WorkspaceId, BranchLifecycle>,
+    sort: UpdatesSort,
 ) -> Vec<crate::data::store::WorkspaceId> {
     let mut out = Vec::new();
     for repo in repos {
@@ -44,7 +118,18 @@ pub fn ordered_workspaces_for_panel(
             .filter(|(rid, _)| *rid == repo.id)
             .map(|(_, w)| w)
             .collect();
-        ws_for_repo.sort_by_key(|w| sort_key(w, events, activity, needs_attention));
+        ws_for_repo.sort_by_key(|w| {
+            let default_key = sort_key(w, events, activity, needs_attention);
+            let mode_rank = match sort {
+                UpdatesSort::Default => (0, std::cmp::Reverse(0)),
+                UpdatesSort::Status => status_rank(w, statuses),
+                UpdatesSort::PrStatus => (
+                    lifecycle_rank(lifecycles.get(&w.id).copied()),
+                    std::cmp::Reverse(0),
+                ),
+            };
+            (mode_rank, default_key)
+        });
         out.extend(ws_for_repo.into_iter().map(|w| w.id));
     }
     out
@@ -84,6 +169,16 @@ fn sort_key(
     (attention, failed, activity_rank, recency)
 }
 
+/// Footer hint line. `v`/`s` collapse into one `[v/s] split` chip so the
+/// line still fits the widest panel (80 cols − 2 border = 78) with the
+/// sort mode shown.
+fn footer_text(sort: UpdatesSort) -> String {
+    format!(
+        "[\u{2191}/\u{2193}] move  [enter/l] switch  [v/s] split  [o] sort:{}  [esc] close",
+        sort.footer_label()
+    )
+}
+
 /// Render the floating workspace-updates panel. Reads live App state via
 /// borrowed slices so the panel updates on every render tick.
 #[allow(clippy::too_many_arguments)]
@@ -100,6 +195,7 @@ pub fn render_updates_panel(
     lifecycles: &HashMap<crate::data::store::WorkspaceId, BranchLifecycle>,
     selected: usize,
     now_ms: i64,
+    sort: UpdatesSort,
     theme: &Theme,
 ) {
     // Sizing: ~80 cols wide, ~25 rows tall, but never larger than the area.
@@ -114,7 +210,16 @@ pub fn render_updates_panel(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let order = ordered_workspaces_for_panel(repos, workspaces, events, activity, needs_attention);
+    let order = ordered_workspaces_for_panel(
+        repos,
+        workspaces,
+        events,
+        activity,
+        needs_attention,
+        statuses,
+        lifecycles,
+        sort,
+    );
     // workspace_id -> position in `order` so we can match against `selected`.
     let pos_of: HashMap<crate::data::store::WorkspaceId, usize> =
         order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
@@ -196,10 +301,7 @@ pub fn render_updates_panel(
     // when lifecycle is unknown.
     f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
-        Paragraph::new(
-            "[\u{2191}/\u{2193}] move   [enter/l] switch   [v] vsplit   [s] hsplit   [esc] close",
-        )
-        .style(theme.dim_style()),
+        Paragraph::new(footer_text(sort)).style(theme.dim_style()),
         footer_area,
     );
 }
@@ -888,5 +990,241 @@ mod workspace_row_tests {
         assert_eq!(glyph_span.style.fg, Some(theme.complete));
         assert_eq!(name_span.style.fg, Some(theme.ok));
         assert_eq!(text_span.style.fg, Some(theme.complete));
+    }
+}
+
+#[cfg(test)]
+mod ordering_tests {
+    use super::*;
+    use crate::data::store::{Repo, RepoId, Workspace, WorkspaceId, WorkspaceState};
+    use crate::git::forge::BranchLifecycle;
+    use std::path::PathBuf;
+
+    fn fixture_repo(id: i64) -> Repo {
+        Repo {
+            id: RepoId(id),
+            name: format!("repo{id}"),
+            path: PathBuf::from("/tmp/r"),
+            branch_prefix: String::new(),
+            custom_instructions: None,
+            setup_script: None,
+            archive_script: None,
+            pinned_commands: None,
+            related_repos: None,
+            base_branch: None,
+            detail_bar_config: None,
+            created_at: 0,
+            sort_order: 0,
+        }
+    }
+
+    fn fixture_ws(id: i64, repo: i64, name: &str) -> (RepoId, Workspace) {
+        (
+            RepoId(repo),
+            Workspace {
+                id: WorkspaceId(id),
+                repo_id: RepoId(repo),
+                name: name.to_string(),
+                branch: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/ws"),
+                state: WorkspaceState::Ready,
+                setup_status: crate::data::store::SetupStatus::Ok,
+                created_at: 0,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            },
+        )
+    }
+
+    /// Bundles the three signal maps the ordering function reads, so each
+    /// test only fills in what it exercises.
+    #[derive(Default)]
+    struct Maps {
+        events: HashMap<WorkspaceId, crate::activity::events::WorkspaceEvents>,
+        activity: HashMap<WorkspaceId, crate::ui::updates_bar::ActivityState>,
+        attention: HashSet<WorkspaceId>,
+        statuses: HashMap<WorkspaceId, Status>,
+        lifecycles: HashMap<WorkspaceId, BranchLifecycle>,
+    }
+
+    fn order(
+        repos: &[Repo],
+        ws: &[(RepoId, Workspace)],
+        maps: &Maps,
+        sort: UpdatesSort,
+    ) -> Vec<WorkspaceId> {
+        ordered_workspaces_for_panel(
+            repos,
+            ws,
+            &maps.events,
+            &maps.activity,
+            &maps.attention,
+            &maps.statuses,
+            &maps.lifecycles,
+            sort,
+        )
+    }
+
+    #[test]
+    fn cycle_walks_default_status_pr_and_back() {
+        assert_eq!(UpdatesSort::Default.cycle(), UpdatesSort::Status);
+        assert_eq!(UpdatesSort::Status.cycle(), UpdatesSort::PrStatus);
+        assert_eq!(UpdatesSort::PrStatus.cycle(), UpdatesSort::Default);
+    }
+
+    #[test]
+    fn footer_labels_match_modes() {
+        assert_eq!(UpdatesSort::Default.footer_label(), "default");
+        assert_eq!(UpdatesSort::Status.footer_label(), "status");
+        assert_eq!(UpdatesSort::PrStatus.footer_label(), "pr");
+    }
+
+    /// Status mode: failed workspaces outrank everything, then statuses by
+    /// descending urgency (Status::priority), Idle last.
+    #[test]
+    fn status_sort_ranks_failed_then_urgency() {
+        let repos = vec![fixture_repo(1)];
+        let mut ws = vec![
+            fixture_ws(1, 1, "idle"),
+            fixture_ws(2, 1, "stalled"),
+            fixture_ws(3, 1, "failed"),
+            fixture_ws(4, 1, "question"),
+        ];
+        ws[2].1.state = WorkspaceState::Failed;
+        let mut maps = Maps::default();
+        maps.statuses.insert(WorkspaceId(1), Status::Idle);
+        maps.statuses.insert(WorkspaceId(2), Status::Stalled);
+        maps.statuses.insert(WorkspaceId(4), Status::Question);
+        let got = order(&repos, &ws, &maps, UpdatesSort::Status);
+        assert_eq!(
+            got,
+            vec![
+                WorkspaceId(3),
+                WorkspaceId(2),
+                WorkspaceId(4),
+                WorkspaceId(1)
+            ],
+            "failed → stalled → question → idle"
+        );
+    }
+
+    /// A workspace missing from the statuses map ranks as Idle (last).
+    #[test]
+    fn status_sort_treats_missing_status_as_idle() {
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![fixture_ws(1, 1, "unknown"), fixture_ws(2, 1, "complete")];
+        let mut maps = Maps::default();
+        maps.statuses.insert(WorkspaceId(2), Status::Complete);
+        let got = order(&repos, &ws, &maps, UpdatesSort::Status);
+        assert_eq!(got, vec![WorkspaceId(2), WorkspaceId(1)]);
+    }
+
+    /// PrStatus mode: actionable first — Conflicted → Open → Draft →
+    /// Merged → Closed → NoPr → unknown (absent from the map).
+    #[test]
+    fn pr_sort_ranks_actionable_first() {
+        use BranchLifecycle::*;
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![
+            fixture_ws(1, 1, "unknown"),
+            fixture_ws(2, 1, "nopr"),
+            fixture_ws(3, 1, "closed"),
+            fixture_ws(4, 1, "merged"),
+            fixture_ws(5, 1, "draft"),
+            fixture_ws(6, 1, "open"),
+            fixture_ws(7, 1, "conflicted"),
+        ];
+        let mut maps = Maps::default();
+        maps.lifecycles.insert(WorkspaceId(2), NoPr);
+        maps.lifecycles.insert(WorkspaceId(3), PrClosed);
+        maps.lifecycles.insert(WorkspaceId(4), PrMerged);
+        maps.lifecycles.insert(WorkspaceId(5), PrDraft);
+        maps.lifecycles.insert(WorkspaceId(6), PrOpen);
+        maps.lifecycles.insert(WorkspaceId(7), PrConflicted);
+        let got = order(&repos, &ws, &maps, UpdatesSort::PrStatus);
+        assert_eq!(
+            got,
+            vec![
+                WorkspaceId(7),
+                WorkspaceId(6),
+                WorkspaceId(5),
+                WorkspaceId(4),
+                WorkspaceId(3),
+                WorkspaceId(2),
+                WorkspaceId(1),
+            ]
+        );
+    }
+
+    /// Ties within a mode fall back to the default key — here two PrOpen
+    /// workspaces where one needs attention: attention wins the tie.
+    #[test]
+    fn mode_ties_fall_back_to_default_key() {
+        use BranchLifecycle::*;
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![fixture_ws(1, 1, "calm"), fixture_ws(2, 1, "alert")];
+        let mut maps = Maps::default();
+        maps.lifecycles.insert(WorkspaceId(1), PrOpen);
+        maps.lifecycles.insert(WorkspaceId(2), PrOpen);
+        maps.attention.insert(WorkspaceId(2));
+        let got = order(&repos, &ws, &maps, UpdatesSort::PrStatus);
+        assert_eq!(got, vec![WorkspaceId(2), WorkspaceId(1)]);
+    }
+
+    /// Default mode ignores the new maps entirely — a merged PR must not
+    /// reorder anything when sort is Default.
+    #[test]
+    fn default_sort_ignores_status_and_lifecycle_maps() {
+        use BranchLifecycle::*;
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![fixture_ws(1, 1, "first"), fixture_ws(2, 1, "merged")];
+        let mut maps = Maps::default();
+        maps.lifecycles.insert(WorkspaceId(2), PrConflicted);
+        maps.statuses.insert(WorkspaceId(2), Status::Stalled);
+        let got = order(&repos, &ws, &maps, UpdatesSort::Default);
+        assert_eq!(
+            got,
+            vec![WorkspaceId(1), WorkspaceId(2)],
+            "default keys are equal; stable sort keeps input order"
+        );
+    }
+
+    /// Sorting never crosses repo boundaries: a conflicted PR in repo 2
+    /// stays under repo 2's header even though it outranks repo 1's rows.
+    #[test]
+    fn sorts_stay_within_repo_groups() {
+        use BranchLifecycle::*;
+        let repos = vec![fixture_repo(1), fixture_repo(2)];
+        let ws = vec![
+            fixture_ws(1, 1, "r1-open"),
+            fixture_ws(2, 2, "r2-conflicted"),
+        ];
+        let mut maps = Maps::default();
+        maps.lifecycles.insert(WorkspaceId(1), PrOpen);
+        maps.lifecycles.insert(WorkspaceId(2), PrConflicted);
+        let got = order(&repos, &ws, &maps, UpdatesSort::PrStatus);
+        assert_eq!(
+            got,
+            vec![WorkspaceId(1), WorkspaceId(2)],
+            "repo 1's workspaces list before repo 2's regardless of rank"
+        );
+    }
+
+    #[test]
+    fn footer_shows_active_sort_mode_and_fits_panel() {
+        for (sort, label) in [
+            (UpdatesSort::Default, "sort:default"),
+            (UpdatesSort::Status, "sort:status"),
+            (UpdatesSort::PrStatus, "sort:pr"),
+        ] {
+            let f = footer_text(sort);
+            assert!(f.contains(label), "footer {f:?} must contain {label:?}");
+            assert!(f.contains("[o]"), "footer must advertise the o key");
+            assert!(
+                f.chars().count() <= 78,
+                "footer must fit the widest panel (80 - 2 border): {f:?}"
+            );
+        }
     }
 }

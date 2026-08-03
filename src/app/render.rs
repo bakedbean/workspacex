@@ -708,7 +708,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     }
     if let Some(m) = &app.modal {
         match m {
-            crate::ui::modal::Modal::UpdatesPanel { selected } => {
+            crate::ui::modal::Modal::UpdatesPanel { selected, sort } => {
                 let now_ms = crate::time::now_ms();
                 let mut awaiting: std::collections::HashMap<
                     crate::data::store::WorkspaceId,
@@ -727,14 +727,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .iter()
                     .map(|(k, v)| (*k, translate_activity(*v)))
                     .collect();
-                let statuses: std::collections::HashMap<
-                    crate::data::store::WorkspaceId,
-                    crate::ui::dashboard::status::Status,
-                > = app
-                    .workspaces
-                    .iter()
-                    .map(|(_, w)| (w.id, app.classify_status(w)))
-                    .collect();
+                let statuses = app.classified_statuses();
                 crate::ui::modal::render_updates_panel(
                     f,
                     area,
@@ -748,6 +741,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     &app.pr_lifecycle,
                     *selected,
                     now_ms,
+                    *sort,
                     &app.theme,
                 );
             }

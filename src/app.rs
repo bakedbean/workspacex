@@ -1035,6 +1035,21 @@ impl App {
         })
     }
 
+    /// Classify every workspace into the canonical `Status` vocabulary,
+    /// keyed by workspace id. Shared by the updates-panel renderer and key
+    /// handler so both derive row order from identical inputs.
+    pub fn classified_statuses(
+        &self,
+    ) -> std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::ui::dashboard::status::Status,
+    > {
+        self.workspaces
+            .iter()
+            .map(|(_, w)| (w.id, self.classify_status(w)))
+            .collect()
+    }
+
     /// Classify a workspace into the V5 dashboard `Status` vocabulary.
     /// Combines session liveness, JSONL stopped/stalled signals, and
     /// pending tool_use into one canonical state used by the renderer.
@@ -1057,14 +1072,13 @@ impl App {
         // output" — otherwise a permission prompt that fires before the
         // first PTY byte would be misclassified as Thinking.
         let secs = session.as_ref().and_then(|s| s.idle_secs());
-        // `has_prior_session` does filesystem I/O (canonicalize +
-        // read_dir); skip it when we already have a live session, since
-        // the classifier only looks at it in the no-session branch.
-        let has_prior = if running {
-            false
-        } else {
-            crate::pty::session::has_prior_session_for(&ws.worktree_path, ws.agent)
-        };
+        // `has_prior_session` is dead input in V5: `Status::classify`
+        // collapses prior-session and no-session to Idle either way, so
+        // don't pay `has_prior_session_for`'s filesystem I/O (canonicalize
+        // + read_dir) per workspace here — this classifier runs on every
+        // render tick and every updates-panel keypress. Spawn-mode
+        // detection (`build_spawn_info`) still probes the filesystem itself.
+        let has_prior = false;
         let now_ms = crate::time::now_ms();
         let stopped_kind = self
             .workspace_events

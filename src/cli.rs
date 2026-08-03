@@ -1948,7 +1948,15 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         }
         CliAction::RecapSet { goal, state, next } => {
             let ws = resolve_current_workspace(&store)?;
-            store.set_workspace_recap(ws.id, goal.as_deref(), state.as_deref(), next.as_deref())?;
+            store.set_workspace_recap(
+                ws.id,
+                goal.as_deref(),
+                state.as_deref(),
+                next.as_deref(),
+                None,
+                None,
+                None,
+            )?;
             println!("recap updated");
         }
         CliAction::RecapShow => {

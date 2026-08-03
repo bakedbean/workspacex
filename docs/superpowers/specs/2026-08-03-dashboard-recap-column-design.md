@@ -36,7 +36,7 @@ segments fill the remaining width.
 
 ## 1. Schema & store
 
-- New migration block `SCHEMA_V18` adds three nullable columns to `workspace_recap`:
+- New migration block (`if v < 20`; V18/V19 were already taken by scm_cache) adds three nullable columns to `workspace_recap`:
   `goal_short TEXT`, `state_short TEXT`, `next_short TEXT`.
 - Because wsx re-runs every migration block on each launch, each `ALTER TABLE ... ADD
   COLUMN` must be guarded by a column-existence check (`pragma_table_info`), not just a

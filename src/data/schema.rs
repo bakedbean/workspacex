@@ -139,6 +139,12 @@ impl Store {
             self.add_column_if_missing("scm_cache", "git_fetched_at", "git_fetched_at INTEGER")?;
             self.conn().execute("PRAGMA user_version = 19", [])?;
         }
+        if v < 20 {
+            self.add_column_if_missing("workspace_recap", "goal_short", "goal_short TEXT")?;
+            self.add_column_if_missing("workspace_recap", "state_short", "state_short TEXT")?;
+            self.add_column_if_missing("workspace_recap", "next_short", "next_short TEXT")?;
+            self.conn().execute("PRAGMA user_version = 20", [])?;
+        }
         Ok(())
     }
 

@@ -15,16 +15,23 @@ impl Store {
         goal: Option<&str>,
         state: Option<&str>,
         next: Option<&str>,
+        goal_short: Option<&str>,
+        state_short: Option<&str>,
+        next_short: Option<&str>,
     ) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO workspace_recap (workspace_id, goal, state, next, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5) \
+            "INSERT INTO workspace_recap \
+                 (workspace_id, goal, state, next, goal_short, state_short, next_short, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
              ON CONFLICT(workspace_id) DO UPDATE SET \
-                 goal       = COALESCE(excluded.goal, workspace_recap.goal), \
-                 state      = COALESCE(excluded.state, workspace_recap.state), \
-                 next       = COALESCE(excluded.next, workspace_recap.next), \
-                 updated_at = excluded.updated_at",
-            rusqlite::params![id.0, goal, state, next, now_ms()],
+                 goal        = COALESCE(excluded.goal, workspace_recap.goal), \
+                 state       = COALESCE(excluded.state, workspace_recap.state), \
+                 next        = COALESCE(excluded.next, workspace_recap.next), \
+                 goal_short  = COALESCE(excluded.goal_short, workspace_recap.goal_short), \
+                 state_short = COALESCE(excluded.state_short, workspace_recap.state_short), \
+                 next_short  = COALESCE(excluded.next_short, workspace_recap.next_short), \
+                 updated_at  = excluded.updated_at",
+            rusqlite::params![id.0, goal, state, next, goal_short, state_short, next_short, now_ms()],
         )?;
         Ok(())
     }
@@ -41,7 +48,7 @@ impl Store {
         let r = self
             .conn()
             .query_row(
-                "SELECT goal, state, next, updated_at \
+                "SELECT goal, state, next, goal_short, state_short, next_short, updated_at \
                  FROM workspace_recap WHERE workspace_id = ?1",
                 [id.0],
                 row_to_recap,
@@ -55,7 +62,7 @@ impl Store {
     ) -> Result<std::collections::HashMap<WorkspaceId, WorkspaceRecap>> {
         let mut stmt = self
             .conn()
-            .prepare("SELECT workspace_id, goal, state, next, updated_at FROM workspace_recap")?;
+            .prepare("SELECT workspace_id, goal, state, next, goal_short, state_short, next_short, updated_at FROM workspace_recap")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 WorkspaceId(r.get(0)?),
@@ -63,7 +70,10 @@ impl Store {
                     goal: r.get(1)?,
                     state: r.get(2)?,
                     next: r.get(3)?,
-                    updated_at: r.get(4)?,
+                    goal_short: r.get(4)?,
+                    state_short: r.get(5)?,
+                    next_short: r.get(6)?,
+                    updated_at: r.get(7)?,
                 },
             ))
         })?;
@@ -81,7 +91,10 @@ fn row_to_recap(r: &rusqlite::Row) -> rusqlite::Result<WorkspaceRecap> {
         goal: r.get(0)?,
         state: r.get(1)?,
         next: r.get(2)?,
-        updated_at: r.get(3)?,
+        goal_short: r.get(3)?,
+        state_short: r.get(4)?,
+        next_short: r.get(5)?,
+        updated_at: r.get(6)?,
     })
 }
 
@@ -117,6 +130,9 @@ mod tests {
                 Some("fix auth"),
                 Some("tests failing"),
                 Some("debug regex"),
+                None,
+                None,
+                None,
             )
             .unwrap();
         let got = store.workspace_recap(ws).unwrap().unwrap();
@@ -130,11 +146,27 @@ mod tests {
     fn partial_update_preserves_other_fields_and_bumps_updated_at() {
         let (store, ws) = store_with_workspace();
         store
-            .set_workspace_recap(ws, Some("fix auth"), Some("starting"), None)
+            .set_workspace_recap(
+                ws,
+                Some("fix auth"),
+                Some("starting"),
+                None,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         let first = store.workspace_recap(ws).unwrap().unwrap();
         store
-            .set_workspace_recap(ws, None, Some("tests green"), Some("open PR"))
+            .set_workspace_recap(
+                ws,
+                None,
+                Some("tests green"),
+                Some("open PR"),
+                None,
+                None,
+                None,
+            )
             .unwrap();
         let got = store.workspace_recap(ws).unwrap().unwrap();
         assert_eq!(got.goal.as_deref(), Some("fix auth"), "goal must survive");
@@ -147,7 +179,7 @@ mod tests {
     fn clear_and_all_recaps() {
         let (store, ws) = store_with_workspace();
         store
-            .set_workspace_recap(ws, Some("g"), None, None)
+            .set_workspace_recap(ws, Some("g"), None, None, None, None, None)
             .unwrap();
         let map = store.all_workspace_recaps().unwrap();
         assert_eq!(map.get(&ws).unwrap().goal.as_deref(), Some("g"));
@@ -160,9 +192,65 @@ mod tests {
     fn recap_cascade_deletes_with_workspace() {
         let (store, ws) = store_with_workspace();
         store
-            .set_workspace_recap(ws, Some("g"), None, None)
+            .set_workspace_recap(ws, Some("g"), None, None, None, None, None)
             .unwrap();
         store.delete_workspace(ws).unwrap();
         assert!(store.workspace_recap(ws).unwrap().is_none());
+    }
+
+    #[test]
+    fn short_forms_round_trip() {
+        let (store, ws) = store_with_workspace();
+        store
+            .set_workspace_recap(
+                ws,
+                Some("Audit all V2 invoices for the CV-04964 drift bug"),
+                None,
+                None,
+                Some("Audit V2 invoices, CV-04964"),
+                Some("3/12 done"),
+                Some("fix drift calc"),
+            )
+            .unwrap();
+        let got = store.workspace_recap(ws).unwrap().unwrap();
+        assert_eq!(
+            got.goal_short.as_deref(),
+            Some("Audit V2 invoices, CV-04964")
+        );
+        assert_eq!(got.state_short.as_deref(), Some("3/12 done"));
+        assert_eq!(got.next_short.as_deref(), Some("fix drift calc"));
+    }
+
+    #[test]
+    fn partial_update_preserves_short_forms() {
+        let (store, ws) = store_with_workspace();
+        store
+            .set_workspace_recap(ws, Some("g"), None, None, Some("g-short"), None, None)
+            .unwrap();
+        store
+            .set_workspace_recap(
+                ws,
+                None,
+                Some("tests green"),
+                None,
+                None,
+                Some("s-short"),
+                None,
+            )
+            .unwrap();
+        let got = store.workspace_recap(ws).unwrap().unwrap();
+        assert_eq!(
+            got.goal_short.as_deref(),
+            Some("g-short"),
+            "goal_short must survive"
+        );
+        assert_eq!(got.state_short.as_deref(), Some("s-short"));
+        assert_eq!(got.next_short, None);
+        // shorts also come back through the bulk read
+        let map = store.all_workspace_recaps().unwrap();
+        assert_eq!(
+            map.get(&ws).unwrap().state_short.as_deref(),
+            Some("s-short")
+        );
     }
 }

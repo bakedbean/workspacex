@@ -92,12 +92,16 @@ pub struct ReportedStatus {
 }
 
 /// A row from the `workspace_recap` table: the goal / state / next digest a
-/// workspace's agent maintains via `wsx recap set`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// workspace's agent maintains via `wsx recap set`. The `*_short` fields are
+/// agent-authored keyword distillations rendered by the dashboard row.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceRecap {
     pub goal: Option<String>,
     pub state: Option<String>,
     pub next: Option<String>,
+    pub goal_short: Option<String>,
+    pub state_short: Option<String>,
+    pub next_short: Option<String>,
     pub updated_at: i64,
 }
 
@@ -505,6 +509,22 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert!(v >= 16);
+    }
+
+    #[test]
+    fn migrate_v20_recap_short_columns_idempotent() {
+        let store = Store::open_in_memory().unwrap();
+        store.migrate_for_test().unwrap(); // re-run must not error
+        let n: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('workspace_recap') \
+                 WHERE name IN ('goal_short','state_short','next_short')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 3, "all three short-form columns must exist");
     }
 
     #[test]
@@ -1353,7 +1373,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 19);
+        assert_eq!(v, 20);
     }
 
     #[test]

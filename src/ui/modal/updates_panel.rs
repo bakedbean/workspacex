@@ -58,22 +58,25 @@ impl UpdatesSort {
 }
 
 /// Status-mode rank: lower sorts first. Failed outranks every status —
-/// it's the loudest signal — then descending `Status::priority()`.
+/// it's the loudest signal — then descending `Status::priority()`. The key
+/// is `(failed_first, Reverse(urgency))` rather than a subtraction, so
+/// there's no magic constant to fall out of sync if `Status::priority()`'s
+/// range ever grows.
 fn status_rank(
     w: &crate::data::store::Workspace,
     statuses: &HashMap<crate::data::store::WorkspaceId, Status>,
-) -> u8 {
-    if w.state == crate::data::store::WorkspaceState::Failed {
-        return 0;
-    }
+) -> (u8, std::cmp::Reverse<u8>) {
+    let failed_first = if w.state == crate::data::store::WorkspaceState::Failed {
+        0
+    } else {
+        1
+    };
     let urgency = statuses
         .get(&w.id)
         .copied()
         .unwrap_or(Status::Idle)
         .priority();
-    // priority() is 0..=5 with higher = more urgent; invert so Stalled(5)
-    // ranks 1 (right after failed) and Idle(0) ranks 6 (last).
-    6 - urgency
+    (failed_first, std::cmp::Reverse(urgency))
 }
 
 /// PrStatus-mode rank: actionable lifecycles first, unknown last.
@@ -118,9 +121,12 @@ pub fn ordered_workspaces_for_panel(
         ws_for_repo.sort_by_key(|w| {
             let default_key = sort_key(w, events, activity, needs_attention);
             let mode_rank = match sort {
-                UpdatesSort::Default => 0,
+                UpdatesSort::Default => (0, std::cmp::Reverse(0)),
                 UpdatesSort::Status => status_rank(w, statuses),
-                UpdatesSort::PrStatus => lifecycle_rank(lifecycles.get(&w.id).copied()),
+                UpdatesSort::PrStatus => (
+                    lifecycle_rank(lifecycles.get(&w.id).copied()),
+                    std::cmp::Reverse(0),
+                ),
             };
             (mode_rank, default_key)
         });

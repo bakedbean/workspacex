@@ -727,14 +727,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .iter()
                     .map(|(k, v)| (*k, translate_activity(*v)))
                     .collect();
-                let statuses: std::collections::HashMap<
-                    crate::data::store::WorkspaceId,
-                    crate::ui::dashboard::status::Status,
-                > = app
-                    .workspaces
-                    .iter()
-                    .map(|(_, w)| (w.id, app.classify_status(w)))
-                    .collect();
+                let statuses = app.classified_statuses();
                 crate::ui::modal::render_updates_panel(
                     f,
                     area,

@@ -1035,6 +1035,21 @@ impl App {
         })
     }
 
+    /// Classify every workspace into the canonical `Status` vocabulary,
+    /// keyed by workspace id. Shared by the updates-panel renderer and key
+    /// handler so both derive row order from identical inputs.
+    pub fn classified_statuses(
+        &self,
+    ) -> std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::ui::dashboard::status::Status,
+    > {
+        self.workspaces
+            .iter()
+            .map(|(_, w)| (w.id, self.classify_status(w)))
+            .collect()
+    }
+
     /// Classify a workspace into the V5 dashboard `Status` vocabulary.
     /// Combines session liveness, JSONL stopped/stalled signals, and
     /// pending tool_use into one canonical state used by the renderer.

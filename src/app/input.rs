@@ -1445,14 +1445,7 @@ async fn handle_key_modal(
                 .iter()
                 .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
                 .collect();
-            let statuses: std::collections::HashMap<
-                crate::data::store::WorkspaceId,
-                crate::ui::dashboard::status::Status,
-            > = app
-                .workspaces
-                .iter()
-                .map(|(_, w)| (w.id, app.classify_status(w)))
-                .collect();
+            let statuses = app.classified_statuses();
             let order = crate::ui::modal::ordered_workspaces_for_panel(
                 &app.repos,
                 &app.workspaces,
@@ -1488,6 +1481,8 @@ async fn handle_key_modal(
                 KeyCode::Char('o') => {
                     let selected_id = order.get(selected_now).copied();
                     let new_sort = sort.cycle();
+                    // The activity/status maps don't depend on the sort mode,
+                    // so the pre-cycle maps are safe to reuse for the re-sort.
                     let new_order = crate::ui::modal::ordered_workspaces_for_panel(
                         &app.repos,
                         &app.workspaces,

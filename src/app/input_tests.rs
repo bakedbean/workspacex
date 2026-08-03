@@ -1508,6 +1508,70 @@ mod pm_state_tests {
         }
     }
 
+    /// The sort mode lives only in the modal variant, so closing the panel
+    /// (Esc) and reopening it via the real leader-`u` path must land back on
+    /// `UpdatesSort::Default` — not whatever mode was active when it closed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_reopens_in_default_after_close() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        let target = test_target(&app, ws_id);
+
+        // Open in a non-default sort, then close with Esc — mirrors
+        // `updates_panel_modal_esc_closes`.
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 0,
+            sort: UpdatesSort::PrStatus,
+        });
+        let shared = Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "Esc should close UpdatesPanel");
+
+        // Re-trigger the real open path: Ctrl-X arms the leader, then 'u'
+        // fires the accelerator that constructs a fresh UpdatesPanel modal.
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        assert!(app.leader_pending, "Ctrl-X must arm leader_pending");
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel { selected, sort }) => {
+                assert_eq!(selected, 0);
+                assert_eq!(
+                    sort,
+                    UpdatesSort::Default,
+                    "modal must reopen in Default regardless of the sort it was closed in"
+                );
+            }
+            ref other => panic!("expected UpdatesPanel modal; got {other:?}"),
+        }
+    }
+
     #[test]
     fn updates_panel_render_shows_grouped_workspaces() {
         use crate::data::store::{NewWorkspace, Store, WorkspaceState};

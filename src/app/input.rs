@@ -2422,6 +2422,17 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
             }) {
                 // Clicking the PR chip opens the PR in the browser.
                 open_pr_for_workspace(app, ws_id);
+            } else if let Some((ws_id, _)) =
+                app.dashboard_pr_rects.iter().copied().find(|(_, r)| {
+                    m.column >= r.x
+                        && m.column < r.x.saturating_add(r.width)
+                        && m.row >= r.y
+                        && m.row < r.y.saturating_add(r.height)
+                })
+            {
+                // Clicking a row's PR chip in the dashboard PR column opens
+                // that PR in the browser, same as the detail-bar chip.
+                open_pr_for_workspace(app, ws_id);
             } else if let Some((ws_id, _)) = app.procs_link_rect.filter(|(_, r)| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

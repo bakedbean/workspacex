@@ -86,7 +86,7 @@ pub fn render(
             Constraint::Length(1), // footer
         ])
         .split(area);
-    render_without_footer(f, chunks[0], inputs, state, tick, theme);
+    let _ = render_without_footer(f, chunks[0], inputs, state, tick, theme);
     let _ = render_footer(
         f,
         chunks[1],
@@ -127,10 +127,17 @@ pub(crate) fn footer_hint_rects(
         .collect()
 }
 
+/// A workspace row's clickable PR chip, positioned by flat list index:
+/// `(workspace, flat item index, (char offset in row, char width))`.
+type PrChipSpan = (crate::data::store::WorkspaceId, usize, (u16, u16));
+
 /// Render chrome, status strip, and the workspace list into `area` without
 /// painting a footer row. The caller is responsible for rendering the footer
 /// (usually in a separately-carved row below the detail/PM regions so the
 /// spec order list/detail/pm/footer is respected).
+///
+/// Returns the on-screen rect of each visible row's PR chip so the caller
+/// can hit-test clicks on them (open-PR-in-browser, matching the detail bar).
 pub fn render_without_footer(
     f: &mut Frame,
     area: Rect,
@@ -138,7 +145,7 @@ pub fn render_without_footer(
     state: &mut DashboardState,
     tick: u32,
     theme: &Theme,
-) {
+) -> Vec<(crate::data::store::WorkspaceId, Rect)> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -167,12 +174,42 @@ pub fn render_without_footer(
         chunks[1],
     );
 
-    let items = match state.group_mode {
+    let (items, chip_spans) = match state.group_mode {
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
         GroupMode::Attention => render_by_attention(inputs, state, tick, width, theme),
     };
     let list = List::new(items).highlight_style(theme.selected_bg_style());
     f.render_stateful_widget(list, chunks[3], &mut state.list_state);
+
+    // Convert flat-index chip spans into screen rects. The list has just
+    // rendered, so `list_state.offset()` reflects this frame's scroll
+    // position; every item is one row tall, so a flat index maps straight
+    // to a y offset within the list area.
+    let list_area = chunks[3];
+    let offset = state.list_state.offset();
+    let max_x = list_area.x.saturating_add(list_area.width);
+    chip_spans
+        .into_iter()
+        .filter_map(|(ws_id, flat_idx, (dx, w))| {
+            let dy = flat_idx.checked_sub(offset)?;
+            if dy >= list_area.height as usize {
+                return None;
+            }
+            let x = list_area.x.saturating_add(dx);
+            if x >= max_x {
+                return None;
+            }
+            Some((
+                ws_id,
+                Rect {
+                    x,
+                    y: list_area.y + dy as u16,
+                    width: w.min(max_x - x),
+                    height: 1,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Render only the footer line (key hints + sparkline) into `area`.
@@ -397,7 +434,7 @@ fn render_by_repo<'a>(
     tick: u32,
     width: usize,
     theme: &Theme,
-) -> Vec<ratatui::widgets::ListItem<'static>> {
+) -> (Vec<ratatui::widgets::ListItem<'static>>, Vec<PrChipSpan>) {
     let filter = state.filter.as_deref().filter(|f| !f.is_empty());
     let mut views: Vec<RepoView<'a>> = inputs
         .repos
@@ -433,8 +470,10 @@ fn render_by_repo<'a>(
     // Walk the same item sequence that render_list will emit to determine
     // which flat list index corresponds to the current selection. Also
     // flip `selected: true` on the matching workspace so the row composer
-    // can paint a thicker gutter glyph for the selected row.
+    // can paint a thicker gutter glyph for the selected row, and collect
+    // each visible row's PR chip span for click hit-testing.
     let mut selected_idx: Option<usize> = None;
+    let mut chip_spans: Vec<PrChipSpan> = Vec::new();
     let mut flat_idx: usize = 0;
     let selection = state.selection;
     for view in &mut views {
@@ -455,6 +494,9 @@ fn render_by_repo<'a>(
                     w.selected = true;
                 }
             }
+            if let Some(span) = row::pr_chip_hit_span(w, inputs.column_widths) {
+                chip_spans.push((w.workspace_id, flat_idx, span));
+            }
             flat_idx += 1;
         }
         // Spacer item
@@ -462,7 +504,10 @@ fn render_by_repo<'a>(
     }
     state.list_state.select(selected_idx);
 
-    by_repo::render_list(&views, inputs.column_widths, tick, width, theme)
+    (
+        by_repo::render_list(&views, inputs.column_widths, tick, width, theme),
+        chip_spans,
+    )
 }
 
 fn render_by_attention<'a>(
@@ -471,7 +516,7 @@ fn render_by_attention<'a>(
     tick: u32,
     width: usize,
     theme: &Theme,
-) -> Vec<ratatui::widgets::ListItem<'static>> {
+) -> (Vec<ratatui::widgets::ListItem<'static>>, Vec<PrChipSpan>) {
     let filter = state.filter.as_deref().filter(|f| !f.is_empty());
     let rows: Vec<FlatRow> = inputs
         .workspaces
@@ -527,8 +572,10 @@ fn render_by_attention<'a>(
     // Walk the same item sequence that render_list will emit to determine
     // which flat list index corresponds to the current selection, and
     // mark the matching row so the row composer paints a thicker gutter.
-    // Quiet repos have no selection model in v1 — skip them.
+    // Also collect each row's PR chip span for click hit-testing. Quiet
+    // repos have no selection model (or PR chips) in v1 — skip them.
     let mut selected_idx: Option<usize> = None;
+    let mut chip_spans: Vec<PrChipSpan> = Vec::new();
     let mut flat_idx: usize = 0;
     let selection = state.selection;
     for section in [
@@ -547,13 +594,19 @@ fn render_by_attention<'a>(
                         row.row.selected = true;
                     }
                 }
+                if let Some(span) = row::pr_chip_hit_span(&row.row, inputs.column_widths) {
+                    chip_spans.push((row.row.workspace_id, flat_idx, span));
+                }
                 flat_idx += 1;
             }
         }
     }
     state.list_state.select(selected_idx);
 
-    by_attention::render_list(&data, inputs.column_widths, tick, width, theme)
+    (
+        by_attention::render_list(&data, inputs.column_widths, tick, width, theme),
+        chip_spans,
+    )
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 # Dashboard condensed-recap column
 
 **Date:** 2026-08-03
-**Status:** Approved design, pending implementation
+**Status:** Implemented (PR #267)
 
 ## Problem
 

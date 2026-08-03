@@ -34,6 +34,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.attached_pane_rects.clear();
     app.agent_chip_rects.clear();
     app.pr_link_rect = None;
+    app.dashboard_pr_rects.clear();
     app.procs_link_rect = None;
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();
@@ -255,7 +256,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             app.selectable = new_selectable;
             app.dashboard.selection = selection;
             app.dashboard.selected = selected;
-            dashboard::render_without_footer(
+            app.dashboard_pr_rects = dashboard::render_without_footer(
                 f,
                 dashboard_area,
                 &inputs,

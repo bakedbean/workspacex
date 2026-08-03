@@ -444,6 +444,11 @@ pub struct App {
     /// the workspace it belongs to. Set during draw, read by the mouse
     /// handler. Mirrors the `chip_rects` draw-populates / input-reads pattern.
     pub pr_link_rect: Option<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
+    /// Screen rects of the clickable PR chips in the dashboard list's PR
+    /// column, one per visible row with a chip. Set during draw, read by the
+    /// mouse handler to open that row's PR in the browser — same action as
+    /// the detail-bar chip (`pr_link_rect`), just reachable per row.
+    pub dashboard_pr_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
     /// Screen rect of the clickable running-process count (`● Np`) on the
     /// attached view's chip row, with the workspace it belongs to. Set during
     /// draw, read by the mouse handler to open the process-list modal on click.
@@ -634,6 +639,7 @@ impl App {
             pr_lifecycle: std::collections::HashMap::new(),
             pr_number: std::collections::HashMap::new(),
             pr_link_rect: None,
+            dashboard_pr_rects: Vec::new(),
             procs_link_rect: None,
             pr_last_poll_ms: std::collections::HashMap::new(),
             diff_last_poll_ms: std::collections::HashMap::new(),

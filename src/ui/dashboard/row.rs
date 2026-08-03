@@ -6,7 +6,7 @@
 //!   1ch  ▎ gutter (status color)
 //!   3ch  ├  elbow (faint, centered)
 //!   2ch  status glyph or spinner frame
-//!   28ch ⎇ branch (left-aligned, ellipsized)
+//!   40ch ⎇ branch (left-aligned, ellipsized)
 //!   16ch ⏺ #N pr-lifecycle chip (blank when no PR)
 //!   6ch  ● Np procs (or faint dot when zero)
 //!   12ch +N −N diff
@@ -24,7 +24,7 @@ use crate::ui::theme::Theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-pub const DEFAULT_BRANCH_WIDTH: usize = 28;
+pub const DEFAULT_BRANCH_WIDTH: usize = 40;
 pub const DEFAULT_PR_WIDTH: usize = 16;
 pub const MIN_BRANCH_WIDTH: usize = 10;
 pub const MIN_PR_WIDTH: usize = 8;
@@ -941,16 +941,18 @@ mod tests {
         // The badge takes cells from the branch column's text target,
         // so a long branch name shows fewer characters on rows that
         // have a saved layout. The total branch-column width is
-        // unchanged, so downstream columns stay aligned.
+        // unchanged, so downstream columns stay aligned. Widths are
+        // pinned (not default) so the truncation-window assertions
+        // below don't shift when the default changes.
         let theme = Theme::wsx();
+        let widths = ColumnWidths::clamped(28, DEFAULT_PR_WIDTH);
         let mut inputs = base();
         inputs.nerd_fonts = true;
         inputs.branch = "bakedbean/a-fairly-long-branch-name-here".into();
         inputs.has_multi_pane_layout = true;
-        let with_badge_text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        let with_badge_text = line_text(&render(&inputs, widths, 0, &theme, 120));
         inputs.has_multi_pane_layout = false;
-        let without_badge_text =
-            line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        let without_badge_text = line_text(&render(&inputs, widths, 0, &theme, 120));
         // Without the badge, more branch characters fit before the
         // truncation ellipsis — pick a substring that lands inside the
         // unbadged truncation window but outside the badged one.

@@ -933,7 +933,7 @@ fn notifications_enabled(store: &Store) -> bool {
 
 /// Resolve the dashboard's user-tunable column widths from settings,
 /// clamped to safe min/max. Unset or unparseable values fall back to the
-/// defaults (28 / 16).
+/// defaults (40 / 16).
 fn read_column_widths(store: &Store) -> ColumnWidths {
     use crate::ui::dashboard::row::{ColumnWidths, DEFAULT_BRANCH_WIDTH, DEFAULT_PR_WIDTH};
     let branch = store

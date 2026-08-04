@@ -1430,6 +1430,23 @@ async fn handle_key_modal(
                 app.modal = None;
                 handle_key_dashboard(app, k).await?;
             }
+            // Rename is handled in-modal (not forwarded): bare `r` on the
+            // dashboard is the PM-digest refresh nudge.
+            KeyCode::Char('r') => {
+                let ws = match app.selected_target() {
+                    Some(SelectionTarget::Workspace(ws_id)) => app
+                        .workspaces
+                        .iter()
+                        .find(|(_, w)| w.id == ws_id)
+                        .map(|(_, w)| (w.id, w.name.clone())),
+                    _ => None,
+                };
+                app.modal = ws.map(|(workspace_id, name_buffer)| Modal::RenameWorkspace {
+                    workspace_id,
+                    name_buffer,
+                    notice: None,
+                });
+            }
             // Everything else is inert while the card is open.
             _ => {}
         },
@@ -2056,7 +2073,85 @@ async fn handle_key_modal(
                 app.pending_remote_gen = None;
             }
         }
-        Modal::RenameWorkspace { .. } => {}
+        Modal::RenameWorkspace {
+            workspace_id,
+            mut name_buffer,
+            notice: _,
+        } => match k.code {
+            KeyCode::Esc => {
+                app.modal = None;
+            }
+            KeyCode::Enter => {
+                match crate::data::workspace::normalize_slug(&name_buffer) {
+                    None => {
+                        app.modal = Some(Modal::RenameWorkspace {
+                            workspace_id,
+                            name_buffer,
+                            notice: Some("name cannot be empty".to_string()),
+                        });
+                    }
+                    Some(slug) => {
+                        let ws = app
+                            .workspaces
+                            .iter()
+                            .find(|(_, w)| w.id == workspace_id)
+                            .map(|(_, w)| w.clone());
+                        let repo = ws
+                            .as_ref()
+                            .and_then(|w| app.repos.iter().find(|r| r.id == w.repo_id).cloned());
+                        match (ws, repo) {
+                            (Some(ws), Some(repo)) if slug != ws.name => {
+                                match crate::data::workspace::rename(&app.store, &repo, &ws, &slug)
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        app.modal = None;
+                                        app.refresh()?;
+                                    }
+                                    Err(e) => {
+                                        app.modal = Some(Modal::RenameWorkspace {
+                                            workspace_id,
+                                            name_buffer,
+                                            notice: Some(format!("rename failed: {e}")),
+                                        });
+                                    }
+                                }
+                            }
+                            // Unchanged name: nothing to do.
+                            (Some(_), Some(_)) => {
+                                app.modal = None;
+                            }
+                            // Workspace/repo vanished underneath (archived
+                            // elsewhere): close quietly and resync.
+                            _ => {
+                                app.modal = None;
+                                app.refresh()?;
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                name_buffer.pop();
+                app.modal = Some(Modal::RenameWorkspace {
+                    workspace_id,
+                    name_buffer,
+                    notice: None,
+                });
+            }
+            KeyCode::Char(c)
+                if !k.modifiers.contains(KeyModifiers::CONTROL)
+                    && !k.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                name_buffer.push(c);
+                app.modal = Some(Modal::RenameWorkspace {
+                    workspace_id,
+                    name_buffer,
+                    notice: None,
+                });
+            }
+            _ => {}
+        },
     }
     Ok(())
 }

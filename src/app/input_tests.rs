@@ -6463,6 +6463,7 @@ mod pm_state_tests {
 mod rename_modal_tests {
     use super::*;
     use crate::data::store::{NewWorkspace, Store};
+    use crossterm::event::KeyEvent;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
@@ -6533,6 +6534,226 @@ mod rename_modal_tests {
             text.contains("rename failed: boom"),
             "notice must render; got {text:?}"
         );
+    }
+
+    fn dummy_shared() -> std::sync::Arc<tokio::sync::Mutex<App>> {
+        std::sync::Arc::new(tokio::sync::Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn actions_card_r_opens_rename_prefilled() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.dashboard.selection = Some(crate::app::SelectionTarget::Workspace(ws_id));
+        app.modal = Some(crate::ui::modal::Modal::WorkspaceActions);
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.modal {
+            Some(crate::ui::modal::Modal::RenameWorkspace {
+                workspace_id,
+                name_buffer,
+                notice,
+            }) => {
+                assert_eq!(*workspace_id, ws_id);
+                assert_eq!(name_buffer, "alpha", "buffer pre-fills current name");
+                assert!(notice.is_none());
+            }
+            other => panic!("expected RenameWorkspace modal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rename_modal_esc_cancels_without_changes() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.modal = Some(crate::ui::modal::Modal::RenameWorkspace {
+            workspace_id: ws_id,
+            name_buffer: "alpha-two".to_string(),
+            notice: None,
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none());
+        let (_, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id).unwrap();
+        assert_eq!(ws.name, "alpha", "esc must not rename");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rename_modal_empty_buffer_shows_notice() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.modal = Some(crate::ui::modal::Modal::RenameWorkspace {
+            workspace_id: ws_id,
+            name_buffer: "...".to_string(), // normalizes to None
+            notice: None,
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.modal {
+            Some(crate::ui::modal::Modal::RenameWorkspace { notice, .. }) => {
+                assert_eq!(notice.as_deref(), Some("name cannot be empty"));
+            }
+            other => panic!("modal must stay open with notice, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rename_modal_enter_renames_workspace_and_branch() {
+        // Real git repo: `rename` runs `git branch -m`.
+        let repo_dir = tempfile::TempDir::new().unwrap();
+        let r = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(repo_dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        r(&["init", "-q", "-b", "main"]);
+        r(&["config", "user.email", "t@e"]);
+        r(&["config", "user.name", "t"]);
+        r(&["commit", "--allow-empty", "-q", "-m", "init"]);
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == repo_id)
+            .unwrap();
+        let base = tempfile::TempDir::new().unwrap();
+        let created = crate::data::workspace::create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let ws_id = created.workspace.id;
+
+        let mut app = App::new(store, base.path().to_path_buf()).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::RenameWorkspace {
+            workspace_id: ws_id,
+            name_buffer: "Fix Bug!".to_string(), // exercises normalization too
+            notice: None,
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(app.modal.is_none(), "modal closes on success");
+        let ws = app
+            .store
+            .workspaces(repo.id)
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == ws_id)
+            .unwrap();
+        assert_eq!(ws.name, "fix-bug");
+        assert_eq!(ws.branch, "wsx/fix-bug");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rename_modal_git_failure_keeps_modal_with_notice() {
+        // Repo path is not a git repo → `git branch -m` fails.
+        let (mut app, ws_id) = app_with_workspace();
+        app.modal = Some(crate::ui::modal::Modal::RenameWorkspace {
+            workspace_id: ws_id,
+            name_buffer: "beta".to_string(),
+            notice: None,
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.modal {
+            Some(crate::ui::modal::Modal::RenameWorkspace { notice, .. }) => {
+                assert!(
+                    notice.as_deref().unwrap_or("").starts_with("rename failed"),
+                    "got notice {notice:?}"
+                );
+            }
+            other => panic!("modal must stay open on git failure, got {other:?}"),
+        }
+        let (_, ws) = app.workspaces.iter().find(|(_, w)| w.id == ws_id).unwrap();
+        assert_eq!(ws.name, "alpha", "failed rename must not change the name");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rename_modal_typing_and_backspace_edit_buffer() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.modal = Some(crate::ui::modal::Modal::RenameWorkspace {
+            workspace_id: ws_id,
+            name_buffer: "alpha".to_string(),
+            notice: Some("stale".to_string()),
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.modal {
+            Some(crate::ui::modal::Modal::RenameWorkspace {
+                name_buffer,
+                notice,
+                ..
+            }) => {
+                assert_eq!(name_buffer, "alphx");
+                assert!(notice.is_none(), "editing clears a stale notice");
+            }
+            other => panic!("expected RenameWorkspace modal, got {other:?}"),
+        }
     }
 }
 

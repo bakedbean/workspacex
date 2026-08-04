@@ -423,14 +423,57 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
         }
     }
 
+    // Pass 3 — render at the allocated widths, tracking the ACTUAL rendered
+    // length: `truncate_words` keeps whole words, so a truncated segment can
+    // come out well short of its target. That shortfall accrues as `bonus`
+    // width, granted forward to later clipped fallback segments — otherwise
+    // it would strand as blank space (allocation-only accounting bug).
     let mut out = String::new();
+    let mut bonus = 0usize;
     for (w, seg) in widths.iter().zip(segments) {
-        out.push_str(SEG_SEP);
-        if seg.text.chars().count() <= *w {
-            out.push_str(&seg.text);
-        } else {
-            out.push_str(&truncate_words(&seg.text, *w));
+        let len = seg.text.chars().count();
+        let mut target = *w;
+        if !seg.authored && len > target && bonus > 0 {
+            let grow = (len - target).min(bonus);
+            target += grow;
+            bonus -= grow;
         }
+        let rendered = if len <= target {
+            seg.text.clone()
+        } else {
+            truncate_words(&seg.text, target)
+        };
+        bonus += target - rendered.chars().count();
+        out.push_str(SEG_SEP);
+        out.push_str(&rendered);
+    }
+    // The accrued shortfall can even re-admit segments pass 1 dropped: same
+    // inclusion rule (whole base width fits), against bonus width only.
+    for seg in segments.iter().skip(widths.len()) {
+        let len = seg.text.chars().count();
+        let base = if seg.authored {
+            len
+        } else {
+            len.min(FALLBACK_SEGMENT_FLOOR)
+        };
+        if bonus < sep_len + base {
+            break;
+        }
+        bonus -= sep_len + base;
+        let mut target = base;
+        if !seg.authored && len > base {
+            let grow = (len - base).min(bonus);
+            target += grow;
+            bonus -= grow;
+        }
+        let rendered = if len <= target {
+            seg.text.clone()
+        } else {
+            truncate_words(&seg.text, target)
+        };
+        bonus += target - rendered.chars().count();
+        out.push_str(SEG_SEP);
+        out.push_str(&rendered);
     }
     out
 }
@@ -776,6 +819,29 @@ mod tests {
         assert_eq!(fit_segments(&segs, 60), format!(" · {text}"));
         // At exactly floor room (3 + 32) it still clips at a word boundary.
         assert_eq!(fit_segments(&segs, 35), " · Audit V2 invoices for amount…");
+    }
+
+    #[test]
+    fn word_boundary_shortfall_flows_to_later_segments() {
+        // The goal's word-boundary truncation renders short of its allocated
+        // 32 (here 10 chars short); that gap must not strand as blank space —
+        // the next clipped fallback segment expands into it.
+        let goal = "aaaa bbbb cccccccccccccccccccccccc"; // 34 chars, awkward boundary
+        let state = "one two three four five six seven eight nine"; // 44 chars
+        let out = fit_segments(&[fb(goal), fb(state)], 70);
+        // Pass 1: both at floor 32 (3+32+3+32 = 70, leftover 0). Goal renders
+        // "aaaa bbbb…" (10) → 22 chars of bonus; state grows 32 → 44 → whole.
+        assert_eq!(out, format!(" · aaaa bbbb… · {state}"));
+    }
+
+    #[test]
+    fn word_boundary_shortfall_readmits_dropped_segment() {
+        // The goal alone consumes the whole allocation, dropping state in
+        // pass 1 — but its actual render is 10 chars short of target, which
+        // is room enough to admit the small authored state after all.
+        let goal = "aaaa bbbb cccccccccccc"; // 22 chars
+        let out = fit_segments(&[au(goal), au("st")], 23);
+        assert_eq!(out, " · aaaa bbbb… · st");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::activity::events::{ToolUseCounts, WorkspaceEvents};
 use crate::data::store::{ReportedStatus, WorkspaceRecap};
 use crate::ui::dashboard::status::Status;
 use crate::ui::pm_pane::RECAP_STALE_SLACK_MS;
-use crate::ui::text::truncate;
+use crate::ui::text::truncate_words;
 
 /// Chars a full recap field is clipped to when its short form is absent.
 pub const RECAP_FIELD_CLIP: usize = 32;
@@ -100,8 +100,9 @@ pub fn row_column(
     }
 }
 
-/// Short form preferred, full field clipped to `RECAP_FIELD_CLIP` otherwise,
-/// absent fields skipped. Order: goal, state, next.
+/// Short form preferred (verbatim), full field terse-clipped to
+/// `RECAP_FIELD_CLIP` otherwise, absent fields skipped. Order: goal, state,
+/// next.
 fn recap_segments(r: &WorkspaceRecap) -> Vec<String> {
     [
         (&r.goal_short, &r.goal),
@@ -112,12 +113,39 @@ fn recap_segments(r: &WorkspaceRecap) -> Vec<String> {
     .filter_map(|(short, full)| {
         non_empty_trimmed(short.as_deref())
             .map(collapse_ws)
-            .or_else(|| {
-                non_empty_trimmed(full.as_deref())
-                    .map(|f| truncate(&collapse_ws(f), RECAP_FIELD_CLIP))
-            })
+            .or_else(|| non_empty_trimmed(full.as_deref()).map(terse_clip))
     })
     .collect()
+}
+
+/// Mechanical terse-ification for a full recap field standing in for a
+/// missing short form: collapse whitespace, drop articles (a/an/the), and
+/// cut at a word boundary under `RECAP_FIELD_CLIP`. Only ever applied to
+/// full fields — agent-authored short forms render verbatim.
+fn terse_clip(s: &str) -> String {
+    // This runs during per-frame row synthesis: build the stripped string
+    // incrementally (no per-word lowercase allocation, no intermediate Vec).
+    let is_article = |w: &str| {
+        w.eq_ignore_ascii_case("a") || w.eq_ignore_ascii_case("an") || w.eq_ignore_ascii_case("the")
+    };
+    let collapsed = collapse_ws(s);
+    let mut stripped = String::with_capacity(collapsed.len());
+    for word in collapsed.split_whitespace() {
+        if is_article(word) {
+            continue;
+        }
+        if !stripped.is_empty() {
+            stripped.push(' ');
+        }
+        stripped.push_str(word);
+    }
+    // An all-article field must not vanish — keep the raw text.
+    let base = if stripped.is_empty() {
+        collapsed
+    } else {
+        stripped
+    };
+    truncate_words(&base, RECAP_FIELD_CLIP)
 }
 
 /// The pre-recap heuristic body, minus the status word (the token carries it):
@@ -373,8 +401,54 @@ mod tests {
                     2,
                     "absent next is skipped, not placeholder'd"
                 );
-                assert_eq!(segments[0].chars().count(), 32);
-                assert!(segments[0].ends_with('…'));
+                // Articles stripped, cut at a word boundary under the clip.
+                assert_eq!(segments[0], "Audit all V2 invoices…");
+                assert!(segments[0].chars().count() <= RECAP_FIELD_CLIP);
+            }
+            other => panic!("expected Recap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn full_field_clip_strips_articles_and_cuts_at_word_boundary() {
+        let rc = recap_with(
+            Some("Make the dashboard PR status column clickable from anywhere"),
+            None,
+            None,
+            None,
+            0,
+        );
+        let c = row_column(Status::Waiting, Some(&evt()), 0, None, Some(&rc));
+        match c.body {
+            ColumnBody::Recap { segments, .. } => {
+                assert_eq!(segments[0], "Make dashboard PR status column…");
+            }
+            other => panic!("expected Recap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authored_short_forms_are_never_rewritten() {
+        // Article stripping applies only to the mechanical full-field clip;
+        // agent-authored short forms render verbatim.
+        let rc = recap_with(None, Some("fix the flaky thing"), None, None, 0);
+        let c = row_column(Status::Waiting, Some(&evt()), 0, None, Some(&rc));
+        match c.body {
+            ColumnBody::Recap { segments, .. } => {
+                assert_eq!(segments[0], "fix the flaky thing");
+            }
+            other => panic!("expected Recap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn all_article_field_falls_back_to_raw_text() {
+        // A field that is nothing but articles must not vanish entirely.
+        let rc = recap_with(Some("the the the"), None, None, None, 0);
+        let c = row_column(Status::Waiting, Some(&evt()), 0, None, Some(&rc));
+        match c.body {
+            ColumnBody::Recap { segments, .. } => {
+                assert_eq!(segments[0], "the the the");
             }
             other => panic!("expected Recap, got {other:?}"),
         }

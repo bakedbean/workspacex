@@ -19,7 +19,7 @@ use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn};
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
-use crate::ui::text::{truncate, truncate_pad};
+use crate::ui::text::{truncate, truncate_pad, truncate_words};
 use crate::ui::theme::Theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -301,7 +301,7 @@ pub fn render(
             ColumnBody::Fallback { text, emphasis } => {
                 let sep_len = SEG_SEP.chars().count();
                 let fitted = if avail > sep_len + 1 {
-                    format!("{SEG_SEP}{}", truncate(text, avail - sep_len))
+                    format!("{SEG_SEP}{}", truncate_words(text, avail - sep_len))
                 } else {
                     String::new()
                 };
@@ -363,10 +363,11 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
 
 const SEG_SEP: &str = " · ";
 
-/// Greedy segment fitting for the recap body. The first segment (goal) is
-/// always included, truncated to what remains; later segments (state, next)
-/// are appended only when they fit whole — a segment that doesn't fit is
-/// dropped along with everything after it.
+/// Greedy segment fitting for the recap body. When there's meaningful room
+/// (`avail > sep_len + 1`) the first segment (goal) is included, truncated
+/// at a word boundary to what remains — below that nothing is emitted.
+/// Later segments (state, next) are appended only when they fit whole — a
+/// segment that doesn't fit is dropped along with everything after it.
 fn fit_segments(segments: &[String], avail: usize) -> String {
     let sep_len = SEG_SEP.chars().count();
     let mut out = String::new();
@@ -376,7 +377,7 @@ fn fit_segments(segments: &[String], avail: usize) -> String {
             if avail <= sep_len + 1 {
                 break;
             }
-            let t = truncate(seg, avail - sep_len);
+            let t = truncate_words(seg, avail - sep_len);
             used = sep_len + t.chars().count();
             out.push_str(SEG_SEP);
             out.push_str(&t);
@@ -711,7 +712,8 @@ mod tests {
         // state no longer fits whole → dropped
         assert_eq!(fit_segments(&segs, 18), " · goal seg");
         // goal itself doesn't fit → truncated with …
-        assert_eq!(fit_segments(&segs, 9), " · goal …");
+        // goal itself doesn't fit → word-boundary truncation, ellipsis attached
+        assert_eq!(fit_segments(&segs, 9), " · goal…");
         // no room for anything meaningful
         assert_eq!(fit_segments(&segs, 4), "");
     }

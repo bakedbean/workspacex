@@ -74,7 +74,7 @@ wsx recap set --state "tests added but failing" --state-short "tests failing" \
 wsx recap show
 ```
 
-Fields update independently; set `--goal`/`--goal-short` once and refresh the state/next pairs as work progresses. Short forms are keyword distillations for the dashboard row — identifiers and ticket/PR numbers, no filler; aim for ≤40 chars (goal) / ≤24 chars (state, next).
+Fields update independently; set `--goal`/`--goal-short` once and refresh the state/next pairs as work progresses. Short forms are keyword distillations for the dashboard row — telegraphic style: identifiers and ticket/PR numbers only, no articles (a/an/the), no filler verbs ("make dashboard PR clickable", not "Make the dashboard PR status column clickable"); aim for ≤40 chars (goal) / ≤24 chars (state, next).
 
 ## Slug rules (read before typing --name)
 

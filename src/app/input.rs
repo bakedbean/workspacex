@@ -2109,10 +2109,17 @@ async fn handle_key_modal(
                                         app.refresh()?;
                                     }
                                     Err(e) => {
+                                        // Git stderr can span lines; the notice
+                                        // renders on a single modal line.
+                                        let msg = e
+                                            .to_string()
+                                            .split_whitespace()
+                                            .collect::<Vec<_>>()
+                                            .join(" ");
                                         app.modal = Some(Modal::RenameWorkspace {
                                             workspace_id,
                                             name_buffer,
-                                            notice: Some(format!("rename failed: {e}")),
+                                            notice: Some(format!("rename failed: {msg}")),
                                         });
                                     }
                                 }

@@ -523,10 +523,11 @@ pub fn slugify_prompt(text: &str) -> Option<String> {
 }
 
 /// Normalize user-typed text into a kebab-case slug: lowercase, map
-/// non-alphanumerics to '-', collapse dash runs, trim edge dashes.
-/// Unlike `slugify_prompt` this never drops words and has no minimum
-/// length — the user typed exactly the slug they want. Returns `None`
-/// only when nothing alphanumeric remains.
+/// anything that is not an ASCII letter or digit to '-' (non-ASCII
+/// letters and digits are treated as separators too), collapse dash
+/// runs, trim edge dashes. Unlike `slugify_prompt` this never drops
+/// words and has no minimum length — the user typed exactly the slug
+/// they want. Returns `None` when no ASCII alphanumerics remain.
 pub fn normalize_slug(text: &str) -> Option<String> {
     let cleaned: String = text
         .to_lowercase()

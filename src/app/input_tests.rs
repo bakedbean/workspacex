@@ -6709,9 +6709,11 @@ mod rename_modal_tests {
         .unwrap();
         match &app.modal {
             Some(crate::ui::modal::Modal::RenameWorkspace { notice, .. }) => {
+                let text = notice.as_deref().unwrap_or("");
+                assert!(text.starts_with("rename failed"), "got notice {notice:?}");
                 assert!(
-                    notice.as_deref().unwrap_or("").starts_with("rename failed"),
-                    "got notice {notice:?}"
+                    !text.contains('\n'),
+                    "notice must stay on one line; got {notice:?}"
                 );
             }
             other => panic!("modal must stay open on git failure, got {other:?}"),

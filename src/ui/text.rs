@@ -30,14 +30,19 @@ pub(crate) fn truncate_words(s: &str, target: usize) -> String {
         return String::new();
     }
     let mut out = String::new();
+    // Running char count — recomputing `out.chars().count()` per word would
+    // make this quadratic, and it runs during per-frame row synthesis.
+    let mut out_len = 0usize;
     for word in s.split_whitespace() {
         let sep = usize::from(!out.is_empty());
+        let word_len = word.chars().count();
         // `< target` (not `<=`) keeps one char of budget for the `…`.
-        if out.chars().count() + sep + word.chars().count() < target {
+        if out_len + sep + word_len < target {
             if sep == 1 {
                 out.push(' ');
             }
             out.push_str(word);
+            out_len += sep + word_len;
         } else {
             break;
         }

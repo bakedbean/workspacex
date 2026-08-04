@@ -363,10 +363,11 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
 
 const SEG_SEP: &str = " · ";
 
-/// Greedy segment fitting for the recap body. The first segment (goal) is
-/// always included, truncated at a word boundary to what remains; later
-/// segments (state, next) are appended only when they fit whole — a segment
-/// that doesn't fit is dropped along with everything after it.
+/// Greedy segment fitting for the recap body. When there's meaningful room
+/// (`avail > sep_len + 1`) the first segment (goal) is included, truncated
+/// at a word boundary to what remains — below that nothing is emitted.
+/// Later segments (state, next) are appended only when they fit whole — a
+/// segment that doesn't fit is dropped along with everything after it.
 fn fit_segments(segments: &[String], avail: usize) -> String {
     let sep_len = SEG_SEP.chars().count();
     let mut out = String::new();

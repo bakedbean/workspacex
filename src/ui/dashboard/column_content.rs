@@ -123,12 +123,22 @@ fn recap_segments(r: &WorkspaceRecap) -> Vec<String> {
 /// cut at a word boundary under `RECAP_FIELD_CLIP`. Only ever applied to
 /// full fields — agent-authored short forms render verbatim.
 fn terse_clip(s: &str) -> String {
+    // This runs during per-frame row synthesis: build the stripped string
+    // incrementally (no per-word lowercase allocation, no intermediate Vec).
+    let is_article = |w: &str| {
+        w.eq_ignore_ascii_case("a") || w.eq_ignore_ascii_case("an") || w.eq_ignore_ascii_case("the")
+    };
     let collapsed = collapse_ws(s);
-    let stripped: String = collapsed
-        .split_whitespace()
-        .filter(|w| !matches!(w.to_lowercase().as_str(), "a" | "an" | "the"))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let mut stripped = String::with_capacity(collapsed.len());
+    for word in collapsed.split_whitespace() {
+        if is_article(word) {
+            continue;
+        }
+        if !stripped.is_empty() {
+            stripped.push(' ');
+        }
+        stripped.push_str(word);
+    }
     // An all-article field must not vanish — keep the raw text.
     let base = if stripped.is_empty() {
         collapsed

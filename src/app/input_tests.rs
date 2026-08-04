@@ -6460,6 +6460,83 @@ mod pm_state_tests {
 }
 
 #[cfg(test)]
+mod rename_modal_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, Store};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::path::PathBuf;
+
+    fn screen_text(term: &Terminal<TestBackend>) -> String {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn app_with_workspace() -> (App, crate::data::store::WorkspaceId) {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        (app, ws_id)
+    }
+
+    #[test]
+    fn workspace_actions_card_lists_rename() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.dashboard.selection = Some(crate::app::SelectionTarget::Workspace(ws_id));
+        app.modal = Some(crate::ui::modal::Modal::WorkspaceActions);
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        assert!(
+            screen_text(&term).contains("rename"),
+            "actions card must list the rename action"
+        );
+    }
+
+    #[test]
+    fn rename_modal_renders_buffer_and_notice() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.modal = Some(crate::ui::modal::Modal::RenameWorkspace {
+            workspace_id: ws_id,
+            name_buffer: "alpha-two".to_string(),
+            notice: Some("rename failed: boom".to_string()),
+        });
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let text = screen_text(&term);
+        assert!(
+            text.contains("alpha-two"),
+            "buffer must render; got {text:?}"
+        );
+        assert!(
+            text.contains("rename failed: boom"),
+            "notice must render; got {text:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod detail_scroll {
     use super::*;
     use crate::data::store::Store;

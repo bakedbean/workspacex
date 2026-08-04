@@ -2056,6 +2056,7 @@ async fn handle_key_modal(
                 app.pending_remote_gen = None;
             }
         }
+        Modal::RenameWorkspace { .. } => {}
     }
     Ok(())
 }

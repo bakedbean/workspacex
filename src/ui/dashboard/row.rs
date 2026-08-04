@@ -16,7 +16,7 @@
 use crate::git::DiffStats;
 use crate::git::forge::BranchLifecycle;
 use crate::pty::session::AgentKind;
-use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn};
+use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RecapSegment, RowColumn};
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
 use crate::ui::text::{truncate, truncate_pad, truncate_words};
@@ -363,33 +363,73 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
 
 const SEG_SEP: &str = " · ";
 
-/// Greedy segment fitting for the recap body. When there's meaningful room
+/// Base width a fallback (full-field) segment is held to while later
+/// segments are being placed. After every included segment has its base
+/// width, clipped fallback segments expand left-to-right into whatever
+/// column width is left — so a wide dashboard shows more of a full field
+/// instead of stranding blank space after a fixed clip.
+const FALLBACK_SEGMENT_FLOOR: usize = 32;
+
+/// Width-fit the recap segments into `avail` chars.
+///
+/// Pass 1 — inclusion at base widths: authored short forms count at full
+/// length (they render verbatim), fallback full fields at
+/// `FALLBACK_SEGMENT_FLOOR`. When there's meaningful room
 /// (`avail > sep_len + 1`) the first segment (goal) is included, truncated
-/// at a word boundary to what remains — below that nothing is emitted.
-/// Later segments (state, next) are appended only when they fit whole — a
-/// segment that doesn't fit is dropped along with everything after it.
-fn fit_segments(segments: &[String], avail: usize) -> String {
+/// to what remains — below that nothing is emitted. Later segments (state,
+/// next) are included only when their base width fits whole; one that
+/// doesn't fit is dropped along with everything after it.
+///
+/// Pass 2 — expansion: leftover width is granted to clipped fallback
+/// segments left-to-right. Each segment renders whole when its width
+/// allows, word-boundary truncated otherwise.
+fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
     let sep_len = SEG_SEP.chars().count();
-    let mut out = String::new();
+
+    let mut widths: Vec<usize> = Vec::with_capacity(segments.len());
     let mut used = 0usize;
     for (i, seg) in segments.iter().enumerate() {
+        let len = seg.text.chars().count();
+        let base = if seg.authored {
+            len
+        } else {
+            len.min(FALLBACK_SEGMENT_FLOOR)
+        };
         if i == 0 {
             if avail <= sep_len + 1 {
                 break;
             }
-            let t = truncate_words(seg, avail - sep_len);
-            used = sep_len + t.chars().count();
-            out.push_str(SEG_SEP);
-            out.push_str(&t);
+            let w = base.min(avail - sep_len);
+            used = sep_len + w;
+            widths.push(w);
+        } else if used + sep_len + base <= avail {
+            used += sep_len + base;
+            widths.push(base);
         } else {
-            let seg_len = seg.chars().count();
-            if used + sep_len + seg_len <= avail {
-                out.push_str(SEG_SEP);
-                out.push_str(seg);
-                used += sep_len + seg_len;
-            } else {
-                break;
-            }
+            break;
+        }
+    }
+
+    let mut leftover = avail.saturating_sub(used);
+    for (w, seg) in widths.iter_mut().zip(segments) {
+        if leftover == 0 {
+            break;
+        }
+        let len = seg.text.chars().count();
+        if !seg.authored && len > *w {
+            let grow = (len - *w).min(leftover);
+            *w += grow;
+            leftover -= grow;
+        }
+    }
+
+    let mut out = String::new();
+    for (w, seg) in widths.iter().zip(segments) {
+        out.push_str(SEG_SEP);
+        if seg.text.chars().count() <= *w {
+            out.push_str(&seg.text);
+        } else {
+            out.push_str(&truncate_words(&seg.text, *w));
         }
     }
     out
@@ -698,24 +738,57 @@ mod tests {
         );
     }
 
+    fn au(s: &str) -> RecapSegment {
+        RecapSegment {
+            text: s.to_string(),
+            authored: true,
+        }
+    }
+
+    fn fb(s: &str) -> RecapSegment {
+        RecapSegment {
+            text: s.to_string(),
+            authored: false,
+        }
+    }
+
     #[test]
     fn fit_segments_drops_then_truncates() {
-        let segs = vec![
-            "goal seg".to_string(),
-            "state".to_string(),
-            "next".to_string(),
-        ];
+        let segs = vec![au("goal seg"), au("state"), au("next")];
         // everything fits: " · goal seg · state · next" = 26 chars
         assert_eq!(fit_segments(&segs, 26), " · goal seg · state · next");
         // next no longer fits whole → dropped
         assert_eq!(fit_segments(&segs, 25), " · goal seg · state");
         // state no longer fits whole → dropped
         assert_eq!(fit_segments(&segs, 18), " · goal seg");
-        // goal itself doesn't fit → truncated with …
         // goal itself doesn't fit → word-boundary truncation, ellipsis attached
         assert_eq!(fit_segments(&segs, 9), " · goal…");
         // no room for anything meaningful
         assert_eq!(fit_segments(&segs, 4), "");
+    }
+
+    #[test]
+    fn fallback_segment_expands_into_free_width() {
+        // 38-char fallback field: past the 32-char floor, but a wide column
+        // has room — it renders whole instead of clipping at the floor.
+        let text = "Audit V2 invoices for amount drift bug";
+        let segs = vec![fb(text)];
+        assert_eq!(fit_segments(&segs, 60), format!(" · {text}"));
+        // At exactly floor room (3 + 32) it still clips at a word boundary.
+        assert_eq!(fit_segments(&segs, 35), " · Audit V2 invoices for amount…");
+    }
+
+    #[test]
+    fn later_segments_keep_their_floor_before_goal_expands() {
+        // A long fallback goal must not starve the authored state segment:
+        // state is included at its full width first, then the goal expands
+        // into whatever is left (here 5 chars past its 32-char floor).
+        let goal = "one two three four five six seven eight nine ten eleven twelve";
+        let segs = vec![fb(goal), au("3/12 done")];
+        assert_eq!(
+            fit_segments(&segs, 52),
+            " · one two three four five six seven… · 3/12 done"
+        );
     }
 
     #[test]
@@ -743,7 +816,7 @@ mod tests {
             token: "working".to_string(),
             reported: false,
             body: ColumnBody::Recap {
-                segments: vec!["Audit V2 #2835".to_string(), "3/12 done".to_string()],
+                segments: vec![au("Audit V2 #2835"), au("3/12 done")],
                 stale: false,
             },
         });
@@ -763,7 +836,7 @@ mod tests {
             token: "idle".to_string(),
             reported: false,
             body: ColumnBody::Recap {
-                segments: vec!["Audit V2 #2835".to_string()],
+                segments: vec![au("Audit V2 #2835")],
                 stale: true,
             },
         });

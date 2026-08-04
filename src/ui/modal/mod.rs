@@ -100,6 +100,13 @@ pub enum Modal {
         /// Last launch result (success path or error), shown below the list.
         notice: Option<String>,
     },
+    RenameWorkspace {
+        workspace_id: crate::data::store::WorkspaceId,
+        /// Pre-filled with the current name; edited in place.
+        name_buffer: String,
+        /// Inline error line (e.g. rename failure); cleared on next edit.
+        notice: Option<String>,
+    },
     RepoSettings {
         repo_id: crate::data::store::RepoId,
         selected: usize,
@@ -346,10 +353,26 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
             "These apply to the selected workspace:\n\n  \
              e   edit        t   term\n  \
              v   diff        g   lazygit\n  \
-             c   chronox\n\n  \
+             c   chronox     r   rename\n\n  \
              ?/Esc  close"
                 .to_string(),
         ),
+        Modal::RenameWorkspace {
+            name_buffer,
+            notice,
+            ..
+        } => {
+            let notice_line = notice
+                .as_deref()
+                .map(|n| format!("{n}\n"))
+                .unwrap_or_default();
+            (
+                "rename workspace",
+                format!(
+                    "name: {name_buffer}\u{2588}\n\n{notice_line}[enter] rename   [esc] cancel"
+                ),
+            )
+        }
         // RemoteWorkspaceList is handled by the early-return above; this arm
         // is unreachable but required for exhaustiveness.
         Modal::RemoteWorkspaceList { .. } => {

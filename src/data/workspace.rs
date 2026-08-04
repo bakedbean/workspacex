@@ -522,6 +522,26 @@ pub fn slugify_prompt(text: &str) -> Option<String> {
     if slug.len() < 6 { None } else { Some(slug) }
 }
 
+/// Normalize user-typed text into a kebab-case slug: lowercase, map
+/// anything that is not an ASCII letter or digit to '-' (non-ASCII
+/// letters and digits are treated as separators too), collapse dash
+/// runs, trim edge dashes. Unlike `slugify_prompt` this never drops
+/// words and has no minimum length — the user typed exactly the slug
+/// they want. Returns `None` when no ASCII alphanumerics remain.
+pub fn normalize_slug(text: &str) -> Option<String> {
+    let cleaned: String = text
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let words: Vec<&str> = cleaned.split('-').filter(|s| !s.is_empty()).collect();
+    if words.is_empty() {
+        None
+    } else {
+        Some(words.join("-"))
+    }
+}
+
 /// Rename a workspace's name AND its git branch. Idempotent.
 /// Caller is responsible for refreshing App state after.
 pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) -> Result<()> {
@@ -801,6 +821,22 @@ mod tests {
             slugify_prompt("Fix Issue #123!!"),
             Some("fix-issue-123".into())
         );
+    }
+
+    #[test]
+    fn normalize_slug_cases() {
+        // Exact slugs pass through untouched.
+        assert_eq!(normalize_slug("wip-ci"), Some("wip-ci".into()));
+        // Lowercasing + punctuation → dashes.
+        assert_eq!(normalize_slug("Fix Login!!"), Some("fix-login".into()));
+        // Dash runs collapse, edges trim.
+        assert_eq!(normalize_slug("--a--b--"), Some("a-b".into()));
+        // No stopword dropping, no length floor (contrast slugify_prompt).
+        assert_eq!(normalize_slug("the"), Some("the".into()));
+        assert_eq!(normalize_slug("x"), Some("x".into()));
+        // Nothing alphanumeric → None.
+        assert_eq!(normalize_slug("..."), None);
+        assert_eq!(normalize_slug(""), None);
     }
 
     #[tokio::test]

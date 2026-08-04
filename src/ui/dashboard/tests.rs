@@ -543,3 +543,88 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
     );
     assert_eq!(nav, render, "nav and render agree under a sort_order tie");
 }
+
+fn item_with_column<'a>(repo: &'a Repo, column: Option<RowColumn>) -> WorkspaceItem<'a> {
+    WorkspaceItem {
+        repo,
+        workspace_id: WorkspaceId(1),
+        status: crate::ui::dashboard::status::Status::Idle,
+        row: row::RowInputs {
+            agent: crate::pty::session::AgentKind::Claude,
+            status: crate::ui::dashboard::status::Status::Idle,
+            branch: "bb/some-branch".to_string(),
+            pr_number: None,
+            procs: 0,
+            diff: None,
+            column,
+            ago_secs: None,
+            selected: false,
+            yolo: false,
+            setup_failed: false,
+            shared: false,
+            shared_active: false,
+            lifecycle: None,
+            nerd_fonts: false,
+            workspace_id: WorkspaceId(1),
+            has_multi_pane_layout: false,
+        },
+    }
+}
+
+#[test]
+fn matches_filter_matches_status_token() {
+    let repo = fake_repo(1, "repo", "/tmp/repo");
+    let item = item_with_column(
+        &repo,
+        Some(RowColumn {
+            token: "working".into(),
+            reported: false,
+            body: ColumnBody::Empty,
+        }),
+    );
+    assert!(matches_filter(&item, "work"));
+    assert!(!matches_filter(&item, "blocked"));
+}
+
+#[test]
+fn matches_filter_matches_recap_segments() {
+    let repo = fake_repo(1, "repo", "/tmp/repo");
+    let seg = |t: &str| column_content::RecapSegment {
+        text: t.into(),
+        authored: true,
+    };
+    let item = item_with_column(
+        &repo,
+        Some(RowColumn {
+            token: "idle".into(),
+            reported: false,
+            body: ColumnBody::Recap {
+                segments: vec![seg("Audit V2 invoices"), seg("fix drift calc")],
+                stale: false,
+            },
+        }),
+    );
+    assert!(matches_filter(&item, "drift"));
+    assert!(matches_filter(&item, "audit"));
+    assert!(!matches_filter(&item, "nonexistent"));
+}
+
+#[test]
+fn matches_filter_matches_fallback_text_and_branch() {
+    let repo = fake_repo(1, "repo", "/tmp/repo");
+    let item = item_with_column(
+        &repo,
+        Some(RowColumn {
+            token: "idle".into(),
+            reported: false,
+            body: ColumnBody::Fallback {
+                text: "migrate auth flow".into(),
+                emphasis: ColumnEmphasis::Dim,
+            },
+        }),
+    );
+    assert!(matches_filter(&item, "auth"));
+    assert!(matches_filter(&item, "some-branch"));
+    let bare = item_with_column(&repo, None);
+    assert!(!matches_filter(&bare, "anything"));
+}

@@ -35,7 +35,12 @@ wsx repo set-related-repos <repo> <comma-separated-names>
 # The workspace is resolved from $WSX_WORKSPACE_ID, else the cwd's worktree.
 wsx agent list                              # peers here; (primary) marks the original agent
 wsx agent add <kind>                        # attach another agent: kind = claude|pi|hermes|codex
-wsx agent send <label> <message…>           # async message to a peer (label e.g. claude, claude#2)
+wsx agent send [--workspace <repo>/<slug>] <label> <message…>
+                                            # async message to an agent; omit
+                                            # --workspace for a peer here.
+                                            # label `primary` = that workspace's
+                                            # primary agent (always correct for a
+                                            # workspace you just created).
 ```
 
 Run `wsx --help` or `wsx <command> --help` to list commands and arguments directly from the CLI.
@@ -91,6 +96,68 @@ Slugs **do not need to match** across related repos — each repo has its own `b
 
 If you omit `--name`, wsx auto-generates an adjective-noun slug like `merry-birch`. Rename via `wsx workspace rename <repo> <auto> <real>` — this updates the git branch AND the wsx DB. Using `git branch -m` directly leaves wsx's DB stale.
 
+## Handing off to a new workspace
+
+Creating a workspace and then working in it yourself defeats the purpose: the
+new workspace sits idle on the dashboard while this session's history grows.
+Create it, brief its agent, and go back to your own task.
+
+**When.** Two triggers:
+
+- **Hard:** the work ahead needs a new branch. Branching inside this worktree
+  is the wrong move — create a workspace instead.
+- **Soft:** the work shifts to a concern independent enough that this session's
+  history would be noise. It must genuinely stand alone; a subtask of what
+  you're already doing does not qualify.
+
+**How.** Two commands:
+
+```
+wsx workspace create <repo> --name <slug>
+wsx agent send --workspace <repo>/<slug> primary "<brief>"
+```
+
+Always pass `--name` — an unnamed workspace forces the new agent to rename it
+before it can start. Use `primary` as the label: you cannot run `wsx agent
+list` against another workspace, and a fresh workspace has exactly one agent.
+
+**The brief.** It is the receiving agent's *only* context. Write it so it still
+makes sense if this session were deleted.
+
+```
+TASK:        what to build or fix, and what done looks like
+WHY:         the decision or finding that led here
+CONTEXT:     contracts, types, names, file:line pointers — anything decided in
+             my session that is not yet in the repo
+CONSTRAINTS: don't touch X; follow the pattern at path:line; merge after PR #N
+START:       the first concrete step
+```
+
+**Then.** Tell the user which workspace is now working on what, and return to
+your own task.
+
+**Worked example:**
+
+```
+wsx workspace create backend --name add-widgets-endpoint
+wsx agent send --workspace backend/add-widgets-endpoint primary "
+TASK: Add POST /widgets returning 201 with the created Widget. Done when the
+handler, its route registration, and a happy-path + validation test are in.
+WHY: The frontend work in workspacex/widgets-ui needs this endpoint; I settled
+the payload shape there and it is not in any repo yet.
+CONTEXT: Request body is {name: string, qty: int}; response is the full Widget
+including server-assigned id and created_at. Follow the pattern in
+src/api/gadgets.rs:40-88 — same validation helper, same error envelope.
+CONSTRAINTS: Don't change the existing GET /widgets response shape. This must
+merge BEFORE workspacex/widgets-ui.
+START: read src/api/gadgets.rs:40-88, then src/api/mod.rs route table.
+"
+```
+
+Delivery requires a running `wsx` dashboard — the TUI is what injects queued
+messages. If `agent send` warns that none is running, tell the user to open
+`wsx`, or the handoff will sit undelivered.
+
 ## Cross-repo orchestration
 
 When a task spans two repos configured as related (you'll see a system-prompt fragment listing read-only source paths like `/work/frontend`), follow this exact sequence:
@@ -99,21 +166,31 @@ When a task spans two repos configured as related (you'll see a system-prompt fr
 2. **Create the sibling workspace from this session:**
    ```
    wsx workspace create <other-repo> --name <slug>
-   sibling=$(wsx workspace path <other-repo> <slug>)
    ```
-3. **`cd "$sibling"`** and make the corresponding changes. Staying in the same Claude session means your context (API contract, design decisions) carries over — usually the right call.
+3. **Brief its agent and hand off.**
+   ```
+   wsx agent send --workspace <other-repo>/<slug> primary "<brief>"
+   ```
+   See [Handing off to a new workspace](#handing-off-to-a-new-workspace) for
+   what the brief must contain. Do NOT `cd` into the sibling worktree and make
+   the changes yourself.
 4. **Two PRs, cross-linked.** Each repo gets its own branch and its own PR. In each description, link the other PR and call out merge order (typically: backend before frontend for new endpoints; frontend before backend for breaking removals).
 5. **Tell the user** the PRs are ready and which order to merge. wsx has no atomic-merge primitive — the human is the coordinator.
 
-If the work is large enough that you want separate Claude sessions per repo, the alternative is: create the workspace, then ask the user to attach to it via the wsx dashboard. A fresh Claude there will not share your context — propagate decisions via commits, PR bodies, or a design note checked into the repo.
+The sibling session does not share your context — the brief is your handoff
+channel for the initial task. For anything that must outlive either session,
+propagate it via commits and PR bodies.
 
 ## Common mistakes (verbatim from baseline testing)
 
 - **Hallucinating syntax.** "I'll just try `wsx workspace create frontend bakedbean/foo`." Always re-read this skill's CLI surface before typing.
 - **Passing a full branch name to `--name`.** Yields doubled prefix. Pass only the trailing slug.
-- **Editing files in a related repo's source path** (`/work/<repo>`). Those are read-only mirrors on whatever branch the source's main worktree is on. Always `cd` into the path returned by `wsx workspace path`.
+- **Editing files in a related repo's source path** (`/work/<repo>`). Those are read-only mirrors on whatever branch the source's main worktree is on — never write there. If the task needs changes in that repo, create a workspace and hand it off (see [Handing off to a new workspace](#handing-off-to-a-new-workspace)); `wsx workspace path` is for reading the sibling worktree, not for `cd`-ing in and editing it yourself.
 - **Committing on a placeholder branch.** If `git branch --show-current` shows the auto-generated slug (e.g. `bakedbean/merry-birch`) and you've decided what you're doing, rename via `wsx workspace rename` BEFORE committing.
 - **Assuming a sibling session "knows" what you decided.** Different sessions don't share state — the PR body and commit messages are your handoff channel.
+- **Driving a workspace you created.** Creating a workspace and then `cd`-ing
+  into it leaves it idle on the dashboard and piles its history into the wrong
+  session. Create, brief, hand off.
 
 ## Multi-agent workspaces
 

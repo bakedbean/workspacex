@@ -38,20 +38,37 @@ Because agents share the worktree, switching focus is just changing which sessio
 
 ### Inter-agent messaging
 
-Agents in the same workspace can send each other messages:
+Agents can send each other messages — a peer in the same workspace by default, or any agent in another workspace with `--workspace`:
 
 ```bash
-wsx agent send <label> <message…>
+wsx agent send [--workspace <repo>/<slug>] <label> <message…>
 ```
 
-`<label>` is an agent's footer/list label (`claude`, `claude#2`, `codex`, …). The rest of the line is the message body. Delivery is **asynchronous**: the message is queued and injected into the target's session on the next tick, prefixed with a banner so the recipient knows where it came from:
+`<label>` is an agent's footer/list label (`claude`, `claude#2`, `codex`, …),
+or the reserved label `primary` for the workspace's primary agent. The rest of
+the line is the message body. Without `--workspace` the target is the current
+workspace; with it, any workspace — which is how one agent hands a task to a
+freshly created workspace's agent. Delivery is **asynchronous**: the message is
+queued and injected into the target's session on the next tick, prefixed with a
+banner so the recipient knows where it came from:
 
 ```
 [message from claude#2]
 …your message body…
 ```
 
+A sender in a *different* workspace is qualified with its `<repo>/<slug>`, so
+the recipient can see which workspace the work came from:
+
+```
+[message from workspacex/parent-task claude]
+…your message body…
+```
+
 If the sender is the `wsx` CLI itself (not another agent — i.e. `$WSX_AGENT_INSTANCE_ID` is unset), the banner is just `[message]`. If the target agent isn't running yet, wsx spawns it first, then delivers. Sending to a label that doesn't exist in the workspace errors with a hint to run `wsx agent list`.
+Queued messages are injected by the running `wsx` TUI, so `wsx agent send`
+warns on stderr when no dashboard is running — the message stays queued and is
+delivered when one starts.
 
 Since all agents write to the same files, prefer messaging to hand off work rather than editing the same paths in parallel.
 
@@ -83,3 +100,6 @@ When wsx spawns an agent it injects two environment variables into that session,
 | `WSX_AGENT_INSTANCE_ID`  | This specific agent instance                       |
 
 `wsx agent` commands resolve the "current" workspace from `$WSX_WORKSPACE_ID` first, falling back to matching the current directory against known worktrees — so the commands work both from inside an agent session and from a plain shell in the worktree. `wsx agent send` uses `$WSX_AGENT_INSTANCE_ID` to stamp the `[message from …]` sender on outgoing messages.
+`--workspace <repo>/<slug>` overrides that resolution for the *target*;
+`$WSX_AGENT_INSTANCE_ID` still identifies the sender, which is how a
+cross-workspace message gets its `<repo>/<slug>`-qualified banner.

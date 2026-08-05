@@ -47,17 +47,18 @@ WSX_HERMES_MODEL=llama-3-70b-instruct WSX_HERMES_PROVIDER=together wsx workspace
 
 When a workspace uses `coding_agent: codex`, wsx spawns `codex` (or the path in `WSX_CODEX_BIN`) instead of `claude`. Codex receives wsx custom instructions and auto-rename directives.
 
-**AGENTS.md management**: Because Codex has no `--append-system-prompt` flag, wsx injects the workspace doctrine, the auto-rename hint, and any custom instructions into a `wsx-managed` fenced block in the worktree's `AGENTS.md` — the same mechanism used for Hermes:
+**Instruction injection**: Codex has no `--append-system-prompt` flag, so wsx passes the workspace doctrine, the auto-rename hint, and any custom instructions as a Codex config override on the spawn command line:
 
-```markdown
-<!-- BEGIN wsx-managed -->
-
-…injected instructions…
-
-<!-- END wsx-managed -->
+```bash
+codex -c 'developer_instructions="…injected instructions…"' \
+      -c 'project_doc_fallback_filenames=["CLAUDE.md"]'
 ```
 
-The block is rewritten every time Codex spawns and automatically cleaned up when there's nothing to inject. The file is git-excluded via `.git/info/exclude` if untracked, or will show as modified during a spawn if already tracked. The superpowers-skills doctrine clause is omitted for Codex (those skills install under `~/.claude` and Codex can't load them).
+Codex renders `developer_instructions` as the first developer-role message, ahead of its own instructions and ahead of the user-role message that carries `AGENTS.md`. **Nothing is written to your worktree** — no `AGENTS.md`, no `.git/info/exclude` entry. A repo's own `AGENTS.md` is still read by Codex as usual, and `project_doc_fallback_filenames` makes Codex fall back to `CLAUDE.md` in repos that have no `AGENTS.md`. The superpowers-skills doctrine clause is omitted for Codex (those skills install under `~/.claude` and Codex can't load them).
+
+Both overrides are applied only to **fresh** spawns. `codex resume --last` restores the session's stored configuration and ignores these two keys, so a resumed session keeps the doctrine it was started with. It also means edits to a workspace's custom instructions or related-repo context never reach an already-started Codex session — re-attaching with `resume --last` after editing them won't pick up the change, since only a fresh spawn re-composes the `-c` overrides. Requires Codex `0.146.0` or newer.
+
+If a worktree was used with an older wsx, it may contain a wsx-created `AGENTS.md`; deleting it lets the new `CLAUDE.md` fallback work.
 
 **Claude slash commands**: before each Codex spawn, wsx mirrors Markdown files from `~/.claude/commands/` into a local Codex plugin at `~/plugins/wsx-claude-commands/commands/` and registers that plugin in the implicit personal marketplace at `~/.agents/plugins/marketplace.json`. The marketplace entry is marked `INSTALLED_BY_DEFAULT`, so commands such as `/pull-request` and `/commit-changes` are available in Codex without maintaining a second command set. Edits to the Claude command files are picked up on the next Codex spawn.
 

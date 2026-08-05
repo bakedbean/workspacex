@@ -1,11 +1,15 @@
-//! Workspace preparation for Hermes/Codex spawns.
+//! Workspace preparation for Hermes spawns.
 //!
-//! Hermes and Codex read project instructions from `AGENTS.md` (rather than
-//! Claude's native `CLAUDE.md` / `--append-system-prompt`), so before spawning
-//! them wsx rewrites a `BEGIN/END wsx-managed` block in that file, hides it from
-//! `git status`, and (for Hermes) records a spawn-timestamp marker for session
-//! detection. Pure side-effecting helpers over a worktree path + SpawnMode;
+//! Hermes reads project instructions from `AGENTS.md` (rather than Claude's
+//! native `CLAUDE.md` / `--append-system-prompt`), so before spawning it wsx
+//! rewrites a `BEGIN/END wsx-managed` block in that file, hides it from
+//! `git status`, and records a spawn-timestamp marker for session detection.
+//! Pure side-effecting helpers over a worktree path + SpawnMode;
 //! `prepare_*_workspace` are re-exported from `pty::session` for the spawn path.
+//!
+//! Codex used to share this mechanism. It no longer does — its instructions go
+//! through `-c developer_instructions` in `pty::command`, so
+//! `prepare_codex_workspace` writes nothing to the worktree.
 
 use crate::pty::command::compose_injected_prompt;
 use crate::pty::session::{SpawnMode, resolve_gitdir};
@@ -24,7 +28,7 @@ const CLAUDE_PROVENANCE_COMMENT: &str = "<!-- Copied from CLAUDE.md by wsx -->";
 
 /// Read a repo's root `CLAUDE.md`, returning its contents only if the file
 /// exists and holds non-whitespace text. Used to seed a newly-created
-/// `AGENTS.md` so Hermes/Codex get the same project instructions Claude reads
+/// `AGENTS.md` so Hermes gets the same project instructions Claude reads
 /// natively. Best-effort: any IO error yields `None`.
 fn read_claude_md(cwd: &Path) -> Option<String> {
     let contents = std::fs::read_to_string(cwd.join("CLAUDE.md")).ok()?;
@@ -44,7 +48,7 @@ fn read_claude_md(cwd: &Path) -> Option<String> {
 fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
     let path = cwd.join("AGENTS.md");
     // Capture existence before reading: when wsx creates AGENTS.md fresh we
-    // seed it with the repo's CLAUDE.md (if any) so Hermes/Codex get the same
+    // seed it with the repo's CLAUDE.md (if any) so Hermes gets the same
     // project instructions Claude reads natively. Checking emptiness after the
     // read wouldn't distinguish a missing file from an empty one.
     let file_existed = path.exists();
@@ -187,19 +191,19 @@ pub(crate) fn prepare_hermes_workspace(cwd: &Path, mode: &SpawnMode) {
     }
 }
 
-/// Prepare a worktree for a Codex spawn: inject the wsx-managed instruction
-/// block into AGENTS.md (Codex reads project instructions from there, like
-/// Hermes) and hide the file from `git status`. Codex needs NO spawn-timestamp
-/// marker — session detection is cwd-in-file, not marker-based.
-pub(crate) fn prepare_codex_workspace(cwd: &Path, mode: &SpawnMode) {
+/// Prepare a worktree for a Codex spawn: sync Claude slash-commands into
+/// Codex's plugin directory.
+///
+/// Instruction injection deliberately does **not** happen here. Doctrine,
+/// rename hint, and custom instructions ride on `-c developer_instructions` in
+/// `build_codex_command`, and a repo's `CLAUDE.md` is picked up via
+/// `-c project_doc_fallback_filenames`. So unlike the Hermes path, the Codex
+/// path writes nothing to the worktree — no `AGENTS.md`, no `.git/info/exclude`
+/// entry. Both parameters are retained to keep the signature symmetric with
+/// `prepare_hermes_workspace` at the `src/pty/session.rs` call site.
+pub(crate) fn prepare_codex_workspace(_cwd: &Path, _mode: &SpawnMode) {
     #[cfg(not(test))]
     crate::agent::codex_commands::sync_claude_commands_for_codex();
-    let injected = compose_injected_prompt(mode);
-    let had_content = injected.is_some();
-    write_agents_md_section(cwd, injected.as_deref());
-    if had_content {
-        ensure_git_exclude(cwd, "AGENTS.md");
-    }
 }
 
 #[cfg(test)]
@@ -586,10 +590,16 @@ mod tests {
         }
     }
 
+    /// Codex instructions ride on `-c developer_instructions` in
+    /// `build_codex_command`, so preparing a Codex worktree must leave no trace:
+    /// no AGENTS.md, no git-exclude entry, and (as always) no Hermes marker.
     #[test]
-    fn prepare_codex_workspace_injects_rename_block_into_agents_md() {
+    fn prepare_codex_workspace_writes_nothing_to_worktree() {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path();
+        std::fs::create_dir_all(cwd.join(".git/info")).unwrap();
+        // A CLAUDE.md would previously have been copied into a fresh AGENTS.md.
+        std::fs::write(cwd.join("CLAUDE.md"), "# Project rules\n").unwrap();
         let mode = SpawnMode::Fresh {
             rename_ctx: Some(RenameContext {
                 current_branch: "prefix/my-slug".to_string(),
@@ -597,41 +607,22 @@ mod tests {
                 repo_name: "myrepo".to_string(),
                 current_slug: "my-slug".to_string(),
             }),
-            custom_instructions: None,
+            custom_instructions: Some("CUSTOM".to_string()),
             doctrine: Some("DOCTRINE-MARKER".to_string()),
             additional_dirs: vec![],
             yolo: false,
         };
         prepare_codex_workspace(cwd, &mode);
-        let agents = std::fs::read_to_string(cwd.join("AGENTS.md")).unwrap();
-        assert!(
-            agents.contains("BEGIN wsx-managed"),
-            "block markers: {agents}"
-        );
-        assert!(
-            agents.contains("DOCTRINE-MARKER"),
-            "doctrine injected: {agents}"
-        );
-        assert!(
-            agents.contains("wsx workspace rename"),
-            "rename hint: {agents}"
-        );
-    }
 
-    #[test]
-    fn prepare_codex_workspace_writes_no_hermes_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let cwd = dir.path();
-        std::fs::create_dir_all(cwd.join(".git/info")).unwrap();
-        let mode = SpawnMode::Fresh {
-            rename_ctx: None,
-            custom_instructions: Some("CUSTOM".to_string()),
-            doctrine: None,
-            additional_dirs: vec![],
-            yolo: false,
-        };
-        prepare_codex_workspace(cwd, &mode);
-        // Codex uses cwd-in-file detection, not the Hermes spawn marker.
+        assert!(
+            !cwd.join("AGENTS.md").exists(),
+            "codex must not write AGENTS.md"
+        );
+        let exclude = std::fs::read_to_string(cwd.join(".git/info/exclude")).unwrap_or_default();
+        assert!(
+            !exclude.contains("AGENTS.md"),
+            "codex must not git-exclude AGENTS.md: {exclude:?}"
+        );
         assert!(
             !cwd.join(".git/info/wsx-hermes-spawn-at").exists(),
             "codex must not write the hermes spawn marker"

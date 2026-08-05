@@ -2,8 +2,9 @@
 //!
 //! Builds the `CommandBuilder` for each [`AgentKind`] (claude/pi/hermes/codex)
 //! from a worktree path + [`SpawnMode`], including rename system-prompt
-//! rendering and the AGENTS.md-injected prompt composition. Pure functions over
-//! paths/modes — no `Session` state. Re-exported from `pty::session` so the
+//! rendering and the injected-prompt composition shared by the AGENTS.md and
+//! Codex `-c` delivery paths. Pure functions over paths/modes — no `Session`
+//! state. Re-exported from `pty::session` so the
 //! spawn path and the existing call sites keep resolving the builders
 //! unqualified.
 
@@ -430,8 +431,10 @@ fn render_rename_system_prompt_hermes(
     render_rename_system_prompt_pi(current_branch, branch_prefix, repo_name, current_slug)
 }
 
-/// Decide what text to inject into the wsx-managed block of AGENTS.md for a
-/// given Hermes spawn mode. Returns None when nothing needs injecting.
+/// Decide what text to inject for a given spawn mode. Delivery is up to the
+/// caller: `prepare_hermes_workspace` writes the result into the wsx-managed
+/// block of `AGENTS.md`, while `build_codex_command` passes it via
+/// `-c developer_instructions`. Returns None when nothing needs injecting.
 pub(crate) fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
     let (doctrine, rename, custom) = match mode {
         SpawnMode::Fresh {
@@ -470,6 +473,40 @@ pub(crate) fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
     }
 }
 
+/// Encode `s` as a TOML basic string, surrounding quotes included, so it can
+/// be used as the value half of a `codex -c key=value` override.
+///
+/// `-c` parses the value as TOML and only falls back to treating it as a raw
+/// literal when parsing *fails*. A value that parses as a non-string is a hard
+/// launch error (`-c developer_instructions=true` →
+/// "invalid type: boolean `true`, expected a string"). Since custom
+/// instructions are user-supplied, quoting is what stops a user's own text
+/// from breaking their spawn.
+///
+/// Escapes per the TOML basic-string rules: `\` and `"`, the shorthand
+/// escapes for tab/newline/carriage-return, and every other control character
+/// (U+0000–U+001F, U+007F) as `\uXXXX`.
+fn toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Build a `CommandBuilder` for `codex` (or whatever `WSX_CODEX_BIN` points to)
 /// inside `cwd`. Inherits the current process env.
 ///
@@ -481,8 +518,18 @@ pub(crate) fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
 /// sessions pass no approval flags, inheriting Codex's interactive defaults.
 /// `WSX_CODEX_MODEL` (trimmed, non-empty) adds `-m <model>`.
 ///
-/// Codex has no `--append-system-prompt`; instruction injection (doctrine /
-/// rename / custom) is handled by `prepare_codex_workspace` via AGENTS.md.
+/// Codex has no `--append-system-prompt`. Instruction injection (doctrine /
+/// rename / custom) rides on `-c developer_instructions=<toml string>`, which
+/// Codex renders as the first developer-role message — ahead of its own
+/// instructions and of the user-role message carrying AGENTS.md. A second
+/// override, `project_doc_fallback_filenames=["CLAUDE.md"]`, lets Codex read a
+/// repo's `CLAUDE.md` when it has no `AGENTS.md`. Nothing is written to the
+/// worktree.
+///
+/// Both overrides are **Fresh-only**: `codex resume --last` restores the
+/// session's stored config and silently ignores `-c` for these two keys
+/// (verified against codex-cli 0.146.0). A resumed session already carries the
+/// doctrine in its history from the Fresh spawn that created it.
 /// The `remote` arg is unused — wsx's RemoteOpts targets Claude's
 /// `--remote-control`, which is unrelated to Codex's `--remote`.
 pub fn build_codex_command(
@@ -509,6 +556,28 @@ pub fn build_codex_command(
                 cmd.arg(arg);
             }
         }
+    }
+
+    // Instruction injection + project-doc fallback. `-c` is a global flag
+    // accepted before any subcommand; Fresh emits no subcommand anyway.
+    //
+    // Argv-size ceiling: not the OS execve limit (Linux 128KB / macOS ~1MB)
+    // but tmux — shared workspaces go through `wrap_in_tmux` (src/pty/tmux.rs),
+    // which packs the whole child argv+env into one message capped by tmux's
+    // MAX_IMSGSIZE (16384 bytes; measured `tmux new-session -d -- /bin/echo
+    // <arg>` ok at ~16000 bytes, "command too long" at ~20000). The ~3KB
+    // doctrine has headroom, and Claude/Pi pass the same composed prompt the
+    // same way — but the next argv-borne prompt should know the real number.
+    if matches!(mode, SpawnMode::Fresh { .. }) {
+        if let Some(prompt) = compose_injected_prompt(mode) {
+            cmd.arg("-c");
+            cmd.arg(format!(
+                "developer_instructions={}",
+                toml_basic_string(&prompt)
+            ));
+        }
+        cmd.arg("-c");
+        cmd.arg(r#"project_doc_fallback_filenames=["CLAUDE.md"]"#);
     }
 
     let (resume, yolo) = match mode {
@@ -587,6 +656,36 @@ mod tests {
             custom_pos > rename_pos,
             "custom instructions must come after rename block"
         );
+    }
+
+    #[test]
+    fn toml_basic_string_wraps_and_escapes() {
+        assert_eq!(toml_basic_string(""), "\"\"");
+        assert_eq!(toml_basic_string("hello"), "\"hello\"");
+        assert_eq!(toml_basic_string("say \"hi\""), "\"say \\\"hi\\\"\"");
+        assert_eq!(toml_basic_string("a\\b"), "\"a\\\\b\"");
+        assert_eq!(toml_basic_string("a\nb"), "\"a\\nb\"");
+        assert_eq!(toml_basic_string("a\tb"), "\"a\\tb\"");
+        assert_eq!(toml_basic_string("a\rb"), "\"a\\rb\"");
+        assert_eq!(toml_basic_string("a\u{1}b"), "\"a\\u0001b\"");
+        assert_eq!(toml_basic_string("a\u{7f}b"), "\"a\\u007Fb\"");
+    }
+
+    /// The whole reason this helper exists: an unquoted value that parses as a
+    /// TOML non-string makes `codex -c` refuse to launch with
+    /// "invalid type: boolean `true`, expected a string".
+    #[test]
+    fn toml_basic_string_quotes_values_that_would_parse_as_non_strings() {
+        assert_eq!(toml_basic_string("true"), "\"true\"");
+        assert_eq!(toml_basic_string("123"), "\"123\"");
+        assert_eq!(toml_basic_string("[1, 2]"), "\"[1, 2]\"");
+    }
+
+    /// Markdown doctrine text must survive verbatim apart from the escapes.
+    #[test]
+    fn toml_basic_string_preserves_markdown_punctuation() {
+        let encoded = toml_basic_string("## Doctrine\n\n- run `wsx status set` — now");
+        assert_eq!(encoded, "\"## Doctrine\\n\\n- run `wsx status set` — now\"");
     }
 
     #[test]
@@ -1761,11 +1860,142 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         });
-        assert!(argv.iter().any(|a| a == "-c"), "argv: {argv:?}");
         assert!(
-            argv.iter()
-                .any(|a| a.starts_with("notify=[") && a.contains("from-notify")),
+            argv.windows(2).any(|w| w[0] == "-c"
+                && w[1].starts_with("notify=[")
+                && w[1].contains("from-notify")),
             "argv: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn codex_fresh_emits_developer_instructions() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        env.remove("WSX_CODEX_MODEL");
+        let argv = codex_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: Some("CUSTOM_MARK".to_string()),
+            doctrine: Some("DOCTRINE_MARK".to_string()),
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        let value = argv
+            .iter()
+            .find(|a| a.starts_with("developer_instructions="))
+            .unwrap_or_else(|| panic!("no developer_instructions arg: {argv:?}"));
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "-c" && w[1].starts_with("developer_instructions=")),
+            "expected -c to immediately precede developer_instructions=...: argv: {argv:?}"
+        );
+        assert!(value.contains("DOCTRINE_MARK"), "argv: {argv:?}");
+        assert!(value.contains("CUSTOM_MARK"), "argv: {argv:?}");
+    }
+
+    #[test]
+    fn codex_fresh_emits_claude_md_project_doc_fallback() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        env.remove("WSX_CODEX_MODEL");
+        let argv = codex_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "-c" && w[1] == r#"project_doc_fallback_filenames=["CLAUDE.md"]"#),
+            "expected -c to immediately precede project_doc_fallback_filenames=...: argv: {argv:?}"
+        );
+    }
+
+    /// Doctrine disabled, no rename, no custom instructions: nothing to inject, so
+    /// no `developer_instructions` arg — but the CLAUDE.md fallback is
+    /// unconditional on Fresh, since it is about how Codex finds project docs
+    /// rather than about wsx having something to say.
+    #[test]
+    fn codex_fresh_without_injectable_content_omits_developer_instructions() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        env.remove("WSX_CODEX_MODEL");
+        let argv = codex_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a.starts_with("developer_instructions=")),
+            "argv: {argv:?}"
+        );
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "-c" && w[1] == r#"project_doc_fallback_filenames=["CLAUDE.md"]"#),
+            "expected -c to immediately precede project_doc_fallback_filenames=...: argv: {argv:?}"
+        );
+    }
+
+    /// `codex resume --last` restores the session's stored config and silently
+    /// ignores `-c` overrides for both instruction keys (verified against
+    /// codex-cli 0.146.0). Emitting them on Continue would make the argv assert
+    /// something untrue.
+    #[test]
+    fn codex_continue_omits_instruction_config() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        env.remove("WSX_CODEX_MODEL");
+        let argv = codex_argv(&SpawnMode::Continue {
+            custom_instructions: Some("CUSTOM_MARK".to_string()),
+            doctrine: Some("DOCTRINE_MARK".to_string()),
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a.starts_with("developer_instructions=")),
+            "argv: {argv:?}"
+        );
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a.starts_with("project_doc_fallback_filenames=")),
+            "argv: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a.contains("DOCTRINE_MARK")),
+            "no instruction text may leak into a resume argv: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a.contains("CUSTOM_MARK")),
+            "no instruction text may leak into a resume argv: {argv:?}"
+        );
+    }
+
+    /// A custom instruction of literal `true` must not reach codex as a bare TOML
+    /// boolean — that is a hard launch failure, not a fallback.
+    #[test]
+    fn codex_developer_instructions_value_is_a_quoted_toml_string() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        env.remove("WSX_CODEX_MODEL");
+        let argv = codex_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: Some("true".to_string()),
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        });
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "-c" && w[1] == r#"developer_instructions="true""#),
+            "expected -c to immediately precede developer_instructions=\"true\": argv: {argv:?}"
         );
     }
 }

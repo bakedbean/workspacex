@@ -1945,6 +1945,15 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 .and_then(|s| s.parse::<i64>().ok())
                 .map(crate::data::store::AgentInstanceId);
             store.enqueue_message(target_ws.id, target_id, from, &prompt)?;
+            if !crate::tui_ipc::any_live_tui() {
+                // The TUI is the only thing that injects queued messages, so
+                // without one this send is a no-op the sender would never
+                // notice. Not an error: the row is queued, not lost.
+                eprintln!(
+                    "warning: no wsx dashboard is running — this message is queued and \
+                     will not be delivered until one starts. Tell the user to open `wsx`."
+                );
+            }
             match workspace.as_deref() {
                 Some(_) => println!("queued message to {target} in {}", target_ws.name),
                 None => println!("queued message to {target}"),

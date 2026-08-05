@@ -13,14 +13,36 @@ pub fn delivery_banner(from_label: Option<&str>, body: &str) -> String {
 }
 
 /// Resolve the human-readable sender label for a message (None → CLI/human origin).
+///
+/// The sender is looked up GLOBALLY by instance id rather than within
+/// `msg.workspace_id`, because a handoff is enqueued against the *target's*
+/// workspace while its sender lives elsewhere. When the sender is in a
+/// different workspace than the message, the label is qualified with
+/// `<repo>/<slug> ` so the recipient can see where the work came from.
 pub fn sender_label(store: &Store, msg: &AgentMessage) -> Option<String> {
     let from = msg.from_agent_id?;
-    store
-        .workspace_agents(msg.workspace_id)
+    let sender = store.workspace_agents_by_id(from).ok()??;
+    let label = sender.label();
+    if sender.workspace_id == msg.workspace_id {
+        return Some(label);
+    }
+    match workspace_ref(store, sender.workspace_id) {
+        Some(origin) => Some(format!("{origin} {label}")),
+        // Origin workspace row is gone (archived mid-flight): the bare label
+        // is still better than dropping the sender entirely.
+        None => Some(label),
+    }
+}
+
+/// `<repo>/<slug>` for a workspace id, or None if either row is missing.
+fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Option<String> {
+    let w = store.workspace_by_id(ws).ok()??;
+    let repo = store
+        .repos()
         .ok()?
         .into_iter()
-        .find(|i| i.id == from)
-        .map(|i| i.label())
+        .find(|r| r.id == w.repo_id)?;
+    Some(format!("{}/{}", repo.name, w.name))
 }
 
 impl crate::app::App {
@@ -137,6 +159,48 @@ mod tests {
             "[message from claude#2]\nhi"
         );
         assert_eq!(delivery_banner(None, "hi"), "[message]\nhi");
+    }
+
+    #[test]
+    fn sender_label_qualifies_a_cross_workspace_origin() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "workspacex", "wsx")
+            .unwrap();
+        let mk = |name: &str, path: &str| {
+            store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name,
+                    branch: &format!("wsx/{name}"),
+                    worktree_path: std::path::Path::new(path),
+                    yolo: false,
+                    agent: AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap()
+        };
+        let origin = mk("parent-task", "/tmp/r/parent-task");
+        let child = mk("child-task", "/tmp/r/child-task");
+        let sender = store
+            .add_primary_agent(origin, AgentKind::Claude, 1)
+            .unwrap();
+        let target = store
+            .add_primary_agent(child, AgentKind::Claude, 1)
+            .unwrap();
+
+        // A handoff: enqueued against the TARGET's workspace, sent from `origin`.
+        store
+            .enqueue_message(child, target.id, Some(sender.id), "TASK: build it")
+            .unwrap();
+        let msg = store.undelivered_messages().unwrap().pop().unwrap();
+
+        let label = sender_label(&store, &msg);
+        assert_eq!(label.as_deref(), Some("workspacex/parent-task claude"));
+        assert_eq!(
+            delivery_banner(label.as_deref(), "TASK: build it"),
+            "[message from workspacex/parent-task claude]\nTASK: build it"
+        );
     }
 
     #[test]

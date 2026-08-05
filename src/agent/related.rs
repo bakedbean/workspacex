@@ -54,17 +54,28 @@ pub fn build_read_only_prompt(resolved: &[(String, PathBuf)]) -> Option<String> 
          summary of the task (e.g. `add-widgets-endpoint`); wsx applies \
          that repo's configured branch_prefix, so the resulting branch is \
          `<prefix>/<slug>`. Do NOT pass a full branch name as the slug.\n\
-         \x20 2. `wsx workspace path <repo> <slug>` — prints the new \
-         worktree path. `cd` there to make changes, commit, and push.\n\
-         \x20 3. Each repo gets its own branch and its own PR. To \
+         \x20 2. `wsx agent send --workspace <repo>/<slug> primary \
+         \"<brief>\"` — hand the task to that workspace's own agent. The \
+         brief is its ONLY context: state the task and what done looks \
+         like, the API shape or decisions settled here, `file:line` \
+         pointers, the constraints, and the first concrete step. Write it \
+         so it still makes sense if this session were deleted.\n\
+         \x20 3. Tell the user which workspace now owns the sibling task, \
+         then carry on with your own. Do NOT `cd` into the sibling \
+         worktree and make the changes yourself — that leaves the new \
+         workspace idle on the dashboard and piles this task's history \
+         into the wrong session.\n\
+         \x20 4. Each repo gets its own branch and its own PR. To \
          coordinate \"ship together\", cross-link the PRs in each \
          description and ask the user to merge in dependency order.\n\n\
          Workspaces in different repos do not share Claude session state. \
-         If you split work across sessions, propagate API contracts and \
-         decisions via commits or PR bodies, not by assuming the other \
-         session remembers.\n\n\
-         Other useful commands: `wsx workspace list [<repo>]`, \
-         `wsx workspace rename <repo> <old-slug> <new-slug>`, \
+         The brief is your handoff channel for the initial task; for \
+         anything that must outlive either session, propagate it via \
+         commits and PR bodies rather than assuming the other session \
+         remembers.\n\n\
+         Other useful commands: `wsx workspace path <repo> <slug>` (read \
+         the sibling worktree without working in it), `wsx workspace list \
+         [<repo>]`, `wsx workspace rename <repo> <old-slug> <new-slug>`, \
          `wsx workspace archive <repo> <slug>`.\n\n\
          Read, grep, and quote freely from these read-only paths. Just \
          don't write to them.\n"
@@ -205,6 +216,24 @@ mod tests {
         assert!(
             out.contains("Do NOT pass a full branch name"),
             "prompt missing slug-vs-branch warning: {out}"
+        );
+    }
+
+    #[test]
+    fn read_only_prompt_prescribes_handoff_not_cd_and_work() {
+        let r = vec![("frontend".to_string(), PathBuf::from("/work/frontend"))];
+        let out = build_read_only_prompt(&r).unwrap();
+        assert!(
+            out.contains("wsx agent send --workspace <repo>/<slug> primary"),
+            "prompt must teach the handoff send: {out}"
+        );
+        assert!(
+            out.contains("Do NOT `cd` into the sibling worktree"),
+            "prompt must forbid working in the sibling from this session: {out}"
+        );
+        assert!(
+            !out.contains("`cd` there to make changes"),
+            "the old cd-and-work instruction must be gone: {out}"
         );
     }
 

@@ -288,7 +288,7 @@ mod tests {
         let d = process_doctrine(AgentKind::Claude);
         assert!(d.contains("handoff brief"), "receiving side missing: {d}");
         assert!(
-            d.contains("wsx recap set --goal"),
+            d.contains("Set `wsx recap set --goal` from it before you start"),
             "receiver must seed its recap goal from the brief: {d}"
         );
     }

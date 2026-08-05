@@ -188,11 +188,21 @@ impl Store {
     }
 
     /// Resolve a label like "claude" or "claude#2" to an instance id.
+    ///
+    /// The reserved label `primary` resolves to the workspace's primary
+    /// instance. A caller addressing *another* workspace cannot run
+    /// `wsx agent list` against it to discover labels, so `primary` gives it a
+    /// name that is always correct for a freshly created workspace (exactly one
+    /// agent, and it is primary). No `AgentKind::display_name()` is `primary`,
+    /// so the alias cannot shadow a real label.
     pub fn resolve_instance_label(
         &self,
         ws: WorkspaceId,
         label: &str,
     ) -> Result<Option<AgentInstanceId>> {
+        if label == "primary" {
+            return self.primary_instance_id(ws);
+        }
         Ok(self
             .workspace_agents(ws)?
             .into_iter()
@@ -308,6 +318,56 @@ mod store_tests {
         );
         assert_eq!(store.resolve_instance_label(ws, "nope").unwrap(), None);
         assert!(store.primary_instance_id(ws).unwrap().is_some());
+    }
+
+    #[test]
+    fn resolve_primary_alias_returns_the_primary_instance() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        // A second claude exists so `primary` cannot match by kind alone.
+        let second = store.add_workspace_agent(ws, AgentKind::Claude).unwrap();
+        let primary = store.primary_instance_id(ws).unwrap().unwrap();
+        assert_ne!(primary, second.id);
+        assert_eq!(
+            store.resolve_instance_label(ws, "primary").unwrap(),
+            Some(primary)
+        );
+        // The alias must not shadow ordinary labels.
+        assert_eq!(
+            store.resolve_instance_label(ws, "claude").unwrap(),
+            Some(primary)
+        );
+        assert_eq!(
+            store.resolve_instance_label(ws, "claude#2").unwrap(),
+            Some(second.id)
+        );
+    }
+
+    #[test]
+    fn primary_alias_is_agent_kind_agnostic() {
+        // The alias must work when the primary is not a claude — the sender
+        // of a handoff does not know the target workspace's agent kind.
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r2"), "r2", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w2",
+                branch: "wsx/w2",
+                worktree_path: std::path::Path::new("/tmp/r2/w2"),
+                yolo: false,
+                agent: AgentKind::Hermes,
+                shared: false,
+            })
+            .unwrap();
+        let p = store.add_primary_agent(ws, AgentKind::Hermes, 1).unwrap();
+        assert_eq!(
+            store.resolve_instance_label(ws, "primary").unwrap(),
+            Some(p.id)
+        );
+        assert_eq!(store.resolve_instance_label(ws, "claude").unwrap(), None);
     }
 
     #[test]

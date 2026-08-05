@@ -28,7 +28,7 @@ const CLAUDE_PROVENANCE_COMMENT: &str = "<!-- Copied from CLAUDE.md by wsx -->";
 
 /// Read a repo's root `CLAUDE.md`, returning its contents only if the file
 /// exists and holds non-whitespace text. Used to seed a newly-created
-/// `AGENTS.md` so Hermes/Codex get the same project instructions Claude reads
+/// `AGENTS.md` so Hermes gets the same project instructions Claude reads
 /// natively. Best-effort: any IO error yields `None`.
 fn read_claude_md(cwd: &Path) -> Option<String> {
     let contents = std::fs::read_to_string(cwd.join("CLAUDE.md")).ok()?;
@@ -48,7 +48,7 @@ fn read_claude_md(cwd: &Path) -> Option<String> {
 fn write_agents_md_section(cwd: &Path, content: Option<&str>) {
     let path = cwd.join("AGENTS.md");
     // Capture existence before reading: when wsx creates AGENTS.md fresh we
-    // seed it with the repo's CLAUDE.md (if any) so Hermes/Codex get the same
+    // seed it with the repo's CLAUDE.md (if any) so Hermes gets the same
     // project instructions Claude reads natively. Checking emptiness after the
     // read wouldn't distinguish a missing file from an empty one.
     let file_existed = path.exists();

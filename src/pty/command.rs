@@ -2,8 +2,9 @@
 //!
 //! Builds the `CommandBuilder` for each [`AgentKind`] (claude/pi/hermes/codex)
 //! from a worktree path + [`SpawnMode`], including rename system-prompt
-//! rendering and the AGENTS.md-injected prompt composition. Pure functions over
-//! paths/modes — no `Session` state. Re-exported from `pty::session` so the
+//! rendering and the injected-prompt composition shared by the AGENTS.md and
+//! Codex `-c` delivery paths. Pure functions over paths/modes — no `Session`
+//! state. Re-exported from `pty::session` so the
 //! spawn path and the existing call sites keep resolving the builders
 //! unqualified.
 
@@ -430,8 +431,10 @@ fn render_rename_system_prompt_hermes(
     render_rename_system_prompt_pi(current_branch, branch_prefix, repo_name, current_slug)
 }
 
-/// Decide what text to inject into the wsx-managed block of AGENTS.md for a
-/// given Hermes spawn mode. Returns None when nothing needs injecting.
+/// Decide what text to inject for a given spawn mode. Delivery is up to the
+/// caller: `prepare_hermes_workspace` writes the result into the wsx-managed
+/// block of `AGENTS.md`, while `build_codex_command` passes it via
+/// `-c developer_instructions`. Returns None when nothing needs injecting.
 pub(crate) fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
     let (doctrine, rename, custom) = match mode {
         SpawnMode::Fresh {
@@ -557,6 +560,14 @@ pub fn build_codex_command(
 
     // Instruction injection + project-doc fallback. `-c` is a global flag
     // accepted before any subcommand; Fresh emits no subcommand anyway.
+    //
+    // Argv-size ceiling: not the OS execve limit (Linux 128KB / macOS ~1MB)
+    // but tmux — shared workspaces go through `wrap_in_tmux` (src/pty/tmux.rs),
+    // which packs the whole child argv+env into one message capped by tmux's
+    // MAX_IMSGSIZE (16384 bytes; measured `tmux new-session -d -- /bin/echo
+    // <arg>` ok at ~16000 bytes, "command too long" at ~20000). The ~3KB
+    // doctrine has headroom, and Claude/Pi pass the same composed prompt the
+    // same way — but the next argv-borne prompt should know the real number.
     if matches!(mode, SpawnMode::Fresh { .. }) {
         if let Some(prompt) = compose_injected_prompt(mode) {
             cmd.arg("-c");
@@ -1849,10 +1860,10 @@ mod tests {
             additional_dirs: vec![],
             yolo: false,
         });
-        assert!(argv.iter().any(|a| a == "-c"), "argv: {argv:?}");
         assert!(
-            argv.iter()
-                .any(|a| a.starts_with("notify=[") && a.contains("from-notify")),
+            argv.windows(2).any(|w| w[0] == "-c"
+                && w[1].starts_with("notify=[")
+                && w[1].contains("from-notify")),
             "argv: {argv:?}"
         );
     }
@@ -1873,6 +1884,11 @@ mod tests {
             .iter()
             .find(|a| a.starts_with("developer_instructions="))
             .unwrap_or_else(|| panic!("no developer_instructions arg: {argv:?}"));
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "-c" && w[1].starts_with("developer_instructions=")),
+            "expected -c to immediately precede developer_instructions=...: argv: {argv:?}"
+        );
         assert!(value.contains("DOCTRINE_MARK"), "argv: {argv:?}");
         assert!(value.contains("CUSTOM_MARK"), "argv: {argv:?}");
     }
@@ -1890,9 +1906,9 @@ mod tests {
             yolo: false,
         });
         assert!(
-            argv.iter()
-                .any(|a| a == r#"project_doc_fallback_filenames=["CLAUDE.md"]"#),
-            "argv: {argv:?}"
+            argv.windows(2)
+                .any(|w| w[0] == "-c" && w[1] == r#"project_doc_fallback_filenames=["CLAUDE.md"]"#),
+            "expected -c to immediately precede project_doc_fallback_filenames=...: argv: {argv:?}"
         );
     }
 
@@ -1919,9 +1935,9 @@ mod tests {
             "argv: {argv:?}"
         );
         assert!(
-            argv.iter()
-                .any(|a| a == r#"project_doc_fallback_filenames=["CLAUDE.md"]"#),
-            "argv: {argv:?}"
+            argv.windows(2)
+                .any(|w| w[0] == "-c" && w[1] == r#"project_doc_fallback_filenames=["CLAUDE.md"]"#),
+            "expected -c to immediately precede project_doc_fallback_filenames=...: argv: {argv:?}"
         );
     }
 
@@ -1956,6 +1972,10 @@ mod tests {
             !argv.iter().any(|a| a.contains("DOCTRINE_MARK")),
             "no instruction text may leak into a resume argv: {argv:?}"
         );
+        assert!(
+            !argv.iter().any(|a| a.contains("CUSTOM_MARK")),
+            "no instruction text may leak into a resume argv: {argv:?}"
+        );
     }
 
     /// A custom instruction of literal `true` must not reach codex as a bare TOML
@@ -1973,8 +1993,9 @@ mod tests {
             yolo: false,
         });
         assert!(
-            argv.iter().any(|a| a == r#"developer_instructions="true""#),
-            "argv: {argv:?}"
+            argv.windows(2)
+                .any(|w| w[0] == "-c" && w[1] == r#"developer_instructions="true""#),
+            "expected -c to immediately precede developer_instructions=\"true\": argv: {argv:?}"
         );
     }
 }

@@ -220,13 +220,19 @@ rewrites them into `AGENTS.md`. They will now reach only the session that was
 Fresh-spawned with them. The doctrine itself is unaffected, since it is already
 in the resumed session's history.
 
-**Stale blocks are not cleaned up.** Worktrees that already had a Codex spawn
-retain their `BEGIN/END wsx-managed` block in `AGENTS.md`, which will now
-duplicate the `-c` channel. The block is self-guarding — its rename clause is
-conditioned on the branch still being a placeholder — and the file is excluded
-from `git status`, so the effect is redundant tokens rather than wrong
-behaviour. A one-time `strip_wsx_block` on Codex spawn would fix it and is a
-small follow-up if the duplication proves noticeable.
+**Stale blocks are not cleaned up — and this is wrong behaviour, not redundant
+tokens.** Worktrees where the old code *created* `AGENTS.md` also contain a
+one-shot copy of the repo's `CLAUDE.md`, written under a
+`<!-- Copied from CLAUDE.md by wsx -->` marker (the logic was at
+`src/pty/workspace_prep.rs:74-87`). That copy sits **outside** the
+`BEGIN/END wsx-managed` markers, so the suggested one-time `strip_wsx_block`
+follow-up would *not* remove it. And because `AGENTS.md` then exists,
+`project_doc_fallback_filenames` never fires in those worktrees — it is a true
+fallback, conditioned on `AGENTS.md`'s absence. Net effect: such a worktree
+permanently feeds Codex a **frozen snapshot** of `CLAUDE.md` taken at first
+spawn, and the per-session resolution this spec elsewhere calls "strictly
+better than the copy it replaces" never applies there. The remedy is simple:
+delete any wsx-created `AGENTS.md` in an existing Codex worktree.
 
 ## Verification log
 

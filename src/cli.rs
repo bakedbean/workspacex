@@ -2390,6 +2390,94 @@ mod tests {
         assert!(e.contains("api-fix"), "must list known slugs: {e}");
     }
 
+    /// Dispatch-arm coverage for `wsx agent send --workspace`: the target
+    /// workspace, its label resolution, and the `enqueue_message` argument
+    /// order are the one seam nothing else in the branch exercises.
+    #[tokio::test]
+    async fn agent_send_dispatch_targets_the_other_workspaces_primary() {
+        use crate::config::Dirs;
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+        use crate::test_support::EnvGuard;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::for_test(tmp.path());
+
+        // Seed two workspaces directly against the DB file `run_cli` will
+        // open, so we can assert the queued row lands against the TARGET,
+        // not the sender's own (origin) workspace.
+        let (origin_primary, target_ws, target_primary) = {
+            let store = Store::open(&dirs.db_path()).unwrap();
+            let repo = store
+                .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+                .unwrap();
+            let origin = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name: "origin",
+                    branch: "wsx/origin",
+                    worktree_path: std::path::Path::new("/tmp/r/origin"),
+                    yolo: false,
+                    agent: AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            let origin_primary = store
+                .add_primary_agent(origin, AgentKind::Claude, 1)
+                .unwrap();
+
+            let target = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name: "target",
+                    branch: "wsx/target",
+                    worktree_path: std::path::Path::new("/tmp/r/target"),
+                    yolo: false,
+                    agent: AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            let target_primary = store
+                .add_primary_agent(target, AgentKind::Claude, 1)
+                .unwrap();
+            (origin_primary.id, target, target_primary.id)
+        };
+
+        let mut env = EnvGuard::new();
+        // Point the "is a TUI running" check at an empty scratch dir so the
+        // dispatch's stderr warning path is deterministic regardless of the
+        // ambient environment (this process may itself be running under a
+        // live wsx dashboard).
+        env.set("XDG_RUNTIME_DIR", tmp.path());
+        // Target resolution must come entirely from `workspace`, not from
+        // the sender's own identity, so leave the sender unset.
+        env.remove("WSX_AGENT_INSTANCE_ID");
+
+        let action = CliAction::AgentSend {
+            target: "primary".to_string(),
+            prompt: "do the thing".to_string(),
+            workspace: Some("r/target".to_string()),
+        };
+        run_cli(action, &dirs).await.unwrap();
+
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let queued = store.undelivered_messages().unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(
+            queued[0].workspace_id, target_ws,
+            "must queue against the TARGET workspace"
+        );
+        assert_eq!(
+            queued[0].target_agent_id, target_primary,
+            "must resolve `primary` against the TARGET workspace, not the origin"
+        );
+        assert_ne!(
+            queued[0].target_agent_id, origin_primary,
+            "must not resolve `primary` against the origin workspace"
+        );
+        assert_eq!(queued[0].body, "do the thing");
+    }
+
     #[test]
     fn misuse_is_tagged_with_group() {
         match parse(&["agent", "send"]) {

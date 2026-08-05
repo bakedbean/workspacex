@@ -48,7 +48,8 @@ pub fn build_read_only_prompt(resolved: &[(String, PathBuf)]) -> Option<String> 
          there would land outside your workspace and could clobber other \
          active work.\n\n\
          When a task requires changes in a related repo, drive wsx from \
-         this session to spin up a sibling workspace, then work in it:\n\n\
+         this session to hand the task off to a sibling workspace's own \
+         agent:\n\n\
          \x20 1. `wsx workspace create <repo> --name <slug>` — create a \
          workspace in the related repo. `<slug>` is a 2-4 word kebab-case \
          summary of the task (e.g. `add-widgets-endpoint`); wsx applies \
@@ -234,6 +235,10 @@ mod tests {
         assert!(
             !out.contains("`cd` there to make changes"),
             "the old cd-and-work instruction must be gone: {out}"
+        );
+        assert!(
+            !out.contains("then work in it"),
+            "lead-in must not imply this session works in the sibling worktree: {out}"
         );
     }
 

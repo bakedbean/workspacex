@@ -1936,7 +1936,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         })
                         .unwrap_or_else(|_| "(unknown)".to_string());
                     Error::UserInput(format!(
-                        "no agent '{target}' in workspace {}; agents there: {labels}",
+                        "no agent '{target}' in workspace {}; agents there: {labels} \
+                         (or `primary` for whichever is that workspace's primary agent)",
                         target_ws.name
                     ))
                 })?;
@@ -2476,6 +2477,63 @@ mod tests {
             "must not resolve `primary` against the origin workspace"
         );
         assert_eq!(queued[0].body, "do the thing");
+    }
+
+    /// The unknown-label error must offer `primary` alongside the concrete
+    /// labels. A cross-workspace sender cannot run `wsx agent list` against
+    /// the target, so this error is the one place it learns how to recover —
+    /// and `primary` is the label that works whatever kind the target runs.
+    #[tokio::test]
+    async fn agent_send_unknown_label_error_offers_the_primary_alias() {
+        use crate::config::Dirs;
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+        use crate::test_support::EnvGuard;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::for_test(tmp.path());
+        {
+            let store = Store::open(&dirs.db_path()).unwrap();
+            let repo = store
+                .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+                .unwrap();
+            let ws = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name: "target",
+                    branch: "wsx/target",
+                    worktree_path: std::path::Path::new("/tmp/r/target"),
+                    yolo: false,
+                    agent: AgentKind::Hermes,
+                    shared: false,
+                })
+                .unwrap();
+            store.add_primary_agent(ws, AgentKind::Hermes, 1).unwrap();
+        }
+
+        let mut env = EnvGuard::new();
+        env.set("XDG_RUNTIME_DIR", tmp.path());
+        env.remove("WSX_AGENT_INSTANCE_ID");
+
+        // Guess the wrong kind label against a hermes-primary workspace —
+        // the exact case a sender hits when it cannot enumerate the target.
+        let action = CliAction::AgentSend {
+            target: "claude".to_string(),
+            prompt: "do the thing".to_string(),
+            workspace: Some("r/target".to_string()),
+        };
+        let err = run_cli(action, &dirs).await.unwrap_err().to_string();
+        assert!(
+            err.contains("hermes"),
+            "must list the concrete labels that exist: {err}"
+        );
+        assert!(
+            err.contains("primary"),
+            "must offer the primary alias as a recovery path: {err}"
+        );
+        // Nothing is queued when resolution fails.
+        let store = Store::open(&dirs.db_path()).unwrap();
+        assert!(store.undelivered_messages().unwrap().is_empty());
     }
 
     #[test]

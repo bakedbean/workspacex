@@ -44,8 +44,8 @@ const CLAUSE_HANDOFF_OUT: &str = "- Start a new workspace instead of a new branc
     `cd` into the new worktree and work there yourself.";
 
 const CLAUSE_HANDOFF_IN: &str = "- If your first input is a handoff brief from \
-    another workspace's agent, that brief is your task. Set `wsx recap set \
-    --goal` from it before you start.";
+    another workspace's agent (banner: `[message from <repo>/<slug> <label>]`), \
+    that brief is your task. Set `wsx recap set --goal` from it before you start.";
 
 const CLAUSE_STATUS: &str = "- Report your status as you go with `wsx status set \
     <working|waiting|blocked|done> --message \"<one line>\"`: `working` when you start \

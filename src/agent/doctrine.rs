@@ -29,6 +29,24 @@ const CLAUSE_WSX_SKILL: &str = "- Load and follow the wsx skill. It is authorita
     for workspace and cross-repo operations in this environment; consult it before \
     running wsx commands.";
 
+const CLAUSE_HANDOFF_OUT: &str = "- Start a new workspace instead of a new branch. \
+    When the work ahead needs a new branch, or shifts to a concern independent \
+    enough that this session's history would be noise, do not branch here — \
+    create a workspace and hand the task to its own agent: \
+    `wsx workspace create <repo> --name <slug>`, then \
+    `wsx agent send --workspace <repo>/<slug> primary \"<brief>\"`. Always pass \
+    `--name`; an unnamed workspace forces the new agent to rename it before it \
+    can start. The brief is the receiving agent's ONLY context: state the task \
+    and what done looks like, why it exists, the decisions and file:line \
+    pointers it needs, the constraints, and the first concrete step — write it \
+    so it still makes sense if this session were deleted. Then tell the user \
+    which workspace is now working on what and return to your own task; do NOT \
+    `cd` into the new worktree and work there yourself.";
+
+const CLAUSE_HANDOFF_IN: &str = "- If your first input is a handoff brief from \
+    another workspace's agent, that brief is your task. Set `wsx recap set \
+    --goal` from it before you start.";
+
 const CLAUSE_STATUS: &str = "- Report your status as you go with `wsx status set \
     <working|waiting|blocked|done> --message \"<one line>\"`: `working` when you start \
     substantive work, `blocked` when you need a decision or answer from the user, \
@@ -85,6 +103,8 @@ pub fn process_doctrine(agent: AgentKind) -> String {
     }
     clauses.push(CLAUSE_COMMITS);
     clauses.push(CLAUSE_WSX_SKILL);
+    clauses.push(CLAUSE_HANDOFF_OUT);
+    clauses.push(CLAUSE_HANDOFF_IN);
     clauses.push(CLAUSE_STATUS);
     clauses.push(CLAUSE_RECAP);
     format!("{DOCTRINE_HEADER}\n\n{}", clauses.join("\n"))
@@ -236,5 +256,40 @@ mod tests {
                 "sentinel {sentinel:?} should disable the doctrine"
             );
         }
+    }
+
+    #[test]
+    fn doctrine_teaches_handoff_to_every_agent() {
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Pi,
+            AgentKind::Hermes,
+            AgentKind::Codex,
+        ] {
+            let d = process_doctrine(agent);
+            assert!(
+                d.contains("wsx agent send --workspace"),
+                "{agent:?} must learn the cross-workspace send: {d}"
+            );
+            assert!(
+                d.contains("wsx workspace create <repo> --name <slug>"),
+                "{agent:?} must learn to name the new workspace: {d}"
+            );
+            assert!(
+                d.to_lowercase()
+                    .contains("do not `cd` into the new worktree"),
+                "{agent:?} must be told not to drive the workspace it created: {d}"
+            );
+        }
+    }
+
+    #[test]
+    fn doctrine_tells_the_receiver_a_brief_is_its_task() {
+        let d = process_doctrine(AgentKind::Claude);
+        assert!(d.contains("handoff brief"), "receiving side missing: {d}");
+        assert!(
+            d.contains("wsx recap set --goal"),
+            "receiver must seed its recap goal from the brief: {d}"
+        );
     }
 }

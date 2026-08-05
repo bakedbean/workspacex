@@ -9,7 +9,7 @@ When you spawn a workspace in `backend`, wsx invokes claude with `--add-dir` poi
 To prevent claude from accidentally editing files in the source paths of related repos (which would land changes on whatever branch the source is on), wsx also appends a system-prompt instruction telling claude:
 
 - Treat those directories as read-only.
-- If changes are needed there, drive `wsx workspace create <other-repo> --name <slug>` from this session, `cd` into the new worktree path (`wsx workspace path <other-repo> <slug>`), and make the changes there. Each repo gets its own branch and PR; cross-link them and merge in dependency order.
+- If changes are needed there, drive `wsx workspace create <other-repo> --name <slug>` from this session, then hand the task to that workspace's own agent with `wsx agent send --workspace <other-repo>/<slug> primary "<brief>"` — do not `cd` into the sibling worktree and make the changes yourself. Tell the user which workspace now owns the sibling task. Each repo gets its own branch and PR; cross-link them and merge in dependency order.
 
 This is a soft guard, not a tool-level lock — it relies on claude following the instruction. The same trust model as `custom_instructions`. Installing the bundled wsx skill (`wsx setup install-skill`, see [Agent skill](agent-skill.md)) reinforces this with the full CLI vocabulary and slug-naming rules.
 

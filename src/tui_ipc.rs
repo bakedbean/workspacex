@@ -44,6 +44,18 @@ pub fn live_socket_candidates() -> Vec<(PathBuf, u32)> {
     found.into_iter().map(|(p, pid, _)| (p, pid)).collect()
 }
 
+/// Whether a `wsx` TUI is currently listening on one of its IPC sockets.
+///
+/// Messages queued by `wsx agent send` are only injected by a running TUI
+/// (`App::drain_agent_messages`), so a queued handoff with no dashboard up
+/// never reaches its target. A live listener accepts a connection; a stale
+/// socket file left behind by a dead process refuses it.
+pub fn any_live_tui() -> bool {
+    live_socket_candidates()
+        .into_iter()
+        .any(|(path, _pid)| std::os::unix::net::UnixStream::connect(path).is_ok())
+}
+
 /// Wire protocol: `select <repo...> <slug>` — repo names may contain spaces,
 /// slugs never do, so the last token is the slug.
 pub fn parse_line(line: &str) -> Option<(String, String)> {
@@ -124,6 +136,36 @@ mod ipc_tests {
     fn socket_path_shape() {
         let p = socket_path_for(4242);
         assert!(p.to_string_lossy().ends_with("tui-4242.sock"));
+    }
+
+    #[test]
+    fn any_live_tui_detects_a_listener_and_ignores_a_stale_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut guard = crate::test_support::EnvGuard::new();
+        guard.set("XDG_RUNTIME_DIR", dir.path());
+        std::fs::create_dir_all(socket_dir()).unwrap();
+
+        // Nothing at all.
+        assert!(!any_live_tui(), "empty socket dir is not a live TUI");
+
+        // A stale socket: bind then drop. Dropping a UnixListener does NOT
+        // unlink the path, so the file survives with nobody listening —
+        // exactly what a crashed TUI leaves behind.
+        let stale = socket_path_for(999_999);
+        {
+            let _dead = std::os::unix::net::UnixListener::bind(&stale).unwrap();
+        }
+        assert!(stale.exists(), "precondition: stale socket file remains");
+        assert!(
+            !any_live_tui(),
+            "a socket with no listener is not a live TUI"
+        );
+        std::fs::remove_file(&stale).unwrap();
+
+        // A real listener.
+        let live = socket_path_for(std::process::id());
+        let _listener = std::os::unix::net::UnixListener::bind(&live).unwrap();
+        assert!(any_live_tui(), "a bound listener is a live TUI");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

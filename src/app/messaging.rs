@@ -28,8 +28,10 @@ pub fn sender_label(store: &Store, msg: &AgentMessage) -> Option<String> {
     }
     match workspace_ref(store, sender.workspace_id) {
         Some(origin) => Some(format!("{origin} {label}")),
-        // Origin workspace row is gone (archived mid-flight): the bare label
-        // is still better than dropping the sender entirely.
+        // The instance row resolved but its workspace or repo row didn't
+        // (an inconsistent DB — `delete_workspace` clears `workspace_agents`
+        // before `workspaces`, so a normal archive can't reach this): the
+        // bare label is still better than dropping the sender entirely.
         None => Some(label),
     }
 }

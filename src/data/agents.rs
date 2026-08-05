@@ -371,6 +371,20 @@ mod store_tests {
     }
 
     #[test]
+    fn no_agent_kind_shadows_the_primary_alias() {
+        // `resolve_instance_label` reserves "primary"; nothing enforces that
+        // no `AgentKind::display_name()` collides with it. If a future kind
+        // were ever named "primary" it would silently shadow a real label.
+        for kind in AgentKind::ALL {
+            assert_ne!(
+                kind.display_name(),
+                "primary",
+                "{kind:?} must not be named 'primary'"
+            );
+        }
+    }
+
+    #[test]
     fn remove_nonexistent_agent_errors() {
         let store = Store::open_in_memory().unwrap();
         let _ = seed_ws_with_primary(&store);

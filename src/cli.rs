@@ -61,8 +61,8 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Attach an agent (claude|pi|hermes|codex)",
             },
             CmdInfo {
-                usage: "send <label> <message...>",
-                blurb: "Queue an async message to a peer agent",
+                usage: "send [--workspace <repo>/<slug>] <label> <message...>",
+                blurb: "Queue an async message to an agent here or in another workspace",
             },
         ],
     },
@@ -485,6 +485,9 @@ pub enum CliAction {
     AgentSend {
         target: String,
         prompt: String,
+        /// `<repo>/<slug>` when addressing an agent in ANOTHER workspace;
+        /// `None` means the current workspace (the pre-existing behavior).
+        workspace: Option<String>,
     },
     AgentAdd {
         kind: String,
@@ -1103,23 +1106,43 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
     }
 }
 
+const USAGE_AGENT_SEND: &str = "agent send [--workspace <repo>/<slug>] <label> <prompt>";
+
 fn parse_agent(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
         Some("list") => Ok(CliAction::AgentList),
         Some("send") => {
-            let target = it.next().ok_or_else(|| Error::Usage {
-                group: None,
-                msg: "agent send <label> <prompt>".into(),
-            })?;
+            let mut workspace: Option<String> = None;
+            // Flags are recognised ONLY before the label. Everything from the
+            // label onward is positional, so a message body that itself starts
+            // with `--` is preserved verbatim.
+            let target = loop {
+                let arg = it.next().ok_or_else(|| Error::Usage {
+                    group: None,
+                    msg: USAGE_AGENT_SEND.into(),
+                })?;
+                match arg.as_str() {
+                    "--workspace" => {
+                        workspace = Some(it.next().ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--workspace needs value (<repo>/<slug>)".into(),
+                        })?);
+                    }
+                    _ => break arg,
+                }
+            };
             let rest: Vec<String> = it.collect();
             if rest.is_empty() {
                 return Err(Error::Usage {
                     group: None,
-                    msg: "agent send <label> <prompt>".into(),
+                    msg: USAGE_AGENT_SEND.into(),
                 });
             }
-            let prompt = rest.join(" ");
-            Ok(CliAction::AgentSend { target, prompt })
+            Ok(CliAction::AgentSend {
+                target,
+                prompt: rest.join(" "),
+                workspace,
+            })
         }
         Some("add") => {
             let kind = it.next().ok_or_else(|| Error::Usage {
@@ -1891,21 +1914,41 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 println!("{}  {}{}", inst.id.0, inst.label(), tag);
             }
         }
-        CliAction::AgentSend { target, prompt } => {
-            let ws = resolve_current_workspace(&store)?;
+        CliAction::AgentSend {
+            target,
+            prompt,
+            workspace,
+        } => {
+            let target_ws = match workspace.as_deref() {
+                Some(spec) => resolve_workspace_spec(&store, spec)?,
+                None => resolve_current_workspace(&store)?,
+            };
             let target_id = store
-                .resolve_instance_label(ws.id, &target)?
+                .resolve_instance_label(target_ws.id, &target)?
                 .ok_or_else(|| {
+                    // `wsx agent list` only reports the CURRENT workspace, so
+                    // list the target's labels inline instead of pointing at it.
+                    let labels = store
+                        .workspace_agents(target_ws.id)
+                        .map(|v| {
+                            let names: Vec<String> = v.iter().map(|i| i.label()).collect();
+                            join_or_none(names.iter().map(|s| s.as_str()))
+                        })
+                        .unwrap_or_else(|_| "(unknown)".to_string());
                     Error::UserInput(format!(
-                        "no agent '{target}' in this workspace; try `wsx agent list`"
+                        "no agent '{target}' in workspace {}; agents there: {labels}",
+                        target_ws.name
                     ))
                 })?;
             let from = std::env::var("WSX_AGENT_INSTANCE_ID")
                 .ok()
                 .and_then(|s| s.parse::<i64>().ok())
                 .map(crate::data::store::AgentInstanceId);
-            store.enqueue_message(ws.id, target_id, from, &prompt)?;
-            println!("queued message to {target}");
+            store.enqueue_message(target_ws.id, target_id, from, &prompt)?;
+            match workspace.as_deref() {
+                Some(_) => println!("queued message to {target} in {}", target_ws.name),
+                None => println!("queued message to {target}"),
+            }
         }
         CliAction::AgentAdd { kind } => {
             let ws = resolve_current_workspace(&store)?;
@@ -2115,6 +2158,51 @@ fn lookup_workspace(
         .ok_or_else(|| Error::UserInput(format!("no workspace named {name} in repo {}", repo.name)))
 }
 
+/// Resolve a `--workspace <repo>/<slug>` spec to a workspace.
+///
+/// Splits on the LAST `/`: repo names may contain spaces and other
+/// characters, but a workspace slug never contains `/` (the same assumption
+/// `tui_ipc::parse_line` makes). Errors list the valid alternatives, because
+/// the caller is usually an agent that cannot enumerate them itself.
+fn resolve_workspace_spec(
+    store: &crate::data::store::Store,
+    spec: &str,
+) -> Result<crate::data::store::Workspace> {
+    let malformed = || Error::UserInput(format!("--workspace expects <repo>/<slug>, got '{spec}'"));
+    let (repo_name, slug) = spec.rsplit_once('/').ok_or_else(malformed)?;
+    if repo_name.is_empty() || slug.is_empty() {
+        return Err(malformed());
+    }
+    let repos = crate::data::repo::list(store)?;
+    let repo = repos.iter().find(|r| r.name == repo_name).ok_or_else(|| {
+        Error::UserInput(format!(
+            "--workspace: no repo named '{repo_name}'; known repos: {}",
+            join_or_none(repos.iter().map(|r| r.name.as_str()))
+        ))
+    })?;
+    let workspaces = store.workspaces(repo.id)?;
+    workspaces
+        .iter()
+        .find(|w| w.name == slug)
+        .cloned()
+        .ok_or_else(|| {
+            Error::UserInput(format!(
+                "--workspace: no workspace '{slug}' in repo '{repo_name}'; known: {}",
+                join_or_none(workspaces.iter().map(|w| w.name.as_str()))
+            ))
+        })
+}
+
+/// Comma-join names for an error hint, or `(none)` when the list is empty.
+fn join_or_none<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let v: Vec<&str> = names.collect();
+    if v.is_empty() {
+        "(none)".to_string()
+    } else {
+        v.join(", ")
+    }
+}
+
 fn open_in_editor(key: &str, initial: &str) -> Result<String> {
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
     let dir = std::env::temp_dir();
@@ -2178,6 +2266,119 @@ mod tests {
         let mut v = vec!["wsx".to_string()];
         v.extend(args.iter().map(|s| s.to_string()));
         parse_args(v)
+    }
+
+    #[test]
+    fn parses_agent_send_with_workspace_flag() {
+        match parse(&[
+            "agent",
+            "send",
+            "--workspace",
+            "backend/add-widgets",
+            "primary",
+            "do",
+            "the",
+            "thing",
+        ])
+        .unwrap()
+        {
+            CliAction::AgentSend {
+                target,
+                prompt,
+                workspace,
+            } => {
+                assert_eq!(target, "primary");
+                assert_eq!(prompt, "do the thing");
+                assert_eq!(workspace.as_deref(), Some("backend/add-widgets"));
+            }
+            other => panic!("expected AgentSend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_send_flags_are_only_recognised_before_the_label() {
+        // Everything from the label onward is body, so a message that itself
+        // starts with `--` is preserved verbatim rather than parsed as a flag.
+        match parse(&["agent", "send", "claude", "--workspace", "is", "a", "flag"]).unwrap() {
+            CliAction::AgentSend {
+                target,
+                prompt,
+                workspace,
+            } => {
+                assert_eq!(target, "claude");
+                assert_eq!(prompt, "--workspace is a flag");
+                assert_eq!(workspace, None);
+            }
+            other => panic!("expected AgentSend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_send_rejects_incomplete_invocations() {
+        assert!(parse(&["agent", "send", "--workspace"]).is_err()); // flag needs a value
+        assert!(parse(&["agent", "send", "--workspace", "backend/x"]).is_err()); // no label
+        assert!(parse(&["agent", "send", "--workspace", "backend/x", "primary"]).is_err()); // no body
+    }
+
+    fn seed_spec_store() -> crate::data::store::Store {
+        use crate::data::store::{NewWorkspace, Store};
+        let store = Store::open_in_memory().unwrap();
+        // A repo name containing a space exercises the split-on-LAST-slash rule.
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/mb"), "meals backend", "wsx")
+            .unwrap();
+        store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "api-fix",
+                branch: "wsx/api-fix",
+                worktree_path: std::path::Path::new("/tmp/mb/api-fix"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+    }
+
+    #[test]
+    fn workspace_spec_splits_on_the_last_slash() {
+        let store = seed_spec_store();
+        let ws = resolve_workspace_spec(&store, "meals backend/api-fix").unwrap();
+        assert_eq!(ws.name, "api-fix");
+    }
+
+    #[test]
+    fn workspace_spec_errors_name_the_valid_alternatives() {
+        let store = seed_spec_store();
+
+        let e = resolve_workspace_spec(&store, "noslug")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("<repo>/<slug>"),
+            "must show the expected form: {e}"
+        );
+
+        let e = resolve_workspace_spec(&store, "/api-fix")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("<repo>/<slug>"), "empty repo is malformed: {e}");
+
+        let e = resolve_workspace_spec(&store, "meals backend/")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("<repo>/<slug>"), "empty slug is malformed: {e}");
+
+        let e = resolve_workspace_spec(&store, "nope/api-fix")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("meals backend"), "must list known repos: {e}");
+
+        let e = resolve_workspace_spec(&store, "meals backend/nope")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("api-fix"), "must list known slugs: {e}");
     }
 
     #[test]
@@ -2276,9 +2477,14 @@ mod tests {
             other => panic!("expected ConfigSet value \"help\", got {other:?}"),
         }
         match parse(&["agent", "send", "claude", "help"]).unwrap() {
-            CliAction::AgentSend { target, prompt } => {
+            CliAction::AgentSend {
+                target,
+                prompt,
+                workspace,
+            } => {
                 assert_eq!(target, "claude");
                 assert_eq!(prompt, "help");
+                assert_eq!(workspace, None);
             }
             other => panic!("expected AgentSend prompt \"help\", got {other:?}"),
         }
@@ -2313,14 +2519,14 @@ mod tests {
         let h = render_group_help("agent");
         assert!(h.contains("list"));
         assert!(h.contains("add <kind>"));
-        assert!(h.contains("send <label> <message...>"));
+        assert!(h.contains("send [--workspace <repo>/<slug>] <label> <message...>"));
     }
 
     #[test]
     fn usage_error_has_message_then_group_block() {
         let s = render_usage_error(Some("agent"), "missing arguments");
         assert!(s.starts_with("error: missing arguments"));
-        assert!(s.contains("send <label> <message...>"));
+        assert!(s.contains("send [--workspace <repo>/<slug>] <label> <message...>"));
     }
 
     #[test]
@@ -2923,9 +3129,14 @@ mod tests {
     #[test]
     fn parses_agent_send_joins_prompt() {
         match parse(&["agent", "send", "claude#2", "hello", "there"]).unwrap() {
-            CliAction::AgentSend { target, prompt } => {
+            CliAction::AgentSend {
+                target,
+                prompt,
+                workspace,
+            } => {
                 assert_eq!(target, "claude#2");
                 assert_eq!(prompt, "hello there");
+                assert_eq!(workspace, None, "no flag → current workspace");
             }
             other => panic!("expected AgentSend, got {other:?}"),
         }
@@ -2969,7 +3180,7 @@ mod tests {
         };
         let s = report_cli_error(&e);
         assert!(s.starts_with("error: agent send needs"));
-        assert!(s.contains("send <label> <message...>"));
+        assert!(s.contains("send [--workspace <repo>/<slug>] <label> <message...>"));
     }
 
     #[test]

@@ -65,7 +65,8 @@ the recipient can see which workspace the work came from:
 …your message body…
 ```
 
-If the sender is the `wsx` CLI itself (not another agent — i.e. `$WSX_AGENT_INSTANCE_ID` is unset), the banner is just `[message]`. If the target agent isn't running yet, wsx spawns it first, then delivers. Sending to a label that doesn't exist in the workspace errors with a hint to run `wsx agent list`.
+If the sender is the `wsx` CLI itself (not another agent — i.e. `$WSX_AGENT_INSTANCE_ID` is unset), the banner is just `[message]`. If the target agent isn't running yet, wsx spawns it first, then delivers. Sending to a label that doesn't exist in the target workspace errors with that workspace's agent labels listed inline (`wsx agent list` only reports the current workspace, so it can't describe another one).
+
 Queued messages are injected by the running `wsx` TUI, so `wsx agent send`
 warns on stderr when no dashboard is running — the message stays queued and is
 delivered when one starts.
@@ -100,6 +101,7 @@ When wsx spawns an agent it injects two environment variables into that session,
 | `WSX_AGENT_INSTANCE_ID`  | This specific agent instance                       |
 
 `wsx agent` commands resolve the "current" workspace from `$WSX_WORKSPACE_ID` first, falling back to matching the current directory against known worktrees — so the commands work both from inside an agent session and from a plain shell in the worktree. `wsx agent send` uses `$WSX_AGENT_INSTANCE_ID` to stamp the `[message from …]` sender on outgoing messages.
+
 `--workspace <repo>/<slug>` overrides that resolution for the *target*;
 `$WSX_AGENT_INSTANCE_ID` still identifies the sender, which is how a
 cross-workspace message gets its `<repo>/<slug>`-qualified banner.

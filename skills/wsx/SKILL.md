@@ -31,8 +31,9 @@ wsx repo list
 wsx repo set-prefix <repo> <prefix>
 wsx repo set-related-repos <repo> <comma-separated-names>
 
-# Multi-agent: operate on the CURRENT workspace — no <repo>/<slug> args.
-# The workspace is resolved from $WSX_WORKSPACE_ID, else the cwd's worktree.
+# Multi-agent: `list`/`add` operate on the CURRENT workspace — no <repo>/<slug>
+# args. The workspace is resolved from $WSX_WORKSPACE_ID, else the cwd's
+# worktree. `send` can target another workspace via --workspace.
 wsx agent list                              # peers here; (primary) marks the original agent
 wsx agent add <kind>                        # attach another agent: kind = claude|pi|hermes|codex
 wsx agent send [--workspace <repo>/<slug>] <label> <message…>

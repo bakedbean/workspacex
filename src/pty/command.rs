@@ -470,6 +470,41 @@ pub(crate) fn compose_injected_prompt(mode: &SpawnMode) -> Option<String> {
     }
 }
 
+/// Encode `s` as a TOML basic string, surrounding quotes included, so it can
+/// be used as the value half of a `codex -c key=value` override.
+///
+/// `-c` parses the value as TOML and only falls back to treating it as a raw
+/// literal when parsing *fails*. A value that parses as a non-string is a hard
+/// launch error (`-c developer_instructions=true` →
+/// "invalid type: boolean `true`, expected a string"). Since custom
+/// instructions are user-supplied, quoting is what stops a user's own text
+/// from breaking their spawn.
+///
+/// Escapes per the TOML basic-string rules: `\` and `"`, the shorthand
+/// escapes for tab/newline/carriage-return, and every other control character
+/// (U+0000–U+001F, U+007F) as `\uXXXX`.
+#[allow(dead_code)]
+fn toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Build a `CommandBuilder` for `codex` (or whatever `WSX_CODEX_BIN` points to)
 /// inside `cwd`. Inherits the current process env.
 ///
@@ -587,6 +622,36 @@ mod tests {
             custom_pos > rename_pos,
             "custom instructions must come after rename block"
         );
+    }
+
+    #[test]
+    fn toml_basic_string_wraps_and_escapes() {
+        assert_eq!(toml_basic_string(""), "\"\"");
+        assert_eq!(toml_basic_string("hello"), "\"hello\"");
+        assert_eq!(toml_basic_string("say \"hi\""), "\"say \\\"hi\\\"\"");
+        assert_eq!(toml_basic_string("a\\b"), "\"a\\\\b\"");
+        assert_eq!(toml_basic_string("a\nb"), "\"a\\nb\"");
+        assert_eq!(toml_basic_string("a\tb"), "\"a\\tb\"");
+        assert_eq!(toml_basic_string("a\rb"), "\"a\\rb\"");
+        assert_eq!(toml_basic_string("a\u{1}b"), "\"a\\u0001b\"");
+        assert_eq!(toml_basic_string("a\u{7f}b"), "\"a\\u007Fb\"");
+    }
+
+    /// The whole reason this helper exists: an unquoted value that parses as a
+    /// TOML non-string makes `codex -c` refuse to launch with
+    /// "invalid type: boolean `true`, expected a string".
+    #[test]
+    fn toml_basic_string_quotes_values_that_would_parse_as_non_strings() {
+        assert_eq!(toml_basic_string("true"), "\"true\"");
+        assert_eq!(toml_basic_string("123"), "\"123\"");
+        assert_eq!(toml_basic_string("[1, 2]"), "\"[1, 2]\"");
+    }
+
+    /// Markdown doctrine text must survive verbatim apart from the escapes.
+    #[test]
+    fn toml_basic_string_preserves_markdown_punctuation() {
+        let encoded = toml_basic_string("## Doctrine\n\n- run `wsx status set` — now");
+        assert_eq!(encoded, "\"## Doctrine\\n\\n- run `wsx status set` — now\"");
     }
 
     #[test]

@@ -36,7 +36,9 @@ const CLAUSE_HANDOFF_OUT: &str = "- Start a new workspace instead of a new branc
     `wsx workspace create <repo> --name <slug>`, then \
     `wsx agent send --workspace <repo>/<slug> primary \"<brief>\"`. Always pass \
     `--name`; an unnamed workspace forces the new agent to rename it before it \
-    can start. The brief is the receiving agent's ONLY context: state the task \
+    can start. The new workspace inherits this workspace's yolo mode and agent \
+    kind automatically — do not pass `--yolo`, and pass `--agent` only to \
+    deliberately pick a different agent. The brief is the receiving agent's ONLY context: state the task \
     and what done looks like, why it exists, the decisions and file:line \
     pointers it needs, the constraints, and the first concrete step — write it \
     so it still makes sense if this session were deleted. Then tell the user \
@@ -279,6 +281,10 @@ mod tests {
                 d.to_lowercase()
                     .contains("do not `cd` into the new worktree"),
                 "{agent:?} must be told not to drive the workspace it created: {d}"
+            );
+            assert!(
+                d.contains("inherits this workspace's yolo mode and agent kind"),
+                "{agent:?} must learn that yolo/agent inherit on create: {d}"
             );
         }
     }

@@ -289,15 +289,10 @@ pub fn render(
         spans.push(Span::styled(token, token_style));
         let avail = body_width.saturating_sub(used);
         let (rest, rest_style) = match &col.body {
-            ColumnBody::Recap { segments, stale } => {
-                let text = fit_segments(segments, avail);
-                let style = if *stale {
-                    theme.dim_style().add_modifier(Modifier::DIM)
-                } else {
-                    theme.dim_style()
-                };
-                (text, style)
-            }
+            // One grey for every recap. Fading a stale one only made the
+            // text unreadable without making the staleness legible; the PM
+            // pane carries that signal as an explicit `recap stale` fact.
+            ColumnBody::Recap { segments } => (fit_segments(segments, avail), theme.dim_style()),
             ColumnBody::Fallback { text, emphasis } => {
                 let sep_len = SEG_SEP.chars().count();
                 let fitted = if avail > sep_len + 1 {
@@ -883,7 +878,6 @@ mod tests {
             reported: false,
             body: ColumnBody::Recap {
                 segments: vec![au("Audit V2 #2835"), au("3/12 done")],
-                stale: false,
             },
         });
         let theme = Theme::wsx();
@@ -895,15 +889,17 @@ mod tests {
         );
     }
 
+    /// Recap bodies render in the plain theme grey, never faded: the DIM
+    /// modifier blends the fg toward the background and left the text
+    /// unreadable in terminals that honor SGR 2.
     #[test]
-    fn stale_recap_body_renders_extra_dim() {
+    fn recap_body_renders_plain_dim_never_faded() {
         let mut inputs = base();
         inputs.column = Some(RowColumn {
             token: "idle".to_string(),
             reported: false,
             body: ColumnBody::Recap {
                 segments: vec![au("Audit V2 #2835")],
-                stale: true,
             },
         });
         let theme = Theme::wsx();
@@ -913,7 +909,8 @@ mod tests {
             .iter()
             .find(|s| s.content.contains("Audit V2"))
             .expect("segment span present");
-        assert!(seg_span.style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(seg_span.style.fg, theme.dim_style().fg);
+        assert!(!seg_span.style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

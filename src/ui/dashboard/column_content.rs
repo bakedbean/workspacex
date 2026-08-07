@@ -5,7 +5,6 @@
 use crate::activity::events::{ToolUseCounts, WorkspaceEvents};
 use crate::data::store::{ReportedStatus, WorkspaceRecap};
 use crate::ui::dashboard::status::Status;
-use crate::ui::pm_pane::RECAP_STALE_SLACK_MS;
 /// One recap segment for the renderer to width-fit. Agent-authored short
 /// forms render verbatim; fallback full fields (`authored: false`) get a
 /// width floor from the renderer and may expand into free column width.
@@ -30,10 +29,9 @@ pub struct RowColumn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColumnBody {
     /// Agent-authored recap segments (goal/state/next, short forms preferred),
-    /// greedy-fitted by the renderer. `stale`: activity outran `updated_at`.
+    /// greedy-fitted by the renderer.
     Recap {
         segments: Vec<RecapSegment>,
-        stale: bool,
     },
     /// No recap — the pre-recap heuristic text (question topic, tool trace,
     /// last turn text…), already stripped of the status word the token carries.
@@ -86,11 +84,7 @@ pub fn row_column(
     };
     let segments = recap.map(recap_segments).unwrap_or_default();
     let body = if !segments.is_empty() {
-        let last_activity = events.map(|e| e.last_log_activity_ms).unwrap_or(0);
-        let stale = recap
-            .map(|r| last_activity > r.updated_at + RECAP_STALE_SLACK_MS)
-            .unwrap_or(false);
-        ColumnBody::Recap { segments, stale }
+        ColumnBody::Recap { segments }
     } else {
         match fallback_text(status, events, now_ms) {
             Some((text, emphasis)) => ColumnBody::Fallback { text, emphasis },
@@ -392,11 +386,10 @@ mod tests {
         );
         let c = row_column(Status::Waiting, Some(&evt()), 0, None, Some(&rc));
         match c.body {
-            ColumnBody::Recap { segments, stale } => {
+            ColumnBody::Recap { segments } => {
                 let texts: Vec<&str> = segments.iter().map(|s| s.text.as_str()).collect();
                 assert_eq!(texts, vec!["Audit V2 #2835", "3/12 done", "fix drift"]);
                 assert!(segments.iter().all(|s| s.authored));
-                assert!(!stale);
             }
             other => panic!("expected Recap, got {other:?}"),
         }
@@ -487,15 +480,26 @@ mod tests {
         assert!(matches!(c.body, ColumnBody::Fallback { .. }));
     }
 
+    /// The flex column renders every recap the same grey — an out-of-date
+    /// recap must not be styled or shaped differently here. (The PM pane
+    /// still surfaces staleness as an explicit `recap stale` fact.)
     #[test]
-    fn recap_stale_when_activity_outruns_updated_at() {
+    fn recap_body_is_uniform_when_activity_outruns_updated_at() {
         let rc = recap_with(None, Some("g"), None, None, 1_000);
         let e = WorkspaceEvents {
             last_log_activity_ms: 1_000 + crate::ui::pm_pane::RECAP_STALE_SLACK_MS + 1,
             ..WorkspaceEvents::default()
         };
         let c = row_column(Status::Waiting, Some(&e), 0, None, Some(&rc));
-        assert!(matches!(c.body, ColumnBody::Recap { stale: true, .. }));
+        let fresh = recap_with(None, Some("g"), None, None, 1_000);
+        let c_fresh = row_column(
+            Status::Waiting,
+            Some(&WorkspaceEvents::default()),
+            0,
+            None,
+            Some(&fresh),
+        );
+        assert_eq!(c.body, c_fresh.body);
     }
 
     #[test]

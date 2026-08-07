@@ -600,7 +600,6 @@ fn matches_filter_matches_recap_segments() {
             reported: false,
             body: ColumnBody::Recap {
                 segments: vec![seg("Audit V2 invoices"), seg("fix drift calc")],
-                stale: false,
             },
         }),
     );

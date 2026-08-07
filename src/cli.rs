@@ -1847,7 +1847,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         .into_iter()
                         .find(|pr| pr.id == p.repo_id)
                         .map(|pr| pr.name)
-                        .unwrap_or_default();
+                        .unwrap_or_else(|| "(unknown repo)".to_string());
                     println!(
                         "inherited {} from {}/{}",
                         inherited.join(", "),

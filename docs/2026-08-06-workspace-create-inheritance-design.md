@@ -24,19 +24,24 @@ Rules:
   `--no-yolo`; omitting the flag inherits. (Deliberate simplicity — a
   safer-than-parent child can be created from outside the workspace.)
 - **agent**: `--agent <kind>` wins if passed; else the parent's agent kind;
-  else the default (claude).
+  else the `coding_agent` setting (claude unless configured otherwise) — the
+  same default the TUI's create modal already used, which the CLI previously
+  ignored by hard-defaulting to claude.
 - Inheritance is repo-agnostic: a yolo workspacex parent creating a sessionx
   child still passes both on (the cross-repo handoff case).
-- No parent resolvable (create run outside any workspace): behavior is
-  exactly today's — flag values or defaults.
+- No parent resolvable (create run outside any workspace): yolo behaves
+  exactly as today (flag value); the agent falls back to the `coding_agent`
+  setting rather than hard-defaulting to claude, aligning the CLI with the
+  TUI and the book.
 - The command's stdout names what was inherited and from where, so agents
   and humans see it happened.
 
 ## Implementation
 
 - A pure helper in `cli.rs`,
-  `effective_create_flags(explicit_yolo, explicit_agent, parent) ->
-  (bool, AgentKind)`, unit-tested without env/cwd manipulation
+  `effective_create_flags(explicit_yolo, explicit_agent, parent,
+  default_agent) -> (bool, AgentKind)` (with `default_agent` resolved from
+  the `coding_agent` setting), unit-tested without env/cwd manipulation
   (`resolve_current_workspace` reads process-global state, hostile to
   parallel tests).
 - The `CliAction::WorkspaceCreate` handler resolves the parent best-effort
@@ -53,6 +58,6 @@ notion and its own explicit controls.
 ## Testing
 
 - Unit tests for `effective_create_flags`: explicit beats parent, parent
-  beats default, no parent preserves today's behavior, yolo flag ORs with
-  parent yolo.
+  beats the `coding_agent` setting, the setting applies when no parent,
+  yolo flag ORs with parent yolo.
 - Doctrine content test extended for the new clause.

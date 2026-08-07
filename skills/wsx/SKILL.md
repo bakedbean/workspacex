@@ -48,6 +48,8 @@ Run `wsx --help` or `wsx <command> --help` to list commands and arguments direct
 
 `--agent` on `create` picks the workspace's first (primary) agent; `wsx agent add` attaches more on top. See [Multi-agent workspaces](#multi-agent-workspaces) below for how peers, labels, and messaging work.
 
+When `create` runs from inside a workspace (an agent handing off, or a shell in a worktree), the new workspace inherits that workspace's yolo mode and agent kind. Don't pass `--yolo` when handing off; pass `--agent` only to deliberately pick a different agent. Creates from outside any workspace default to non-yolo and the `coding_agent` setting (claude unless configured otherwise).
+
 The full reference is the project README's "CLI reference", "Multi-agent workspaces", and "Related repos" sections — consult it for `wsx config` / `wsx remote` / setup scripts.
 
 ## Reporting your status

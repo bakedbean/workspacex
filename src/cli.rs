@@ -1809,13 +1809,19 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let r = lookup_repo(&store, &repo)?;
             let worktree_base = dirs.app_dir().join("worktrees");
             std::fs::create_dir_all(&worktree_base)?;
-            let agent_kind = crate::pty::session::AgentKind::from_str_or_default(agent.as_deref());
+            // Inherit yolo + agent kind from the workspace this command runs
+            // inside (agent handoffs, or a human in a worktree shell); creates
+            // from outside any workspace behave as before.
+            let parent = resolve_current_workspace(&store).ok();
+            let default_agent = crate::pty::session::AgentKind::from_store(&store);
+            let (effective_yolo, agent_kind) =
+                effective_create_flags(yolo, agent.as_deref(), parent.as_ref(), default_agent);
             let created = crate::data::workspace::create(
                 &store,
                 &r,
                 name.as_deref(),
                 &worktree_base,
-                yolo,
+                effective_yolo,
                 shared,
                 agent_kind,
                 tokio_util::sync::CancellationToken::new(),
@@ -1828,6 +1834,28 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 created.workspace.name,
                 created.workspace.worktree_path.display()
             );
+            if let Some(p) = &parent {
+                let mut inherited: Vec<String> = Vec::new();
+                if effective_yolo && !yolo {
+                    inherited.push("yolo".to_string());
+                }
+                if agent.is_none() && p.agent != default_agent {
+                    inherited.push(format!("agent={}", p.agent.display_name()));
+                }
+                if !inherited.is_empty() {
+                    let parent_repo = crate::data::repo::list(&store)?
+                        .into_iter()
+                        .find(|pr| pr.id == p.repo_id)
+                        .map(|pr| pr.name)
+                        .unwrap_or_else(|| "(unknown repo)".to_string());
+                    println!(
+                        "inherited {} from {}/{}",
+                        inherited.join(", "),
+                        parent_repo,
+                        p.name
+                    );
+                }
+            }
             if let crate::data::setup::SetupResult::Failed { exit_code } = created.setup_result {
                 println!("warning: setup script exited with code {exit_code}");
             }
@@ -2147,6 +2175,30 @@ fn resolve_current_workspace(
             )
         })?;
     Ok(ws)
+}
+
+/// Effective yolo + agent for a new workspace: explicit flags win, then the
+/// parent workspace (the one this `wsx` invocation runs inside, if any), then
+/// `default_agent` (the `coding_agent` setting — the same default the TUI's
+/// create modal uses). Inheritance means an agent handing work to a sibling
+/// workspace doesn't need to know — and can't reliably know — its own
+/// workspace's yolo state or agent kind. Pure so it can be unit-tested
+/// without the process-global env/cwd that `resolve_current_workspace` reads.
+fn effective_create_flags(
+    explicit_yolo: bool,
+    explicit_agent: Option<&str>,
+    parent: Option<&crate::data::store::Workspace>,
+    default_agent: crate::pty::session::AgentKind,
+) -> (bool, crate::pty::session::AgentKind) {
+    let yolo = explicit_yolo || parent.is_some_and(|p| p.yolo);
+    let agent = match explicit_agent {
+        Some(_) => crate::pty::session::AgentKind::from_str_or_default(explicit_agent),
+        None => match parent {
+            Some(p) => p.agent,
+            None => default_agent,
+        },
+    };
+    (yolo, agent)
 }
 
 fn lookup_repo(store: &crate::data::store::Store, name: &str) -> Result<crate::data::store::Repo> {
@@ -3083,6 +3135,90 @@ mod tests {
     #[test]
     fn parses_workspace_create_rejects_unknown_arg() {
         assert!(parse(&["workspace", "create", "backend", "--bogus"]).is_err());
+    }
+
+    use crate::pty::session::AgentKind;
+
+    fn parent_ws(yolo: bool, agent: AgentKind) -> crate::data::store::Workspace {
+        use crate::data::store::{RepoId, SetupStatus, Workspace, WorkspaceId, WorkspaceState};
+        Workspace {
+            id: WorkspaceId(1),
+            repo_id: RepoId(1),
+            name: "parent".into(),
+            branch: "x/parent".into(),
+            worktree_path: std::path::PathBuf::from("/tmp/p"),
+            state: WorkspaceState::Ready,
+            setup_status: SetupStatus::Ok,
+            created_at: 0,
+            yolo,
+            agent,
+            shared: false,
+        }
+    }
+
+    #[test]
+    fn create_flags_without_parent_keep_todays_defaults() {
+        assert_eq!(
+            effective_create_flags(false, None, None, AgentKind::Claude),
+            (false, AgentKind::Claude)
+        );
+        assert_eq!(
+            effective_create_flags(true, Some("pi"), None, AgentKind::Claude),
+            (true, AgentKind::Pi)
+        );
+    }
+
+    #[test]
+    fn create_flags_without_parent_fall_back_to_coding_agent_setting() {
+        assert_eq!(
+            effective_create_flags(false, None, None, AgentKind::Codex),
+            (false, AgentKind::Codex)
+        );
+    }
+
+    #[test]
+    fn create_flags_inherit_yolo_and_agent_from_parent() {
+        let parent = parent_ws(true, AgentKind::Pi);
+        assert_eq!(
+            effective_create_flags(false, None, Some(&parent), AgentKind::Claude),
+            (true, AgentKind::Pi)
+        );
+    }
+
+    #[test]
+    fn create_flags_parent_agent_beats_coding_agent_setting() {
+        let parent = parent_ws(false, AgentKind::Pi);
+        assert_eq!(
+            effective_create_flags(false, None, Some(&parent), AgentKind::Codex),
+            (false, AgentKind::Pi)
+        );
+    }
+
+    #[test]
+    fn create_flags_explicit_agent_beats_parent() {
+        let parent = parent_ws(false, AgentKind::Pi);
+        assert_eq!(
+            effective_create_flags(false, Some("codex"), Some(&parent), AgentKind::Claude),
+            (false, AgentKind::Codex)
+        );
+    }
+
+    #[test]
+    fn create_flags_explicit_yolo_ors_with_parent() {
+        let parent = parent_ws(false, AgentKind::Claude);
+        assert_eq!(
+            effective_create_flags(true, None, Some(&parent), AgentKind::Claude),
+            (true, AgentKind::Claude)
+        );
+    }
+
+    #[test]
+    fn create_flags_non_yolo_claude_parent_matches_defaults() {
+        let parent = parent_ws(false, AgentKind::Claude);
+        assert_eq!(
+            effective_create_flags(false, None, Some(&parent), AgentKind::Claude),
+            (false, AgentKind::Claude)
+        );
     }
 
     #[test]

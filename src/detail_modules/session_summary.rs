@@ -1,7 +1,9 @@
-//! Session summary module. Shows the agent's current status, last
-//! activity, and tool-use trace for the selected workspace.
+//! Session summary module. Leads with the workspace's agent-authored
+//! recap, then shows the agent's current status, last activity, and
+//! tool-use trace for the selected workspace.
 
 use crate::activity::events::WorkspaceEvents;
+use crate::data::store::WorkspaceRecap;
 use crate::detail_modules::{DetailContext, DetailModule};
 use crate::ui::dashboard::column_content::{
     format_ago_short, format_state_line, format_tool_trace,
@@ -56,6 +58,17 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
     // wrapped lines align with the first character of the prompt text.
     let continuation = Span::raw("  ".to_string());
 
+    // The agent-authored recap leads: goal/state/next is a fresher answer
+    // to "what is this workspace doing" than the prompt that opened the
+    // session. It comes from SQLite rather than the JSONL scan, so it
+    // renders above the `match` — visible even while events are loading.
+    let recap = ctx
+        .recap
+        .map(|r| recap_lines(r, &prefix, theme, inner_width))
+        .unwrap_or_default();
+    let has_recap = !recap.is_empty();
+    out.extend(recap);
+
     match events {
         None => {
             out.push(Line::from(Span::styled(
@@ -64,7 +77,9 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
             )));
         }
         Some(evt) => {
-            if let Some(prompt) = evt.first_user_text.as_deref() {
+            // The opening prompt is the pre-recap fallback only — once a
+            // recap exists it answers the same question, better.
+            if let Some(prompt) = evt.first_user_text.as_deref().filter(|_| !has_recap) {
                 let trimmed = prompt.trim();
                 if !trimmed.is_empty() {
                     // Respect `\n` from the original prompt AND wrap long lines
@@ -167,6 +182,78 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
         Span::styled(active_text, theme.dim_style()),
     ]));
 
+    out
+}
+
+/// Labels for the three recap slots. Padded to a common width so the
+/// values column-align with each other and with the `model: ` /
+/// `context: ` lines further down the module.
+const RECAP_LABELS: [&str; 3] = ["goal:  ", "state: ", "next:  "];
+
+/// Resolve one recap slot: the long form, falling back to the agent's
+/// short form when the long one is absent or blank. The PM pane reads
+/// only the long fields, so a workspace whose agent ran
+/// `wsx recap set --goal-short` alone renders empty there; that hole
+/// isn't worth reproducing on a second surface.
+fn recap_field<'a>(long: Option<&'a str>, short: Option<&'a str>) -> Option<&'a str> {
+    [long, short]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+}
+
+/// The recap block: one `▸ goal:  …` line per populated slot, values
+/// wrapped to the width left after the label and hanging-indented so
+/// continuation lines sit under the value's first character. Empty when
+/// every slot is absent or blank — the caller then falls back to the
+/// opening prompt.
+fn recap_lines(
+    recap: &WorkspaceRecap,
+    prefix: &ratatui::text::Span<'static>,
+    theme: &crate::ui::theme::Theme,
+    inner_width: usize,
+) -> Vec<ratatui::text::Line<'static>> {
+    use ratatui::text::{Line, Span};
+
+    let slots = [
+        recap_field(recap.goal.as_deref(), recap.goal_short.as_deref()),
+        recap_field(recap.state.as_deref(), recap.state_short.as_deref()),
+        recap_field(recap.next.as_deref(), recap.next_short.as_deref()),
+    ];
+
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for (label, value) in RECAP_LABELS.iter().zip(slots) {
+        let Some(value) = value else { continue };
+        let label_chars = label.chars().count();
+        // Too narrow for label + value: degrade to a truncated dim label,
+        // the same way `label_value_line` does for `model:`/`context:`.
+        if label_chars >= inner_width {
+            out.push(Line::from(vec![
+                prefix.clone(),
+                Span::styled(truncate_to_chars(label, inner_width), theme.dim_style()),
+            ]));
+            continue;
+        }
+        // Wrapped lines align under the value, past the 2-cell prefix and
+        // the label.
+        let indent = Span::raw(" ".repeat(2 + label_chars));
+        for (i, text) in wrap_lines(value, inner_width - label_chars)
+            .into_iter()
+            .enumerate()
+        {
+            let mut spans = if i == 0 {
+                vec![
+                    prefix.clone(),
+                    Span::styled(label.to_string(), theme.dim_style()),
+                ]
+            } else {
+                vec![indent.clone()]
+            };
+            spans.push(Span::styled(text, theme.dim_style()));
+            out.push(Line::from(spans));
+        }
+    }
     out
 }
 
@@ -453,6 +540,221 @@ mod tests {
             s.push('\n');
         }
         s
+    }
+
+    // -- recap block ------------------------------------------------
+
+    /// Leak a recap built from the three long fields (the shape
+    /// `wsx recap set --goal/--state/--next` produces).
+    fn leak_recap(
+        goal: Option<&str>,
+        state: Option<&str>,
+        next: Option<&str>,
+    ) -> &'static WorkspaceRecap {
+        Box::leak(Box::new(WorkspaceRecap {
+            goal: goal.map(str::to_string),
+            state: state.map(str::to_string),
+            next: next.map(str::to_string),
+            ..Default::default()
+        }))
+    }
+
+    /// Leak events carrying an opening prompt — the pre-recap fallback.
+    fn leak_events_with_prompt(prompt: &str) -> &'static WorkspaceEvents {
+        Box::leak(Box::new(WorkspaceEvents {
+            first_user_text: Some(prompt.to_string()),
+            ..WorkspaceEvents::default()
+        }))
+    }
+
+    #[test]
+    fn recap_replaces_the_opening_prompt() {
+        let mut ctx = stub_context();
+        ctx.events = Some(leak_events_with_prompt("the original prompt text"));
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(
+            Some("fix the auth regression"),
+            Some("tests failing"),
+            Some("debug the regex"),
+        ));
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(text.contains("goal:"), "missing goal label:\n{text}");
+        assert!(text.contains("fix the auth regression"), "{text}");
+        assert!(text.contains("state:"), "missing state label:\n{text}");
+        assert!(text.contains("tests failing"), "{text}");
+        assert!(text.contains("next:"), "missing next label:\n{text}");
+        assert!(text.contains("debug the regex"), "{text}");
+        assert!(
+            !text.contains("the original prompt text"),
+            "prompt must yield to the recap:\n{text}"
+        );
+    }
+
+    #[test]
+    fn partial_recap_renders_present_slots_only_and_still_hides_the_prompt() {
+        let mut ctx = stub_context();
+        ctx.events = Some(leak_events_with_prompt("the original prompt text"));
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(Some("fix the auth regression"), None, None));
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(text.contains("goal:"), "{text}");
+        assert!(
+            !text.contains("state:"),
+            "absent slot must be skipped:\n{text}"
+        );
+        assert!(
+            !text.contains("next:"),
+            "absent slot must be skipped:\n{text}"
+        );
+        assert!(
+            !text.contains("the original prompt text"),
+            "one populated slot is still a recap — no prompt:\n{text}"
+        );
+    }
+
+    #[test]
+    fn blank_recap_falls_back_to_the_prompt() {
+        let mut ctx = stub_context();
+        ctx.events = Some(leak_events_with_prompt("the original prompt text"));
+        ctx.events_scanned = true;
+        // A row exists but every field is whitespace — indistinguishable
+        // from no recap at all.
+        ctx.recap = Some(leak_recap(Some("   "), Some(""), Some("\n\t")));
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(!text.contains("goal:"), "{text}");
+        assert!(text.contains("the original prompt text"), "{text}");
+    }
+
+    #[test]
+    fn absent_recap_falls_back_to_the_prompt() {
+        let mut ctx = stub_context();
+        ctx.events = Some(leak_events_with_prompt("the original prompt text"));
+        ctx.events_scanned = true;
+        ctx.recap = None;
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(!text.contains("goal:"), "{text}");
+        assert!(text.contains("the original prompt text"), "{text}");
+    }
+
+    #[test]
+    fn recap_renders_before_events_are_scanned() {
+        // The recap comes from SQLite, not the JSONL scan, so it must be
+        // visible during the `loading…` window rather than waiting on it.
+        let mut ctx = stub_context();
+        ctx.events = None;
+        ctx.events_scanned = false;
+        ctx.recap = Some(leak_recap(Some("fix the auth regression"), None, None));
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(text.contains("fix the auth regression"), "{text}");
+        assert!(
+            text.contains("loading"),
+            "events-derived content is still loading:\n{text}"
+        );
+    }
+
+    #[test]
+    fn recap_falls_back_to_the_short_form_when_the_long_field_is_absent() {
+        // `wsx recap set --goal-short` alone: the PM pane shows nothing,
+        // this module shows the short form.
+        let recap: &'static WorkspaceRecap = Box::leak(Box::new(WorkspaceRecap {
+            goal_short: Some("audit V2 invoices".into()),
+            state: Some("3/12 checked".into()),
+            state_short: Some("3/12".into()),
+            ..Default::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events_scanned = true;
+        ctx.recap = Some(recap);
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(text.contains("audit V2 invoices"), "{text}");
+        assert!(
+            text.contains("3/12 checked"),
+            "the long form still wins when both are set:\n{text}"
+        );
+    }
+
+    #[test]
+    fn long_recap_value_wraps_with_a_hanging_indent() {
+        let mut ctx = stub_context();
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(
+            Some("audit all V2 invoices auto-issued today for the amount-drift bug"),
+            None,
+            None,
+        ));
+
+        // inner_width 28, label 7 -> values wrap at 21 chars.
+        let lines = SessionSummary.lines(&ctx, 30);
+        let goal_idx = lines
+            .iter()
+            .position(|l| {
+                let t: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                t.contains("goal:")
+            })
+            .expect("goal line");
+        let cont = &lines[goal_idx + 1];
+        assert_eq!(
+            cont.spans[0].content.as_ref(),
+            "         ",
+            "continuation must be indented past the prefix + label"
+        );
+        let cont_text: String = cont.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            !cont_text.contains('▸'),
+            "continuation must not repeat the bullet: {cont_text:?}"
+        );
+        // Every wrapped fragment stays within the value column.
+        for line in &lines[goal_idx..=goal_idx + 1] {
+            let t: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(t.chars().count() <= 30, "line overflows the column: {t:?}");
+        }
+    }
+
+    #[test]
+    fn recap_line_degrades_to_label_only_when_narrow() {
+        // inner_width for lines(ctx, 8) is 6 — narrower than the 7-char
+        // "goal:  " label.
+        let mut ctx = stub_context();
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(Some("fix the auth regression"), None, None));
+
+        let lines = SessionSummary.lines(&ctx, 8);
+        let line = find_line(&lines, "goal");
+        assert_eq!(line.spans.len(), 2, "expected prefix + label only");
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[1].content.chars().count(), 6);
+    }
+
+    #[test]
+    fn recap_label_and_value_share_the_dim_style() {
+        // One grey for every recap — the same call commit e4bf119 made
+        // for the dashboard row's flex column.
+        let mut ctx = stub_context();
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(Some("fix the auth regression"), None, None));
+
+        let lines = SessionSummary.lines(&ctx, 60);
+        let line = find_line(&lines, "goal:");
+        assert_eq!(line.spans[1].content.as_ref(), "goal:  ");
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[2].content.as_ref(), "fix the auth regression");
+        assert_eq!(line.spans[2].style, ctx.theme.dim_style());
+    }
+
+    #[test]
+    fn recap_field_prefers_long_then_short_then_nothing() {
+        assert_eq!(recap_field(Some("long"), Some("short")), Some("long"));
+        assert_eq!(recap_field(None, Some("short")), Some("short"));
+        assert_eq!(recap_field(Some("  "), Some("short")), Some("short"));
+        assert_eq!(recap_field(Some(" long "), None), Some("long"));
+        assert_eq!(recap_field(None, None), None);
+        assert_eq!(recap_field(Some(""), Some("\t")), None);
     }
 
     #[test]

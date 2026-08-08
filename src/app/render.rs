@@ -336,6 +336,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             repo,
                             workspace: ws,
                             events: app.workspace_events.get(&ws.id),
+                            recap: app.recaps.get(&ws.id),
                             procs,
                             diff: app.workspace_diff.get(&ws.id).copied(),
                             diff_per_file: app.workspace_diff_per_file.get(&ws.id),

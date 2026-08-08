@@ -8,7 +8,7 @@
 use crate::activity::events::WorkspaceEvents;
 use crate::activity::proc::ProcInfo;
 use crate::config::detail_bar_config::DetailBarConfig;
-use crate::data::store::{Repo, Workspace};
+use crate::data::store::{Repo, Workspace, WorkspaceRecap};
 use crate::git::DiffStats;
 use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::status::Status;
@@ -23,6 +23,9 @@ pub struct DetailInputs<'a> {
     pub repo: &'a Repo,
     pub workspace: &'a Workspace,
     pub events: Option<&'a WorkspaceEvents>,
+    /// The workspace's latest `wsx recap set` digest, when it has one.
+    /// SESSION SUMMARY leads with it in place of the first user prompt.
+    pub recap: Option<&'a WorkspaceRecap>,
     pub procs: &'a [ProcInfo],
     pub diff: Option<DiffStats>,
     /// Per-file diff stats keyed by path relative to the worktree
@@ -266,6 +269,7 @@ fn render_body_region(
         repo: inputs.repo,
         workspace: inputs.workspace,
         events: inputs.events,
+        recap: inputs.recap,
         procs: inputs.procs,
         diff: inputs.diff,
         diff_per_file: inputs.diff_per_file,
@@ -842,6 +846,7 @@ mod tests {
                 repo: &repo,
                 workspace: &ws,
                 events: None,
+                recap: None,
                 procs: &[],
                 diff: None,
                 diff_per_file: None,
@@ -1069,6 +1074,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
+            recap: None,
             procs: &[],
             diff: Some(DiffStats {
                 added: 12,
@@ -1121,6 +1127,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1167,6 +1174,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1219,6 +1227,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: None,
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1259,6 +1268,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1306,6 +1316,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: None,
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1357,6 +1368,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: None,
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1411,6 +1423,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: None,
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1611,6 +1624,7 @@ mod tests {
             repo: &repo,
             workspace: &ws,
             events: Some(&evt),
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1687,6 +1701,7 @@ mod tests {
             repo: &repo,
             workspace: &workspace,
             events: None,
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1738,6 +1753,7 @@ mod tests {
             repo: &repo,
             workspace: &workspace,
             events: None,
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,
@@ -1787,6 +1803,7 @@ mod tests {
             repo: &repo,
             workspace: &workspace,
             events: None,
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,

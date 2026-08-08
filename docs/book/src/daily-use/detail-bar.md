@@ -40,6 +40,28 @@ clamped on save (see below).
 `recent_files`. Unknown IDs render a `[unknown: <id>]` placeholder and
 log a warning, so typos are visible but don't break the dashboard.
 
+`session_summary` leads with the workspace's recap — the same
+`goal` / `state` / `next` the Project Manager pane shows, one labeled
+line per populated field, wrapped to the column:
+
+```
+SESSION SUMMARY
+▸ goal:  Audit all V2 invoices auto-issued
+         today for the CV-04964 drift bug
+▸ state: 3 of 12 checked, drift on 2
+▸ next:  Fix rounding in issue_v2()
+▸ Read×12 Edit×3 Bash×7
+▸ working
+▸ model: opus 5
+```
+
+Each field prefers the long form and falls back to the short one, so a
+workspace whose agent only set `--goal-short` still gets a line. A
+workspace with no recap at all falls back to the session's first user
+prompt, which is what the module always showed before recaps existed.
+Because the recap comes from the database rather than the session log,
+it appears immediately — it doesn't wait on the `loading…` scan.
+
 When every container is empty (`[[], [], []]`), the bar shrinks to its
 4-row chrome (header + two rules + reply input) regardless of
 `height.percent`. That's how you trim the bar to just the reply input.

@@ -7,7 +7,7 @@
 
 use crate::activity::events::WorkspaceEvents;
 use crate::activity::proc::ProcInfo;
-use crate::data::store::{Repo, Workspace};
+use crate::data::store::{Repo, Workspace, WorkspaceRecap};
 use crate::git::DiffStats;
 use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::status::Status;
@@ -22,6 +22,8 @@ pub struct DetailContext<'a> {
     pub repo: &'a Repo,
     pub workspace: &'a Workspace,
     pub events: Option<&'a WorkspaceEvents>,
+    /// The workspace's latest `wsx recap set` digest, when it has one.
+    pub recap: Option<&'a WorkspaceRecap>,
     pub procs: &'a [ProcInfo],
     pub diff: Option<DiffStats>,
     pub diff_per_file: Option<&'a HashMap<String, DiffStats>>,
@@ -145,6 +147,7 @@ pub(crate) mod tests_helpers {
             repo,
             workspace,
             events: None,
+            recap: None,
             procs: &[],
             diff: None,
             diff_per_file: None,

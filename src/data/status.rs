@@ -41,7 +41,20 @@ impl Store {
     /// Only `Waiting` is suppressed. `Working` (the agent resumed),
     /// `Blocked` (a permission prompt genuinely needs the user) and `Done`
     /// (a `Stop` whose `background_tasks` has emptied) all still supersede
-    /// `Busy`, so the state clears itself the moment the session moves on.
+    /// `Busy`, so the next hook event the session emits clears it. That is
+    /// arrival order, not event order: hook processes are independent and the
+    /// row is last-writer-wins, so a stalled `Stop` landing after a newer
+    /// `UserPromptSubmit` can briefly resurrect `Busy` until the following
+    /// event. Pre-existing for every state, and self-correcting.
+    ///
+    /// Nothing here expires a stale `Busy` from a session that died mid-flight;
+    /// the dashboard's escape is the `session_running` guard in
+    /// `Status::classify`. Consumers that render `all_workspace_status`
+    /// directly — waybar (`src/waybar/status.rs`) and the menubar rows
+    /// (`src/workspace_rows.rs`) — have no liveness signal and so show the last
+    /// stored state indefinitely, exactly as they already do for a `Working`
+    /// push whose session was killed.
+    ///
     /// Explicit `wsx status set` pushes are unaffected: they go through
     /// `set_workspace_status` and stay authoritative.
     pub fn apply_hook_status(
@@ -244,6 +257,121 @@ mod tests {
             .set_workspace_status(ws, ReportedState::Waiting, Some("parked"), "model")
             .unwrap();
         assert_eq!(state_of(&store, ws), Some(ReportedState::Waiting));
+    }
+
+    #[test]
+    fn waiting_inserts_again_after_a_clear() {
+        // `clear_workspace_status` deletes the row, so the conditional upsert
+        // must fall through to its INSERT arm rather than silently no-op.
+        let (store, ws) = store_with_workspace();
+        store
+            .apply_hook_status(ws, ReportedState::Busy, "hook")
+            .unwrap();
+        store.clear_workspace_status(ws).unwrap();
+        store
+            .apply_hook_status(ws, ReportedState::Waiting, "hook")
+            .unwrap();
+        assert_eq!(state_of(&store, ws), Some(ReportedState::Waiting));
+    }
+
+    #[test]
+    fn busy_is_honored_across_connections() {
+        // The rule exists to arbitrate between separate `wsx status from-hook`
+        // processes, so it must read the *stored* row and not any connection-
+        // local state. Two Stores over one file stand in for two processes.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        let writer = Store::open(&db).unwrap();
+        let repo = writer
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "r/")
+            .unwrap();
+        let ws = writer
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "r/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        writer
+            .apply_hook_status(ws, ReportedState::Busy, "hook")
+            .unwrap();
+
+        let other = Store::open(&db).unwrap();
+        other
+            .apply_hook_status(ws, ReportedState::Waiting, "hook")
+            .unwrap();
+        assert_eq!(state_of(&other, ws), Some(ReportedState::Busy));
+        assert_eq!(state_of(&writer, ws), Some(ReportedState::Busy));
+    }
+
+    #[test]
+    fn production_park_sequence_never_reports_done_early() {
+        // The whole chain the live bug ran through, replayed from payloads
+        // captured off Claude Code 2.1.226: parse_event -> apply_hook_status.
+        // The two idle prompts are the 60s notification timer firing while the
+        // session sits parked on its subagent.
+        use crate::agent::status::for_agent;
+        let claude = for_agent(AgentKind::Claude);
+        let (store, ws) = store_with_workspace();
+        let sequence = [
+            (
+                serde_json::json!({"hook_event_name": "UserPromptSubmit"}),
+                ReportedState::Working,
+            ),
+            (
+                serde_json::json!({
+                    "hook_event_name": "Stop",
+                    "last_assistant_message": "Dispatched the reviewer.",
+                    "background_tasks": [
+                        {"id": "a1", "type": "subagent", "status": "running", "description": "probe"}
+                    ]
+                }),
+                ReportedState::Busy,
+            ),
+            (
+                serde_json::json!({
+                    "hook_event_name": "Notification",
+                    "notification_type": "idle_prompt",
+                    "message": "Claude is waiting for your input"
+                }),
+                ReportedState::Busy,
+            ),
+            (
+                serde_json::json!({
+                    "hook_event_name": "Notification",
+                    "notification_type": "idle_prompt",
+                    "message": "Claude is waiting for your input"
+                }),
+                ReportedState::Busy,
+            ),
+            (
+                serde_json::json!({"hook_event_name": "UserPromptSubmit"}),
+                ReportedState::Working,
+            ),
+            (
+                serde_json::json!({
+                    "hook_event_name": "Stop",
+                    "last_assistant_message": "All done.",
+                    "background_tasks": []
+                }),
+                ReportedState::Done,
+            ),
+        ];
+        for (payload, want) in sequence {
+            if let Some(state) = claude.parse_event(&payload) {
+                store.apply_hook_status(ws, state, "hook").unwrap();
+            }
+            assert_eq!(
+                state_of(&store, ws),
+                Some(want),
+                "after {}",
+                payload["hook_event_name"]
+            );
+        }
     }
 
     #[test]

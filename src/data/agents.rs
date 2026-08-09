@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::pty::session::AgentKind;
 use rusqlite::OptionalExtension;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInstance {
     pub id: AgentInstanceId,
     pub workspace_id: WorkspaceId,
@@ -62,6 +62,29 @@ impl Store {
         )?;
         let rows = stmt.query_map([ws.0], row_to_instance)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Every instance in the database, grouped by workspace. Each group is
+    /// ordered exactly like `workspace_agents`: primary first, then by
+    /// creation time. One statement for the whole table — the dashboard
+    /// refreshes this per `App::refresh`, not per frame, so a per-workspace
+    /// query in a loop would be needless I/O.
+    pub fn all_workspace_agents(
+        &self,
+    ) -> Result<std::collections::HashMap<WorkspaceId, Vec<AgentInstance>>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at
+             FROM workspace_agents
+             ORDER BY workspace_id ASC, is_primary DESC, created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], row_to_instance)?;
+        let mut map: std::collections::HashMap<WorkspaceId, Vec<AgentInstance>> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let inst = row?;
+            map.entry(inst.workspace_id).or_default().push(inst);
+        }
+        Ok(map)
     }
 
     /// Add a non-primary instance, computing the next ordinal for its kind.
@@ -494,6 +517,66 @@ mod store_tests {
         assert_eq!(all.len(), 1);
         assert!(all[0].is_primary);
         assert_eq!(all[0].agent, AgentKind::Hermes);
+    }
+
+    #[test]
+    fn all_workspace_agents_groups_by_workspace_and_keeps_primary_first() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let mk = |name: &str| {
+            store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name,
+                    branch: name,
+                    worktree_path: &std::path::PathBuf::from(format!("/tmp/r/{name}")),
+                    yolo: false,
+                    agent: AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap()
+        };
+        let ws_a = mk("a");
+        let ws_b = mk("b");
+        store.add_primary_agent(ws_a, AgentKind::Claude, 1).unwrap();
+        store.add_workspace_agent(ws_a, AgentKind::Codex).unwrap();
+        store.add_primary_agent(ws_b, AgentKind::Pi, 1).unwrap();
+
+        let map = store.all_workspace_agents().unwrap();
+
+        // Grouped per workspace.
+        assert_eq!(map.get(&ws_a).map(|v| v.len()), Some(2));
+        assert_eq!(map.get(&ws_b).map(|v| v.len()), Some(1));
+        // Primary first, then creation order — same contract as workspace_agents().
+        let a = &map[&ws_a];
+        assert!(a[0].is_primary, "primary must sort first");
+        assert_eq!(a[0].agent, AgentKind::Claude);
+        assert_eq!(a[1].agent, AgentKind::Codex);
+        assert!(!a[1].is_primary);
+        // Matches the per-workspace query exactly.
+        assert_eq!(store.workspace_agents(ws_a).unwrap(), *a);
+    }
+
+    #[test]
+    fn all_workspace_agents_omits_workspaces_with_no_instances() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "lonely",
+                branch: "lonely",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        assert!(!store.all_workspace_agents().unwrap().contains_key(&ws));
     }
 }
 

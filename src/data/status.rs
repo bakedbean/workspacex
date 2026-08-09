@@ -50,14 +50,36 @@ impl Store {
         state: ReportedState,
         source: &str,
     ) -> Result<()> {
-        if state == ReportedState::Waiting
-            && self
-                .workspace_status(id)?
-                .is_some_and(|cur| cur.state == ReportedState::Busy)
-        {
-            return Ok(());
+        if state != ReportedState::Waiting {
+            return self.set_workspace_status(id, state, None, source);
         }
-        self.set_workspace_status(id, state, None, source)
+        // Conditional upsert rather than read-then-write: every `wsx status
+        // from-hook` is its own short-lived process racing the same row, so a
+        // separate SELECT could observe a state that no longer holds by the time
+        // the write lands — letting a Waiting clobber a Busy written just after
+        // the read, or suppressing one against a Busy already superseded. The
+        // `DO UPDATE ... WHERE` reads the stored row inside the same statement.
+        // A missing row still inserts: with no Busy on record there is nothing
+        // to protect.
+        self.conn().execute(
+            "INSERT INTO workspace_status \
+                 (workspace_id, state, message, source, reported_at) \
+             VALUES (?1, ?2, NULL, ?3, ?4) \
+             ON CONFLICT(workspace_id) DO UPDATE SET \
+                 state       = excluded.state, \
+                 message     = excluded.message, \
+                 source      = excluded.source, \
+                 reported_at = excluded.reported_at \
+             WHERE workspace_status.state <> ?5",
+            rusqlite::params![
+                id.0,
+                state.as_str(),
+                source,
+                now_ms(),
+                ReportedState::Busy.as_str(),
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn clear_workspace_status(&self, id: WorkspaceId) -> Result<()> {
@@ -162,9 +184,13 @@ mod tests {
             .apply_hook_status(ws, ReportedState::Busy, "hook")
             .unwrap();
         store
-            .apply_hook_status(ws, ReportedState::Waiting, "hook")
+            .apply_hook_status(ws, ReportedState::Waiting, "notify")
             .unwrap();
-        assert_eq!(state_of(&store, ws), Some(ReportedState::Busy));
+        let got = store.workspace_status(ws).unwrap().unwrap();
+        assert_eq!(got.state, ReportedState::Busy);
+        // The suppressed push must leave the row entirely untouched, not just
+        // its state — a distinct `source` proves the upsert took no branch.
+        assert_eq!(got.source, "hook");
     }
 
     #[test]

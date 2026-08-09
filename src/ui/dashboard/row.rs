@@ -213,14 +213,17 @@ pub fn render(
     // the name separately, so the column's char budget is accounted for in
     // exactly one place and `branch_visible_width` above stays authoritative.
     // The `<glyph> ` prefix is two chars; in a column too narrow to hold even
-    // that, everything left goes to the glyph span.
-    let (glyph_cell, name_cell) = match branch_truncated.char_indices().nth(2) {
-        Some((i, _)) => branch_truncated.split_at(i),
-        None => (branch_truncated.as_str(), ""),
-    };
-    spans.push(Span::styled(glyph_cell.to_string(), glyph_style));
-    if !name_cell.is_empty() {
-        spans.push(Span::styled(name_cell.to_string(), name_style));
+    // that, everything left goes to the glyph span. `split_off` hands the
+    // glyph span the existing buffer and allocates only the name, and its
+    // char-boundary precondition is met by construction — the index comes
+    // from `char_indices`. Bind that index before splitting: matching on the
+    // iterator directly would hold a borrow across the mutation.
+    let mut glyph_cell = branch_truncated;
+    let name_split = glyph_cell.char_indices().nth(2).map(|(i, _)| i);
+    let name_cell = name_split.map(|i| glyph_cell.split_off(i));
+    spans.push(Span::styled(glyph_cell, glyph_style));
+    if let Some(name_cell) = name_cell.filter(|n| !n.is_empty()) {
+        spans.push(Span::styled(name_cell, name_style));
     }
     if inputs.setup_failed {
         spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));

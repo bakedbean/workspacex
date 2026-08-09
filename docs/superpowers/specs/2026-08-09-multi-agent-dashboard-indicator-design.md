@@ -98,15 +98,20 @@ Unicode/ASCII, matching how the existing bar is drawn.
 `ColumnWidths.agent` is **derived, not read from settings**, so `read_column_widths`
 (`app/render.rs:939-954`) does not populate it — it keeps reading only
 `dashboard_branch_width` and `dashboard_pr_width`, and leaves `agent` at its 1 default.
-Each dashboard view then overwrites `agent` on its own copy of `ColumnWidths`, computed
-over the rows it is about to draw, before passing it to `row::render`:
 
-- `by_repo::render_list` (`by_repo.rs:156`)
-- `by_attention::flat_row_line` (`by_attention.rs:132-146`)
+The derived width is computed in **`render_by_repo` (`mod.rs:442`) and
+`render_by_attention` (`mod.rs:524`)**, not inside the view modules. This placement is
+load-bearing: each of those functions builds the visible row set, then uses
+`inputs.column_widths` *twice* — once in the PR-chip hit-test walk (`mod.rs:508`,
+`mod.rs:608`) and once when calling `render_list` (`mod.rs:519`, `mod.rs:618`).
+Computing the width where both callers can see it keeps rendering and hit-testing
+consistent by construction. Computing it lower down, inside `render_list`, would widen
+the drawn row while the hit-test walk still used the unwidened value — silently
+offsetting every PR-chip click target.
 
-Scoping it per-view is what makes "max across visible rows" correct when
-`by_attention` filters rows out. `by_attention` already clones `RowInputs`, so it
-inherits `peers` for free.
+Both functions have already applied the user's filter and (for `by_repo`) the fold state
+at that point, which is what makes "max across visible rows" correct. `by_attention`
+already clones `RowInputs`, so it inherits `peers` for free.
 
 ## 3. Downstream width consumers
 
@@ -140,6 +145,13 @@ unfiltered by liveness, so exited agents stay switchable and clickable.
 **Cache the roster** as `App::agent_roster: HashMap<WorkspaceId, Vec<AgentInstance>>`,
 populated in `App::refresh()` alongside `app.workspaces`, so the per-frame render path
 does no DB I/O. Liveness is read from the in-memory `app.sessions` each frame.
+
+The cache is filled by a new bulk query `Store::all_workspace_agents() ->
+HashMap<WorkspaceId, Vec<AgentInstance>>`, mirroring `all_workspace_status`
+(`data/status.rs:119-134`) — one statement for the whole table rather than one per
+workspace. `refresh()` already bulk-loads `pushed_status` and
+`workspaces_with_multi_pane_layouts` this way (`app.rs:733-765`), so this follows the
+established shape.
 
 Every mutation path must invalidate the cache:
 

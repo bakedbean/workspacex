@@ -144,9 +144,11 @@ pub fn render(
 
     // 4: branch — the row's identity column (the workspace name never
     // diverged from the branch in practice, so the branch alone carries
-    // identity). Bold like the name column it replaced, warn-colored when
-    // YOLO; the PR-lifecycle COLOR now lives in the chip column that
-    // follows, though the branch glyph shape still varies by lifecycle.
+    // identity). The NAME is bold like the name column it replaced, and
+    // warn-colored when YOLO; the leading branch GLYPH is colored by PR
+    // lifecycle instead (dim when unknown / no PR), matching the chip column
+    // that follows and the shared-workspace picker, so the glyph's shape and
+    // its color tell the same story.
     // Optionally prefixed by the multi-pane-layout glyph: the
     // nf-fa-columns glyph (U+F0DB) renders as a 1-cell glyph in
     // most nerd-font terminals, so the prefix consumes 2 display
@@ -199,11 +201,27 @@ pub fn render(
         .max(1);
     let branch_truncated = truncate(&branch_text, branch_target);
     let branch_visible_width = branch_truncated.chars().count();
-    let mut branch_style = Style::default().add_modifier(Modifier::BOLD);
+    let mut name_style = Style::default().add_modifier(Modifier::BOLD);
     if inputs.yolo {
-        branch_style = branch_style.fg(theme.warn);
+        name_style = name_style.fg(theme.warn);
     }
-    spans.push(Span::styled(branch_truncated, branch_style));
+    let glyph_style = theme
+        .lifecycle_style(inputs.lifecycle)
+        .unwrap_or_else(|| theme.dim_style())
+        .add_modifier(Modifier::BOLD);
+    // Split the ALREADY-truncated text rather than truncating the glyph and
+    // the name separately, so the column's char budget is accounted for in
+    // exactly one place and `branch_visible_width` above stays authoritative.
+    // The `<glyph> ` prefix is two chars; in a column too narrow to hold even
+    // that, everything left goes to the glyph span.
+    let (glyph_cell, name_cell) = match branch_truncated.char_indices().nth(2) {
+        Some((i, _)) => branch_truncated.split_at(i),
+        None => (branch_truncated.as_str(), ""),
+    };
+    spans.push(Span::styled(glyph_cell.to_string(), glyph_style));
+    if !name_cell.is_empty() {
+        spans.push(Span::styled(name_cell.to_string(), name_style));
+    }
     if inputs.setup_failed {
         spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
     }
@@ -1069,6 +1087,100 @@ mod tests {
             text.contains("\u{e0a0}"),
             "default glyph for no PR: {text:?}"
         );
+    }
+
+    /// Style of the span carrying the branch glyph. The glyph is unique among
+    /// a row's spans, so matching on it is enough to isolate the cell.
+    fn branch_glyph_style(inputs: &RowInputs, theme: &Theme) -> Style {
+        let line = render(inputs, ColumnWidths::default(), 0, theme, 120);
+        let glyph = crate::ui::theme::branch_glyph(inputs.lifecycle, inputs.nerd_fonts);
+        line.spans
+            .iter()
+            .find(|s| s.content.as_ref().starts_with(glyph))
+            .expect("branch glyph span present")
+            .style
+    }
+
+    #[test]
+    fn branch_glyph_takes_the_lifecycle_color_and_the_name_does_not() {
+        let theme = Theme::wsx();
+        for lc in [
+            BranchLifecycle::PrOpen,
+            BranchLifecycle::PrConflicted,
+            BranchLifecycle::PrMerged,
+            BranchLifecycle::PrClosed,
+        ] {
+            let mut inputs = base();
+            inputs.lifecycle = Some(lc);
+            assert_eq!(
+                branch_glyph_style(&inputs, &theme).fg,
+                theme.lifecycle_style(Some(lc)).unwrap().fg,
+                "glyph carries the {lc:?} color"
+            );
+            let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+            let name = line
+                .spans
+                .iter()
+                .find(|s| s.content.as_ref().contains("bakedbean/repo-overview"))
+                .expect("branch name span present");
+            assert_eq!(name.style.fg, None, "the name keeps its default color");
+            assert!(name.style.add_modifier.contains(Modifier::BOLD));
+        }
+    }
+
+    #[test]
+    fn branch_glyph_dims_when_the_branch_has_no_pr_status() {
+        // No PR, a draft PR, and a not-yet-fetched lifecycle all share the
+        // "nothing to report" color — the same fallback the chip column uses.
+        let theme = Theme::wsx();
+        for lc in [
+            None,
+            Some(BranchLifecycle::NoPr),
+            Some(BranchLifecycle::PrDraft),
+        ] {
+            let mut inputs = base();
+            inputs.lifecycle = lc;
+            assert_eq!(
+                branch_glyph_style(&inputs, &theme).fg,
+                Some(theme.dim),
+                "glyph dims for {lc:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn yolo_warn_colors_the_branch_name_but_not_the_lifecycle_glyph() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.yolo = true;
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        assert_eq!(
+            branch_glyph_style(&inputs, &theme).fg,
+            theme.ok_style().fg,
+            "YOLO recolors the name, not the status glyph"
+        );
+    }
+
+    #[test]
+    fn splitting_the_glyph_span_leaves_column_widths_untouched() {
+        // The glyph and the name are truncated as one string and only then
+        // split into two spans, so even a column too narrow for both keeps
+        // the row's total width — and never panics on a mid-glyph split.
+        let theme = Theme::wsx();
+        for branch_width in [MIN_BRANCH_WIDTH, 12, DEFAULT_BRANCH_WIDTH] {
+            let mut inputs = base();
+            inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+            inputs.shared = true;
+            inputs.has_multi_pane_layout = true;
+            inputs.setup_failed = true;
+            let widths = ColumnWidths::clamped(branch_width, DEFAULT_PR_WIDTH);
+            let line = render(&inputs, widths, 0, &theme, 120);
+            assert_eq!(
+                line_text(&line).chars().count(),
+                120,
+                "row fills the terminal width at branch_width={branch_width}"
+            );
+        }
     }
 
     #[test]

@@ -2022,7 +2022,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         None => ws.agent,
                     };
                     if let Some(state) = crate::agent::status::for_agent(kind).parse_event(&json) {
-                        let _ = store.set_workspace_status(ws.id, state, None, "hook");
+                        let _ = store.apply_hook_status(ws.id, state, "hook");
                     }
                 }
             }
@@ -2042,7 +2042,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         if let Some(state) =
                             crate::agent::status::for_agent(kind).parse_event(&json)
                         {
-                            let _ = store.set_workspace_status(ws.id, state, None, "notify");
+                            let _ = store.apply_hook_status(ws.id, state, "notify");
                         }
                     }
                 }

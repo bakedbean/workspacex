@@ -1873,6 +1873,9 @@ async fn handle_key_modal(
                         AttachReady::AgentMissing => {} // ensure_instance_session set the modal
                         _ => app.modal = None,
                     }
+                    // Refill `agent_roster` so it reflects the new instance —
+                    // nothing else on this path goes through `refresh()`.
+                    app.refresh()?;
                 }
                 KeyCode::Char('a') => {
                     for kind in AgentKind::ALL {
@@ -1880,6 +1883,10 @@ async fn handle_key_modal(
                         let _ = ensure_instance_session(app, inst.id, true)?;
                     }
                     app.modal = None;
+                    // Refill `agent_roster` so it reflects the four new
+                    // instances — nothing else on this path goes through
+                    // `refresh()`.
+                    app.refresh()?;
                 }
                 KeyCode::Char('x') => {
                     // Remove the most-recently-added non-primary instance.
@@ -1891,6 +1898,9 @@ async fn handle_key_modal(
                     {
                         app.sessions.remove(last.id);
                         app.store.remove_workspace_agent(last.id)?;
+                        // Refill `agent_roster` so it reflects the removal —
+                        // nothing else on this path goes through `refresh()`.
+                        app.refresh()?;
                     }
                 }
                 _ => {}

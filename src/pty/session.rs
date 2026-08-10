@@ -287,6 +287,51 @@ impl Session {
     }
 }
 
+#[cfg(test)]
+impl Session {
+    /// Build a `Session` for tests that only need a directly-chosen
+    /// `status`, without spawning a child process or requiring a Tokio
+    /// runtime (unlike `spawn_session`/`spawn_command_session`, which start a
+    /// reader thread and a Tokio writer task). `master` gets a real OS pty
+    /// pair — cheap, since nothing is spawned into it — and `killer` gets a
+    /// no-op stand-in; neither is exercised by tests that construct a
+    /// session this way, they only read `status`.
+    fn fake(status: SessionStatus) -> Session {
+        #[derive(Debug)]
+        struct NoopKiller;
+        impl portable_pty::ChildKiller for NoopKiller {
+            fn kill(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+                Box::new(NoopKiller)
+            }
+        }
+
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty for fake test session");
+        let (tx, _rx) = mpsc::channel::<Vec<u8>>(1);
+        Session {
+            parser: Arc::new(Mutex::new(Parser::new(24, 80, 1000))),
+            writer: tx,
+            status: Arc::new(RwLock::new(status)),
+            activity_ms: Arc::new(AtomicU64::new(0)),
+            agent: AgentKind::Claude,
+            scrollback_offset: std::sync::atomic::AtomicUsize::new(0),
+            master: Mutex::new(pair.master),
+            killer: Mutex::new(Box::new(NoopKiller)),
+            prompt: Arc::new(Mutex::new(PromptCapture::default())),
+            tmux_session: None,
+        }
+    }
+}
+
 /// Build the two writes used to inject `text` into an agent and submit it:
 /// `(body, enter)`, sent as separate writes by `send_text_when_settled`.
 ///
@@ -603,6 +648,21 @@ impl SessionManager {
 
     pub fn get(&self, id: crate::data::store::AgentInstanceId) -> Option<Arc<Session>> {
         self.sessions.get(&id).cloned()
+    }
+
+    /// Test-only: register a fake session under `id` with a directly-chosen
+    /// `status`, bypassing the real spawn path entirely (no process, no
+    /// Tokio runtime needed — see `Session::fake`). `sessions` is private,
+    /// so tests that need to control an instance's `SessionStatus` (e.g.
+    /// `App::live_instances` liveness filtering) have no other way to
+    /// populate this map.
+    #[cfg(test)]
+    pub fn insert_fake_session(
+        &mut self,
+        id: crate::data::store::AgentInstanceId,
+        status: SessionStatus,
+    ) {
+        self.sessions.insert(id, Arc::new(Session::fake(status)));
     }
 
     pub fn remove(&mut self, id: crate::data::store::AgentInstanceId) {

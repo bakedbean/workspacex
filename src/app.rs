@@ -2609,7 +2609,11 @@ mod live_instances_tests {
         /// it's immediately reflected, and return the new workspace id. Each
         /// call needs a distinct `name` — `workspaces.worktree_path` is
         /// UNIQUE, and `name` seeds the fixture path.
-        fn test_workspace(&mut self, name: &str) -> crate::data::store::WorkspaceId {
+        ///
+        /// `pub(crate)` (not just private to this module) so other `cfg(test)`
+        /// modules in the crate — e.g. `app::render`'s row-building tests —
+        /// can reuse it instead of duplicating the fixture setup.
+        pub(crate) fn test_workspace(&mut self, name: &str) -> crate::data::store::WorkspaceId {
             let repo = self
                 .store
                 .add_repo(
@@ -2638,7 +2642,9 @@ mod live_instances_tests {
         /// via `SessionManager::insert_fake_session` — bypasses the real
         /// spawn path (no process, no agent binary, no Tokio runtime needed)
         /// so liveness-filtering tests can pick any status synchronously.
-        fn test_spawn_session(
+        ///
+        /// `pub(crate)`, see `test_workspace` above for why.
+        pub(crate) fn test_spawn_session(
             &mut self,
             id: crate::data::store::AgentInstanceId,
             status: SessionStatus,

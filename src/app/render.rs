@@ -83,69 +83,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     if *rid != repo.id {
                         continue;
                     }
-                    let status = app.classify_status(ws);
-                    let session = app
-                        .primary_instance(ws.id)
-                        .and_then(|i| app.sessions.get(i));
-                    let secs = session.as_ref().map(|s| {
-                        let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
-                        if last == 0 {
-                            return 0;
-                        }
-                        let now = now_ms.max(0) as u64;
-                        now.saturating_sub(last) / 1000
-                    });
-                    let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
-                    // Badge liveness: a running client in this wsx (the tmux
-                    // attach client) or a detached-but-alive server session
-                    // (from the throttled has-session sweep) both mean the
-                    // agent is alive in tmux right now.
-                    let session_running = session.as_ref().is_some_and(|s| {
-                        matches!(
-                            *s.status.read().unwrap(),
-                            crate::pty::session::SessionStatus::Running { .. }
-                        )
-                    });
-                    let shared_active =
-                        ws.shared && (session_running || app.shared_detached.contains(&ws.id));
-                    let row = crate::ui::dashboard::row::RowInputs {
-                        agent: ws.agent,
-                        // Task 5 populates this from live sessions.
-                        peers: Vec::new(),
-                        status,
-                        branch: ws.branch.clone(),
-                        pr_number: app.pr_number.get(&ws.id).copied(),
-                        procs: app
-                            .workspace_processes
-                            .get(&ws.id)
-                            .map(|v| v.len() as u32)
-                            .unwrap_or(0),
-                        diff: app.workspace_diff.get(&ws.id).copied(),
-                        column: Some(crate::ui::dashboard::column_content::row_column(
-                            status,
-                            app.workspace_events.get(&ws.id),
-                            now_ms,
-                            app.fresh_reported_status(ws.id),
-                            app.recaps.get(&ws.id),
-                        )),
-                        ago_secs: secs,
-                        selected: matches!(app.selected_target(),
-                            Some(SelectionTarget::Workspace(id)) if id == ws.id),
-                        yolo: ws.yolo,
-                        setup_failed,
-                        shared: ws.shared,
-                        shared_active,
-                        lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
-                        nerd_fonts,
-                        workspace_id: ws.id,
-                        has_multi_pane_layout: app
-                            .workspaces_with_multi_pane_layouts
-                            .contains(&ws.id),
-                    };
+                    let row = build_row_inputs(app, ws, now_ms, nerd_fonts);
                     workspaces.push(dashboard::WorkspaceItem {
                         repo,
                         workspace_id: ws.id,
-                        status,
+                        status: row.status,
                         row,
                     });
                 }
@@ -858,6 +800,81 @@ fn draw_attached_nav_overlay(f: &mut ratatui::Frame, area: ratatui::layout::Rect
     );
 }
 
+/// Build one workspace's dashboard row inputs: status classification, live
+/// peer agents, activity age, and the assorted per-row cache lookups the
+/// renderer needs. Extracted from the per-workspace loop in `draw` so it's
+/// callable directly from tests without spinning up a `TestBackend` frame.
+fn build_row_inputs(
+    app: &App,
+    ws: &crate::data::store::Workspace,
+    now_ms: i64,
+    nerd_fonts: bool,
+) -> crate::ui::dashboard::row::RowInputs {
+    let status = app.classify_status(ws);
+    let session = app
+        .primary_instance(ws.id)
+        .and_then(|i| app.sessions.get(i));
+    let secs = session.as_ref().map(|s| {
+        let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
+        if last == 0 {
+            return 0;
+        }
+        let now = now_ms.max(0) as u64;
+        now.saturating_sub(last) / 1000
+    });
+    let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
+    // Badge liveness: a running client in this wsx (the tmux
+    // attach client) or a detached-but-alive server session
+    // (from the throttled has-session sweep) both mean the
+    // agent is alive in tmux right now.
+    let session_running = session.as_ref().is_some_and(|s| {
+        matches!(
+            *s.status.read().unwrap(),
+            crate::pty::session::SessionStatus::Running { .. }
+        )
+    });
+    let shared_active = ws.shared && (session_running || app.shared_detached.contains(&ws.id));
+    crate::ui::dashboard::row::RowInputs {
+        agent: ws.agent,
+        // Live peers only, primary excluded — it renders unconditionally as
+        // the rightmost bar. Order is roster order (creation time), so a
+        // newly added peer lands next to the primary.
+        peers: app
+            .live_instances(ws.id)
+            .into_iter()
+            .filter(|inst| !inst.is_primary)
+            .map(|inst| inst.agent)
+            .collect(),
+        status,
+        branch: ws.branch.clone(),
+        pr_number: app.pr_number.get(&ws.id).copied(),
+        procs: app
+            .workspace_processes
+            .get(&ws.id)
+            .map(|v| v.len() as u32)
+            .unwrap_or(0),
+        diff: app.workspace_diff.get(&ws.id).copied(),
+        column: Some(crate::ui::dashboard::column_content::row_column(
+            status,
+            app.workspace_events.get(&ws.id),
+            now_ms,
+            app.fresh_reported_status(ws.id),
+            app.recaps.get(&ws.id),
+        )),
+        ago_secs: secs,
+        selected: matches!(app.selected_target(),
+            Some(SelectionTarget::Workspace(id)) if id == ws.id),
+        yolo: ws.yolo,
+        setup_failed,
+        shared: ws.shared,
+        shared_active,
+        lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
+        nerd_fonts,
+        workspace_id: ws.id,
+        has_multi_pane_layout: app.workspaces_with_multi_pane_layouts.contains(&ws.id),
+    }
+}
+
 #[doc(hidden)]
 pub fn draw_for_test(f: &mut ratatui::Frame, app: &mut App) {
     draw(f, app);
@@ -1182,5 +1199,70 @@ mod selection_anchoring_tests {
             app.selection_target_exists(sel.unwrap()),
             "fallback target actually exists"
         );
+    }
+}
+
+#[cfg(test)]
+mod build_row_inputs_tests {
+    //! Exercises `build_row_inputs` directly rather than through a
+    //! `TestBackend` frame — it's the extracted per-workspace loop body from
+    //! `draw`, so calling it needs only an `App` and a `Workspace`, not a
+    //! full render pass. `test_workspace` / `test_spawn_session` are the
+    //! `pub(crate)` fixture helpers from `app::live_instances_tests`.
+    use super::*;
+    use crate::pty::session::{AgentKind, SessionStatus};
+
+    fn test_app() -> App {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap()
+    }
+
+    /// `build_row_inputs` takes `&Workspace`, not a `WorkspaceId` — look the
+    /// row up from `app.workspaces` the same way `draw`'s loop does.
+    fn row_inputs(
+        app: &App,
+        ws: crate::data::store::WorkspaceId,
+    ) -> crate::ui::dashboard::row::RowInputs {
+        let (_, workspace) = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == ws)
+            .expect("workspace present after refresh");
+        build_row_inputs(app, workspace, crate::time::now_ms(), true)
+    }
+
+    #[test]
+    fn row_peers_exclude_the_primary_and_dead_agents() {
+        let mut app = test_app();
+        let ws = app.test_workspace("multi");
+        let primary = app
+            .store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        let live_peer = app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let dead_peer = app.store.add_workspace_agent(ws, AgentKind::Pi).unwrap();
+        app.refresh().unwrap();
+        app.test_spawn_session(primary.id, SessionStatus::Running { pid: 1 });
+        app.test_spawn_session(live_peer.id, SessionStatus::Running { pid: 2 });
+        app.test_spawn_session(dead_peer.id, SessionStatus::Exited { code: 0 });
+
+        let peers = row_inputs(&app, ws).peers;
+        assert_eq!(
+            peers,
+            vec![AgentKind::Codex],
+            "primary and dead peer excluded"
+        );
+    }
+
+    #[test]
+    fn row_peers_are_empty_when_the_workspace_was_never_attached() {
+        let mut app = test_app();
+        let ws = app.test_workspace("cold");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        app.refresh().unwrap();
+        // No sessions spawned at all.
+        assert!(row_inputs(&app, ws).peers.is_empty());
     }
 }

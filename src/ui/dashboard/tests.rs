@@ -684,12 +684,6 @@ fn give_workspace_peers(inputs: &mut DashboardInputs<'_>, index: usize, n: usize
     inputs.workspaces[index].row.peers = vec![AgentKind::Codex; n];
 }
 
-fn fold_every_repo(state: &mut DashboardState, inputs: &DashboardInputs<'_>) {
-    for r in &inputs.repos {
-        state.folded.insert(r.id.0 as u64, true);
-    }
-}
-
 /// Render a single `ListItem` through a 1-row `TestBackend` and read the
 /// buffer back as a string, so tests can assert on exactly what a flat list
 /// index will paint on screen.
@@ -734,13 +728,38 @@ fn derived_agent_width_of_nothing_is_one() {
 #[test]
 fn folded_repos_do_not_widen_the_strip() {
     // A peer-heavy workspace inside a collapsed repo is not drawn, so
-    // it must not tax the recap column of the rows that ARE drawn.
-    let mut inputs = fixture_dashboard_inputs();
+    // it must not tax the recap column of the rows that ARE drawn. Fold
+    // ONLY the peer-heavy repo, leaving another repo expanded, so the
+    // assertion actually distinguishes "folded rows excluded from the
+    // derivation" from "folded rows counted" — every workspace has a PR
+    // chip (so chips is non-empty either way) and the visible chip's x
+    // must land exactly where it would at the default (unwidened) width.
+    let mut inputs = fixture_dashboard_inputs_with_pr();
     give_workspace_peers(&mut inputs, 0, 3);
+    let folded_repo_id = inputs.workspaces[0].repo.id;
     let mut state = DashboardState::default();
-    fold_every_repo(&mut state, &inputs);
-    let (_items, chips) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
-    assert!(chips.is_empty(), "folded repos render no rows");
+    state.folded.insert(folded_repo_id.0 as u64, true);
+    let (items, chips) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    assert!(!chips.is_empty(), "other repos still render rows");
+    let (ws_id, flat_idx, (x, _w)) = chips[0];
+    let rendered = item_text(&items[flat_idx]);
+    assert_eq!(
+        rendered.chars().position(|c| c == '⏺'),
+        Some(x as usize),
+        "hit span must match where the chip actually rendered:\n  {rendered:?}"
+    );
+    let visible_row = &inputs
+        .workspaces
+        .iter()
+        .find(|w| w.workspace_id == ws_id)
+        .unwrap()
+        .row;
+    let (x_unwidened, _) =
+        row::pr_chip_hit_span(visible_row, row::ColumnWidths::default()).unwrap();
+    assert_eq!(
+        x, x_unwidened,
+        "the folded repo's 3 peers must not widen the strip for a visible row"
+    );
 }
 
 #[test]
@@ -751,11 +770,29 @@ fn chip_hit_spans_use_the_widened_strip() {
     give_workspace_peers(&mut inputs, 0, 2);
     let mut state = DashboardState::default();
     let (items, chips) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
-    let (_ws, flat_idx, (x, _w)) = chips[0];
+    let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
     assert_eq!(
         rendered.chars().position(|c| c == '⏺'),
         Some(x as usize),
         "hit span must match where the chip actually rendered:\n  {rendered:?}"
+    );
+    // Prove the derived width actually reaches the render, not just that
+    // both consumers happen to agree at whatever (possibly unwidened)
+    // width they were both given. 2 peers + primary = 3 live agents, one
+    // more cell than the default width of 1, so every chip — including
+    // rows with no peers of their own — must sit 2 columns further right
+    // than it would at the unwidened default.
+    let row_for_chip = &inputs
+        .workspaces
+        .iter()
+        .find(|w| w.workspace_id == ws_id)
+        .unwrap()
+        .row;
+    let (x_default, _) = row::pr_chip_hit_span(row_for_chip, row::ColumnWidths::default()).unwrap();
+    assert_eq!(
+        x,
+        x_default + 2,
+        "derived width must reach the render: a 3-wide strip shifts every chip 2 columns"
     );
 }

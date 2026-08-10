@@ -44,9 +44,10 @@ pub const DEFAULT_AGENT_WIDTH: usize = 1;
 /// degrade rather than grow without bound.
 pub const MAX_AGENT_WIDTH: usize = 4;
 
-/// User-resizable column widths. Values are clamped to safe ranges by
-/// `ColumnWidths::clamped` (called from the config read path) so the
-/// renderer never has to defend itself against pathological inputs.
+/// Column widths. `branch`/`pr` are user-resizable and clamped to safe
+/// ranges by `ColumnWidths::clamped` (called from the config read path) so
+/// the renderer never has to defend itself against pathological inputs;
+/// `agent` is derived per frame instead — see its field doc below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColumnWidths {
     pub branch: usize,

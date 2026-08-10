@@ -3923,6 +3923,107 @@ mod pm_state_tests {
         );
     }
 
+    /// Regression test: a primary `workspace_agents` row seeded strictly
+    /// *after* the app's last `refresh()` — mirroring `resolve_primary_instance`
+    /// backfilling a missing primary during attach, a path with no `refresh()`
+    /// on it — must still be recognized as running when the workspace is
+    /// unshared. Before the fix, `toggle_workspace_shared` derived `running`
+    /// from the cached `agent_roster`, which would still be missing this
+    /// instance; the cleanup loop would then treat its `session_ref` as
+    /// orphaned/detached and tmux-kill the live session instead of
+    /// respawning it as a direct child.
+    #[tokio::test]
+    async fn toggle_unshare_respawns_primary_seeded_after_last_refresh() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("tmux-calls.log");
+        let fake = dir.path().join("fake-tmux.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\nexit 0\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let mut env = EnvGuard::new();
+        env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: dir.path(),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Codex,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        // Deliberately no primary row yet — the exact anomaly
+        // `resolve_primary_instance` exists to repair.
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(
+            app.agent_roster.get(&ws_id).is_none_or(|v| v.is_empty()),
+            "sanity: no primary row existed as of the last refresh"
+        );
+
+        // Mimics the attach path: a primary row is seeded and a session
+        // spawned for it, with no `refresh()` anywhere on that path — so
+        // `agent_roster` never learns about this instance.
+        let primary_id = test_primary_instance(&app, ws_id);
+        app.store
+            .set_instance_session_ref(primary_id, "wsx-r-w")
+            .unwrap();
+        let mode = crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+        };
+        app.sessions
+            .spawn(
+                primary_id,
+                ws_id,
+                dir.path(),
+                80,
+                24,
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Codex,
+                None,
+            )
+            .unwrap();
+        assert!(
+            app.agent_roster.get(&ws_id).is_none_or(|v| v.is_empty()),
+            "sanity: the cache still doesn't know about the backfilled primary"
+        );
+
+        crate::app::toggle_workspace_shared(&mut app, ws_id).unwrap();
+
+        // The live instance must be respawned direct, not tmux-killed as if
+        // it were an orphaned, detached session.
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            !calls.contains("kill-session"),
+            "a live instance must be respawned, not tmux-killed as if detached; tmux calls: {calls:?}"
+        );
+        assert!(
+            app.sessions.get(primary_id).is_some(),
+            "the primary must come back up as a direct child after unsharing, not be left dead"
+        );
+    }
+
     /// Toggling a workspace to shared must eagerly spawn agents that are NOT
     /// currently running — not just restart running ones. A stopped agent
     /// previously got a flag flip only: no tmux session existed until the

@@ -782,11 +782,33 @@ impl App {
         Ok(())
     }
 
+    /// Whether `id` currently has a live (`SessionStatus::Running`) session
+    /// in `self.sessions`. The shared liveness predicate: `live_instances`,
+    /// `has_live_instance`, and any caller with its own already-fetched
+    /// instance list (e.g. `toggle_workspace_shared`, which cannot use
+    /// `agent_roster` — see its comment) all filter through this so there is
+    /// exactly one definition of "running" in the app.
+    pub fn instance_is_running(&self, id: crate::data::store::AgentInstanceId) -> bool {
+        self.sessions.get(id).is_some_and(|s| {
+            matches!(
+                *s.status.read().unwrap(),
+                crate::pty::session::SessionStatus::Running { .. }
+            )
+        })
+    }
+
     /// The workspace's agent instances that currently have a running
     /// session, in roster order (primary first). Instances registered in
     /// the DB but with no session — never started, or exited — are
     /// excluded: nothing reaps an instance row when its agent exits, so
     /// "registered" and "running" diverge permanently.
+    ///
+    /// Reads the cached `agent_roster`, so it can lag behind the DB by up to
+    /// one `refresh()` — fine for the dashboard render path this feeds, but
+    /// wrong for a caller that just mutated the roster and needs the result
+    /// to reflect that mutation immediately (see `toggle_workspace_shared`,
+    /// which filters its own freshly-fetched instance list instead of
+    /// calling this).
     pub fn live_instances(
         &self,
         ws: crate::data::store::WorkspaceId,
@@ -796,14 +818,7 @@ impl App {
             .map(|instances| {
                 instances
                     .iter()
-                    .filter(|inst| {
-                        self.sessions.get(inst.id).is_some_and(|s| {
-                            matches!(
-                                *s.status.read().unwrap(),
-                                crate::pty::session::SessionStatus::Running { .. }
-                            )
-                        })
-                    })
+                    .filter(|inst| self.instance_is_running(inst.id))
                     .cloned()
                     .collect()
             })
@@ -813,17 +828,13 @@ impl App {
     /// Whether the workspace has any instance with a running session — not
     /// just the primary, see `live_instances`. Equivalent to
     /// `!self.live_instances(ws).is_empty()` but doesn't clone the roster
-    /// just to test non-emptiness.
+    /// just to test non-emptiness. Same cache-staleness caveat as
+    /// `live_instances` applies.
     pub fn has_live_instance(&self, ws: crate::data::store::WorkspaceId) -> bool {
         self.agent_roster.get(&ws).is_some_and(|instances| {
-            instances.iter().any(|inst| {
-                self.sessions.get(inst.id).is_some_and(|s| {
-                    matches!(
-                        *s.status.read().unwrap(),
-                        crate::pty::session::SessionStatus::Running { .. }
-                    )
-                })
-            })
+            instances
+                .iter()
+                .any(|inst| self.instance_is_running(inst.id))
         })
     }
 
@@ -2035,10 +2046,17 @@ pub(crate) fn toggle_workspace_shared(
         return Ok(());
     }
     let all_instances = app.store.workspace_agents(ws_id)?;
-    // Reads the roster as of the last `refresh` (not requeried here), which
-    // is correct: this enumerates sessions that exist right now, and no
-    // instance is added or removed on this path before `refresh()` below.
-    let running: Vec<_> = app.live_instances(ws_id);
+    // Derived from `all_instances` (not `app.live_instances`/`agent_roster`):
+    // a row inserted on this same tick — e.g. `resolve_primary_instance`
+    // backfilling a missing primary during attach — has no `refresh()` on
+    // its path, so the cache can be missing it indefinitely. Deriving from
+    // the fresh `all_instances` fetch above keeps `running` a subset of it
+    // by construction, which the respawn/cleanup loops below depend on.
+    let running: Vec<_> = all_instances
+        .iter()
+        .filter(|inst| app.instance_is_running(inst.id))
+        .cloned()
+        .collect();
     app.store.set_workspace_shared(ws_id, to_shared)?;
     app.refresh()?; // reload app.workspaces so spawn sees the new flag
     // `sessions.remove` calls `kill_backend` in both directions: for a direct

@@ -790,14 +790,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 let agents = app.store.workspace_agents(id)?;
                 let running_count = agents
                     .iter()
-                    .filter(|inst| {
-                        app.sessions.get(inst.id).is_some_and(|s| {
-                            matches!(
-                                *s.status.read().unwrap(),
-                                crate::pty::session::SessionStatus::Running { .. }
-                            )
-                        })
-                    })
+                    .filter(|inst| app.instance_is_running(inst.id))
                     .count();
                 app.modal = Some(Modal::ConfirmShare {
                     workspace_id: id,

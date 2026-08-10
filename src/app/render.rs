@@ -110,6 +110,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         ws.shared && (session_running || app.shared_detached.contains(&ws.id));
                     let row = crate::ui::dashboard::row::RowInputs {
                         agent: ws.agent,
+                        // Task 5 populates this from live sessions.
+                        peers: Vec::new(),
                         status,
                         branch: ws.branch.clone(),
                         pr_number: app.pr_number.get(&ws.id).copied(),

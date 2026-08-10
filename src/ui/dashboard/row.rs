@@ -3,6 +3,8 @@
 //! `ListItem`.
 //!
 //! Columns (left → right):
+//!   1-4ch ▎ agent strip (one bar per live agent, primary rightmost;
+//!         derived per frame, not user-configurable — see `ColumnWidths`)
 //!   1ch  ▎ gutter (status color)
 //!   3ch  ├  elbow (faint, centered)
 //!   2ch  status glyph or spinner frame
@@ -36,7 +38,11 @@ const AGE_WIDTH: usize = 10;
 const GUTTER_WIDTH: usize = 1;
 const ELBOW_WIDTH: usize = 3;
 const GLYPH_WIDTH: usize = 2;
-const AGENT_WIDTH: usize = 1;
+pub const DEFAULT_AGENT_WIDTH: usize = 1;
+/// Cap on the agent strip. Five live agents is one keystroke away — the
+/// agents panel's `a` key adds all four kinds at once — so the strip must
+/// degrade rather than grow without bound.
+pub const MAX_AGENT_WIDTH: usize = 4;
 
 /// User-resizable column widths. Values are clamped to safe ranges by
 /// `ColumnWidths::clamped` (called from the config read path) so the
@@ -45,6 +51,10 @@ const AGENT_WIDTH: usize = 1;
 pub struct ColumnWidths {
     pub branch: usize,
     pub pr: usize,
+    /// Derived per frame from the live-agent count across visible rows —
+    /// NOT user-configurable and NOT read from settings. Set via
+    /// `with_agent` by the view dispatchers in `dashboard::mod`.
+    pub agent: usize,
 }
 
 impl ColumnWidths {
@@ -52,6 +62,14 @@ impl ColumnWidths {
         Self {
             branch: branch.clamp(MIN_BRANCH_WIDTH, MAX_BRANCH_WIDTH),
             pr: pr.clamp(MIN_PR_WIDTH, MAX_PR_WIDTH),
+            agent: DEFAULT_AGENT_WIDTH,
+        }
+    }
+
+    pub fn with_agent(self, agent: usize) -> Self {
+        Self {
+            agent: agent.clamp(DEFAULT_AGENT_WIDTH, MAX_AGENT_WIDTH),
+            ..self
         }
     }
 }
@@ -61,6 +79,7 @@ impl Default for ColumnWidths {
         Self {
             branch: DEFAULT_BRANCH_WIDTH,
             pr: DEFAULT_PR_WIDTH,
+            agent: DEFAULT_AGENT_WIDTH,
         }
     }
 }
@@ -70,6 +89,11 @@ impl Default for ColumnWidths {
 #[derive(Debug, Clone)]
 pub struct RowInputs {
     pub agent: AgentKind,
+    /// Live non-primary agents in this workspace, in creation order. The
+    /// primary is `agent` and is rendered unconditionally; peers appear
+    /// only while their session is running, so a finished reviewer drops
+    /// out and the strip narrows back on its own.
+    pub peers: Vec<AgentKind>,
     pub status: Status,
     pub branch: String,
     pub pr_number: Option<u32>,
@@ -95,6 +119,47 @@ pub struct RowInputs {
     pub workspace_id: crate::data::store::WorkspaceId,
 }
 
+/// The leftmost column: one bar per live agent, right-aligned so the
+/// primary stays adjacent to the status gutter and a single-agent row
+/// looks exactly as it did before the strip existed. Always returns
+/// exactly `widths.agent` chars — the whole row's column alignment
+/// depends on it.
+pub fn agent_strip_spans(
+    inputs: &RowInputs,
+    widths: ColumnWidths,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let cells = widths.agent.max(1);
+    let total = inputs.peers.len() + 1;
+    if total > cells {
+        // Overflow: a `+` stands in for the peers that don't fit, then the
+        // NEWEST peers, then the primary — the oldest peers are what drop
+        // out. With only one cell there's no room for the marker, so the
+        // primary alone is the honest render.
+        let peer_cells = cells.saturating_sub(2);
+        if cells >= 2 {
+            spans.push(Span::styled("+".to_string(), theme.dim_style()));
+        }
+        for kind in &inputs.peers[inputs.peers.len() - peer_cells..] {
+            spans.push(Span::styled("▎".to_string(), theme.agent_style(*kind)));
+        }
+    } else {
+        let pad = cells - total;
+        if pad > 0 {
+            spans.push(Span::raw(" ".repeat(pad)));
+        }
+        for kind in &inputs.peers {
+            spans.push(Span::styled("▎".to_string(), theme.agent_style(*kind)));
+        }
+    }
+    spans.push(Span::styled(
+        "▎".to_string(),
+        theme.agent_style(inputs.agent),
+    ));
+    spans
+}
+
 pub fn render(
     inputs: &RowInputs,
     widths: ColumnWidths,
@@ -106,14 +171,11 @@ pub fn render(
     let pr_width = widths.pr;
     let mut spans: Vec<Span<'static>> = Vec::new();
 
-    // 0: agent identity bar — a fixed per-agent color, independent of
-    // status. Sits left of the status gutter so the row shows a two-tone
-    // left edge: outer = agent, inner = status. Plain Unicode, no
-    // nerd-font gating (same glyph as the gutter).
-    spans.push(Span::styled(
-        "▎".to_string(),
-        theme.agent_style(inputs.agent),
-    ));
+    // 0: agent identity strip — one fixed-per-kind colored bar per live
+    // agent, primary rightmost. Sits left of the status gutter so the row
+    // shows a two-tone left edge: outer = agents, inner = status. Plain
+    // Unicode, no nerd-font gating (same glyph as the gutter).
+    spans.extend(agent_strip_spans(inputs, widths, theme));
 
     // 1: gutter — thicker bar on the selected row gives a high-contrast
     // leading edge that doesn't rely on the row-bg tint being visible.
@@ -281,7 +343,7 @@ pub fn render(
     }
 
     // 8: message (flex)
-    let left_consumed = AGENT_WIDTH
+    let left_consumed = widths.agent
         + GUTTER_WIDTH
         + ELBOW_WIDTH
         + GLYPH_WIDTH
@@ -372,7 +434,7 @@ fn pr_chip_text(inputs: &RowInputs) -> Option<String> {
 /// clicks on blank space don't open a browser.
 pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16, u16)> {
     let text = pr_chip_text(inputs)?;
-    let x = AGENT_WIDTH + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
+    let x = widths.agent + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
     let width = truncate(&text, widths.pr).chars().count();
     Some((x as u16, width as u16))
 }
@@ -526,6 +588,7 @@ mod tests {
     fn base() -> RowInputs {
         RowInputs {
             agent: AgentKind::Claude,
+            peers: Vec::new(),
             status: Status::Question,
             branch: "bakedbean/repo-overview".into(),
             pr_number: None,
@@ -1508,5 +1571,172 @@ mod tests {
             text.trim_end().ends_with("29s ago"),
             "age column stays right-aligned: {text:?}"
         );
+    }
+
+    fn strip_text(inputs: &RowInputs, widths: ColumnWidths) -> String {
+        let theme = Theme::wsx();
+        agent_strip_spans(inputs, widths, &theme)
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn strip_at_width_one_is_a_single_primary_bar() {
+        let inputs = base();
+        assert_eq!(strip_text(&inputs, ColumnWidths::default()), "▎");
+    }
+
+    #[test]
+    fn strip_right_aligns_with_primary_last() {
+        let mut inputs = base();
+        inputs.peers = vec![AgentKind::Codex, AgentKind::Pi];
+        // Two peers + primary = 3 bars in a 4-wide field: one pad cell.
+        assert_eq!(
+            strip_text(&inputs, ColumnWidths::default().with_agent(4)),
+            " ▎▎▎"
+        );
+    }
+
+    #[test]
+    fn strip_pads_when_the_row_has_fewer_agents_than_the_column() {
+        let inputs = base(); // primary only
+        assert_eq!(
+            strip_text(&inputs, ColumnWidths::default().with_agent(4)),
+            "   ▎"
+        );
+    }
+
+    #[test]
+    fn strip_colors_each_bar_by_its_own_kind_with_primary_rightmost() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.agent = AgentKind::Claude;
+        inputs.peers = vec![AgentKind::Codex];
+        let spans = agent_strip_spans(&inputs, ColumnWidths::default().with_agent(2), &theme);
+        let bars: Vec<_> = spans.iter().filter(|s| s.content.contains('▎')).collect();
+        assert_eq!(bars.len(), 2);
+        assert_eq!(bars[0].style.fg, theme.agent_style(AgentKind::Codex).fg);
+        assert_eq!(bars[1].style.fg, theme.agent_style(AgentKind::Claude).fg);
+    }
+
+    #[test]
+    fn strip_overflows_with_a_plus_marker() {
+        let mut inputs = base();
+        // 4 peers + primary = 5 live, one more than MAX_AGENT_WIDTH.
+        inputs.peers = vec![
+            AgentKind::Codex,
+            AgentKind::Pi,
+            AgentKind::Hermes,
+            AgentKind::Codex,
+        ];
+        let text = strip_text(&inputs, ColumnWidths::default().with_agent(MAX_AGENT_WIDTH));
+        assert_eq!(text, "+▎▎▎");
+        assert_eq!(text.chars().count(), MAX_AGENT_WIDTH);
+    }
+
+    #[test]
+    fn strip_is_always_exactly_the_column_width() {
+        for agent_width in 1..=MAX_AGENT_WIDTH {
+            for peer_count in 0..6 {
+                let mut inputs = base();
+                inputs.peers = vec![AgentKind::Codex; peer_count];
+                let text = strip_text(&inputs, ColumnWidths::default().with_agent(agent_width));
+                assert_eq!(
+                    text.chars().count(),
+                    agent_width,
+                    "width {agent_width}, {peer_count} peers: {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn with_agent_clamps_to_the_cap() {
+        assert_eq!(ColumnWidths::default().with_agent(0).agent, 1);
+        assert_eq!(
+            ColumnWidths::default().with_agent(99).agent,
+            MAX_AGENT_WIDTH
+        );
+    }
+
+    #[test]
+    fn widening_the_strip_shifts_every_later_column_by_the_same_amount() {
+        let theme = Theme::wsx();
+        let procs_col = |s: &str| s.chars().position(|c| c == '●').unwrap();
+        let mut inputs = base();
+        inputs.procs = 2;
+        let narrow = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        let wide = line_text(&render(
+            &inputs,
+            ColumnWidths::default().with_agent(3),
+            0,
+            &theme,
+            120,
+        ));
+        assert_eq!(procs_col(&wide), procs_col(&narrow) + 2);
+    }
+
+    #[test]
+    fn pr_chip_hit_span_tracks_the_agent_column_width() {
+        let mut inputs = base();
+        inputs.pr_number = Some(12);
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        let (x_narrow, w_narrow) = pr_chip_hit_span(&inputs, ColumnWidths::default()).unwrap();
+        let (x_wide, w_wide) =
+            pr_chip_hit_span(&inputs, ColumnWidths::default().with_agent(4)).unwrap();
+        assert_eq!(x_wide, x_narrow + 3, "chip must shift with the strip");
+        assert_eq!(w_wide, w_narrow, "chip width is unaffected");
+    }
+
+    #[test]
+    fn hit_span_matches_where_the_chip_actually_renders() {
+        // Guards the real failure mode: `pr_chip_hit_span` recomputes the
+        // offset independently of `left_consumed`, so the two can silently
+        // disagree and send clicks to the wrong column.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.pr_number = Some(12);
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        for agent_width in 1..=MAX_AGENT_WIDTH {
+            let widths = ColumnWidths::default().with_agent(agent_width);
+            let text = line_text(&render(&inputs, widths, 0, &theme, 160));
+            let (x, _) = pr_chip_hit_span(&inputs, widths).unwrap();
+            let rendered_at = text.chars().position(|c| c == '⏺').unwrap();
+            assert_eq!(
+                rendered_at, x as usize,
+                "agent_width={agent_width}: hit span disagrees with render"
+            );
+        }
+    }
+
+    #[test]
+    fn strip_padding_carries_no_explicit_style_because_the_list_highlight_paints_it() {
+        // The selected-row background is painted by ratatui's `List` widget
+        // AFTER the row's spans are rendered — `List::highlight_style` is
+        // applied via `Buffer::set_style` over the whole row area, which
+        // unconditionally overwrites every cell's bg in that row (see
+        // `ratatui::widgets::list::rendering::render`). Every other blank
+        // cell in this row (the empty PR chip, the branch trailing pad) is
+        // an unstyled `Span::raw` for the same reason: painting a bg here
+        // too would be redundant, and on an UNselected row it would
+        // incorrectly tint the padding since dim/status/agent styles never
+        // set a bg of their own. So the padding must carry no bg either way
+        // — selected or not.
+        let theme = Theme::wsx();
+        for selected in [false, true] {
+            let mut inputs = base();
+            inputs.selected = selected;
+            let spans = agent_strip_spans(&inputs, ColumnWidths::default().with_agent(4), &theme);
+            let pad = spans
+                .iter()
+                .find(|s| s.content.as_ref() == "   ")
+                .expect("pad span present");
+            assert_eq!(
+                pad.style.bg, None,
+                "padding must not set its own bg (selected={selected}); \
+                 the row highlight paints it instead"
+            );
+        }
     }
 }

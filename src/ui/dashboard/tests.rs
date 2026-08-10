@@ -43,6 +43,7 @@ fn build_inputs<'a>(
                 status: w.status,
                 row: row::RowInputs {
                     agent: crate::pty::session::AgentKind::Claude,
+                    peers: Vec::new(),
                     status: w.status,
                     branch: w.branch.clone(),
                     pr_number: None,
@@ -551,6 +552,7 @@ fn item_with_column<'a>(repo: &'a Repo, column: Option<RowColumn>) -> WorkspaceI
         status: crate::ui::dashboard::status::Status::Idle,
         row: row::RowInputs {
             agent: crate::pty::session::AgentKind::Claude,
+            peers: Vec::new(),
             status: crate::ui::dashboard::status::Status::Idle,
             branch: "bb/some-branch".to_string(),
             pr_number: None,

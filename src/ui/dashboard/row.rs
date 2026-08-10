@@ -1622,6 +1622,7 @@ mod tests {
 
     #[test]
     fn strip_overflows_with_a_plus_marker() {
+        let theme = Theme::wsx();
         let mut inputs = base();
         // 4 peers + primary = 5 live, one more than MAX_AGENT_WIDTH.
         inputs.peers = vec![
@@ -1630,9 +1631,35 @@ mod tests {
             AgentKind::Hermes,
             AgentKind::Codex,
         ];
-        let text = strip_text(&inputs, ColumnWidths::default().with_agent(MAX_AGENT_WIDTH));
+        let widths = ColumnWidths::default().with_agent(MAX_AGENT_WIDTH);
+        let text = strip_text(&inputs, widths);
         assert_eq!(text, "+▎▎▎");
         assert_eq!(text.chars().count(), MAX_AGENT_WIDTH);
+
+        // Text alone can't distinguish "kept the newest peers" from "kept
+        // the oldest" — both render as `+▎▎▎`. Only the bar colors tell
+        // them apart: the spec requires the OLDEST peers to drop, so the
+        // two surviving peer bars must be Hermes (index 2) then Codex
+        // (index 3, the second/duplicate one) — not Codex+Pi (indices 0-1),
+        // which is what a `&peers[..peer_cells]` bug would keep instead.
+        let spans = agent_strip_spans(&inputs, widths, &theme);
+        let bars: Vec<_> = spans.iter().filter(|s| s.content.contains('▎')).collect();
+        assert_eq!(bars.len(), 3, "two surviving peers + primary");
+        assert_eq!(
+            bars[0].style.fg,
+            theme.agent_style(AgentKind::Hermes).fg,
+            "oldest surviving peer bar must be Hermes, not the dropped Codex/Pi"
+        );
+        assert_eq!(
+            bars[1].style.fg,
+            theme.agent_style(AgentKind::Codex).fg,
+            "newest peer bar must be the second Codex"
+        );
+        assert_eq!(
+            bars[2].style.fg,
+            theme.agent_style(inputs.agent).fg,
+            "primary stays rightmost"
+        );
     }
 
     #[test]
@@ -1712,17 +1739,12 @@ mod tests {
 
     #[test]
     fn strip_padding_carries_no_explicit_style_because_the_list_highlight_paints_it() {
-        // The selected-row background is painted by ratatui's `List` widget
-        // AFTER the row's spans are rendered — `List::highlight_style` is
-        // applied via `Buffer::set_style` over the whole row area, which
-        // unconditionally overwrites every cell's bg in that row (see
-        // `ratatui::widgets::list::rendering::render`). Every other blank
-        // cell in this row (the empty PR chip, the branch trailing pad) is
-        // an unstyled `Span::raw` for the same reason: painting a bg here
-        // too would be redundant, and on an UNselected row it would
-        // incorrectly tint the padding since dim/status/agent styles never
-        // set a bg of their own. So the padding must carry no bg either way
-        // — selected or not.
+        // Documents the *intent*: the pad span itself carries no bg by
+        // construction (`Span::raw`), on the theory that `List::highlight_style`
+        // paints the selected-row background after the fact. That theory is
+        // NOT verified by this test alone — see
+        // `strip_padding_gets_the_selected_row_background_from_the_list_highlight`
+        // below for the buffer-level check that actually guards it.
         let theme = Theme::wsx();
         for selected in [false, true] {
             let mut inputs = base();
@@ -1736,6 +1758,47 @@ mod tests {
                 pad.style.bg, None,
                 "padding must not set its own bg (selected={selected}); \
                  the row highlight paints it instead"
+            );
+        }
+    }
+
+    #[test]
+    fn strip_padding_gets_the_selected_row_background_from_the_list_highlight() {
+        // The span-level test above can't tell "unstyled because the List
+        // highlight paints it" from "unstyled and simply never gets a
+        // background" — both look identical at the span level. Render
+        // through the real pipeline instead: a `List` with
+        // `highlight_style(theme.selected_bg_style())`, exactly as
+        // `dashboard::mod::render` wires it up, then assert the ACTUAL
+        // buffer bg of the pad cells. If a future ratatui bump changed how
+        // (or whether) the highlight paints over unstyled cells, this test
+        // — not the span-level one — is what would catch it.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::{List, ListItem, ListState};
+
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.selected = true;
+        // agent_width 4 with only the primary agent live leaves 3 pad cells
+        // at the row's left edge (columns 0-2), then the primary bar at 3.
+        let widths = ColumnWidths::default().with_agent(4);
+        let line = render(&inputs, widths, 0, &theme, 40);
+        let list = List::new(vec![ListItem::new(line)]).highlight_style(theme.selected_bg_style());
+        let mut state = ListState::default();
+        state.select(Some(0));
+
+        let backend = TestBackend::new(40, 1);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| f.render_stateful_widget(list, f.area(), &mut state))
+            .unwrap();
+
+        let buf = term.backend().buffer();
+        for x in 0..3 {
+            assert_eq!(
+                buf[(x, 0)].bg,
+                theme.selected_bg,
+                "pad cell at x={x} must carry the selected row background"
             );
         }
     }

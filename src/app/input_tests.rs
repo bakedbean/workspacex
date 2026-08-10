@@ -4180,6 +4180,107 @@ mod pm_state_tests {
         );
     }
 
+    /// Regression test for a stale-cache bug: an instance added (and given a
+    /// running session) strictly *after* the app's last `agent_roster` fill
+    /// must still be seen as live by the very next `refresh()` — unlike
+    /// `shared_workspace_with_running_added_instance_is_not_detached` above,
+    /// where the added instance already exists in the store before
+    /// `App::new`'s first refresh, so it's vacuously present in
+    /// `agent_roster` from the start. Here the instance is added, and its
+    /// session spawned, only after `App::new` returns — exercising the
+    /// window where a `refresh()` must pick up an instance that didn't
+    /// exist as of the previous roster fill.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_workspace_with_instance_added_after_last_refresh_is_not_detached() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        let script = tmpdir.path().join("fake-tmux.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        env.set("WSX_TMUX_BIN", script.to_str().unwrap());
+        env.set("WSX_CODEX_BIN", cat_path());
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+            .unwrap();
+        let ws_path = tmpdir.path().join("w");
+        std::fs::create_dir_all(&ws_path).unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "r/w",
+                worktree_path: &ws_path,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: true,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+        let primary = store
+            .add_primary_agent(
+                ws_id,
+                crate::pty::session::AgentKind::Claude,
+                crate::data::store::now_ms(),
+            )
+            .unwrap();
+        store
+            .set_instance_session_ref(primary.id, "wsx-r-w")
+            .unwrap();
+
+        // `App::new`'s first (unthrottled) sweep runs with only the primary
+        // in the roster — no live client anywhere yet, so it marks `ws_id`
+        // detached (the tmux script always reports alive).
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert!(
+            app.shared_detached.contains(&ws_id),
+            "sanity: no client yet, so the workspace starts out detached"
+        );
+
+        // Add a second instance to the store, then spawn it, strictly after
+        // `App::new`'s roster fill — `agent_roster` does not know about it
+        // yet.
+        let added = app
+            .store
+            .add_workspace_agent(ws_id, crate::pty::session::AgentKind::Codex)
+            .unwrap();
+        app.sessions
+            .spawn(
+                added.id,
+                ws_id,
+                &ws_path,
+                80,
+                24,
+                crate::pty::session::SpawnMode::Fresh {
+                    rename_ctx: None,
+                    custom_instructions: None,
+                    doctrine: None,
+                    additional_dirs: vec![],
+                    yolo: false,
+                },
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                crate::pty::session::AgentKind::Codex,
+                None,
+            )
+            .unwrap();
+
+        // Force a fresh sweep on the very next refresh.
+        app.shared_detached_polled_ms = 0;
+        app.refresh().unwrap();
+
+        assert!(
+            !app.shared_detached.contains(&ws_id),
+            "the just-added instance's live session must be visible to this refresh's sweep, \
+             not lag a cycle behind"
+        );
+    }
+
     /// Test helper: create an App with N repos registered in the store
     /// and loaded into app.repos. Uses a unique tmpdir per call so paths
     /// don't collide.

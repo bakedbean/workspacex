@@ -747,6 +747,14 @@ impl App {
                 self.workspaces.push((r.id, w));
             }
         }
+        // `refresh_shared_detached` reads `agent_roster` (both the liveness
+        // and the tmux-session-ref checks), so this must be filled before
+        // it runs — otherwise the sweep sees a cycle-stale (or, at cold
+        // start, empty) roster. `all_workspace_agents` only depends on
+        // `self.store`, and nothing between the workspaces rebuild above and
+        // here writes to the DB or reads `agent_roster`, so hoisting it this
+        // early is safe.
+        self.agent_roster = self.store.all_workspace_agents().unwrap_or_default();
         // Needs `self.workspaces` populated above (it iterates shared
         // workspaces) — must run after the rebuild, not before.
         self.refresh_shared_detached();
@@ -770,7 +778,6 @@ impl App {
             .into_iter()
             .collect();
         self.pushed_status = self.store.all_workspace_status().unwrap_or_default();
-        self.agent_roster = self.store.all_workspace_agents().unwrap_or_default();
         self.recaps = self.store.all_workspace_recaps().unwrap_or_default();
         Ok(())
     }
@@ -803,6 +810,23 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// Whether the workspace has any instance with a running session — not
+    /// just the primary, see `live_instances`. Equivalent to
+    /// `!self.live_instances(ws).is_empty()` but doesn't clone the roster
+    /// just to test non-emptiness.
+    pub fn has_live_instance(&self, ws: crate::data::store::WorkspaceId) -> bool {
+        self.agent_roster.get(&ws).is_some_and(|instances| {
+            instances.iter().any(|inst| {
+                self.sessions.get(inst.id).is_some_and(|s| {
+                    matches!(
+                        *s.status.read().unwrap(),
+                        crate::pty::session::SessionStatus::Running { .. }
+                    )
+                })
+            })
+        })
+    }
+
     /// Sweep for shared workspaces whose tmux session is alive on the
     /// server while wsx holds no client for it (e.g. right after a wsx
     /// restart). Populates `shared_detached`, consumed by the shared-badge
@@ -821,26 +845,22 @@ impl App {
             if !ws.shared {
                 continue;
             }
-            // The tmux-liveness check below needs a fresh roster, not the
-            // cached `agent_roster`: this method runs from inside `refresh`
-            // itself, before `agent_roster` is refilled for this cycle, so
-            // the cache would read one cycle stale here — most visibly on
-            // the very first sweep at startup, where it's still empty.
-            // `has_client` doesn't have that problem (no session can exist
-            // for `self.sessions` to observe before this workspace's roster
-            // has ever been fetched), so it uses the `live_instances` helper.
-            let instances = match self.store.workspace_agents(ws.id) {
-                Ok(i) => i,
-                Err(_) => continue,
-            };
-            let has_client = !self.live_instances(ws.id).is_empty();
-            if has_client {
+            // One `agent_roster` lookup serves both checks (`refresh` fills
+            // it before calling this method, so it's current for this
+            // cycle — see the comment in `refresh`). A client on ANY
+            // instance (not just the primary) means the workspace isn't
+            // detached — e.g. only a side-pane codex#2 is attached while the
+            // primary exited.
+            if self.has_live_instance(ws.id) {
                 continue;
             }
-            let alive = instances
+            let alive = self
+                .agent_roster
+                .get(&ws.id)
                 .into_iter()
-                .filter_map(|i| i.session_ref)
-                .any(|name| crate::pty::tmux::has_session(&name));
+                .flatten()
+                .filter_map(|i| i.session_ref.as_deref())
+                .any(crate::pty::tmux::has_session);
             if alive {
                 self.shared_detached.insert(ws.id);
             }

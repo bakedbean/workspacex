@@ -439,6 +439,17 @@ fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
     }
 }
 
+/// Cells the agent strip needs for a set of rows: the widest live-agent
+/// count among them, capped. Derived per frame from the rows actually
+/// being drawn — a peer inside a folded repo or filtered out by the search
+/// box must not tax the recap column of the rows that ARE drawn.
+fn derived_agent_width<'a>(rows: impl Iterator<Item = &'a RowInputs>) -> usize {
+    rows.map(|r| r.peers.len() + 1)
+        .max()
+        .unwrap_or(1)
+        .clamp(1, row::MAX_AGENT_WIDTH)
+}
+
 fn render_by_repo<'a>(
     inputs: &DashboardInputs<'a>,
     state: &mut DashboardState,
@@ -478,6 +489,14 @@ fn render_by_repo<'a>(
         .collect();
     by_repo::order_repos(&mut views);
 
+    // Only expanded repos render rows, so only they may widen the strip.
+    let widths = inputs.column_widths.with_agent(derived_agent_width(
+        views
+            .iter()
+            .filter(|v| v.expanded)
+            .flat_map(|v| v.workspaces.iter()),
+    ));
+
     // Walk the same item sequence that render_list will emit to determine
     // which flat list index corresponds to the current selection. Also
     // flip `selected: true` on the matching workspace so the row composer
@@ -505,7 +524,7 @@ fn render_by_repo<'a>(
                     w.selected = true;
                 }
             }
-            if let Some(span) = row::pr_chip_hit_span(w, inputs.column_widths) {
+            if let Some(span) = row::pr_chip_hit_span(w, widths) {
                 chip_spans.push((w.workspace_id, flat_idx, span));
             }
             flat_idx += 1;
@@ -516,7 +535,7 @@ fn render_by_repo<'a>(
     state.list_state.select(selected_idx);
 
     (
-        by_repo::render_list(&views, inputs.column_widths, tick, width, theme),
+        by_repo::render_list(&views, widths, tick, width, theme),
         chip_spans,
     )
 }
@@ -580,6 +599,19 @@ fn render_by_attention<'a>(
     // recency-only for WORKING / RECENT / IDLE).
     let mut data = by_attention::partition(rows, quiet);
 
+    // Quiet repos render no rows, so only the four sections count.
+    let widths = inputs.column_widths.with_agent(derived_agent_width(
+        [
+            &data.needs_attention,
+            &data.working,
+            &data.recent,
+            &data.idle,
+        ]
+        .into_iter()
+        .flat_map(|s| s.iter())
+        .map(|r| &r.row),
+    ));
+
     // Walk the same item sequence that render_list will emit to determine
     // which flat list index corresponds to the current selection, and
     // mark the matching row so the row composer paints a thicker gutter.
@@ -605,7 +637,7 @@ fn render_by_attention<'a>(
                         row.row.selected = true;
                     }
                 }
-                if let Some(span) = row::pr_chip_hit_span(&row.row, inputs.column_widths) {
+                if let Some(span) = row::pr_chip_hit_span(&row.row, widths) {
                     chip_spans.push((row.row.workspace_id, flat_idx, span));
                 }
                 flat_idx += 1;
@@ -615,7 +647,7 @@ fn render_by_attention<'a>(
     state.list_state.select(selected_idx);
 
     (
-        by_attention::render_list(&data, inputs.column_widths, tick, width, theme),
+        by_attention::render_list(&data, widths, tick, width, theme),
         chip_spans,
     )
 }

@@ -173,6 +173,7 @@ mod tests {
             .enumerate()
             .map(|(i, w)| RowInputs {
                 agent: crate::pty::session::AgentKind::Claude,
+                peers: Vec::new(),
                 status: w.status,
                 branch: w.branch.clone(),
                 pr_number: None,

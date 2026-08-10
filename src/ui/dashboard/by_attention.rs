@@ -237,6 +237,7 @@ mod tests {
                     repo_name: r.name.clone(),
                     row: RowInputs {
                         agent: crate::pty::session::AgentKind::Claude,
+                        peers: Vec::new(),
                         status: w.status,
                         branch: w.branch.clone(),
                         pr_number: None,
@@ -413,6 +414,7 @@ mod tests {
             repo_name: "wsx".into(),
             row: RowInputs {
                 agent: crate::pty::session::AgentKind::Claude,
+                peers: Vec::new(),
                 status: Status::Question,
                 branch: "bakedbean/repo-overview".into(),
                 pr_number: None,

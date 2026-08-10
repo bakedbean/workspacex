@@ -3,9 +3,11 @@
 
 use super::*;
 use crate::data::store::{Repo, RepoId, WorkspaceId};
+use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn};
 use crate::ui::dashboard::fixture;
 use crate::ui::dashboard::layout::GroupMode;
+use crate::ui::dashboard::row::MAX_AGENT_WIDTH;
 use crate::ui::theme::Theme;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -43,6 +45,7 @@ fn build_inputs<'a>(
                 status: w.status,
                 row: row::RowInputs {
                     agent: crate::pty::session::AgentKind::Claude,
+                    peers: Vec::new(),
                     status: w.status,
                     branch: w.branch.clone(),
                     pr_number: None,
@@ -544,29 +547,37 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
     assert_eq!(nav, render, "nav and render agree under a sort_order tie");
 }
 
+fn base_row() -> row::RowInputs {
+    row::RowInputs {
+        agent: crate::pty::session::AgentKind::Claude,
+        peers: Vec::new(),
+        status: crate::ui::dashboard::status::Status::Idle,
+        branch: "bb/some-branch".to_string(),
+        pr_number: None,
+        procs: 0,
+        diff: None,
+        column: None,
+        ago_secs: None,
+        selected: false,
+        yolo: false,
+        setup_failed: false,
+        shared: false,
+        shared_active: false,
+        lifecycle: None,
+        nerd_fonts: false,
+        workspace_id: WorkspaceId(1),
+        has_multi_pane_layout: false,
+    }
+}
+
 fn item_with_column<'a>(repo: &'a Repo, column: Option<RowColumn>) -> WorkspaceItem<'a> {
     WorkspaceItem {
         repo,
         workspace_id: WorkspaceId(1),
         status: crate::ui::dashboard::status::Status::Idle,
         row: row::RowInputs {
-            agent: crate::pty::session::AgentKind::Claude,
-            status: crate::ui::dashboard::status::Status::Idle,
-            branch: "bb/some-branch".to_string(),
-            pr_number: None,
-            procs: 0,
-            diff: None,
             column,
-            ago_secs: None,
-            selected: false,
-            yolo: false,
-            setup_failed: false,
-            shared: false,
-            shared_active: false,
-            lifecycle: None,
-            nerd_fonts: false,
-            workspace_id: WorkspaceId(1),
-            has_multi_pane_layout: false,
+            ..base_row()
         },
     }
 }
@@ -626,4 +637,162 @@ fn matches_filter_matches_fallback_text_and_branch() {
     assert!(matches_filter(&item, "some-branch"));
     let bare = item_with_column(&repo, None);
     assert!(!matches_filter(&bare, "anything"));
+}
+
+// ---- derived_agent_width fixtures ----
+
+fn row_with_peers(n: usize) -> RowInputs {
+    let mut r = base_row();
+    r.peers = vec![AgentKind::Codex; n];
+    r
+}
+
+/// Build a full `DashboardInputs` from the shared design fixture, leaked to
+/// `'static` so tests can own it directly (mirrors `render_to_strings`'
+/// construction but hands the caller the `DashboardInputs` itself instead of
+/// rendering it immediately).
+fn fixture_dashboard_inputs() -> DashboardInputs<'static> {
+    let fixtures: &'static [fixture::FixtureRepo] = Box::leak(fixture::repos().into_boxed_slice());
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    let repos: &'static [Repo] = Box::leak(repos.into_boxed_slice());
+    let (repo_refs, workspaces) = build_inputs(fixtures, repos);
+    let activity: &'static [u32] = Box::leak(vec![0u32; 24].into_boxed_slice());
+    DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity,
+        column_widths: row::ColumnWidths::default(),
+    }
+}
+
+/// Same as `fixture_dashboard_inputs`, but every workspace has an open PR so
+/// every row renders a clickable PR chip.
+fn fixture_dashboard_inputs_with_pr() -> DashboardInputs<'static> {
+    let mut inputs = fixture_dashboard_inputs();
+    for w in inputs.workspaces.iter_mut() {
+        w.row.lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
+        w.row.pr_number = Some(100 + w.workspace_id.0 as u32);
+    }
+    inputs
+}
+
+fn give_workspace_peers(inputs: &mut DashboardInputs<'_>, index: usize, n: usize) {
+    inputs.workspaces[index].row.peers = vec![AgentKind::Codex; n];
+}
+
+/// Render a single `ListItem` through a 1-row `TestBackend` and read the
+/// buffer back as a string, so tests can assert on exactly what a flat list
+/// index will paint on screen.
+fn item_text(item: &ratatui::widgets::ListItem<'static>) -> String {
+    let backend = TestBackend::new(160, 1);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| {
+        let list = List::new(vec![item.clone()]);
+        f.render_widget(list, f.area());
+    })
+    .unwrap();
+    let buf = term.backend().buffer().clone();
+    (0..buf.area.width)
+        .map(|x| buf[(x, 0)].symbol().to_string())
+        .collect()
+}
+
+#[test]
+fn derived_agent_width_is_one_when_no_workspace_has_peers() {
+    let rows = [row_with_peers(0), row_with_peers(0)];
+    assert_eq!(derived_agent_width(rows.iter()), 1);
+}
+
+#[test]
+fn derived_agent_width_takes_the_max_across_rows() {
+    let rows = [row_with_peers(0), row_with_peers(2), row_with_peers(1)];
+    assert_eq!(derived_agent_width(rows.iter()), 3);
+}
+
+#[test]
+fn derived_agent_width_clamps_to_the_cap() {
+    let rows = [row_with_peers(9)];
+    assert_eq!(derived_agent_width(rows.iter()), MAX_AGENT_WIDTH);
+}
+
+#[test]
+fn derived_agent_width_of_nothing_is_one() {
+    let rows: Vec<RowInputs> = Vec::new();
+    assert_eq!(derived_agent_width(rows.iter()), 1);
+}
+
+#[test]
+fn folded_repos_do_not_widen_the_strip() {
+    // A peer-heavy workspace inside a collapsed repo is not drawn, so
+    // it must not tax the recap column of the rows that ARE drawn. Fold
+    // ONLY the peer-heavy repo, leaving another repo expanded, so the
+    // assertion actually distinguishes "folded rows excluded from the
+    // derivation" from "folded rows counted" — every workspace has a PR
+    // chip (so chips is non-empty either way) and the visible chip's x
+    // must land exactly where it would at the default (unwidened) width.
+    let mut inputs = fixture_dashboard_inputs_with_pr();
+    give_workspace_peers(&mut inputs, 0, 3);
+    let folded_repo_id = inputs.workspaces[0].repo.id;
+    let mut state = DashboardState::default();
+    state.folded.insert(folded_repo_id.0 as u64, true);
+    let (items, chips) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    assert!(!chips.is_empty(), "other repos still render rows");
+    let (ws_id, flat_idx, (x, _w)) = chips[0];
+    let rendered = item_text(&items[flat_idx]);
+    assert_eq!(
+        rendered.chars().position(|c| c == '⏺'),
+        Some(x as usize),
+        "hit span must match where the chip actually rendered:\n  {rendered:?}"
+    );
+    let visible_row = &inputs
+        .workspaces
+        .iter()
+        .find(|w| w.workspace_id == ws_id)
+        .unwrap()
+        .row;
+    let (x_unwidened, _) =
+        row::pr_chip_hit_span(visible_row, row::ColumnWidths::default()).unwrap();
+    assert_eq!(
+        x, x_unwidened,
+        "the folded repo's 3 peers must not widen the strip for a visible row"
+    );
+}
+
+#[test]
+fn chip_hit_spans_use_the_widened_strip() {
+    // The regression this task exists to prevent: hit spans computed at
+    // the unwidened width while rows render at the widened one.
+    let mut inputs = fixture_dashboard_inputs_with_pr();
+    give_workspace_peers(&mut inputs, 0, 2);
+    let mut state = DashboardState::default();
+    let (items, chips) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (ws_id, flat_idx, (x, _w)) = chips[0];
+    let rendered = item_text(&items[flat_idx]);
+    assert_eq!(
+        rendered.chars().position(|c| c == '⏺'),
+        Some(x as usize),
+        "hit span must match where the chip actually rendered:\n  {rendered:?}"
+    );
+    // Prove the derived width actually reaches the render, not just that
+    // both consumers happen to agree at whatever (possibly unwidened)
+    // width they were both given. 2 peers + primary = 3 live agents, one
+    // more cell than the default width of 1, so every chip — including
+    // rows with no peers of their own — must sit 2 columns further right
+    // than it would at the unwidened default.
+    let row_for_chip = &inputs
+        .workspaces
+        .iter()
+        .find(|w| w.workspace_id == ws_id)
+        .unwrap()
+        .row;
+    let (x_default, _) = row::pr_chip_hit_span(row_for_chip, row::ColumnWidths::default()).unwrap();
+    assert_eq!(
+        x,
+        x_default + 2,
+        "derived width must reach the render: a 3-wide strip shifts every chip 2 columns"
+    );
 }

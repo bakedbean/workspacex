@@ -471,6 +471,14 @@ pub struct App {
         crate::data::store::WorkspaceId,
         crate::data::store::ReportedStatus,
     >,
+    /// Every workspace's agent instances, refilled by `refresh`. Cached so
+    /// the per-frame dashboard build can resolve a workspace's agents
+    /// without a SQLite round-trip per row. Liveness is NOT cached — it
+    /// comes from `sessions`, which is already in memory.
+    pub agent_roster: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        Vec<crate::data::agents::AgentInstance>,
+    >,
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity:
         std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
@@ -645,6 +653,7 @@ impl App {
             diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
             pushed_status: std::collections::HashMap::new(),
+            agent_roster: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
             workspace_events_scanned: std::collections::HashSet::new(),
             workspace_needs_attention: std::collections::HashSet::new(),
@@ -738,6 +747,14 @@ impl App {
                 self.workspaces.push((r.id, w));
             }
         }
+        // `refresh_shared_detached` reads `agent_roster` (both the liveness
+        // and the tmux-session-ref checks), so this must be filled before
+        // it runs — otherwise the sweep sees a cycle-stale (or, at cold
+        // start, empty) roster. `all_workspace_agents` only depends on
+        // `self.store`, and nothing between the workspaces rebuild above and
+        // here writes to the DB or reads `agent_roster`, so hoisting it this
+        // early is safe.
+        self.agent_roster = self.store.all_workspace_agents().unwrap_or_default();
         // Needs `self.workspaces` populated above (it iterates shared
         // workspaces) — must run after the rebuild, not before.
         self.refresh_shared_detached();
@@ -765,6 +782,62 @@ impl App {
         Ok(())
     }
 
+    /// Whether `id` currently has a live (`SessionStatus::Running`) session
+    /// in `self.sessions`. The shared liveness predicate: `live_instances`,
+    /// `has_live_instance`, and any caller with its own already-fetched
+    /// instance list (e.g. `toggle_workspace_shared`, which cannot use
+    /// `agent_roster` — see its comment) all filter through this so there is
+    /// exactly one definition of "running" in the app.
+    pub fn instance_is_running(&self, id: crate::data::store::AgentInstanceId) -> bool {
+        self.sessions.get(id).is_some_and(|s| {
+            matches!(
+                *s.status.read().unwrap(),
+                crate::pty::session::SessionStatus::Running { .. }
+            )
+        })
+    }
+
+    /// The workspace's agent instances that currently have a running
+    /// session, in roster order (primary first). Instances registered in
+    /// the DB but with no session — never started, or exited — are
+    /// excluded: nothing reaps an instance row when its agent exits, so
+    /// "registered" and "running" diverge permanently.
+    ///
+    /// Reads the cached `agent_roster`, so it can lag behind the DB by up to
+    /// one `refresh()` — fine for the dashboard render path this feeds, but
+    /// wrong for a caller that just mutated the roster and needs the result
+    /// to reflect that mutation immediately (see `toggle_workspace_shared`,
+    /// which filters its own freshly-fetched instance list instead of
+    /// calling this).
+    pub fn live_instances(
+        &self,
+        ws: crate::data::store::WorkspaceId,
+    ) -> Vec<crate::data::agents::AgentInstance> {
+        self.agent_roster
+            .get(&ws)
+            .map(|instances| {
+                instances
+                    .iter()
+                    .filter(|inst| self.instance_is_running(inst.id))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Whether the workspace has any instance with a running session — not
+    /// just the primary, see `live_instances`. Equivalent to
+    /// `!self.live_instances(ws).is_empty()` but doesn't clone the roster
+    /// just to test non-emptiness. Same cache-staleness caveat as
+    /// `live_instances` applies.
+    pub fn has_live_instance(&self, ws: crate::data::store::WorkspaceId) -> bool {
+        self.agent_roster.get(&ws).is_some_and(|instances| {
+            instances
+                .iter()
+                .any(|inst| self.instance_is_running(inst.id))
+        })
+    }
+
     /// Sweep for shared workspaces whose tmux session is alive on the
     /// server while wsx holds no client for it (e.g. right after a wsx
     /// restart). Populates `shared_detached`, consumed by the shared-badge
@@ -783,29 +856,22 @@ impl App {
             if !ws.shared {
                 continue;
             }
-            // One roster fetch serves both checks. A client on ANY instance
-            // (not just the primary) means the workspace isn't detached —
-            // e.g. only a side-pane codex#2 is attached while the primary
-            // exited.
-            let instances = match self.store.workspace_agents(ws.id) {
-                Ok(i) => i,
-                Err(_) => continue,
-            };
-            let has_client = instances.iter().any(|inst| {
-                self.sessions.get(inst.id).is_some_and(|s| {
-                    matches!(
-                        *s.status.read().unwrap(),
-                        crate::pty::session::SessionStatus::Running { .. }
-                    )
-                })
-            });
-            if has_client {
+            // One `agent_roster` lookup serves both checks (`refresh` fills
+            // it before calling this method, so it's current for this
+            // cycle — see the comment in `refresh`). A client on ANY
+            // instance (not just the primary) means the workspace isn't
+            // detached — e.g. only a side-pane codex#2 is attached while the
+            // primary exited.
+            if self.has_live_instance(ws.id) {
                 continue;
             }
-            let alive = instances
+            let alive = self
+                .agent_roster
+                .get(&ws.id)
                 .into_iter()
-                .filter_map(|i| i.session_ref)
-                .any(|name| crate::pty::tmux::has_session(&name));
+                .flatten()
+                .filter_map(|i| i.session_ref.as_deref())
+                .any(crate::pty::tmux::has_session);
             if alive {
                 self.shared_detached.insert(ws.id);
             }
@@ -1980,16 +2046,15 @@ pub(crate) fn toggle_workspace_shared(
         return Ok(());
     }
     let all_instances = app.store.workspace_agents(ws_id)?;
+    // Derived from `all_instances` (not `app.live_instances`/`agent_roster`):
+    // a row inserted on this same tick — e.g. `resolve_primary_instance`
+    // backfilling a missing primary during attach — has no `refresh()` on
+    // its path, so the cache can be missing it indefinitely. Deriving from
+    // the fresh `all_instances` fetch above keeps `running` a subset of it
+    // by construction, which the respawn/cleanup loops below depend on.
     let running: Vec<_> = all_instances
         .iter()
-        .filter(|inst| {
-            app.sessions.get(inst.id).is_some_and(|s| {
-                matches!(
-                    *s.status.read().unwrap(),
-                    crate::pty::session::SessionStatus::Running { .. }
-                )
-            })
-        })
+        .filter(|inst| app.instance_is_running(inst.id))
         .cloned()
         .collect();
     app.store.set_workspace_shared(ws_id, to_shared)?;
@@ -2543,6 +2608,119 @@ mod added_spawn_tests {
             }
             other => panic!("expected Fresh, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod live_instances_tests {
+    use super::*;
+    use crate::data::store::NewWorkspace;
+    use crate::pty::session::{AgentKind, SessionStatus};
+
+    fn test_app() -> App {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap()
+    }
+
+    impl App {
+        /// Insert a fresh repo + workspace for this test, refresh the app so
+        /// it's immediately reflected, and return the new workspace id. Each
+        /// call needs a distinct `name` — `workspaces.worktree_path` is
+        /// UNIQUE, and `name` seeds the fixture path.
+        ///
+        /// `pub(crate)` (not just private to this module) so other `cfg(test)`
+        /// modules in the crate — e.g. `app::render`'s row-building tests —
+        /// can reuse it instead of duplicating the fixture setup.
+        pub(crate) fn test_workspace(&mut self, name: &str) -> crate::data::store::WorkspaceId {
+            let repo = self
+                .store
+                .add_repo(
+                    std::path::Path::new(&format!("/tmp/{name}-repo")),
+                    name,
+                    "wsx",
+                )
+                .unwrap();
+            let ws = self
+                .store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name,
+                    branch: &format!("wsx/{name}"),
+                    worktree_path: &std::path::PathBuf::from(format!("/tmp/{name}-repo/{name}")),
+                    yolo: false,
+                    agent: AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            self.refresh().unwrap();
+            ws
+        }
+
+        /// Register a fake session for `id` with a directly-chosen `status`,
+        /// via `SessionManager::insert_fake_session` — bypasses the real
+        /// spawn path (no process, no agent binary, no Tokio runtime needed)
+        /// so liveness-filtering tests can pick any status synchronously.
+        ///
+        /// `pub(crate)`, see `test_workspace` above for why.
+        pub(crate) fn test_spawn_session(
+            &mut self,
+            id: crate::data::store::AgentInstanceId,
+            status: SessionStatus,
+        ) {
+            self.sessions.insert_fake_session(id, status);
+        }
+    }
+
+    #[test]
+    fn live_instances_excludes_exited_and_never_started_peers() {
+        let mut app = test_app();
+        let ws = app.test_workspace("multi");
+        let primary = app
+            .store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        let peer_running = app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let peer_exited = app.store.add_workspace_agent(ws, AgentKind::Pi).unwrap();
+        // `peer_never_started` gets no session entry at all.
+        let _peer_never_started = app
+            .store
+            .add_workspace_agent(ws, AgentKind::Hermes)
+            .unwrap();
+        app.refresh().unwrap();
+
+        app.test_spawn_session(primary.id, SessionStatus::Running { pid: 1 });
+        app.test_spawn_session(peer_running.id, SessionStatus::Running { pid: 2 });
+        app.test_spawn_session(peer_exited.id, SessionStatus::Exited { code: 0 });
+
+        let live: Vec<_> = app.live_instances(ws).into_iter().map(|i| i.id).collect();
+        assert_eq!(live, vec![primary.id, peer_running.id]);
+    }
+
+    #[test]
+    fn live_instances_is_empty_for_unknown_workspace() {
+        let app = test_app();
+        assert!(
+            app.live_instances(crate::data::store::WorkspaceId(9999))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn refresh_repopulates_the_agent_roster() {
+        let mut app = test_app();
+        let ws = app.test_workspace("rostered");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        app.refresh().unwrap();
+        assert_eq!(app.agent_roster.get(&ws).map(|v| v.len()), Some(1));
+
+        app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        // Stale until refresh — this is the cache contract every mutation
+        // path has to respect.
+        assert_eq!(app.agent_roster.get(&ws).map(|v| v.len()), Some(1));
+        app.refresh().unwrap();
+        assert_eq!(app.agent_roster.get(&ws).map(|v| v.len()), Some(2));
     }
 }
 

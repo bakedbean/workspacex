@@ -1428,9 +1428,23 @@ mod tests {
         // master can surface EOF ahead of buffered output on macOS, so the
         // reader breaks out before it ever parses — and signals nothing.
         // Sleeping holds the slave open until the assertion is done.
+        // Drain any permit left by another test's session BEFORE spawning: the
+        // wake is process-wide, and a stale permit would let this pass without
+        // our own reader ever signalling. Draining after the spawn would eat
+        // our own signal instead.
+        let _ = tokio::time::timeout(
+            Duration::from_millis(50),
+            crate::pty::wake::output_wake().wait(),
+        )
+        .await;
+
         let mut cmd = CommandBuilder::new("/bin/sh");
         cmd.arg("-c");
         cmd.arg("echo hello; sleep 30");
+        // Every production caller sets cwd explicitly. Without it the child
+        // inherits the test binary's ambient working directory, which made this
+        // spawn fail with ENOENT under parallel load.
+        cmd.cwd("/");
         let session = spawn_command_session(cmd, 80, 24, AgentKind::Claude, "sh".into(), None)
             .expect("/bin/sh should spawn");
 

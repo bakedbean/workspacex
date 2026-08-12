@@ -1307,13 +1307,20 @@ use std::time::Duration;
 /// so one tick is exactly one spinner frame.
 pub(crate) const TICK: Duration = Duration::from_millis(125);
 
-/// Floor on the gap between two frames.
+/// Floor on the gap between two frames — 30fps.
 ///
-/// PTY output can arrive far faster than a terminal can usefully display it, so
-/// wake-driven redraws are clamped to the same 62.5Hz ceiling the old fixed
-/// tick imposed. Keeps a streaming agent from spinning the loop hotter than it
-/// ever ran before.
-const MIN_FRAME: Duration = Duration::from_millis(16);
+/// A busy agent emits output continuously (Claude Code animates its own
+/// spinner), so the wake fires continuously and this floor, not the tick, is
+/// what sets CPU cost while an agent works. 30fps is the cheapest rate that
+/// still reads as smooth: the resulting ~33ms of echo latency sits under the
+/// ~50ms threshold where typing starts to feel detached, and it halves the
+/// per-frame cost against the 62.5Hz the old fixed tick ran at.
+const MIN_FRAME: Duration = Duration::from_millis(33);
+
+/// The cadence the loop ran at before repaints were wake-driven. Retained as
+/// the yardstick for `MIN_FRAME`: peak redraw rate must never rise above it.
+#[cfg(test)]
+const LEGACY_FRAME: Duration = Duration::from_millis(16);
 
 /// How long to wait before the next frame, given how long ago the last one was.
 /// `None` means the budget is already spent — draw now.
@@ -1339,7 +1346,7 @@ mod pacing_tests {
         // waits out the remaining budget instead of spinning the loop.
         assert_eq!(
             frame_delay(Duration::from_millis(1)),
-            Some(Duration::from_millis(15))
+            Some(Duration::from_millis(32))
         );
     }
 
@@ -1350,11 +1357,24 @@ mod pacing_tests {
     }
 
     #[test]
-    fn the_floor_never_exceeds_the_old_fixed_cadence() {
-        // The old loop drew at most every 16ms. Wake-driven redraws must not
-        // beat that, or this change would raise peak CPU instead of cutting it.
-        assert_eq!(MIN_FRAME, Duration::from_millis(16));
-        assert!(frame_delay(Duration::ZERO).unwrap() <= MIN_FRAME);
+    fn the_floor_never_beats_the_old_fixed_cadence() {
+        // The old loop drew at most every 16ms. Wake-driven redraws must not be
+        // more frequent than that, or this would raise peak CPU instead of
+        // cutting it. `MIN_FRAME` is deliberately slower still.
+        assert!(
+            MIN_FRAME >= LEGACY_FRAME,
+            "peak redraw rate must not exceed the pre-wake loop"
+        );
+    }
+
+    #[test]
+    fn the_floor_stays_within_typing_latency_budget() {
+        // Echo latency is bounded by the floor. Past ~50ms typing reads as
+        // detached, so this is the ceiling on trading responsiveness for CPU.
+        assert!(
+            MIN_FRAME <= Duration::from_millis(50),
+            "frame floor doubles as worst-case keystroke echo latency"
+        );
     }
 }
 

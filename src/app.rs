@@ -1344,9 +1344,42 @@ const MIN_FRAME: Duration = Duration::from_millis(33);
 const LEGACY_FRAME: Duration = Duration::from_millis(16);
 
 /// How long to wait before the next frame, given how long ago the last one was.
-/// `None` means the budget is already spent — draw now.
+/// `None` means the budget is already spent — draw now. A remainder of exactly
+/// zero is `None` too: scheduling a zero-length sleep would burn a whole loop
+/// iteration to learn what is already known.
 fn frame_delay(since_last_frame: Duration) -> Option<Duration> {
-    MIN_FRAME.checked_sub(since_last_frame)
+    MIN_FRAME
+        .checked_sub(since_last_frame)
+        .filter(|remaining| !remaining.is_zero())
+}
+
+/// What the render loop should do about drawing on this iteration.
+#[derive(Debug, PartialEq, Eq)]
+enum FrameAction {
+    /// A repaint is owed and allowed — draw now.
+    Draw,
+    /// A repaint is owed but the floor has not expired. Wake after this long,
+    /// while still servicing input and output in the meantime.
+    WaitFor(Duration),
+    /// Nothing is owed. Park on the event arms with no frame timer at all —
+    /// an idle TUI does no work until something actually happens.
+    Park,
+}
+
+/// Decide the iteration's drawing behaviour.
+///
+/// The floor paces *frames*, never the loop. Sleeping before the select instead
+/// would cap event intake at one event per frame, so key repeats and wheel
+/// bursts would drain at 30/sec and accumulate latency — far worse than the
+/// single-frame delay the floor is meant to cost.
+fn next_frame_action(dirty: bool, since_last_frame: Option<Duration>) -> FrameAction {
+    if !dirty {
+        return FrameAction::Park;
+    }
+    match since_last_frame.and_then(frame_delay) {
+        Some(remaining) => FrameAction::WaitFor(remaining),
+        None => FrameAction::Draw,
+    }
 }
 
 #[cfg(test)]
@@ -1373,7 +1406,8 @@ mod pacing_tests {
 
     #[test]
     fn an_exhausted_budget_draws_immediately() {
-        assert_eq!(frame_delay(MIN_FRAME), Some(Duration::ZERO));
+        // Exactly at the floor counts as spent, not as a zero-length wait.
+        assert_eq!(frame_delay(MIN_FRAME), None);
         assert_eq!(frame_delay(MIN_FRAME + Duration::from_millis(1)), None);
     }
 
@@ -1421,6 +1455,62 @@ mod pacing_tests {
             extra_tick_ready_after_stall(&mut tick).await,
             "tokio's default is Burst; if this ever changes the guard above is moot"
         );
+    }
+
+    #[test]
+    fn an_idle_loop_parks_instead_of_scheduling_a_frame() {
+        // Nothing owed: no frame timer at all, so an idle TUI waits purely on
+        // real events rather than waking itself 30 times a second.
+        assert_eq!(next_frame_action(false, None), FrameAction::Park);
+        assert_eq!(
+            next_frame_action(false, Some(Duration::from_secs(9))),
+            FrameAction::Park
+        );
+    }
+
+    #[test]
+    fn the_first_frame_draws_without_waiting() {
+        assert_eq!(next_frame_action(true, None), FrameAction::Draw);
+    }
+
+    #[test]
+    fn a_repaint_owed_past_the_floor_draws_immediately() {
+        assert_eq!(next_frame_action(true, Some(MIN_FRAME)), FrameAction::Draw);
+        assert_eq!(
+            next_frame_action(true, Some(MIN_FRAME + Duration::from_millis(5))),
+            FrameAction::Draw
+        );
+    }
+
+    #[test]
+    fn a_repaint_owed_inside_the_floor_waits_out_the_remainder() {
+        assert_eq!(
+            next_frame_action(true, Some(Duration::from_millis(1))),
+            FrameAction::WaitFor(Duration::from_millis(32))
+        );
+    }
+
+    #[test]
+    fn input_is_never_gated_by_the_frame_floor() {
+        // The regression this replaced: the floor used to sleep at the top of
+        // the loop, so every event waited a frame and bursts drained at 30/sec
+        // with cumulative latency. Pacing must never resolve to a decision that
+        // blocks the select, only ever to one that schedules a *frame* — so
+        // however recently we drew, the loop still parks on the event arms as
+        // soon as the repaint is satisfied.
+        for elapsed_ms in [0, 1, 10, 32, 33, 100] {
+            let elapsed = Some(Duration::from_millis(elapsed_ms));
+            assert_eq!(
+                next_frame_action(false, elapsed),
+                FrameAction::Park,
+                "a satisfied screen must never hold up event intake ({elapsed_ms}ms)"
+            );
+            assert_ne!(
+                next_frame_action(true, elapsed),
+                FrameAction::Park,
+                "an owed repaint must still be scheduled ({elapsed_ms}ms)"
+            );
+        }
     }
 
     #[test]
@@ -1513,6 +1603,10 @@ pub async fn run<B: Backend + std::io::Write>(
     let mut events = EventStream::new();
     let mut tick = housekeeping_interval();
     let mut last_frame: Option<std::time::Instant> = None;
+    // Whether the screen owes a repaint. Set by anything that can change what
+    // is displayed; cleared by the draw. Lets input be consumed at full speed
+    // while frames stay coalesced to `MIN_FRAME`.
+    let mut dirty = true;
 
     loop {
         // Handle any pending edit BEFORE drawing — the editor takes
@@ -1523,16 +1617,17 @@ pub async fn run<B: Backend + std::io::Write>(
         };
         if let Some(edit) = pending {
             do_pending_edit(terminal, &app, edit).await?;
+            // The editor owned the terminal; the screen needs rebuilding.
+            dirty = true;
         }
 
-        // Hold the frame floor. Done before taking the lock so a burst of PTY
-        // output waits here rather than blocking the rest of the app.
-        if let Some(delay) = last_frame.map(|t| t.elapsed()).and_then(frame_delay) {
-            tokio::time::sleep(delay).await;
-        }
-        last_frame = Some(std::time::Instant::now());
-
-        {
+        // Draw only when something changed AND the floor has expired. The floor
+        // paces *frames*, never the loop itself: sleeping here instead would
+        // throttle event intake to one event per frame, so a burst of key
+        // repeats or wheel events would queue up and drain at 30/sec with
+        // cumulative latency. Input is handled at full speed below and merely
+        // marks the screen dirty; redraws coalesce.
+        if next_frame_action(dirty, last_frame.map(|t| t.elapsed())) == FrameAction::Draw {
             let mut g = app.lock().await;
             terminal.draw(|f| crate::app::render::draw(f, &mut g))?;
             // Drain bells queued during draw and fire them OUTSIDE the draw
@@ -1542,17 +1637,35 @@ pub async fn run<B: Backend + std::io::Write>(
             for state in bells {
                 fire_bell(state, &g.store);
             }
+            dirty = false;
+            last_frame = Some(std::time::Instant::now());
             if g.quit {
                 break;
             }
         }
 
+        // A redraw owed but not yet allowed needs its own wakeup, or the loop
+        // would park on the other arms and the frame would never land. When
+        // nothing is owed this arm is `pending` and never fires.
+        let frame_due = match next_frame_action(dirty, last_frame.map(|t| t.elapsed())) {
+            FrameAction::WaitFor(d) => Some(d),
+            // `Draw` cannot occur — the block above would have consumed it.
+            FrameAction::Draw | FrameAction::Park => None,
+        };
+
         tokio::select! {
-            // An attached pane's contents changed. Nothing to update here —
-            // the next loop iteration redraws from the parser — but this is
+            _ = async move {
+                match frame_due {
+                    Some(d) => tokio::time::sleep(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {}
+            // An attached pane's contents changed. The redraw happens at the
+            // top of the next iteration, subject to the frame floor — this is
             // what lets `TICK` be slow without laggy panes.
-            _ = crate::pty::wake::output_wake().wait() => {}
+            _ = crate::pty::wake::output_wake().wait() => { dirty = true; }
             _ = tick.tick() => {
+                dirty = true;
                 let mut g = app.lock().await;
                 g.tick = g.tick.wrapping_add(1);
                 // Expire any ephemeral chip-dispatch echo in the reply
@@ -1613,6 +1726,7 @@ pub async fn run<B: Backend + std::io::Write>(
                 }
             }
             maybe_evt = events.next() => {
+                dirty = true;
                 let Some(Ok(evt)) = maybe_evt else { break; };
                 // Drain any refreshes scheduled by detach handlers while
                 // we held the lock; resolve each id to its (path, agent)

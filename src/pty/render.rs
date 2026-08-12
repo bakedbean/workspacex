@@ -19,12 +19,26 @@ pub fn render_screen(screen: &Screen, buf: &mut Buffer, area: Rect) {
                 cell_buf.reset();
                 continue;
             };
-            let glyph = cell.contents();
-            cell_buf.set_symbol(if glyph.is_empty() {
-                " "
+            // `contents()` heap-allocates a String on every call, and this runs
+            // once per cell per frame. `has_contents()` answers the blank case
+            // without allocating, and blank cells dominate a typical pane.
+            //
+            // Only safe as a one-way fast path: `has_contents()` tests vt100's
+            // bit-packed length byte, whose high bits flag wide characters, so
+            // a wide *continuation* cell reports `true` while `contents()` is
+            // still empty. False therefore guarantees empty; true does not
+            // guarantee non-empty, and must fall through to the exact check —
+            // otherwise every wide glyph collapses to a zero-width symbol.
+            if !cell.has_contents() {
+                cell_buf.set_symbol(" ");
             } else {
-                glyph.as_str()
-            });
+                let glyph = cell.contents();
+                cell_buf.set_symbol(if glyph.is_empty() {
+                    " "
+                } else {
+                    glyph.as_str()
+                });
+            }
             cell_buf.set_style(convert_style(cell));
         }
     }
@@ -72,6 +86,52 @@ mod tests {
         render_screen(p.screen(), &mut buf, Rect::new(0, 0, 10, 3));
         let line: String = (0..5).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert_eq!(line, "hello");
+    }
+
+    #[test]
+    fn blank_cells_render_as_a_space() {
+        // The allocation-free fast path. Untouched cells must still produce a
+        // space, not an empty symbol.
+        let mut p = Parser::new(2, 10, 0);
+        p.process(b"ab");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
+        render_screen(p.screen(), &mut buf, Rect::new(0, 0, 10, 2));
+        for x in 2..10 {
+            assert_eq!(buf[(x, 0)].symbol(), " ", "blank cell at x={x}");
+        }
+        assert_eq!(buf[(0, 1)].symbol(), " ", "blank row");
+    }
+
+    #[test]
+    fn wide_glyph_continuation_cell_renders_as_a_space() {
+        // Regression guard for the fast path: vt100 packs wide-character flags
+        // into the same byte `has_contents()` tests, so a continuation cell
+        // reports "has contents" while its contents are empty. Taking the fast
+        // path on it would emit a zero-width symbol and break CJK/emoji panes.
+        let mut p = Parser::new(2, 10, 0);
+        p.process("世界".as_bytes());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
+        render_screen(p.screen(), &mut buf, Rect::new(0, 0, 10, 2));
+
+        assert_eq!(buf[(0, 0)].symbol(), "世");
+        assert_eq!(
+            buf[(1, 0)].symbol(),
+            " ",
+            "continuation cell must not be a zero-width symbol"
+        );
+        assert_eq!(buf[(2, 0)].symbol(), "界");
+        assert_eq!(buf[(3, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn combining_characters_survive_the_fast_path() {
+        // A cell can hold several codepoints; the fast path must not truncate
+        // them to the first.
+        let mut p = Parser::new(2, 10, 0);
+        p.process("e\u{0301}".as_bytes()); // e + combining acute
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
+        render_screen(p.screen(), &mut buf, Rect::new(0, 0, 10, 2));
+        assert_eq!(buf[(0, 0)].symbol(), "e\u{0301}");
     }
 
     #[test]

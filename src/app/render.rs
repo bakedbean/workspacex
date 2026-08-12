@@ -19,6 +19,17 @@ type PaneData = (
     Option<crate::pty::session::AgentKind>,
 );
 
+/// Tell each session whether it is on screen, so backgrounded agents stop
+/// signalling the render loop for output no frame can show.
+///
+/// Reuses `resize_sync::visible_instances` rather than deriving a second notion
+/// of visibility — that helper already answers "which instances does the
+/// current view display" and is tested.
+fn sync_session_visibility(app: &App) {
+    let visible = crate::app::resize_sync::visible_instances(&app.view);
+    app.sessions.sync_visibility(&visible);
+}
+
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     use crate::ui::{attached, dashboard, modal};
     let area = f.area();
@@ -39,6 +50,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();
     app.usage_window_option_rects.clear();
+    sync_session_visibility(app);
 
     match &app.view {
         crate::ui::View::Dashboard => {

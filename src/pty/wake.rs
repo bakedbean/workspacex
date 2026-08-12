@@ -8,6 +8,14 @@
 //!
 //! Signalling here decouples the two: the tick drops to animation speed while
 //! attached panes still repaint as soon as bytes actually land.
+//!
+//! Only *visible* sessions signal. A backgrounded agent keeps running and keeps
+//! parsing, but no frame can display it — `pty::render::render_screen` has a
+//! single caller, in `ui::attached` — so signalling for it would hold the loop
+//! at full redraw rate showing nothing new. The gate lives on
+//! [`crate::pty::session::Session::visible`], which the render path maintains
+//! each frame; a signal arriving here therefore means "something on screen
+//! changed", not merely "some PTY produced bytes".
 
 use tokio::sync::Notify;
 
@@ -93,6 +101,30 @@ mod tests {
             second.is_err(),
             "three reads between frames must coalesce into one repaint"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn losing_a_select_race_does_not_break_later_waits() {
+        // The renderer awaits this inside a `select!`, so its wait future is
+        // routinely polled (registering a waiter) and then dropped when another
+        // arm wins. Registration must not leave the wake in a state where a
+        // later signal is missed — otherwise an attached pane could silently
+        // stop repainting.
+        //
+        // This pins the behaviour we depend on at the boundary we control. It
+        // does not attempt to pin tokio's internal guarantee that a permit
+        // handed to a future dropped mid-poll is passed on to the next waiter.
+        let wake = OutputWake::new();
+
+        tokio::select! {
+            _ = wake.wait() => panic!("nothing has signalled yet"),
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+
+        wake.notify();
+        tokio::time::timeout(Duration::from_millis(1), wake.wait())
+            .await
+            .expect("a signal after a lost select race must still be observed");
     }
 
     #[tokio::test]

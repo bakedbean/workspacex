@@ -2875,6 +2875,44 @@ mod added_spawn_tests {
 }
 
 #[cfg(test)]
+mod external_change_tests {
+    use super::*;
+
+    /// End-to-end guard for the settings-cache wiring. `data::settings` tests
+    /// invalidate by hand; this proves the TUI actually calls it when a sibling
+    /// process commits, which is the only thing that makes a memoized setting
+    /// safe to serve from the render path.
+    #[test]
+    fn poll_external_changes_invalidates_the_settings_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let store = crate::data::store::Store::open(&path).unwrap();
+        let mut app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        // Warm the cache through the app's own connection.
+        app.store.set_setting("theme", "dark").unwrap();
+        assert_eq!(
+            app.store.get_setting("theme").unwrap().as_deref(),
+            Some("dark")
+        );
+
+        // A sibling `wsx` process writes through a different connection.
+        let sibling = crate::data::store::Store::open(&path).unwrap();
+        sibling.set_setting("theme", "light").unwrap();
+
+        assert!(
+            app.poll_external_changes(),
+            "a sibling commit must be detected via data_version"
+        );
+        assert_eq!(
+            app.store.get_setting("theme").unwrap().as_deref(),
+            Some("light"),
+            "detecting the commit must also drop the stale memo"
+        );
+    }
+}
+
+#[cfg(test)]
 mod live_instances_tests {
     use super::*;
     use crate::data::store::NewWorkspace;

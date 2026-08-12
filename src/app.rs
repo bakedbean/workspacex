@@ -728,6 +728,9 @@ impl App {
         if v == self.last_data_version {
             return false;
         }
+        // A sibling process committed. Memoized settings were read through our
+        // own connection and may now be stale, so drop them before refreshing.
+        self.store.invalidate_settings_cache();
         // Advance the cached version only after a successful refresh, so a
         // transient error (e.g. brief DB lock) leaves us in a state where
         // the next tick retries instead of silently staying stale.

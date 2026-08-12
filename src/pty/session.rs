@@ -98,6 +98,18 @@ pub struct Session {
     /// `parser.set_scrollback(offset)` before reading `parser.screen()`,
     /// so vt100 clamps to whatever scrollback actually exists.
     pub scrollback_offset: std::sync::atomic::AtomicUsize,
+    /// Whether this session's output currently reaches the screen.
+    ///
+    /// Backgrounded sessions keep running and keep parsing — detaching only
+    /// flips the view — but nothing on the dashboard is derived from a parser
+    /// (`pty::render::render_screen` has exactly one caller, in `ui::attached`).
+    /// Without this gate a hidden agent's output would signal the render loop
+    /// and drive full-rate redraws that cannot show any of it.
+    ///
+    /// Written by the render path each frame rather than by attach/detach
+    /// handlers: "what did we just draw" is self-correcting, whereas mirroring
+    /// every view transition is a bookkeeping problem that fails open.
+    pub visible: Arc<std::sync::atomic::AtomicBool>,
     // Wrapped in Mutex so Session is Sync — required because App is held in
     // an Arc<tokio::sync::Mutex<App>> that gets passed to `tokio::spawn` for
     // the branch-drift poller.
@@ -324,6 +336,7 @@ impl Session {
             activity_ms: Arc::new(AtomicU64::new(0)),
             agent: AgentKind::Claude,
             scrollback_offset: std::sync::atomic::AtomicUsize::new(0),
+            visible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             master: Mutex::new(pair.master),
             killer: Mutex::new(Box::new(NoopKiller)),
             prompt: Arc::new(Mutex::new(PromptCapture::default())),
@@ -542,6 +555,8 @@ pub fn spawn_command_session(
     let parser_r = parser.clone();
     let activity_r = activity_ms.clone();
     let status_r = status.clone();
+    let visible = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let visible_r = visible.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -550,6 +565,14 @@ pub fn spawn_command_session(
                 Ok(n) => {
                     parser_r.lock().unwrap().process(&buf[..n]);
                     activity_r.store(now_ms(), Ordering::Relaxed);
+                    // Tell the render loop the screen moved — but only if this
+                    // session is actually on screen. A backgrounded agent keeps
+                    // producing output that no frame can display, and signalling
+                    // for it would hold the loop at full redraw rate showing
+                    // nothing new. See `Session::visible` and `pty::wake`.
+                    if visible_r.load(Ordering::Relaxed) {
+                        crate::pty::wake::output_wake().notify();
+                    }
                 }
                 Err(_) => break,
             }
@@ -586,6 +609,7 @@ pub fn spawn_command_session(
         activity_ms,
         agent,
         scrollback_offset: std::sync::atomic::AtomicUsize::new(0),
+        visible,
         master: Mutex::new(pair.master),
         killer: Mutex::new(killer),
         prompt,
@@ -695,6 +719,23 @@ impl SessionManager {
         }
     }
 
+    /// Mark exactly the sessions in `visible` as on-screen, and every other as
+    /// backgrounded. Only visible sessions signal the render loop when they
+    /// produce output — see [`Session::visible`].
+    ///
+    /// Driven from the render path each frame so it tracks whatever was
+    /// actually drawn, rather than mirroring every view transition by hand.
+    pub fn sync_visibility(
+        &self,
+        visible: &std::collections::HashSet<crate::data::store::AgentInstanceId>,
+    ) {
+        for (id, session) in &self.sessions {
+            session
+                .visible
+                .store(visible.contains(id), Ordering::Relaxed);
+        }
+    }
+
     pub fn kill_all(&mut self) {
         for s in self.sessions.values() {
             s.kill();
@@ -709,6 +750,12 @@ mod tests {
     use crate::test_support::EnvGuard;
     use std::path::PathBuf;
     use std::time::Duration;
+
+    /// Serializes the tests that assert on the process-wide `output_wake`.
+    /// A *visible* session in one test signals the same singleton another test
+    /// is waiting on, which would let a negative assertion fail spuriously.
+    /// Sessions default to backgrounded, so only these tests can interfere.
+    static WAKE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Kills a private tmux server on scope exit, so a mid-test panic (a failed
     /// assert) can't leak a running server inside the isolated `TMUX_TMPDIR`.
@@ -1408,6 +1455,137 @@ mod tests {
             ),
             other => panic!("expected AgentBinaryMissing(\"ssh-test-bin\"), got {other:?}"),
         }
+    }
+
+    /// End-to-end proof that the reader thread signals the renderer. Without
+    /// this edge the render loop has no way to learn output arrived, which is
+    /// what forced the 16ms poll-by-redrawing tick.
+    ///
+    /// Asserts existence, not exclusivity: `output_wake()` is process-wide, so
+    /// a stray signal from another test could only mask a regression here, not
+    /// invent a failure.
+    #[tokio::test]
+    async fn reader_thread_signals_the_render_loop_on_output() {
+        let _serialized = WAKE_TEST_LOCK.lock().await;
+        // The child must outlive the read. A command that exits immediately
+        // (`echo hello`) races the reader: once the last slave fd closes, the
+        // master can surface EOF ahead of buffered output on macOS, so the
+        // reader breaks out before it ever parses — and signals nothing.
+        // Sleeping holds the slave open until the assertion is done.
+        // Drain any permit left by another test's session BEFORE spawning: the
+        // wake is process-wide, and a stale permit would let this pass without
+        // our own reader ever signalling. Draining after the spawn would eat
+        // our own signal instead.
+        let _ = tokio::time::timeout(
+            Duration::from_millis(50),
+            crate::pty::wake::output_wake().wait(),
+        )
+        .await;
+
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg("echo hello; sleep 30");
+        // Every production caller sets cwd explicitly. Without it the child
+        // inherits the test binary's ambient working directory, which made this
+        // spawn fail with ENOENT under parallel load.
+        cmd.cwd("/");
+        let session = spawn_command_session(cmd, 80, 24, AgentKind::Claude, "sh".into(), None)
+            .expect("/bin/sh should spawn");
+        // Sessions start backgrounded and only signal once a frame has drawn
+        // them; the render path normally does this via `sync_visibility`.
+        session.visible.store(true, Ordering::Relaxed);
+
+        let woken = tokio::time::timeout(
+            Duration::from_secs(10),
+            crate::pty::wake::output_wake().wait(),
+        )
+        .await;
+
+        // Reap before asserting, so a failure can't leak the sleeping child.
+        session.kill();
+        woken.expect("PTY output must wake the render loop");
+    }
+
+    /// The other half of the gate: a running but hidden session must not pull
+    /// the render loop awake. This is what keeps a backgrounded agent from
+    /// holding the whole TUI at full redraw rate to display nothing.
+    #[tokio::test]
+    async fn a_backgrounded_session_does_not_wake_the_render_loop() {
+        let _serialized = WAKE_TEST_LOCK.lock().await;
+        let _ = tokio::time::timeout(
+            Duration::from_millis(50),
+            crate::pty::wake::output_wake().wait(),
+        )
+        .await;
+
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg("while :; do echo tick; sleep 0.05; done");
+        cmd.cwd("/");
+        let session = spawn_command_session(cmd, 80, 24, AgentKind::Claude, "sh".into(), None)
+            .expect("/bin/sh should spawn");
+        // Left backgrounded on purpose — no `visible.store(true)`.
+
+        let woken = tokio::time::timeout(
+            Duration::from_millis(500),
+            crate::pty::wake::output_wake().wait(),
+        )
+        .await;
+
+        session.kill();
+        assert!(
+            woken.is_err(),
+            "a hidden session streaming output must not signal the renderer"
+        );
+    }
+
+    #[test]
+    fn sync_visibility_marks_only_the_listed_sessions() {
+        let mut mgr = SessionManager::new();
+        let on = crate::data::store::AgentInstanceId(1);
+        let off = crate::data::store::AgentInstanceId(2);
+        mgr.insert_fake_session(on, SessionStatus::Running { pid: 1 });
+        mgr.insert_fake_session(off, SessionStatus::Running { pid: 2 });
+
+        let visible: std::collections::HashSet<_> = [on].into_iter().collect();
+        mgr.sync_visibility(&visible);
+
+        assert!(
+            mgr.get(on).unwrap().visible.load(Ordering::Relaxed),
+            "an on-screen session must signal the render loop"
+        );
+        assert!(
+            !mgr.get(off).unwrap().visible.load(Ordering::Relaxed),
+            "a backgrounded session must not"
+        );
+    }
+
+    #[test]
+    fn sync_visibility_clears_a_session_that_went_backgrounded() {
+        // Detaching leaves the session running; it must stop signalling, or a
+        // hidden agent holds the loop at full redraw rate showing nothing.
+        let mut mgr = SessionManager::new();
+        let id = crate::data::store::AgentInstanceId(1);
+        mgr.insert_fake_session(id, SessionStatus::Running { pid: 1 });
+
+        mgr.sync_visibility(&[id].into_iter().collect());
+        assert!(mgr.get(id).unwrap().visible.load(Ordering::Relaxed));
+
+        mgr.sync_visibility(&std::collections::HashSet::new());
+        assert!(
+            !mgr.get(id).unwrap().visible.load(Ordering::Relaxed),
+            "visibility must be revoked, not just granted"
+        );
+    }
+
+    #[test]
+    fn a_freshly_spawned_session_starts_backgrounded() {
+        // Fails closed: a session signals only once a frame has actually drawn
+        // it, so a spawn cannot leak wakes before it is on screen.
+        let mut mgr = SessionManager::new();
+        let id = crate::data::store::AgentInstanceId(1);
+        mgr.insert_fake_session(id, SessionStatus::Running { pid: 1 });
+        assert!(!mgr.get(id).unwrap().visible.load(Ordering::Relaxed));
     }
 
     #[test]

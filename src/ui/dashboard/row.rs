@@ -785,9 +785,10 @@ mod tests {
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("⠋"), "spinner frame at tick 0: {text:?}");
-        let line2 = render(&inputs, ColumnWidths::default(), 8, &theme, 120);
+        // One tick per frame since the render tick moved to `app::TICK`.
+        let line2 = render(&inputs, ColumnWidths::default(), 1, &theme, 120);
         let text2 = line_text(&line2);
-        assert!(text2.contains("⠙"), "spinner advances by tick 8: {text2:?}");
+        assert!(text2.contains("⠙"), "spinner advances by tick 1: {text2:?}");
     }
 
     #[test]

@@ -121,12 +121,13 @@ mod render_archive_steps_tests {
 
     #[test]
     fn spinner_frame_varies_with_tick() {
-        // The spinner glyph at tick=0 is '⠋'; at tick=8 it's '⠙'.
-        // This sanity-checks that render_archive_steps actually
-        // threads `tick` through to spinner::frame.
+        // The spinner glyph at tick=0 is '⠋'; at tick=1 it's '⠙' (one tick per
+        // frame since the render tick moved to `app::TICK`). This sanity-checks
+        // that render_archive_steps actually threads `tick` through to
+        // spinner::frame.
         let body0 = render_archive_steps(ArchiveStep::RemoveWorktree, true, 0);
-        let body8 = render_archive_steps(ArchiveStep::RemoveWorktree, true, 8);
+        let body1 = render_archive_steps(ArchiveStep::RemoveWorktree, true, 1);
         assert!(body0.contains('⠋'));
-        assert!(body8.contains('⠙'));
+        assert!(body1.contains('⠙'));
     }
 }

@@ -728,6 +728,9 @@ impl App {
         if v == self.last_data_version {
             return false;
         }
+        // A sibling process committed. Memoized settings were read through our
+        // own connection and may now be stale, so drop them before refreshing.
+        self.store.invalidate_settings_cache();
         // Advance the cached version only after a successful refresh, so a
         // transient error (e.g. brief DB lock) leaves us in a state where
         // the next tick retries instead of silently staying stale.
@@ -1297,6 +1300,230 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use std::time::Duration;
 
+/// Cadence of the housekeeping/animation tick.
+///
+/// This used to be 16ms, but not because anything needed 62.5Hz: the PTY reader
+/// thread had no way to tell the render loop that output arrived, so the tick
+/// doubled as the poll rate and the loop rebuilt the whole frame ~62 times a
+/// second forever. `pty::wake` now carries that edge, leaving this to drive
+/// only the spinner and periodic bookkeeping — 8Hz is the spinner's spec rate,
+/// so one tick is exactly one spinner frame.
+pub(crate) const TICK: Duration = Duration::from_millis(125);
+
+/// Build the housekeeping/animation interval.
+///
+/// `tokio::time::interval` defaults to `MissedTickBehavior::Burst`, which
+/// replays every deadline missed during a stall back-to-back. The loop does
+/// stall: `do_pending_edit` hands the terminal to `$EDITOR` and awaits it, so a
+/// minutes-long edit banks hundreds of ticks that would then fire in a rush —
+/// whirling the spinner and re-running the bookkeeping block many times over.
+///
+/// `Delay` instead guarantees a full `TICK` between ticks no matter how long
+/// the loop was blocked. Nothing in the tick arm wants replaying: it advances
+/// an animation counter and does deadline-guarded bookkeeping, all of which is
+/// idempotent and all of which only cares about *now*.
+fn housekeeping_interval() -> tokio::time::Interval {
+    let mut tick = tokio::time::interval(TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tick
+}
+
+/// Floor on the gap between two frames — 30fps.
+///
+/// A busy agent emits output continuously (Claude Code animates its own
+/// spinner), so the wake fires continuously and this floor, not the tick, is
+/// what sets CPU cost while an agent works. 30fps is the cheapest rate that
+/// still reads as smooth: the resulting ~33ms of echo latency sits under the
+/// ~50ms threshold where typing starts to feel detached, and it halves the
+/// per-frame cost against the 62.5Hz the old fixed tick ran at.
+const MIN_FRAME: Duration = Duration::from_millis(33);
+
+/// The cadence the loop ran at before repaints were wake-driven. Retained as
+/// the yardstick for `MIN_FRAME`: peak redraw rate must never rise above it.
+#[cfg(test)]
+const LEGACY_FRAME: Duration = Duration::from_millis(16);
+
+/// How long to wait before the next frame, given how long ago the last one was.
+/// `None` means the budget is already spent — draw now. A remainder of exactly
+/// zero is `None` too: scheduling a zero-length sleep would burn a whole loop
+/// iteration to learn what is already known.
+fn frame_delay(since_last_frame: Duration) -> Option<Duration> {
+    MIN_FRAME
+        .checked_sub(since_last_frame)
+        .filter(|remaining| !remaining.is_zero())
+}
+
+/// What the render loop should do about drawing on this iteration.
+#[derive(Debug, PartialEq, Eq)]
+enum FrameAction {
+    /// A repaint is owed and allowed — draw now.
+    Draw,
+    /// A repaint is owed but the floor has not expired. Wake after this long,
+    /// while still servicing input and output in the meantime.
+    WaitFor(Duration),
+    /// Nothing is owed. Park on the event arms with no frame timer at all —
+    /// an idle TUI does no work until something actually happens.
+    Park,
+}
+
+/// Decide the iteration's drawing behaviour.
+///
+/// The floor paces *frames*, never the loop. Sleeping before the select instead
+/// would cap event intake at one event per frame, so key repeats and wheel
+/// bursts would drain at 30/sec and accumulate latency — far worse than the
+/// single-frame delay the floor is meant to cost.
+fn next_frame_action(dirty: bool, since_last_frame: Option<Duration>) -> FrameAction {
+    if !dirty {
+        return FrameAction::Park;
+    }
+    match since_last_frame.and_then(frame_delay) {
+        Some(remaining) => FrameAction::WaitFor(remaining),
+        None => FrameAction::Draw,
+    }
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::*;
+
+    #[test]
+    fn a_tick_driven_frame_never_waits() {
+        // `TICK` is far longer than `MIN_FRAME`, so ordinary idle repaints must
+        // pass straight through the floor rather than adding latency.
+        assert!(TICK > MIN_FRAME);
+        assert_eq!(frame_delay(TICK), None);
+    }
+
+    #[test]
+    fn back_to_back_output_is_held_to_the_frame_floor() {
+        // The streaming-agent case: output arriving 1ms after the last frame
+        // waits out the remaining budget instead of spinning the loop.
+        assert_eq!(
+            frame_delay(Duration::from_millis(1)),
+            Some(Duration::from_millis(32))
+        );
+    }
+
+    #[test]
+    fn an_exhausted_budget_draws_immediately() {
+        // Exactly at the floor counts as spent, not as a zero-length wait.
+        assert_eq!(frame_delay(MIN_FRAME), None);
+        assert_eq!(frame_delay(MIN_FRAME + Duration::from_millis(1)), None);
+    }
+
+    #[test]
+    fn the_floor_never_beats_the_old_fixed_cadence() {
+        // The old loop drew at most every 16ms. Wake-driven redraws must not be
+        // more frequent than that, or this would raise peak CPU instead of
+        // cutting it. `MIN_FRAME` is deliberately slower still.
+        assert!(
+            MIN_FRAME >= LEGACY_FRAME,
+            "peak redraw rate must not exceed the pre-wake loop"
+        );
+    }
+
+    /// Drain the tick that is already overdue after a stall, then report
+    /// whether *another* one is also immediately ready. Under `Burst` every
+    /// missed deadline is queued up and the answer is yes.
+    async fn extra_tick_ready_after_stall(tick: &mut tokio::time::Interval) -> bool {
+        tick.tick().await; // completes immediately at t=0
+        tokio::time::advance(TICK * 10).await;
+        tick.tick().await; // the overdue one; legitimate under any behaviour
+        tokio::time::timeout(Duration::from_millis(1), tick.tick())
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tick_does_not_replay_deadlines_missed_during_a_stall() {
+        // `do_pending_edit` blocks the loop for as long as $EDITOR is open. On
+        // return the tick must resume, not fire hundreds of banked ticks that
+        // whirl the spinner and re-run the bookkeeping block.
+        let mut tick = housekeeping_interval();
+        assert!(
+            !extra_tick_ready_after_stall(&mut tick).await,
+            "a stalled tick must not have extra ticks queued up behind it"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_default_interval_would_replay_them() {
+        // Proves the test above discriminates: tokio's default `Burst` is
+        // exactly the behaviour being guarded against.
+        let mut tick = tokio::time::interval(TICK);
+        assert!(
+            extra_tick_ready_after_stall(&mut tick).await,
+            "tokio's default is Burst; if this ever changes the guard above is moot"
+        );
+    }
+
+    #[test]
+    fn an_idle_loop_parks_instead_of_scheduling_a_frame() {
+        // Nothing owed: no frame timer at all, so an idle TUI waits purely on
+        // real events rather than waking itself 30 times a second.
+        assert_eq!(next_frame_action(false, None), FrameAction::Park);
+        assert_eq!(
+            next_frame_action(false, Some(Duration::from_secs(9))),
+            FrameAction::Park
+        );
+    }
+
+    #[test]
+    fn the_first_frame_draws_without_waiting() {
+        assert_eq!(next_frame_action(true, None), FrameAction::Draw);
+    }
+
+    #[test]
+    fn a_repaint_owed_past_the_floor_draws_immediately() {
+        assert_eq!(next_frame_action(true, Some(MIN_FRAME)), FrameAction::Draw);
+        assert_eq!(
+            next_frame_action(true, Some(MIN_FRAME + Duration::from_millis(5))),
+            FrameAction::Draw
+        );
+    }
+
+    #[test]
+    fn a_repaint_owed_inside_the_floor_waits_out_the_remainder() {
+        assert_eq!(
+            next_frame_action(true, Some(Duration::from_millis(1))),
+            FrameAction::WaitFor(Duration::from_millis(32))
+        );
+    }
+
+    #[test]
+    fn input_is_never_gated_by_the_frame_floor() {
+        // The regression this replaced: the floor used to sleep at the top of
+        // the loop, so every event waited a frame and bursts drained at 30/sec
+        // with cumulative latency. Pacing must never resolve to a decision that
+        // blocks the select, only ever to one that schedules a *frame* — so
+        // however recently we drew, the loop still parks on the event arms as
+        // soon as the repaint is satisfied.
+        for elapsed_ms in [0, 1, 10, 32, 33, 100] {
+            let elapsed = Some(Duration::from_millis(elapsed_ms));
+            assert_eq!(
+                next_frame_action(false, elapsed),
+                FrameAction::Park,
+                "a satisfied screen must never hold up event intake ({elapsed_ms}ms)"
+            );
+            assert_ne!(
+                next_frame_action(true, elapsed),
+                FrameAction::Park,
+                "an owed repaint must still be scheduled ({elapsed_ms}ms)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_floor_stays_within_typing_latency_budget() {
+        // Echo latency is bounded by the floor. Past ~50ms typing reads as
+        // detached, so this is the ceiling on trading responsiveness for CPU.
+        assert!(
+            MIN_FRAME <= Duration::from_millis(50),
+            "frame floor doubles as worst-case keystroke echo latency"
+        );
+    }
+}
+
 async fn do_pending_edit<B>(
     terminal: &mut ratatui::Terminal<B>,
     app: &SharedApp,
@@ -1374,7 +1601,12 @@ pub async fn run<B: Backend + std::io::Write>(
     app: SharedApp,
 ) -> Result<()> {
     let mut events = EventStream::new();
-    let mut tick = tokio::time::interval(Duration::from_millis(16));
+    let mut tick = housekeeping_interval();
+    let mut last_frame: Option<std::time::Instant> = None;
+    // Whether the screen owes a repaint. Set by anything that can change what
+    // is displayed; cleared by the draw. Lets input be consumed at full speed
+    // while frames stay coalesced to `MIN_FRAME`.
+    let mut dirty = true;
 
     loop {
         // Handle any pending edit BEFORE drawing — the editor takes
@@ -1385,9 +1617,17 @@ pub async fn run<B: Backend + std::io::Write>(
         };
         if let Some(edit) = pending {
             do_pending_edit(terminal, &app, edit).await?;
+            // The editor owned the terminal; the screen needs rebuilding.
+            dirty = true;
         }
 
-        {
+        // Draw only when something changed AND the floor has expired. The floor
+        // paces *frames*, never the loop itself: sleeping here instead would
+        // throttle event intake to one event per frame, so a burst of key
+        // repeats or wheel events would queue up and drain at 30/sec with
+        // cumulative latency. Input is handled at full speed below and merely
+        // marks the screen dirty; redraws coalesce.
+        if next_frame_action(dirty, last_frame.map(|t| t.elapsed())) == FrameAction::Draw {
             let mut g = app.lock().await;
             terminal.draw(|f| crate::app::render::draw(f, &mut g))?;
             // Drain bells queued during draw and fire them OUTSIDE the draw
@@ -1397,13 +1637,35 @@ pub async fn run<B: Backend + std::io::Write>(
             for state in bells {
                 fire_bell(state, &g.store);
             }
+            dirty = false;
+            last_frame = Some(std::time::Instant::now());
             if g.quit {
                 break;
             }
         }
 
+        // A redraw owed but not yet allowed needs its own wakeup, or the loop
+        // would park on the other arms and the frame would never land. When
+        // nothing is owed this arm is `pending` and never fires.
+        let frame_due = match next_frame_action(dirty, last_frame.map(|t| t.elapsed())) {
+            FrameAction::WaitFor(d) => Some(d),
+            // `Draw` cannot occur — the block above would have consumed it.
+            FrameAction::Draw | FrameAction::Park => None,
+        };
+
         tokio::select! {
+            _ = async move {
+                match frame_due {
+                    Some(d) => tokio::time::sleep(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {}
+            // An attached pane's contents changed. The redraw happens at the
+            // top of the next iteration, subject to the frame floor — this is
+            // what lets `TICK` be slow without laggy panes.
+            _ = crate::pty::wake::output_wake().wait() => { dirty = true; }
             _ = tick.tick() => {
+                dirty = true;
                 let mut g = app.lock().await;
                 g.tick = g.tick.wrapping_add(1);
                 // Expire any ephemeral chip-dispatch echo in the reply
@@ -1464,6 +1726,7 @@ pub async fn run<B: Backend + std::io::Write>(
                 }
             }
             maybe_evt = events.next() => {
+                dirty = true;
                 let Some(Ok(evt)) = maybe_evt else { break; };
                 // Drain any refreshes scheduled by detach handlers while
                 // we held the lock; resolve each id to its (path, agent)
@@ -2608,6 +2871,44 @@ mod added_spawn_tests {
             }
             other => panic!("expected Fresh, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod external_change_tests {
+    use super::*;
+
+    /// End-to-end guard for the settings-cache wiring. `data::settings` tests
+    /// invalidate by hand; this proves the TUI actually calls it when a sibling
+    /// process commits, which is the only thing that makes a memoized setting
+    /// safe to serve from the render path.
+    #[test]
+    fn poll_external_changes_invalidates_the_settings_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let store = crate::data::store::Store::open(&path).unwrap();
+        let mut app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        // Warm the cache through the app's own connection.
+        app.store.set_setting("theme", "dark").unwrap();
+        assert_eq!(
+            app.store.get_setting("theme").unwrap().as_deref(),
+            Some("dark")
+        );
+
+        // A sibling `wsx` process writes through a different connection.
+        let sibling = crate::data::store::Store::open(&path).unwrap();
+        sibling.set_setting("theme", "light").unwrap();
+
+        assert!(
+            app.poll_external_changes(),
+            "a sibling commit must be detected via data_version"
+        );
+        assert_eq!(
+            app.store.get_setting("theme").unwrap().as_deref(),
+            Some("light"),
+            "detecting the commit must also drop the stale memo"
+        );
     }
 }
 

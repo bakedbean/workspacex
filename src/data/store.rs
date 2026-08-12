@@ -1,6 +1,7 @@
 use crate::error::Result;
 use crate::pty::session::AgentKind;
 use rusqlite::{Connection, OptionalExtension};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -150,13 +151,21 @@ pub struct NewWorkspace<'a> {
 
 pub struct Store {
     conn: Connection,
+    /// Memoized `settings` rows — see `crate::data::settings`. Kept here so no
+    /// caller can bypass it. `RwLock` rather than `RefCell` so `Store` stays
+    /// `Sync`; reads are uncontended and cost orders of magnitude less than the
+    /// SQLite round trip they replace.
+    pub(crate) settings_cache: std::sync::RwLock<HashMap<String, Option<String>>>,
 }
 
 impl Store {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        let store = Self { conn };
+        let store = Self {
+            conn,
+            settings_cache: std::sync::RwLock::new(HashMap::new()),
+        };
         store.migrate()?;
         Ok(store)
     }
@@ -172,7 +181,10 @@ impl Store {
         // the single WAL writer slot; wait up to 3s rather than erroring out
         // immediately with SQLITE_BUSY.
         conn.pragma_update(None, "busy_timeout", 3000)?;
-        let store = Self { conn };
+        let store = Self {
+            conn,
+            settings_cache: std::sync::RwLock::new(HashMap::new()),
+        };
         store.migrate()?;
         Ok(store)
     }

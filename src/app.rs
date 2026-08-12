@@ -1297,6 +1297,67 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use std::time::Duration;
 
+/// Cadence of the housekeeping/animation tick.
+///
+/// This used to be 16ms, but not because anything needed 62.5Hz: the PTY reader
+/// thread had no way to tell the render loop that output arrived, so the tick
+/// doubled as the poll rate and the loop rebuilt the whole frame ~62 times a
+/// second forever. `pty::wake` now carries that edge, leaving this to drive
+/// only the spinner and periodic bookkeeping — 8Hz is the spinner's spec rate,
+/// so one tick is exactly one spinner frame.
+pub(crate) const TICK: Duration = Duration::from_millis(125);
+
+/// Floor on the gap between two frames.
+///
+/// PTY output can arrive far faster than a terminal can usefully display it, so
+/// wake-driven redraws are clamped to the same 62.5Hz ceiling the old fixed
+/// tick imposed. Keeps a streaming agent from spinning the loop hotter than it
+/// ever ran before.
+const MIN_FRAME: Duration = Duration::from_millis(16);
+
+/// How long to wait before the next frame, given how long ago the last one was.
+/// `None` means the budget is already spent — draw now.
+fn frame_delay(since_last_frame: Duration) -> Option<Duration> {
+    MIN_FRAME.checked_sub(since_last_frame)
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::*;
+
+    #[test]
+    fn a_tick_driven_frame_never_waits() {
+        // `TICK` is far longer than `MIN_FRAME`, so ordinary idle repaints must
+        // pass straight through the floor rather than adding latency.
+        assert!(TICK > MIN_FRAME);
+        assert_eq!(frame_delay(TICK), None);
+    }
+
+    #[test]
+    fn back_to_back_output_is_held_to_the_frame_floor() {
+        // The streaming-agent case: output arriving 1ms after the last frame
+        // waits out the remaining budget instead of spinning the loop.
+        assert_eq!(
+            frame_delay(Duration::from_millis(1)),
+            Some(Duration::from_millis(15))
+        );
+    }
+
+    #[test]
+    fn an_exhausted_budget_draws_immediately() {
+        assert_eq!(frame_delay(MIN_FRAME), Some(Duration::ZERO));
+        assert_eq!(frame_delay(MIN_FRAME + Duration::from_millis(1)), None);
+    }
+
+    #[test]
+    fn the_floor_never_exceeds_the_old_fixed_cadence() {
+        // The old loop drew at most every 16ms. Wake-driven redraws must not
+        // beat that, or this change would raise peak CPU instead of cutting it.
+        assert_eq!(MIN_FRAME, Duration::from_millis(16));
+        assert!(frame_delay(Duration::ZERO).unwrap() <= MIN_FRAME);
+    }
+}
+
 async fn do_pending_edit<B>(
     terminal: &mut ratatui::Terminal<B>,
     app: &SharedApp,
@@ -1374,7 +1435,8 @@ pub async fn run<B: Backend + std::io::Write>(
     app: SharedApp,
 ) -> Result<()> {
     let mut events = EventStream::new();
-    let mut tick = tokio::time::interval(Duration::from_millis(16));
+    let mut tick = tokio::time::interval(TICK);
+    let mut last_frame: Option<std::time::Instant> = None;
 
     loop {
         // Handle any pending edit BEFORE drawing — the editor takes
@@ -1386,6 +1448,13 @@ pub async fn run<B: Backend + std::io::Write>(
         if let Some(edit) = pending {
             do_pending_edit(terminal, &app, edit).await?;
         }
+
+        // Hold the frame floor. Done before taking the lock so a burst of PTY
+        // output waits here rather than blocking the rest of the app.
+        if let Some(delay) = last_frame.map(|t| t.elapsed()).and_then(frame_delay) {
+            tokio::time::sleep(delay).await;
+        }
+        last_frame = Some(std::time::Instant::now());
 
         {
             let mut g = app.lock().await;
@@ -1403,6 +1472,10 @@ pub async fn run<B: Backend + std::io::Write>(
         }
 
         tokio::select! {
+            // An attached pane's contents changed. Nothing to update here —
+            // the next loop iteration redraws from the parser — but this is
+            // what lets `TICK` be slow without laggy panes.
+            _ = crate::pty::wake::output_wake().wait() => {}
             _ = tick.tick() => {
                 let mut g = app.lock().await;
                 g.tick = g.tick.wrapping_add(1);

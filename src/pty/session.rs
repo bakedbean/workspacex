@@ -550,6 +550,10 @@ pub fn spawn_command_session(
                 Ok(n) => {
                     parser_r.lock().unwrap().process(&buf[..n]);
                     activity_r.store(now_ms(), Ordering::Relaxed);
+                    // Tell the render loop the screen moved. Without this the
+                    // loop cannot know output arrived and has to poll by
+                    // redrawing blind; see `pty::wake`.
+                    crate::pty::wake::output_wake().notify();
                 }
                 Err(_) => break,
             }
@@ -1408,6 +1412,37 @@ mod tests {
             ),
             other => panic!("expected AgentBinaryMissing(\"ssh-test-bin\"), got {other:?}"),
         }
+    }
+
+    /// End-to-end proof that the reader thread signals the renderer. Without
+    /// this edge the render loop has no way to learn output arrived, which is
+    /// what forced the 16ms poll-by-redrawing tick.
+    ///
+    /// Asserts existence, not exclusivity: `output_wake()` is process-wide, so
+    /// a stray signal from another test could only mask a regression here, not
+    /// invent a failure.
+    #[tokio::test]
+    async fn reader_thread_signals_the_render_loop_on_output() {
+        // The child must outlive the read. A command that exits immediately
+        // (`echo hello`) races the reader: once the last slave fd closes, the
+        // master can surface EOF ahead of buffered output on macOS, so the
+        // reader breaks out before it ever parses — and signals nothing.
+        // Sleeping holds the slave open until the assertion is done.
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg("echo hello; sleep 30");
+        let session = spawn_command_session(cmd, 80, 24, AgentKind::Claude, "sh".into(), None)
+            .expect("/bin/sh should spawn");
+
+        let woken = tokio::time::timeout(
+            Duration::from_secs(10),
+            crate::pty::wake::output_wake().wait(),
+        )
+        .await;
+
+        // Reap before asserting, so a failure can't leak the sleeping child.
+        session.kill();
+        woken.expect("PTY output must wake the render loop");
     }
 
     #[test]

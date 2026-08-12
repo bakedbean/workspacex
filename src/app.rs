@@ -1310,6 +1310,24 @@ use std::time::Duration;
 /// so one tick is exactly one spinner frame.
 pub(crate) const TICK: Duration = Duration::from_millis(125);
 
+/// Build the housekeeping/animation interval.
+///
+/// `tokio::time::interval` defaults to `MissedTickBehavior::Burst`, which
+/// replays every deadline missed during a stall back-to-back. The loop does
+/// stall: `do_pending_edit` hands the terminal to `$EDITOR` and awaits it, so a
+/// minutes-long edit banks hundreds of ticks that would then fire in a rush —
+/// whirling the spinner and re-running the bookkeeping block many times over.
+///
+/// `Delay` instead guarantees a full `TICK` between ticks no matter how long
+/// the loop was blocked. Nothing in the tick arm wants replaying: it advances
+/// an animation counter and does deadline-guarded bookkeeping, all of which is
+/// idempotent and all of which only cares about *now*.
+fn housekeeping_interval() -> tokio::time::Interval {
+    let mut tick = tokio::time::interval(TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tick
+}
+
 /// Floor on the gap between two frames — 30fps.
 ///
 /// A busy agent emits output continuously (Claude Code animates its own
@@ -1367,6 +1385,41 @@ mod pacing_tests {
         assert!(
             MIN_FRAME >= LEGACY_FRAME,
             "peak redraw rate must not exceed the pre-wake loop"
+        );
+    }
+
+    /// Drain the tick that is already overdue after a stall, then report
+    /// whether *another* one is also immediately ready. Under `Burst` every
+    /// missed deadline is queued up and the answer is yes.
+    async fn extra_tick_ready_after_stall(tick: &mut tokio::time::Interval) -> bool {
+        tick.tick().await; // completes immediately at t=0
+        tokio::time::advance(TICK * 10).await;
+        tick.tick().await; // the overdue one; legitimate under any behaviour
+        tokio::time::timeout(Duration::from_millis(1), tick.tick())
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_tick_does_not_replay_deadlines_missed_during_a_stall() {
+        // `do_pending_edit` blocks the loop for as long as $EDITOR is open. On
+        // return the tick must resume, not fire hundreds of banked ticks that
+        // whirl the spinner and re-run the bookkeeping block.
+        let mut tick = housekeeping_interval();
+        assert!(
+            !extra_tick_ready_after_stall(&mut tick).await,
+            "a stalled tick must not have extra ticks queued up behind it"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_default_interval_would_replay_them() {
+        // Proves the test above discriminates: tokio's default `Burst` is
+        // exactly the behaviour being guarded against.
+        let mut tick = tokio::time::interval(TICK);
+        assert!(
+            extra_tick_ready_after_stall(&mut tick).await,
+            "tokio's default is Burst; if this ever changes the guard above is moot"
         );
     }
 
@@ -1458,7 +1511,7 @@ pub async fn run<B: Backend + std::io::Write>(
     app: SharedApp,
 ) -> Result<()> {
     let mut events = EventStream::new();
-    let mut tick = tokio::time::interval(TICK);
+    let mut tick = housekeeping_interval();
     let mut last_frame: Option<std::time::Instant> = None;
 
     loop {

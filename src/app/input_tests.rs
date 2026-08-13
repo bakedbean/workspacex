@@ -5974,6 +5974,109 @@ mod pm_state_tests {
         );
     }
 
+    /// A workspace that already has a live `in_flight` entry — of either
+    /// kind — must refuse to open the archive-confirm modal on `d`. Without
+    /// this guard, a second `d`,`y` on a workspace already archiving would
+    /// replace its `in_flight` entry and spawn a second concurrent archive;
+    /// the first archive's completion would then remove the entry (and thus
+    /// the badge and `attach_is_blocked`'s guard) while the second archive
+    /// is still tearing down the worktree, letting a subsequent attach
+    /// respawn an agent into a directory being deleted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn d_is_inert_when_an_in_flight_entry_already_exists() {
+        use crate::data::in_flight::{InFlight, InFlightKind};
+        use crate::data::progress::SetupProgress;
+        use crate::data::store::NewWorkspace;
+
+        for kind in [InFlightKind::Create, InFlightKind::Archive] {
+            let store = Store::open_in_memory().unwrap();
+            let repo_id = store
+                .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+                .unwrap();
+            let ws_id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name: "busy",
+                    branch: "repo/busy",
+                    worktree_path: std::path::Path::new("/tmp/wsx-busy"),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+            app.selectable = vec![SelectionTarget::Workspace(ws_id)];
+            app.select_index(0);
+            let entry = match kind {
+                InFlightKind::Create => InFlight::create(
+                    SetupProgress::shared(),
+                    tokio_util::sync::CancellationToken::new(),
+                ),
+                InFlightKind::Archive => InFlight::archive(
+                    SetupProgress::shared(),
+                    tokio_util::sync::CancellationToken::new(),
+                ),
+            };
+            app.in_flight.insert(ws_id, entry);
+
+            handle_key_dashboard(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                app.modal.is_none(),
+                "'d' must not open the archive-confirm modal for a workspace \
+                 with a {kind:?} entry already in flight; got {:?}",
+                app.modal
+            );
+        }
+    }
+
+    /// Sanity check for the guard above: with no `in_flight` entry for the
+    /// selected workspace, `d` still opens the archive-confirm modal as
+    /// normal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn d_opens_confirm_archive_when_no_entry_in_flight() {
+        use crate::data::store::NewWorkspace;
+        use crate::ui::modal::Modal;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "idle",
+                branch: "repo/idle",
+                worktree_path: std::path::Path::new("/tmp/wsx-idle"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![SelectionTarget::Workspace(ws_id)];
+        app.select_index(0);
+        assert!(app.in_flight.is_empty());
+
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(app.modal, Some(Modal::ConfirmArchive { workspace_id, .. }) if workspace_id == ws_id),
+            "'d' with no in-flight work should still open ConfirmArchive; got {:?}",
+            app.modal
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn capital_t_opens_confirm_share_and_y_flips_shared_and_restarts_session() {
         // T on a selected workspace opens ConfirmShare proposing the flip of

@@ -260,21 +260,22 @@ pub async fn create_with_app(
             ws_id,
             crate::data::in_flight::InFlight::create(progress.clone(), cancel.clone()),
         );
+        // Repopulate `App.workspaces` now, while the lock is held, so the new
+        // row (and its Provisioning badge) appears on the dashboard immediately.
+        // `App::refresh` is otherwise only triggered by `poll_external_changes`,
+        // which watches `PRAGMA data_version` — and a self-write through this
+        // same connection does not bump it, so nothing else would pick this up
+        // until the operation finishes.
+        let _ = g.refresh();
         ws_id
     };
 
     // From here on, `id` has a live `in_flight` entry. Every remaining exit
     // path — the fetch, a cancellation check, any Phase 4/5/6 error, and the
-    // final success — must remove it exactly once. Hand-placing a `remove`
-    // at each of the half-dozen early returns below is exactly what caused
-    // fix-round-1's regression: every block ran its `g.store.<call>()?`
-    // BEFORE the removal, so a store failure skipped it, and two blocks
-    // (`set_workspace_state(Ready)`, `set_setup_status(Running)`) had no
-    // removal at all — a leak, permanent now that `reconcile_create_result`
-    // no longer sweeps. So instead: run all of it as one block whose `?`
-    // and early `return`s stay local, then remove the entry exactly once,
-    // unconditionally, after it completes — regardless of which path was
-    // taken or whether it succeeded.
+    // final success — must remove it exactly once. Run all of it as one block
+    // whose `?` and early `return`s stay local, then remove the entry exactly
+    // once, unconditionally, after it completes — regardless of which path
+    // was taken or whether it succeeded.
     let result: Result<CreatedWorkspace> = async {
         // --- Phase 3 (unlocked, async): fetch base branch. A fetch failure
         // marks the row Failed rather than leaving it Pending forever, since
@@ -1375,6 +1376,87 @@ mod tests {
             "create_with_app must remove its own in_flight entry on success"
         );
         drop(g);
+    }
+
+    /// F1 regression: `App.workspaces` is otherwise only repopulated by
+    /// `App::refresh`, whose sole automatic trigger (`poll_external_changes`)
+    /// watches `PRAGMA data_version` — which a self-write through the App's
+    /// own connection does not bump (see `store.rs`'s
+    /// `self_write_does_not_change_data_version`). Without an explicit
+    /// refresh right after the Phase 2 insert, the new row would not appear
+    /// on the dashboard until the whole create finished, defeating the
+    /// point of backgrounding creation. This drives a real create with a
+    /// slow setup script through `create_with_app` and asserts the row
+    /// shows up in `app.workspaces` while the task is still running, not
+    /// only after it completes.
+    #[tokio::test]
+    async fn create_with_app_refreshes_app_workspaces_before_setup_completes() {
+        use crate::app::App;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        // A slow setup script keeps the task past Phase 2 for long enough
+        // to observe app.workspaces mid-flight.
+        store
+            .set_repo_setup_script(repo_id, Some("sleep 2"))
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let base_path = base.path().to_path_buf();
+        let app = Arc::new(Mutex::new(App::new(store, base_path.clone()).unwrap()));
+        let repo = {
+            let g = app.lock().await;
+            g.repos[0].clone()
+        };
+
+        let cancel = CancellationToken::new();
+        let progress = crate::data::progress::SetupProgress::shared();
+        let app_clone = app.clone();
+        let handle = tokio::spawn(async move {
+            create_with_app(
+                app_clone,
+                repo,
+                Some("beta".to_string()),
+                base_path,
+                false,
+                false,
+                crate::pty::session::AgentKind::Claude,
+                progress,
+                cancel,
+            )
+            .await
+        });
+
+        // Poll for the row to appear, bounded so a regression fails fast
+        // instead of hanging.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            {
+                let g = app.lock().await;
+                if g.workspaces.iter().any(|(_, w)| w.name == "beta") {
+                    break;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "new workspace row never appeared in app.workspaces"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // We must have observed this WHILE the create was still running
+        // (the setup script's 2s sleep hasn't elapsed yet) — not merely
+        // after the whole thing finished.
+        assert!(
+            !handle.is_finished(),
+            "row should appear before the slow setup script finishes"
+        );
+
+        handle.await.unwrap().unwrap();
     }
 
     /// Regression test for the fix-round-1 finding: `reconcile_create_result`

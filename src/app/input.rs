@@ -782,7 +782,17 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
         }
         (KeyCode::Char('d'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
+                // A workspace with any in-flight entry (create or archive)
+                // already has a live cancellation handle and/or a worktree
+                // being mutated; opening the archive confirm here would let
+                // a second archive spawn on top of it, and the registry
+                // insert on 'y' would clobber the existing entry so the
+                // still-running operation's in_flight record — and its
+                // cancel handle — becomes unreachable. Refuse silently, the
+                // same way `attach_is_blocked` refuses attach.
+                && !app.in_flight.contains_key(&id)
+            {
                 let name = app
                     .workspaces
                     .iter()

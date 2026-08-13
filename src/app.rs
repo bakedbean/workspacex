@@ -2587,19 +2587,15 @@ pub(crate) async fn reconcile_create_result(
 }
 
 /// Reconcile the outcome of a spawned `workspace::archive_with_app` task.
-/// Locks the app briefly and always removes `ws_id`'s own `in_flight`
-/// entry — never a blanket sweep of every `Archive` entry. That would be
-/// the same bug fix-round-1 found on the create side: with the blocking
-/// modal gone, nothing serializes archives (`pending_archive_gen` is a
-/// single slot that a second archive silently clobbers, so it cannot be
-/// trusted to mean "only one archive can ever be in flight"), so a
-/// blanket retain here could evict a different, still-running archive's
-/// entry. `pending_archive_gen` is kept only as informational bookkeeping,
-/// mirroring `pending_create_gen`. There is no modal to touch on success
-/// or failure: a failed removal is logged (there is no persisted failure
-/// status for archive to badge off, unlike create's `SetupStatus::Failed`),
-/// and `refresh()` always runs so the dashboard reflects the store
-/// mutation (or lack of one, on failure).
+/// Locks the app briefly and always removes `ws_id`'s own `in_flight` entry
+/// by id — never a blanket sweep of every `Archive` entry — since multiple
+/// archives can be in flight concurrently and a blanket retain could evict a
+/// different, still-running archive's entry. `pending_archive_gen` is kept
+/// only as informational bookkeeping, mirroring `pending_create_gen`. There
+/// is no modal to touch on success or failure: a failed removal is logged
+/// (there is no persisted failure status for archive to badge off, unlike
+/// create's `SetupStatus::Failed`), and `refresh()` always runs so the
+/// dashboard reflects the store mutation (or lack of one, on failure).
 pub(crate) async fn reconcile_archive_result(
     app: SharedApp,
     my_gen: u64,

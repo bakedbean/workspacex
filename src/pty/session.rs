@@ -297,10 +297,30 @@ impl Session {
                     // `submit_writes` for the per-agent byte shapes). The CR is
                     // a separate write so the agent's TUI sees it as a distinct
                     // Enter rather than part of the typed/pasted text.
+                    //
+                    // A send only fails when the writer task has dropped the
+                    // receiver, which it does as soon as a PTY write errors —
+                    // i.e. the agent is gone. Report that as "not written" so
+                    // the message stays queued rather than being acked into a
+                    // dead terminal. A failed `body` also means the CR is
+                    // pointless, so give up on the pair together.
                     let (body, enter) = submit_writes(self.agent, text);
-                    let _ = self.writer.send(body).await;
+                    if self.writer.send(body).await.is_err() {
+                        tracing::warn!(
+                            text = %text,
+                            "send_text_when_settled: PTY writer is gone; not written"
+                        );
+                        return false;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                    let _ = self.writer.send(enter).await;
+                    if self.writer.send(enter).await.is_err() {
+                        tracing::warn!(
+                            text = %text,
+                            "send_text_when_settled: PTY writer died before the \
+                             submitting CR; not written"
+                        );
+                        return false;
+                    }
                     return true;
                 }
             }
@@ -1200,6 +1220,27 @@ mod tests {
         for agent in [AgentKind::Codex, AgentKind::Hermes, AgentKind::Pi] {
             assert!(ready_for_input(agent, p.screen()), "agent {agent:?}");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_text_when_settled_reports_failure_when_the_pty_is_gone() {
+        // The writer task breaks out of its loop as soon as `write_all` fails
+        // (agent exited, PTY closed), which drops the receiver and closes the
+        // channel. Reporting success there would mark a message delivered that
+        // never reached anything — the exact loss this whole path exists to
+        // prevent. `Session::fake` drops its receiver at construction, which is
+        // the same closed-channel state.
+        let s = Session::fake(SessionStatus::Running { pid: 1 });
+        // Make the session look ready and settled so the write is attempted:
+        // alternate screen up (claude's readiness signal) and output long past.
+        s.parser.lock().unwrap().process(b"\x1b[?1049h\x1b[2J");
+        s.activity_ms
+            .store(now_ms().saturating_sub(10_000), Ordering::Relaxed);
+
+        assert!(
+            !s.send_text_when_settled("lost", 400, 2_000).await,
+            "a closed writer channel means nothing was written"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

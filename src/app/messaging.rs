@@ -128,12 +128,27 @@ impl crate::app::App {
             std::mem::take(&mut *guard)
         };
         for outcome in &outcomes {
-            self.delivering.remove(&outcome.id);
             if outcome.written {
-                let _ = self.store.mark_delivered(outcome.id);
+                // The message reached the agent; only the bookkeeping is left.
+                // If that write fails (a busy DB, say), keep the id in flight
+                // and requeue the ack so a later tick retries it. Releasing it
+                // here would let the next drain see a still-undelivered row and
+                // inject the same brief a second time — a worse failure than
+                // the one this path exists to prevent.
+                if let Err(e) = self.store.mark_delivered(outcome.id) {
+                    tracing::warn!(
+                        error = %e,
+                        id = outcome.id,
+                        "deliver: marking delivered failed; will retry the ack"
+                    );
+                    self.delivery_outcomes.lock().unwrap().push(*outcome);
+                    continue;
+                }
+                self.delivering.remove(&outcome.id);
                 self.delivery_attempts.remove(&outcome.id);
                 continue;
             }
+            self.delivering.remove(&outcome.id);
             let attempts = self.delivery_attempts.entry(outcome.id).or_insert(0);
             *attempts += 1;
             if *attempts >= MAX_DELIVERY_ATTEMPTS {
@@ -346,6 +361,41 @@ mod tests {
         assert!(app.apply_delivery_outcomes());
         assert!(app.store.undelivered_messages().unwrap().is_empty());
         assert!(app.delivering.is_empty());
+    }
+
+    #[test]
+    fn a_failed_ack_retries_the_db_write_without_reinjecting() {
+        // The message DID reach the agent; only the `delivered_at` write
+        // failed. Clearing the in-flight mark here would let the next drain
+        // dispatch the row again and the agent would act on the same brief
+        // twice — worse than the loss this PR is fixing. The ack is retried
+        // instead, and the row stays in flight until it sticks.
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.delivering.insert(ids[0]);
+        app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
+            id: ids[0],
+            written: true,
+        });
+        // Force `mark_delivered` to error the way a locked/ousted DB would.
+        app.store
+            .conn()
+            .execute("DROP TABLE agent_messages", [])
+            .unwrap();
+
+        assert!(app.apply_delivery_outcomes());
+        assert!(
+            app.delivering.contains(&ids[0]),
+            "a message whose ack failed must stay in flight so no drain \
+             redispatches it"
+        );
+        assert_eq!(
+            app.delivery_outcomes.lock().unwrap().as_slice(),
+            &[DeliveryOutcome {
+                id: ids[0],
+                written: true
+            }],
+            "the ack is requeued so a later tick retries the DB write"
+        );
     }
 
     #[test]

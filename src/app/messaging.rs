@@ -83,6 +83,33 @@ pub(crate) struct DeliveryOutcome {
     pub attempted: bool,
 }
 
+/// How often the drain re-runs while mail is still waiting on something the
+/// DB can't announce — an agent that failed to spawn, a session that wasn't
+/// ready. Without this the drain only fires on a sibling DB commit or a
+/// reported outcome, and neither happens for those cases.
+pub(crate) const MAIL_RETRY_INTERVAL_MS: u64 = 2_000;
+
+/// Ceiling on the failed-ack backoff.
+pub(crate) const MAX_ACK_BACKOFF_MS: u64 = 30_000;
+
+/// Delay before retrying a `mark_delivered` that failed `fails` times already.
+/// Doubling from 250ms, capped — a permanently broken DB then costs one write
+/// and one log line every 30s instead of eight per second.
+pub(crate) fn ack_backoff_delay_ms(fails: u32) -> u64 {
+    250u64
+        .checked_shl(fails)
+        .unwrap_or(MAX_ACK_BACKOFF_MS)
+        .min(MAX_ACK_BACKOFF_MS)
+}
+
+/// An ack whose DB write failed, parked until its backoff expires.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PendingAck {
+    pub outcome: DeliveryOutcome,
+    pub due_ms: u64,
+    pub fails: u32,
+}
+
 /// Whether an injection worker is already running against `target`.
 ///
 /// Injection is not atomic — a worker waits for its own quiet window, then
@@ -132,6 +159,44 @@ pub(crate) fn stuck_workspaces(
 }
 
 impl crate::app::App {
+    /// Whether the inbox should be drained now. True at startup (so mail
+    /// queued while wsx was down is picked up) and whenever a scheduled retry
+    /// has come due.
+    pub(crate) fn mail_drain_due(&self, now_ms: u64) -> bool {
+        matches!(self.next_mail_drain_ms, Some(t) if now_ms >= t)
+    }
+
+    /// Ask for another drain `MAIL_RETRY_INTERVAL_MS` from `now_ms`, because
+    /// something is still queued that no DB commit or outcome will announce.
+    pub(crate) fn schedule_mail_retry(&mut self, now_ms: u64) {
+        self.next_mail_drain_ms = Some(now_ms.saturating_add(MAIL_RETRY_INTERVAL_MS));
+    }
+
+    /// Stop the retry heartbeat — everything queued is either dispatched or
+    /// permanently stuck, so only a DB commit or an outcome need wake us.
+    pub(crate) fn clear_mail_retry(&mut self) {
+        self.next_mail_drain_ms = None;
+    }
+
+    /// Move any parked acks whose backoff expired back onto the outcome queue.
+    fn requeue_due_acks(&mut self, now_ms: u64) {
+        if self.pending_acks.is_empty() {
+            return;
+        }
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_acks)
+            .into_iter()
+            .partition(|a| now_ms >= a.due_ms);
+        self.pending_acks = waiting;
+        if due.is_empty() {
+            return;
+        }
+        let mut guard = self.delivery_outcomes.lock().unwrap();
+        for ack in due {
+            self.ack_fails.insert(ack.outcome.id, ack.fails);
+            guard.push(ack.outcome);
+        }
+    }
+
     /// Apply the outcomes reported by finished injection tasks: mark the
     /// messages that actually landed as delivered, and count an attempt against
     /// the ones that didn't so they can be retried.
@@ -140,6 +205,8 @@ impl crate::app::App {
     /// run `drain_agent_messages` again — a failed injection has to be
     /// redispatched by someone, and the external-change poll won't fire for it.
     pub(crate) fn apply_delivery_outcomes(&mut self) -> bool {
+        let now_ms = crate::time::now_ms_u64();
+        self.requeue_due_acks(now_ms);
         let outcomes: Vec<DeliveryOutcome> = {
             let mut guard = self.delivery_outcomes.lock().unwrap();
             if guard.is_empty() {
@@ -156,16 +223,26 @@ impl crate::app::App {
                 // inject the same brief a second time — a worse failure than
                 // the one this path exists to prevent.
                 if let Err(e) = self.store.mark_delivered(outcome.id) {
+                    // Backed off rather than requeued outright: at tick rate a
+                    // permanently failing ack would rewrite the row and log
+                    // eight times a second forever.
+                    let fails = self.ack_fails.remove(&outcome.id).unwrap_or(0);
                     tracing::warn!(
                         error = %e,
                         id = outcome.id,
-                        "deliver: marking delivered failed; will retry the ack"
+                        fails = fails + 1,
+                        "deliver: marking delivered failed; retrying the ack after backoff"
                     );
-                    self.delivery_outcomes.lock().unwrap().push(*outcome);
+                    self.pending_acks.push(PendingAck {
+                        outcome: *outcome,
+                        due_ms: now_ms.saturating_add(ack_backoff_delay_ms(fails)),
+                        fails: fails + 1,
+                    });
                     continue;
                 }
                 self.delivering.remove(&outcome.id);
                 self.delivery_attempts.remove(&outcome.id);
+                self.ack_fails.remove(&outcome.id);
                 continue;
             }
             self.delivering.remove(&outcome.id);
@@ -211,9 +288,17 @@ impl crate::app::App {
     /// - `Ok(Ok)` but no session   → leave pending to retry rather than
     ///   silently dropping (shouldn't happen right after a successful ensure).
     pub(crate) fn drain_agent_messages(&mut self) {
+        let now_ms = crate::time::now_ms_u64();
+        // Assume nothing is left over; the arms below re-arm the heartbeat if
+        // they leave a message waiting on something no DB commit will announce.
+        self.clear_mail_retry();
         let pending = match self.store.undelivered_messages() {
             Ok(p) => p,
-            Err(_) => return, // transient; retry next external-change tick
+            Err(_) => {
+                // Transient read failure — nothing else will wake us.
+                self.schedule_mail_retry(now_ms);
+                return;
+            }
         };
         // Recomputed before the dispatch filter, because the messages being
         // flagged are exactly the ones `deliverable` is about to drop.
@@ -264,13 +349,16 @@ impl crate::app::App {
                         target = target.0,
                         "deliver: ensure session failed; will retry"
                     );
+                    self.schedule_mail_retry(now_ms);
                     continue;
                 }
             };
             let Some(session) = session else {
                 // Ok(Ok) but no session (shouldn't happen right after a
                 // successful ensure): leave pending to retry rather than
-                // silently dropping.
+                // silently dropping. Nothing will report an outcome for it,
+                // so the heartbeat is the only thing that brings it back.
+                self.schedule_mail_retry(now_ms);
                 continue;
             };
 
@@ -408,6 +496,76 @@ mod tests {
     }
 
     #[test]
+    fn ack_backoff_grows_and_is_capped() {
+        // A permanently failing ack used to rewrite the DB and log a WARN on
+        // every 125ms tick, forever.
+        assert_eq!(ack_backoff_delay_ms(0), 250);
+        assert_eq!(ack_backoff_delay_ms(1), 500);
+        assert_eq!(ack_backoff_delay_ms(2), 1_000);
+        assert_eq!(ack_backoff_delay_ms(99), MAX_ACK_BACKOFF_MS);
+        assert!(ack_backoff_delay_ms(7) <= MAX_ACK_BACKOFF_MS);
+    }
+
+    #[test]
+    fn a_queued_message_is_drained_at_startup() {
+        // Nothing else triggers a drain for rows that were already queued when
+        // wsx started: `App::new` snapshots `last_data_version`, so
+        // `poll_external_changes` sees no edge, and no outcome exists yet.
+        // Without an explicit startup drain those messages sit forever.
+        let (app, _ids) = app_with_queued_messages(1);
+        assert!(
+            app.mail_drain_due(crate::time::now_ms_u64()),
+            "a fresh App must drain the inbox on its first tick"
+        );
+    }
+
+    #[test]
+    fn a_scheduled_retry_is_not_due_until_its_deadline() {
+        let (mut app, _ids) = app_with_queued_messages(1);
+        app.schedule_mail_retry(10_000);
+        assert!(!app.mail_drain_due(10_000 + MAIL_RETRY_INTERVAL_MS - 1));
+        assert!(app.mail_drain_due(10_000 + MAIL_RETRY_INTERVAL_MS));
+    }
+
+    #[test]
+    fn nothing_left_to_deliver_stops_the_retry_heartbeat() {
+        let (mut app, _ids) = app_with_queued_messages(1);
+        app.clear_mail_retry();
+        assert!(
+            !app.mail_drain_due(u64::MAX),
+            "an empty inbox must not keep waking the drain"
+        );
+    }
+
+    #[test]
+    fn a_failed_ack_backs_off_instead_of_retrying_every_tick() {
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.delivering
+            .insert(ids[0], crate::data::store::AgentInstanceId(1));
+        app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
+            id: ids[0],
+            target: crate::data::store::AgentInstanceId(1),
+            written: true,
+            attempted: true,
+        });
+        app.store
+            .conn()
+            .execute("DROP TABLE agent_messages", [])
+            .unwrap();
+
+        app.apply_delivery_outcomes();
+        assert!(
+            app.delivery_outcomes.lock().unwrap().is_empty(),
+            "the failed ack is held for its backoff, not requeued immediately"
+        );
+        assert_eq!(app.pending_acks.len(), 1, "it is parked for a later retry");
+        assert!(
+            app.delivering.contains_key(&ids[0]),
+            "still in flight, so no drain can reinject it"
+        );
+    }
+
+    #[test]
     fn a_failed_ack_retries_the_db_write_without_reinjecting() {
         // The message DID reach the agent; only the `delivered_at` write
         // failed. Clearing the in-flight mark here would let the next drain
@@ -436,14 +594,17 @@ mod tests {
              redispatches it"
         );
         assert_eq!(
-            app.delivery_outcomes.lock().unwrap().as_slice(),
-            &[DeliveryOutcome {
+            app.pending_acks
+                .iter()
+                .map(|a| a.outcome)
+                .collect::<Vec<_>>(),
+            vec![DeliveryOutcome {
                 id: ids[0],
                 target: crate::data::store::AgentInstanceId(1),
                 written: true,
                 attempted: true
             }],
-            "the ack is requeued so a later tick retries the DB write"
+            "the ack is parked so a later tick retries the DB write"
         );
     }
 

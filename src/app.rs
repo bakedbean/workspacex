@@ -638,6 +638,18 @@ pub struct App {
     /// row's `✉!` badge, so a message that can't be delivered is visible on the
     /// dashboard instead of only in the log file.
     pub(crate) stuck_mail: std::collections::HashSet<crate::data::store::WorkspaceId>,
+    /// When the inbox should next be drained, epoch-ms. `Some(0)` at startup so
+    /// mail queued while wsx was down is picked up on the first tick — nothing
+    /// else would, since `App::new` snapshots `last_data_version` and so
+    /// `poll_external_changes` sees no edge. Re-armed whenever a drain leaves a
+    /// message waiting on something no DB commit or outcome will announce (an
+    /// agent that failed to spawn, a session that wasn't there).
+    pub(crate) next_mail_drain_ms: Option<u64>,
+    /// Acks whose `mark_delivered` failed, parked until their backoff expires.
+    pub(crate) pending_acks: Vec<crate::app::messaging::PendingAck>,
+    /// Consecutive ack failures per message id, carried across the park so the
+    /// backoff keeps doubling.
+    pub(crate) ack_fails: std::collections::HashMap<i64, u32>,
 }
 
 impl App {
@@ -691,6 +703,11 @@ impl App {
             delivery_outcomes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delivery_attempts: std::collections::HashMap::new(),
             stuck_mail: std::collections::HashSet::new(),
+            // Due immediately: the first tick recovers mail queued while wsx
+            // was not running.
+            next_mail_drain_ms: Some(0),
+            pending_acks: Vec::new(),
+            ack_fails: std::collections::HashMap::new(),
             pending_edit: None,
             theme,
             pm_visible: false,
@@ -1721,7 +1738,13 @@ pub async fn run<B: Backend + std::io::Write>(
                 // through the DB, so `poll_external_changes` never sees it. It
                 // is a lock + is_empty when nothing is in flight.
                 let redeliver = g.apply_delivery_outcomes();
-                if g.poll_external_changes() || redeliver {
+                // The heartbeat covers what neither of the other two triggers
+                // can: mail already queued at startup, and mail left pending by
+                // a failure that produced no outcome (agent spawn failed, no
+                // session). Both would otherwise wait for an unrelated sibling
+                // commit that may never come.
+                let mail_due = g.mail_drain_due(now_ms);
+                if g.poll_external_changes() || redeliver || mail_due {
                     g.drain_agent_messages();
                 }
                 let now_secs = crate::time::now_secs();

@@ -105,6 +105,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         return Err(Error::Cancelled);
     }
 
+    store.set_setup_status(id, SetupStatus::Running)?;
     let setup_result = setup::run_setup(
         repo.setup_script.as_deref(),
         &repo.path,
@@ -287,6 +288,10 @@ pub async fn create_with_app(
     // --- Phase 5 (unlocked, async): run setup script. ---
     if let Ok(mut p) = progress.lock() {
         p.set_phase(SetupPhase::RunningSetup);
+    }
+    {
+        let g = app.lock().await;
+        g.store.set_setup_status(id, SetupStatus::Running)?;
     }
     let log_dir = crate::config::Dirs::discover().log_dir();
     let setup_result = run_setup_logged(

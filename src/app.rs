@@ -746,6 +746,8 @@ impl App {
         let _ = app
             .store
             .sweep_stale_pending(std::time::Duration::from_secs(300));
+        // Resolve setup rows stranded by a crashed process (see sweep_stale_running).
+        let _ = app.store.sweep_stale_running();
         // Load the retained bucketed activity for the sparkline (up to
         // MAX_ACTIVITY_HOURS); the configured window selects how much is shown.
         if let Ok(buckets) = app

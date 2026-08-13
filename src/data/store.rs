@@ -30,6 +30,12 @@ pub enum SetupStatus {
     Ok,
     Failed,
     Cancelled,
+    /// The setup script is running right now, in THIS process. Persisted
+    /// only so a crashed process leaves evidence for `sweep_stale_running`
+    /// to resolve at the next startup — it is never the source for a
+    /// dashboard badge, because it cannot distinguish live work from the
+    /// remains of a killed process. `App::in_flight` is that source.
+    Running,
 }
 
 /// The agent-facing status vocabulary. Distinct from the six *display*
@@ -320,6 +326,20 @@ impl Store {
         Ok(n)
     }
 
+    /// Resolve setup rows stranded by a crashed process. Unlike
+    /// `sweep_stale_pending` this takes no age cutoff: `Running` is written
+    /// only by a live in-process task, so any row still carrying it when we
+    /// start up belongs to a process that is already gone. Runs once at
+    /// startup, before the first draw, so the dashboard never renders a
+    /// spinner for work that died.
+    pub fn sweep_stale_running(&self) -> Result<usize> {
+        let n = self.conn.execute(
+            "UPDATE workspaces SET setup_status = 'Cancelled' WHERE setup_status = 'Running'",
+            [],
+        )?;
+        Ok(n)
+    }
+
     /// Fetch a single workspace by its id.
     pub fn workspace_by_id(&self, id: WorkspaceId) -> Result<Option<Workspace>> {
         let r = self
@@ -397,6 +417,7 @@ fn setup_label(s: &SetupStatus) -> &'static str {
         SetupStatus::Ok => "Ok",
         SetupStatus::Failed => "Failed",
         SetupStatus::Cancelled => "Cancelled",
+        SetupStatus::Running => "Running",
     }
 }
 fn parse_setup(s: &str) -> SetupStatus {
@@ -405,6 +426,7 @@ fn parse_setup(s: &str) -> SetupStatus {
         "Failed" => SetupStatus::Failed,
         "Skipped" => SetupStatus::Skipped,
         "Cancelled" => SetupStatus::Cancelled,
+        "Running" => SetupStatus::Running,
         _ => SetupStatus::NotRun,
     }
 }
@@ -1654,6 +1676,72 @@ mod tests {
         assert_eq!(
             ms, 3000,
             "Store::open must set busy_timeout to exactly 3000ms"
+        );
+    }
+
+    #[test]
+    fn running_setup_status_round_trips() {
+        assert_eq!(setup_label(&SetupStatus::Running), "Running");
+        assert_eq!(parse_setup("Running"), SetupStatus::Running);
+    }
+
+    #[test]
+    fn sweep_stale_running_resolves_only_running_rows() {
+        let store = Store::open_in_memory().unwrap();
+        // Raw insert, matching how the other tests in this module make repos
+        // (there is no `insert_repo`; `repo::add` is async and wants a real
+        // git repo on disk, which this test does not need).
+        store
+            .conn()
+            .execute(
+                "INSERT INTO repos (name, path, branch_prefix, created_at) \
+                 VALUES ('demo','/tmp/wsx-demo','wsx',0)",
+                [],
+            )
+            .unwrap();
+        let repo = store.repos().unwrap().into_iter().next().unwrap().id;
+
+        let mut ids = Vec::new();
+        for (name, status) in [
+            ("a", SetupStatus::Running),
+            ("b", SetupStatus::Ok),
+            ("c", SetupStatus::Failed),
+            ("d", SetupStatus::NotRun),
+        ] {
+            let id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name,
+                    branch: &format!("wsx/{name}"),
+                    worktree_path: &std::path::PathBuf::from(format!("/tmp/demo/{name}")),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            store.set_setup_status(id, status).unwrap();
+            ids.push(id);
+        }
+
+        assert_eq!(
+            store.sweep_stale_running().unwrap(),
+            1,
+            "only the Running row"
+        );
+
+        let after: Vec<SetupStatus> = ids
+            .iter()
+            .map(|id| store.workspace_by_id(*id).unwrap().unwrap().setup_status)
+            .collect();
+        assert_eq!(
+            after,
+            vec![
+                SetupStatus::Cancelled,
+                SetupStatus::Ok,
+                SetupStatus::Failed,
+                SetupStatus::NotRun,
+            ],
+            "Running becomes Cancelled; every other status is untouched"
         );
     }
 }

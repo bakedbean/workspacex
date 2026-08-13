@@ -264,88 +264,100 @@ pub async fn create_with_app(
         ws_id
     };
 
-    if cancel.is_cancelled() {
-        let mut g = app.lock().await;
-        g.store.set_workspace_state(id, WorkspaceState::Failed)?;
-        g.in_flight.remove(&id);
-        return Err(Error::Cancelled);
-    }
-
-    // --- Phase 4 (unlocked, async): create worktree. ---
-    if let Ok(mut p) = progress.lock() {
-        p.set_phase(SetupPhase::CreatingWorktree);
-    }
-    let worktree_result =
-        crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await;
-    if let Err(e) = worktree_result {
-        let mut g = app.lock().await;
-        g.store.set_workspace_state(id, WorkspaceState::Failed)?;
-        g.in_flight.remove(&id);
-        return Err(e);
-    }
-    {
-        let g = app.lock().await;
-        g.store.set_workspace_state(id, WorkspaceState::Ready)?;
-    }
-
-    if cancel.is_cancelled() {
-        let mut g = app.lock().await;
-        g.store.set_setup_status(id, SetupStatus::Cancelled)?;
-        g.in_flight.remove(&id);
-        return Err(Error::Cancelled);
-    }
-
-    // --- Phase 5 (unlocked, async): run setup script. ---
-    if let Ok(mut p) = progress.lock() {
-        p.set_phase(SetupPhase::RunningSetup);
-    }
-    {
-        let g = app.lock().await;
-        g.store.set_setup_status(id, SetupStatus::Running)?;
-    }
-    let log_dir = crate::config::Dirs::discover().log_dir();
-    let setup_result = run_setup_logged(
-        repo.setup_script.as_deref(),
-        &repo.path,
-        &worktree_path,
-        &repo.name,
-        &final_name,
-        &log_dir,
-        &progress,
-        cancel.clone(),
-    )
-    .await;
-    let setup_result = match setup_result {
-        Ok(r) => r,
-        Err(Error::Cancelled) => {
-            let mut g = app.lock().await;
-            g.store.set_setup_status(id, SetupStatus::Cancelled)?;
-            g.in_flight.remove(&id);
+    // From here on, `id` has a live `in_flight` entry. Every remaining exit
+    // path — a cancellation check, any Phase 4/5/6 error, and the final
+    // success — must remove it exactly once. Hand-placing a `remove` at
+    // each of the half-dozen early returns below is exactly what caused
+    // fix-round-1's regression: every block ran its `g.store.<call>()?`
+    // BEFORE the removal, so a store failure skipped it, and two blocks
+    // (`set_workspace_state(Ready)`, `set_setup_status(Running)`) had no
+    // removal at all — a leak, permanent now that `reconcile_create_result`
+    // no longer sweeps. So instead: run all of it as one block whose `?`
+    // and early `return`s stay local, then remove the entry exactly once,
+    // unconditionally, after it completes — regardless of which path was
+    // taken or whether it succeeded.
+    let result: Result<CreatedWorkspace> = async {
+        if cancel.is_cancelled() {
+            let g = app.lock().await;
+            g.store.set_workspace_state(id, WorkspaceState::Failed)?;
             return Err(Error::Cancelled);
         }
-        Err(e) => {
-            let mut g = app.lock().await;
-            g.in_flight.remove(&id);
+
+        // --- Phase 4 (unlocked, async): create worktree. ---
+        if let Ok(mut p) = progress.lock() {
+            p.set_phase(SetupPhase::CreatingWorktree);
+        }
+        let worktree_result =
+            crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await;
+        if let Err(e) = worktree_result {
+            let g = app.lock().await;
+            g.store.set_workspace_state(id, WorkspaceState::Failed)?;
             return Err(e);
         }
-    };
-    let status = setup_status_for(&setup_result);
+        {
+            let g = app.lock().await;
+            g.store.set_workspace_state(id, WorkspaceState::Ready)?;
+        }
 
-    // --- Phase 6 (short, locked): finalize. ---
-    let ws = {
+        if cancel.is_cancelled() {
+            let g = app.lock().await;
+            g.store.set_setup_status(id, SetupStatus::Cancelled)?;
+            return Err(Error::Cancelled);
+        }
+
+        // --- Phase 5 (unlocked, async): run setup script. ---
+        if let Ok(mut p) = progress.lock() {
+            p.set_phase(SetupPhase::RunningSetup);
+        }
+        {
+            let g = app.lock().await;
+            g.store.set_setup_status(id, SetupStatus::Running)?;
+        }
+        let log_dir = crate::config::Dirs::discover().log_dir();
+        let setup_result = run_setup_logged(
+            repo.setup_script.as_deref(),
+            &repo.path,
+            &worktree_path,
+            &repo.name,
+            &final_name,
+            &log_dir,
+            &progress,
+            cancel.clone(),
+        )
+        .await;
+        let setup_result = match setup_result {
+            Ok(r) => r,
+            Err(Error::Cancelled) => {
+                let g = app.lock().await;
+                g.store.set_setup_status(id, SetupStatus::Cancelled)?;
+                return Err(Error::Cancelled);
+            }
+            Err(e) => return Err(e),
+        };
+        let status = setup_status_for(&setup_result);
+
+        // --- Phase 6 (short, locked): finalize. ---
+        let ws = {
+            let g = app.lock().await;
+            g.store.set_setup_status(id, status)?;
+            g.store
+                .workspaces(repo.id)?
+                .into_iter()
+                .find(|w| w.id == id)
+                .ok_or_else(|| Error::Store(rusqlite::Error::QueryReturnedNoRows))?
+        };
+        Ok(CreatedWorkspace {
+            workspace: ws,
+            setup_result,
+        })
+    }
+    .await;
+
+    {
         let mut g = app.lock().await;
-        g.store.set_setup_status(id, status)?;
         g.in_flight.remove(&id);
-        g.store
-            .workspaces(repo.id)?
-            .into_iter()
-            .find(|w| w.id == id)
-            .ok_or_else(|| Error::Store(rusqlite::Error::QueryReturnedNoRows))?
-    };
-    Ok(CreatedWorkspace {
-        workspace: ws,
-        setup_result,
-    })
+    }
+    result
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1384,6 +1396,81 @@ mod tests {
         assert!(
             g.in_flight.contains_key(&other_id),
             "an unrelated in_flight entry must survive another create's failure"
+        );
+    }
+
+    /// Regression test for the fix-round-2 finding: per-block `remove(&id)`
+    /// calls placed AFTER each `g.store.<call>()?` meant a store failure
+    /// skipped the removal, and two blocks — the literal
+    /// `set_workspace_state(Ready)` and `set_setup_status(Running)` writes —
+    /// had no removal at all, leaking the entry permanently on any error
+    /// there (`reconcile_create_result` no longer sweeps as of fix round 1).
+    /// The fix wraps everything after registration in one block and removes
+    /// the entry exactly once, unconditionally, after it — so where inside
+    /// the block a failure originates no longer matters. This test forces
+    /// failure via cancellation deep inside Phase 5 (during the setup
+    /// script), i.e. AFTER execution has passed through both of the
+    /// previously-unprotected Ready/Running blocks, and checks the entry is
+    /// still gone. Paired with `failing_create_removes_only_its_own_in_flight_entry`
+    /// above (which fails early, in Phase 4, before either of those blocks
+    /// runs), the two bracket the whole post-registration span: a real
+    /// sqlite failure at exactly those two call sites was not practical to
+    /// induce deterministically in an in-memory store, so this exercises the
+    /// same "no local remove in this block" hazard from the other side.
+    #[tokio::test]
+    async fn cancelled_create_during_setup_script_still_removes_its_in_flight_entry() {
+        use crate::app::App;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        // A slow setup script gives the spawned canceller time to fire after
+        // Phase 4/5's Ready and Running writes have both already succeeded.
+        store
+            .set_repo_setup_script(repo_id, Some("sleep 10"))
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, base.path().to_path_buf()).unwrap(),
+        ));
+        let repo = {
+            let g = app.lock().await;
+            g.repos[0].clone()
+        };
+
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            cancel_clone.cancel();
+        });
+
+        let progress = crate::data::progress::SetupProgress::shared();
+        let result = create_with_app(
+            app.clone(),
+            repo,
+            Some("cancel-mid-setup".to_string()),
+            base.path().to_path_buf(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            progress,
+            cancel,
+        )
+        .await;
+        assert!(matches!(result, Err(Error::Cancelled)), "got {result:?}");
+
+        let g = app.lock().await;
+        assert!(
+            g.in_flight.is_empty(),
+            "the in_flight entry must be removed even when the failure surfaces \
+             deep inside the post-registration block, past both of the literal \
+             store-write blocks fix-round-1 left with no removal at all"
         );
     }
 

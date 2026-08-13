@@ -571,7 +571,21 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         return Ok(());
     }
     match (k.code, k.modifiers) {
-        (KeyCode::Char('q'), _) => app.quit = true,
+        (KeyCode::Char('q'), _) => {
+            if app.in_flight.is_empty() {
+                app.quit = true;
+            } else {
+                let creates = app
+                    .in_flight
+                    .values()
+                    .filter(|f| f.kind == crate::data::in_flight::InFlightKind::Create)
+                    .count();
+                app.modal = Some(Modal::ConfirmQuit {
+                    creates,
+                    archives: app.in_flight.len() - creates,
+                });
+            }
+        }
         (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
             let max = app.selectable.len().saturating_sub(1);
             let idx = if app.dashboard.selected == 0 {
@@ -611,6 +625,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     yolo: false,
                     shared: false,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
+                    notice: None,
                 });
             }
             None => {}
@@ -637,6 +652,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     yolo,
                     shared: false,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
+                    notice: None,
                 });
             }
         }
@@ -660,6 +676,7 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                     yolo: false,
                     shared: true,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
+                    notice: None,
                 });
             }
         }
@@ -768,7 +785,17 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
             }
         }
         (KeyCode::Char('d'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target() {
+            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
+                // A workspace with any in-flight entry (create or archive)
+                // already has a live cancellation handle and/or a worktree
+                // being mutated; opening the archive confirm here would let
+                // a second archive spawn on top of it, and the registry
+                // insert on 'y' would clobber the existing entry so the
+                // still-running operation's in_flight record — and its
+                // cancel handle — becomes unreachable. Refuse silently, the
+                // same way `attach_is_blocked` refuses attach.
+                && !app.in_flight.contains_key(&id)
+            {
                 let name = app
                     .workspaces
                     .iter()
@@ -1247,6 +1274,7 @@ async fn handle_key_modal(
             yolo,
             shared: ws_shared,
             mut agent,
+            notice: _,
         } => match k.code {
             KeyCode::Esc => {
                 app.modal = None;
@@ -1264,6 +1292,7 @@ async fn handle_key_modal(
                     yolo,
                     shared: ws_shared,
                     agent,
+                    notice: None,
                 });
             }
             KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1273,30 +1302,58 @@ async fn handle_key_modal(
                     yolo,
                     shared: !ws_shared,
                     agent,
+                    notice: None,
                 });
             }
             KeyCode::Enter => {
                 let name = if name_buffer.trim().is_empty() {
                     None
                 } else {
-                    Some(name_buffer.clone())
+                    Some(name_buffer.trim().to_string())
                 };
+                // F5 part 1: validate the name up front. Without this, the
+                // most common no-row failure — the UNIQUE(repo_id, name)
+                // violation when the user types a name that already exists
+                // — produced no row, therefore no badge, therefore no
+                // feedback at all; the modal just closed. Mirrors
+                // `RenameWorkspace`'s `notice` field/shape above.
+                if let Some(n) = &name {
+                    let taken = app
+                        .store
+                        .workspaces(repo_id)
+                        .map(|rows| rows.iter().any(|w| &w.name == n))
+                        .unwrap_or(false);
+                    if taken {
+                        app.modal = Some(Modal::NewWorkspace {
+                            repo_id,
+                            name_buffer,
+                            yolo,
+                            shared: ws_shared,
+                            agent,
+                            notice: Some(format!("a workspace named '{n}' already exists")),
+                        });
+                        return Ok(());
+                    }
+                }
+                // Resolve the final name here rather than letting
+                // `create_with_app` auto-generate one when `name` is
+                // `None` — `reconcile_create_result` needs the exact name
+                // that will be (or would have been) inserted so it can
+                // tell, on failure, whether a row exists at all (F5 part 2).
+                let final_name = name.unwrap_or_else(crate::names::generate);
                 let repo = app.repos.iter().find(|r| r.id == repo_id).unwrap().clone();
                 let base = app.worktree_base.clone();
                 let cancel = tokio_util::sync::CancellationToken::new();
                 let create_gen = app.alloc_create_gen();
                 let progress = crate::data::progress::SetupProgress::shared();
-                app.modal = Some(Modal::SetupRunning {
-                    cancel: cancel.clone(),
-                    progress: progress.clone(),
-                    started: std::time::Instant::now(),
-                });
+                app.modal = None;
                 let shared_clone = shared.clone();
+                let name_for_reconcile = final_name.clone();
                 tokio::spawn(async move {
                     let result = crate::data::workspace::create_with_app(
                         shared_clone.clone(),
                         repo,
-                        name,
+                        Some(final_name),
                         base,
                         yolo,
                         ws_shared,
@@ -1305,7 +1362,14 @@ async fn handle_key_modal(
                         cancel,
                     )
                     .await;
-                    reconcile_create_result(shared_clone, create_gen, result).await;
+                    reconcile_create_result(
+                        shared_clone,
+                        create_gen,
+                        repo_id,
+                        name_for_reconcile,
+                        result,
+                    )
+                    .await;
                 });
             }
             KeyCode::Backspace => {
@@ -1316,6 +1380,7 @@ async fn handle_key_modal(
                     yolo,
                     shared: ws_shared,
                     agent,
+                    notice: None,
                 });
             }
             KeyCode::Char(c) => {
@@ -1326,6 +1391,7 @@ async fn handle_key_modal(
                     yolo,
                     shared: ws_shared,
                     agent,
+                    notice: None,
                 });
             }
             _ => {}
@@ -1353,16 +1419,17 @@ async fn handle_key_modal(
                     }
                 };
                 let archive_gen = app.alloc_archive_gen();
-                let script_present = repo
-                    .archive_script
-                    .as_deref()
-                    .map(|s| !s.trim().is_empty())
-                    .unwrap_or(false);
-                app.modal = Some(Modal::ArchiveRunning {
-                    step: crate::ui::modal::ArchiveStep::Script,
-                    script_present,
-                });
+                let progress = crate::data::progress::SetupProgress::shared();
+                app.in_flight.insert(
+                    ws.id,
+                    crate::data::in_flight::InFlight::archive(
+                        progress.clone(),
+                        tokio_util::sync::CancellationToken::new(),
+                    ),
+                );
+                app.modal = None;
                 let shared_clone = shared.clone();
+                let ws_id = ws.id;
                 tokio::spawn(async move {
                     let result = crate::data::workspace::archive_with_app(
                         shared_clone.clone(),
@@ -1374,12 +1441,53 @@ async fn handle_key_modal(
                         },
                     )
                     .await;
-                    crate::app::reconcile_archive_result(shared_clone, archive_gen, result).await;
+                    crate::app::reconcile_archive_result(shared_clone, archive_gen, ws_id, result)
+                        .await;
                 });
             }
             KeyCode::Char('n') | KeyCode::Esc => {
                 app.modal = None;
             }
+            _ => {}
+        },
+        Modal::ConfirmQuit { .. } => match k.code {
+            KeyCode::Char('y') => {
+                // Cancel creates on the way out so their rows land on Cancelled
+                // rather than waiting for the next startup sweep to resolve them.
+                // Archive has no cancellation and is simply abandoned; it is
+                // self-healing, since remove_worktree falls back to remove_dir_all
+                // once git no longer recognises the path.
+                //
+                // Firing the token alone is not enough: the detached task
+                // never gets a chance to observe it before shutdown, so the
+                // task-level `set_setup_status(Cancelled)` writes in
+                // `workspace::create`/`create_with_app` may never run. Worse,
+                // a create still in its fetch phase hasn't even written
+                // `SetupStatus::Running` yet, so the startup sweep (which only
+                // repairs rows stuck on `Running`) would not repair it either
+                // — leaving a row that looks healthy but has no dependencies
+                // installed. Persist a terminal status synchronously here,
+                // in the same locked handler, before quitting. This must not
+                // block on the tasks themselves finishing — that would
+                // reintroduce exactly the quit-time blocking this feature
+                // removed.
+                for (id, f) in app.in_flight.iter() {
+                    if f.kind == crate::data::in_flight::InFlightKind::Create {
+                        f.cancel.cancel();
+                        if let Err(e) = app
+                            .store
+                            .set_setup_status(*id, crate::data::store::SetupStatus::Cancelled)
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                "failed to persist Cancelled on an in-flight create while quitting"
+                            );
+                        }
+                    }
+                }
+                app.quit = true;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => app.modal = None,
             _ => {}
         },
         Modal::ConfirmShare { workspace_id, .. } => match k.code {
@@ -1401,18 +1509,13 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        Modal::SetupRunning { cancel, .. } => {
-            // Esc cancels in-flight create; every other key (including Enter)
-            // is intentionally ignored during creation.
-            if k.code == KeyCode::Esc {
-                cancel.cancel();
+        Modal::SetupProgress { .. } => {
+            // A viewer onto App::in_flight, not an owner: Esc/Enter just
+            // closes it, leaving the background create running. Every other
+            // key is ignored.
+            if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
                 app.modal = None;
-                app.pending_create_gen = None;
             }
-        }
-        Modal::ArchiveRunning { .. } => {
-            // Archive is non-cancellable. Swallow all keys until the
-            // spawned task completes and reconciles the modal.
         }
         Modal::Error { .. } => {
             if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
@@ -1457,6 +1560,26 @@ async fn handle_key_modal(
                     name_buffer,
                     notice: None,
                 });
+            }
+            // Open the progress viewer for a workspace with work in flight.
+            KeyCode::Char('o') => {
+                if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target()
+                    && app.in_flight.contains_key(&ws_id)
+                {
+                    app.modal = Some(Modal::SetupProgress {
+                        workspace_id: ws_id,
+                    });
+                }
+            }
+            // Cancel an in-flight CREATE. Archive is not cancellable.
+            KeyCode::Char('x') => {
+                if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target()
+                    && let Some(f) = app.in_flight.get(&ws_id)
+                    && f.kind == crate::data::in_flight::InFlightKind::Create
+                {
+                    f.cancel.cancel();
+                    app.modal = None;
+                }
             }
             // Everything else is inert while the card is open.
             _ => {}
@@ -1551,6 +1674,9 @@ async fn handle_key_modal(
                             AttachReady::AgentMissing => {
                                 // Modal::AgentMissing is set; leave view alone.
                             }
+                            AttachReady::Refused => {
+                                // A live archive refused the attach; leave view alone.
+                            }
                         }
                     }
                     // Only close the Updates-panel if AgentMissing didn't
@@ -1618,6 +1744,9 @@ async fn handle_key_modal(
                             }
                             AttachReady::AgentMissing => {
                                 // Modal::AgentMissing is set; leave view alone.
+                            }
+                            AttachReady::Refused => {
+                                // A live archive refused the attach; leave view alone.
                             }
                         }
                     }
@@ -1879,10 +2008,12 @@ async fn handle_key_modal(
                     let inst = app.store.add_workspace_agent(workspace_id, kind)?;
                     // Spawn it now. ensure_instance_session sets Modal::AgentMissing
                     // (and returns AgentMissing) if the binary is absent — in that
-                    // case leave that modal up; otherwise close the panel.
+                    // case leave that modal up; otherwise close the panel. Refused
+                    // (a live archive) is vanishingly unlikely here — the panel
+                    // requires an attached workspace — but is handled the same way.
                     match ensure_instance_session(app, inst.id, true)? {
-                        AttachReady::AgentMissing => {} // ensure_instance_session set the modal
-                        _ => app.modal = None,
+                        AttachReady::AgentMissing | AttachReady::Refused => {}
+                        AttachReady::Ok => app.modal = None,
                     }
                     // Refill `agent_roster` so it reflects the new instance —
                     // nothing else on this path goes through `refresh()`.

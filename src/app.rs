@@ -42,11 +42,15 @@ pub enum SelectionTarget {
 /// Outcome of `ensure_workspace_session`. `AgentMissing` signals to callers
 /// that the spawn failed because the agent binary was not on PATH; the
 /// helper already set `Modal::AgentMissing`, so callers should skip the
-/// view switch and leave the modal up.
+/// view switch and leave the modal up. `Refused` signals that the session
+/// was not touched because `attach_is_blocked` refused it (a live archive
+/// is tearing the workspace down) — callers should treat this exactly like
+/// `AgentMissing`: skip the view switch, set no session, leave things alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachReady {
     Ok,
     AgentMissing,
+    Refused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,6 +400,14 @@ pub struct App {
     /// Used by the reconcile step to detect stale completions (user cancelled,
     /// new create started, etc.).
     pub pending_create_gen: Option<u64>,
+    /// Background create/archive work, keyed by the workspace it targets.
+    /// Sole source of truth for the dashboard's in-flight badges. An entry is
+    /// inserted when the task is spawned and removed by the reconciler on
+    /// every exit path — success, failure, and cancellation alike.
+    pub in_flight: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::in_flight::InFlight,
+    >,
     /// Monotonic counter handed out to in-flight workspace archive tasks.
     pub next_archive_gen: u64,
     /// Generation id of the currently in-flight workspace archive, if any.
@@ -717,6 +729,7 @@ impl App {
             pm_filter: None,
             next_create_gen: 0,
             pending_create_gen: None,
+            in_flight: std::collections::HashMap::new(),
             next_archive_gen: 0,
             pending_archive_gen: None,
             remote_list: None,
@@ -746,6 +759,8 @@ impl App {
         let _ = app
             .store
             .sweep_stale_pending(std::time::Duration::from_secs(300));
+        // Resolve setup rows stranded by a crashed process (see sweep_stale_running).
+        let _ = app.store.sweep_stale_running();
         // Load the retained bucketed activity for the sparkline (up to
         // MAX_ACTIVITY_HOURS); the configured window selects how much is shown.
         if let Ok(buckets) = app
@@ -1088,10 +1103,11 @@ impl App {
         // returns AgentMissing WITHOUT spawning — retargeting anyway would
         // point the focused leaf at a sessionless instance, and the next
         // draw's "leaf session missing -> bounce to Dashboard" guard would
-        // then collapse the whole split. Mirror attach_workspace and bail.
+        // then collapse the whole split. Same for Refused (a live archive
+        // refused the ensure). Mirror attach_workspace and bail.
         match ensure_instance_session(self, inst, true)? {
             AttachReady::Ok => {}
-            AttachReady::AgentMissing => return Ok(()),
+            AttachReady::AgentMissing | AttachReady::Refused => return Ok(()),
         }
         let Some(instance) = self.store.workspace_agents_by_id(inst)? else {
             return Ok(());
@@ -2202,10 +2218,19 @@ pub(crate) fn restore_attached_state(
 /// don't silently drop on workspaces the user hasn't attached to.
 /// No-op when the workspace already has a session, or when
 /// `build_spawn_info` returns `None` (e.g., setup hasn't completed).
+///
+/// This is the single enforcement point for `attach_is_blocked`: every
+/// caller — `attach_workspace`, the inline-dispatch paths, and (via
+/// `ensure_instance_session`'s delegation) primary-instance retargeting —
+/// goes through here, so a live archive can't be raced by a respawn from
+/// any of them.
 pub(crate) fn ensure_workspace_session(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<AttachReady> {
+    if attach_is_blocked(app, ws_id) {
+        return Ok(AttachReady::Refused);
+    }
     if app
         .primary_instance(ws_id)
         .and_then(|i| app.sessions.get(i))
@@ -2268,14 +2293,16 @@ pub(crate) fn ensure_workspace_session(
 /// handlers, `switch_focused_pane_to`, `restore_attached_state`) so the user
 /// sees the modal. Pass `false` for background callers (e.g. the message drain)
 /// so a missing binary doesn't pop a modal over the user's unrelated view.
+///
+/// Enforces `attach_is_blocked` for non-primary instances directly (they
+/// never reach `ensure_workspace_session`). Primary instances delegate
+/// above and get the check there instead — do not duplicate it here, or a
+/// primary would be guarded twice.
 pub(crate) fn ensure_instance_session(
     app: &mut App,
     inst: crate::data::store::AgentInstanceId,
     surface_missing: bool,
 ) -> Result<AttachReady> {
-    if app.sessions.get(inst).is_some() {
-        return Ok(AttachReady::Ok);
-    }
     // Unknown instance id: treat as a no-op (matches `build_spawn_info`
     // returning `None` for a workspace whose setup hasn't completed).
     let Some(instance) = app.store.workspace_agents_by_id(inst)? else {
@@ -2285,6 +2312,12 @@ pub(crate) fn ensure_instance_session(
         return ensure_workspace_session(app, instance.workspace_id);
     }
     let ws_id = instance.workspace_id;
+    if attach_is_blocked(app, ws_id) {
+        return Ok(AttachReady::Refused);
+    }
+    if app.sessions.get(inst).is_some() {
+        return Ok(AttachReady::Ok);
+    }
     if let Some((path, mode, repo_path)) = build_added_spawn_info(app, &instance) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
@@ -2443,18 +2476,34 @@ pub(crate) fn toggle_workspace_shared(
     Ok(())
 }
 
+/// Whether attaching to `ws_id` must be refused. Only a live archive
+/// blocks: its first act is killing the workspace's tmux sessions so a
+/// live agent cannot dirty the worktree during teardown, and attaching
+/// would respawn one into a directory that is being deleted. A create in
+/// flight never blocks — working in a workspace while its setup runs is
+/// the point of backgrounding.
+pub(crate) fn attach_is_blocked(app: &App, ws_id: crate::data::store::WorkspaceId) -> bool {
+    app.in_flight
+        .get(&ws_id)
+        .is_some_and(|f| f.kind == crate::data::in_flight::InFlightKind::Archive)
+}
+
 /// Attach to a workspace: ensure a session, restore layout, and switch
 /// to attached view. Shared by the `Enter` / `i` / `l` key handlers.
 pub(crate) fn attach_workspace(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<()> {
+    // `ensure_workspace_session` is the enforcement point for
+    // `attach_is_blocked` (a live archive refuses); no need to check here
+    // too — see `AttachReady::Refused`.
     match ensure_workspace_session(app, ws_id)? {
         AttachReady::Ok => {}
-        // Attach didn't happen (AgentMissing modal is up) — leave the
-        // workspace's attention marker alone so a failed open doesn't
-        // silently dismiss it.
-        AttachReady::AgentMissing => return Ok(()),
+        // Attach didn't happen (AgentMissing modal is up, or attach was
+        // refused because an archive is tearing this workspace down) —
+        // leave the workspace's attention marker alone so a failed open
+        // doesn't silently dismiss it.
+        AttachReady::AgentMissing | AttachReady::Refused => return Ok(()),
     }
     app.workspace_needs_attention.remove(&ws_id);
     if app
@@ -2499,14 +2548,30 @@ pub(crate) fn schedule_detach_refresh(app: &mut App, ids: impl IntoIterator<Item
     }
 }
 /// Reconcile the outcome of a spawned `workspace::create_with_app` task.
-/// Locks the app briefly; if the modal is still `SetupRunning` AND the
-/// generation matches ours, applies the outcome (close modal on success,
-/// switch to `Modal::Error` on failure). Otherwise — user dismissed or
-/// started a new create — leaves the modal alone but still calls
-/// `refresh()` so the dashboard reflects any state we wrote to the store.
+/// Locks the app briefly and — on success — selects the new workspace.
+/// Does NOT touch `in_flight`: with concurrent creates reachable (the
+/// blocking modal that used to serialize them is gone), only the task that
+/// inserted an entry knows for certain it's the one that finished, so
+/// `create_with_app` itself removes its own entry by id on every exit path.
+/// A blanket removal here could delete a different, still-running create's
+/// entry. There is no modal bookkeeping either: a failed create is carried
+/// by the row badge (not the transient error modal this replaced), and
+/// `Modal::SetupProgress` is a viewer the user may already have closed, so
+/// it is never touched here — EXCEPT for the `Err(_)` backstop below.
+/// Regardless of outcome, `refresh()` runs so the dashboard reflects any
+/// state written to the store.
+///
+/// `repo_id`/`name` are the exact `(repo_id, name)` the caller resolved and
+/// asked `create_with_app` to insert (the caller pre-resolves an auto-
+/// generated name too, rather than letting `create_with_app` pick one, so
+/// this is always the real attempted name). They are only consulted on
+/// `Err(_)`, to answer "did a row for this attempt ever get inserted?" —
+/// see that arm.
 pub(crate) async fn reconcile_create_result(
     app: SharedApp,
     my_gen: u64,
+    repo_id: crate::data::store::RepoId,
+    name: String,
     result: Result<crate::data::workspace::CreatedWorkspace>,
 ) {
     let mut g = app.lock().await;
@@ -2520,9 +2585,6 @@ pub(crate) async fn reconcile_create_result(
         .map(|c| (c.workspace.id, c.workspace.repo_id));
     match result {
         Ok(_) => {
-            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::SetupRunning { .. })) {
-                g.modal = None;
-            }
             let _ = g.refresh();
             // Select the newly created workspace so the dashboard lands on it.
             if let Some((id, repo_id)) = new_ws {
@@ -2544,63 +2606,65 @@ pub(crate) async fn reconcile_create_result(
             }
         }
         Err(crate::error::Error::Cancelled) => {
-            // User cancelled — modal already cleared by Esc handler. Refresh
-            // so the dashboard reflects setup_status=Cancelled.
+            // The `x` binding on the workspace-actions card fires `cancel`
+            // on a live create's token; a `Modal::ConfirmQuit` `y` does too.
+            // Refresh so the dashboard reflects setup_status=Cancelled.
             let _ = g.refresh();
         }
-        Err(e) => {
-            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::SetupRunning { .. })) {
+        Err(_) => {
+            let _ = g.refresh();
+            // F5 backstop: failures AFTER the row exists are carried by the
+            // row badge — deliberately silent here, same as any other
+            // `Err(_)`. But `create_with_app` can also fail BEFORE the row
+            // is ever inserted (`resolve_branch_prefix`, `insert_workspace`,
+            // or `add_primary_agent` erroring in Phase 1/2, ahead of the
+            // wrapped async block) — most commonly a `UNIQUE(repo_id, name)`
+            // violation, though the Enter handler now validates that case
+            // up front. With no row there is no badge and therefore no
+            // feedback at all; the modal would just have closed. Whether a
+            // row exists is the simplest reliable signal available here (no
+            // id is returned on `Err`, so this is the only way to tell) —
+            // look it up by the exact `(repo_id, name)` this attempt used,
+            // and only pop `Modal::Error` when it's genuinely missing.
+            let row_exists = g
+                .store
+                .workspaces(repo_id)
+                .map(|rows| rows.iter().any(|w| w.name == name))
+                .unwrap_or(false);
+            if !row_exists {
                 g.modal = Some(crate::ui::modal::Modal::Error {
-                    message: e.to_string(),
+                    message: format!("failed to create workspace '{name}'"),
                 });
             }
-            let _ = g.refresh();
         }
     }
 }
 
-/// Reconcile the outcome of a spawned `workspace::archive` task.
-/// Locks the app briefly; if the modal is still `ArchiveRunning` AND the
-/// generation matches ours, applies the outcome (close modal on success,
-/// switch to `Modal::Error` on failure). Otherwise — user dismissed or
-/// some other flow replaced the modal — leaves the modal alone but still
-/// calls `refresh()` so the dashboard reflects the store mutation.
+/// Reconcile the outcome of a spawned `workspace::archive_with_app` task.
+/// Locks the app briefly and always removes `ws_id`'s own `in_flight` entry
+/// by id — never a blanket sweep of every `Archive` entry — since multiple
+/// archives can be in flight concurrently and a blanket retain could evict a
+/// different, still-running archive's entry. `pending_archive_gen` is kept
+/// only as informational bookkeeping, mirroring `pending_create_gen`. There
+/// is no modal to touch on success or failure: a failed removal is logged
+/// (there is no persisted failure status for archive to badge off, unlike
+/// create's `SetupStatus::Failed`), and `refresh()` always runs so the
+/// dashboard reflects the store mutation (or lack of one, on failure).
 pub(crate) async fn reconcile_archive_result(
     app: SharedApp,
     my_gen: u64,
+    ws_id: crate::data::store::WorkspaceId,
     result: Result<crate::data::setup::SetupResult>,
 ) {
     let mut g = app.lock().await;
-    let is_mine = g.pending_archive_gen == Some(my_gen);
-    if is_mine {
+    if g.pending_archive_gen == Some(my_gen) {
         g.pending_archive_gen = None;
     }
-    match result {
-        Ok(_) => {
-            if is_mine
-                && matches!(
-                    g.modal,
-                    Some(crate::ui::modal::Modal::ArchiveRunning { .. })
-                )
-            {
-                g.modal = None;
-            }
-            let _ = g.refresh();
-        }
-        Err(e) => {
-            if is_mine
-                && matches!(
-                    g.modal,
-                    Some(crate::ui::modal::Modal::ArchiveRunning { .. })
-                )
-            {
-                g.modal = Some(crate::ui::modal::Modal::Error {
-                    message: e.to_string(),
-                });
-            }
-            let _ = g.refresh();
-        }
+    g.in_flight.remove(&ws_id);
+    if let Err(e) = &result {
+        tracing::warn!(error = %e, workspace_id = ?ws_id, "archive failed");
     }
+    let _ = g.refresh();
 }
 
 /// Reconcile the outcome of a spawned `fetch_shared_list` task (Task 5).
@@ -2645,8 +2709,118 @@ pub(crate) async fn reconcile_remote_list(
 }
 
 #[cfg(test)]
+mod reconcile_create_tests {
+    use super::*;
+    use crate::data::store::NewWorkspace;
+    use crate::error::Error;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn make_app_with_repo() -> (App, crate::data::store::RepoId) {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        (app, repo_id)
+    }
+
+    /// F5 part 2: a create can fail before its row is ever inserted
+    /// (`resolve_branch_prefix`, `insert_workspace`, or `add_primary_agent`
+    /// erroring in Phase 1/2, ahead of `create_with_app`'s wrapped async
+    /// block). With no row there is no badge and therefore no feedback at
+    /// all. The `Err(_)` backstop must pop `Modal::Error` in exactly this
+    /// case — detected here by no row existing for the attempted
+    /// `(repo_id, name)`.
+    #[tokio::test]
+    async fn err_with_no_matching_row_pops_an_error_modal() {
+        let (app, repo_id) = make_app_with_repo();
+        let my_gen = 0;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_create_result(
+            shared.clone(),
+            my_gen,
+            repo_id,
+            "ghost".to_string(),
+            Err(Error::UserInput("boom".into())),
+        )
+        .await;
+        let g = shared.lock().await;
+        assert!(
+            matches!(g.modal, Some(crate::ui::modal::Modal::Error { .. })),
+            "a create that failed before any row existed must surface an \
+             error modal — nothing else can carry that feedback: {:?}",
+            g.modal
+        );
+    }
+
+    /// Failures AFTER the row exists are carried by the row badge — a
+    /// deliberate design decision — so the `Err(_)` arm must stay silent
+    /// when a row for the attempted `(repo_id, name)` is actually present
+    /// (e.g. a fetch/checkout/setup failure inside the wrapped async block,
+    /// all of which run after the row is inserted).
+    #[tokio::test]
+    async fn err_with_a_matching_row_stays_silent() {
+        let (app, repo_id) = make_app_with_repo();
+        app.store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ghost",
+                branch: "repo/ghost",
+                worktree_path: std::path::Path::new("/tmp/r/ghost"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let my_gen = 0;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_create_result(
+            shared.clone(),
+            my_gen,
+            repo_id,
+            "ghost".to_string(),
+            Err(Error::Setup("boom".into())),
+        )
+        .await;
+        let g = shared.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "a failure after the row exists must stay silent — the row \
+             badge carries it: {:?}",
+            g.modal
+        );
+    }
+
+    /// A cancellation must never pop `Modal::Error` either way — cancelling
+    /// is a deliberate user action (the `x` binding, or `ConfirmQuit`'s `y`),
+    /// not a failure that needs surfacing.
+    #[tokio::test]
+    async fn cancelled_never_pops_an_error_modal_even_with_no_row() {
+        let (app, repo_id) = make_app_with_repo();
+        let my_gen = 0;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_create_result(
+            shared.clone(),
+            my_gen,
+            repo_id,
+            "ghost".to_string(),
+            Err(Error::Cancelled),
+        )
+        .await;
+        let g = shared.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "cancellation must stay silent: {:?}",
+            g.modal
+        );
+    }
+}
+
+#[cfg(test)]
 mod reconcile_archive_tests {
     use super::*;
+    use crate::data::in_flight::InFlight;
     use crate::data::setup::SetupResult;
     use crate::error::Error;
     use std::sync::Arc;
@@ -2660,22 +2834,29 @@ mod reconcile_archive_tests {
         (app, tmp)
     }
 
+    fn seed_archive_entry(app: &mut App, ws_id: crate::data::store::WorkspaceId) {
+        app.in_flight.insert(
+            ws_id,
+            InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+    }
+
     #[tokio::test]
-    async fn reconcile_ok_closes_archive_running_modal() {
+    async fn reconcile_ok_removes_the_archived_workspaces_in_flight_entry() {
         let (mut app, _tmp) = make_app();
-        app.modal = Some(crate::ui::modal::Modal::ArchiveRunning {
-            step: crate::ui::modal::ArchiveStep::RemoveWorktree,
-            script_present: false,
-        });
+        let ws_id = crate::data::store::WorkspaceId(1);
+        seed_archive_entry(&mut app, ws_id);
         app.pending_archive_gen = Some(7);
         app.next_archive_gen = 8;
         let shared = Arc::new(Mutex::new(app));
-        reconcile_archive_result(shared.clone(), 7, Ok(SetupResult::Ok)).await;
+        reconcile_archive_result(shared.clone(), 7, ws_id, Ok(SetupResult::Ok)).await;
         let g = shared.lock().await;
         assert!(
-            g.modal.is_none(),
-            "modal should clear on Ok; got {:?}",
-            g.modal
+            !g.in_flight.contains_key(&ws_id),
+            "the archived workspace's in_flight entry should be removed"
         );
         assert!(
             g.pending_archive_gen.is_none(),
@@ -2684,64 +2865,83 @@ mod reconcile_archive_tests {
     }
 
     #[tokio::test]
-    async fn reconcile_err_sets_error_modal() {
+    async fn reconcile_err_still_removes_the_in_flight_entry() {
         let (mut app, _tmp) = make_app();
-        app.modal = Some(crate::ui::modal::Modal::ArchiveRunning {
-            step: crate::ui::modal::ArchiveStep::RemoveWorktree,
-            script_present: false,
-        });
+        let ws_id = crate::data::store::WorkspaceId(1);
+        seed_archive_entry(&mut app, ws_id);
         app.pending_archive_gen = Some(7);
         app.next_archive_gen = 8;
         let shared = Arc::new(Mutex::new(app));
-        reconcile_archive_result(shared.clone(), 7, Err(Error::Setup("boom".into()))).await;
+        reconcile_archive_result(shared.clone(), 7, ws_id, Err(Error::Setup("boom".into()))).await;
         let g = shared.lock().await;
-        match &g.modal {
-            Some(crate::ui::modal::Modal::Error { message }) => {
-                assert!(
-                    message.contains("boom"),
-                    "error message should contain failure detail; got {message:?}"
-                );
-            }
-            other => panic!("expected Modal::Error, got {other:?}"),
-        }
+        assert!(
+            !g.in_flight.contains_key(&ws_id),
+            "a failed archive must still clear its own in_flight entry so the badge stops spinning"
+        );
         assert!(
             g.pending_archive_gen.is_none(),
             "pending_archive_gen should clear after matching reconcile"
         );
     }
 
+    /// Regression: a blanket `retain(|_, f| f.kind != Archive)` would delete
+    /// a different, still-running archive's entry — the same bug fix-round-1
+    /// found on the create side. `pending_archive_gen` cannot be trusted to
+    /// mean only one archive is ever in flight: it is a single slot that a
+    /// second, concurrently-started archive silently clobbers (nothing
+    /// serializes archives once the blocking modal is gone). This drives a
+    /// reconcile for one workspace and asserts an unrelated concurrent
+    /// archive's entry survives.
     #[tokio::test]
-    async fn reconcile_skips_modal_mutation_when_gen_mismatch() {
+    async fn reconcile_removes_only_its_own_entry_leaving_a_concurrent_archive_alone() {
         let (mut app, _tmp) = make_app();
-        // Simulate: a different modal is already showing (e.g. an Error
-        // popped by another flow) and pending_archive_gen advanced past
-        // the value our stale task carries.
-        app.modal = Some(crate::ui::modal::Modal::Error {
-            message: "untouched".into(),
-        });
+        let finishing = crate::data::store::WorkspaceId(1);
+        let still_running = crate::data::store::WorkspaceId(2);
+        seed_archive_entry(&mut app, finishing);
+        seed_archive_entry(&mut app, still_running);
+        app.pending_archive_gen = Some(7);
+        app.next_archive_gen = 8;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_archive_result(shared.clone(), 7, finishing, Ok(SetupResult::Ok)).await;
+        let g = shared.lock().await;
+        assert!(
+            !g.in_flight.contains_key(&finishing),
+            "the finishing archive's own entry should be removed"
+        );
+        assert!(
+            g.in_flight.contains_key(&still_running),
+            "a concurrent, still-running archive's entry must survive"
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_with_stale_gen_still_removes_its_own_entry_but_leaves_gen_alone() {
+        let (mut app, _tmp) = make_app();
+        let ws_id = crate::data::store::WorkspaceId(1);
+        seed_archive_entry(&mut app, ws_id);
+        // Simulate: pending_archive_gen has already advanced past the value
+        // our (real, completed) archive task carries — e.g. a second archive
+        // started after this one. The gen mismatch must not stop this task's
+        // own in_flight entry from being cleaned up; it genuinely finished.
         app.pending_archive_gen = Some(99);
         app.next_archive_gen = 100;
         let shared = Arc::new(Mutex::new(app));
         reconcile_archive_result(
             shared.clone(),
             7, // stale — does not match pending_archive_gen
+            ws_id,
             Err(Error::Setup("ignored".into())),
         )
         .await;
         let g = shared.lock().await;
-        match &g.modal {
-            Some(crate::ui::modal::Modal::Error { message }) => {
-                assert_eq!(
-                    message, "untouched",
-                    "stale reconcile must not overwrite modal"
-                );
-            }
-            other => panic!("expected the pre-existing Error modal to survive, got {other:?}"),
-        }
+        assert!(
+            !g.in_flight.contains_key(&ws_id),
+            "a stale-gen reconcile must still remove its own in_flight entry"
+        );
         assert_eq!(
             g.pending_archive_gen,
             Some(99),
-            "stale reconcile must not clear pending_archive_gen"
+            "a stale reconcile must not clear a newer pending_archive_gen"
         );
     }
 }
@@ -3077,6 +3277,123 @@ mod live_instances_tests {
         assert_eq!(app.agent_roster.get(&ws).map(|v| v.len()), Some(1));
         app.refresh().unwrap();
         assert_eq!(app.agent_roster.get(&ws).map(|v| v.len()), Some(2));
+    }
+
+    #[test]
+    fn attach_refuses_a_workspace_being_archived() {
+        let mut app = test_app();
+        let ws = app.test_workspace("doomed");
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        // Archive kills the workspace's tmux sessions first, precisely so a live
+        // agent cannot dirty the worktree during teardown. Attaching would
+        // respawn one into a directory that is being deleted.
+        attach_workspace(&mut app, ws).unwrap();
+        assert!(
+            !matches!(app.view, View::Attached(_)),
+            "attach must be refused while an archive is in flight"
+        );
+    }
+
+    #[test]
+    fn attach_allows_a_workspace_that_is_only_provisioning() {
+        let mut app = test_app();
+        let ws = app.test_workspace("fresh");
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::create(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        // Dropping in while setup runs is the entire point of this feature.
+        // Only archive is unsafe. (`assert!(!x)`, not `assert!(x == false)` —
+        // clippy's `bool_assert_comparison` is denied by CI.)
+        assert!(
+            !attach_is_blocked(&app, ws),
+            "provisioning must not block attach"
+        );
+    }
+
+    /// F4 regression: `ensure_workspace_session` itself must refuse while an
+    /// archive is in flight, not merely `attach_workspace`'s wrapper. This is
+    /// what closes the bypass routes (chip click / chord / reply Enter,
+    /// `restore_attached_state`'s side-pane spawns, `switch_focused_pane_to`)
+    /// that called `ensure_workspace_session`/`ensure_instance_session`
+    /// directly without ever consulting `attach_is_blocked`.
+    #[test]
+    fn ensure_workspace_session_refuses_when_archive_in_flight() {
+        let mut app = test_app();
+        let ws = app.test_workspace("archiving");
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        assert!(
+            app.primary_instance(ws)
+                .and_then(|i| app.sessions.get(i))
+                .is_none(),
+            "must not spawn a session while an archive is tearing the workspace down"
+        );
+    }
+
+    /// F4 regression, non-primary half: `ensure_instance_session` delegates
+    /// to `ensure_workspace_session` for primary instances (covered above),
+    /// but a non-primary (added) instance never reaches that delegation, so
+    /// it needs its own `attach_is_blocked` check — this is exactly the
+    /// "make sure non-primary instances are guarded too" requirement.
+    #[test]
+    fn ensure_instance_session_refuses_non_primary_when_archive_in_flight() {
+        let mut app = test_app();
+        let ws = app.test_workspace("archiving-peer");
+        let peer = app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let outcome = crate::app::ensure_instance_session(&mut app, peer.id, false).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        assert!(
+            app.sessions.get(peer.id).is_none(),
+            "must not spawn a peer session while an archive is tearing the workspace down"
+        );
+    }
+
+    /// A primary instance routed through `ensure_instance_session` must be
+    /// refused too — via delegation to `ensure_workspace_session` — and must
+    /// NOT be double-guarded (i.e. this must not panic/loop and must return
+    /// the same single `Refused`, proving the delegation path is taken
+    /// rather than a duplicate local check).
+    #[test]
+    fn ensure_instance_session_refuses_primary_via_delegation_when_archive_in_flight() {
+        let mut app = test_app();
+        let ws = app.test_workspace("archiving-primary");
+        let primary = app
+            .store
+            .add_primary_agent(ws, AgentKind::Claude, 0)
+            .unwrap();
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let outcome = crate::app::ensure_instance_session(&mut app, primary.id, false).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
     }
 }
 

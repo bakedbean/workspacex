@@ -193,7 +193,7 @@ mod tests {
                 ago_secs: w.ago_secs,
                 selected: i == 0,
                 yolo: false,
-                setup_failed: false,
+                badge: None,
                 undelivered_mail: false,
                 shared: false,
                 shared_active: false,

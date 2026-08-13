@@ -5418,6 +5418,7 @@ mod pm_state_tests {
             yolo: false,
             shared: false,
             agent: crate::pty::session::AgentKind::Claude,
+            notice: None,
         });
         let shared_app = Arc::new(Mutex::new(
             App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
@@ -5667,7 +5668,7 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
-    async fn enter_in_new_workspace_modal_transitions_to_setup_running_and_spawns_task() {
+    async fn enter_in_new_workspace_modal_backgrounds_create_and_registers_in_flight() {
         use crate::ui::modal::Modal;
         let store = crate::data::store::Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
@@ -5686,6 +5687,7 @@ mod pm_state_tests {
                 yolo: false,
                 shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                notice: None,
             });
         }
         // Send Enter.
@@ -5696,33 +5698,34 @@ mod pm_state_tests {
         {
             let mut g = app.lock().await;
             handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
-            // Immediately after Enter, modal should be SetupRunning.
+            // Create is backgrounded immediately: no modal pops up, so the
+            // dashboard is usable right away instead of blocked behind it.
             assert!(
-                matches!(g.modal, Some(Modal::SetupRunning { .. })),
-                "modal should transition to SetupRunning immediately; got {:?}",
+                g.modal.is_none(),
+                "create should background without opening a modal; got {:?}",
                 g.modal
             );
             assert!(g.pending_create_gen.is_some());
         }
-        // Wait for the spawned create task to finish: the modal clears, the
-        // pending generation is reset, and the workspace materializes.
-        wait_until(&app, "create to finish (modal cleared, 1 workspace)", |g| {
-            g.modal.is_none() && g.pending_create_gen.is_none() && g.workspaces.len() == 1
+        // Wait for the spawned create task to finish: the pending generation
+        // is reset and the workspace materializes.
+        wait_until(&app, "create to finish (1 workspace)", |g| {
+            g.pending_create_gen.is_none() && g.workspaces.len() == 1
         })
         .await;
         let g = app.lock().await;
-        assert!(
-            g.modal.is_none(),
-            "modal should clear after create succeeds; got {:?}",
-            g.modal
-        );
         assert!(g.pending_create_gen.is_none());
         assert_eq!(g.workspaces.len(), 1);
+        // The reconciler must have removed the finished task's registry entry.
+        assert!(
+            g.in_flight.is_empty(),
+            "in_flight entry should be removed once create finishes"
+        );
         let _ = repo_id; // suppress unused warning if not referenced above
     }
 
     #[tokio::test]
-    async fn esc_in_setup_running_cancels_and_closes_modal() {
+    async fn create_registers_in_flight_and_keeps_running_past_esc() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -5747,6 +5750,7 @@ mod pm_state_tests {
                 yolo: false,
                 shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                notice: None,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -5755,11 +5759,18 @@ mod pm_state_tests {
             handle_event(&mut g, &app, CtEvent::Key(enter))
                 .await
                 .unwrap();
-            assert!(matches!(g.modal, Some(Modal::SetupRunning { .. })));
+            assert!(g.modal.is_none(), "create backgrounds without a modal");
         }
-        // Brief yield so the spawned task gets to start the setup script.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        // Press Esc.
+        // Wait for Phase 3 to register the in_flight entry now that the
+        // workspace id exists.
+        wait_until(&app, "in_flight entry to appear", |g| {
+            !g.in_flight.is_empty()
+        })
+        .await;
+        // Press Esc — there is no modal open, so this is a no-op; in
+        // particular it must NOT cancel the running create (Esc only
+        // cancels when it closes a SetupProgress viewer, which requires the
+        // modal to be open).
         {
             let mut g = app.lock().await;
             let esc = crossterm::event::KeyEvent::new(
@@ -5767,27 +5778,30 @@ mod pm_state_tests {
                 crossterm::event::KeyModifiers::empty(),
             );
             handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
-            assert!(g.modal.is_none(), "modal should close immediately on Esc");
-            assert!(g.pending_create_gen.is_none());
+            assert!(g.modal.is_none());
+            assert!(
+                g.pending_create_gen.is_some(),
+                "create must still be running"
+            );
         }
-        // Wait for the spawned task to wind down and record the cancellation.
-        wait_until(&app, "setup task to record Cancelled status", |g| {
+        // Wait for the spawned task to finish normally (not cancelled).
+        wait_until(&app, "create to finish successfully", |g| {
             g.workspaces.len() == 1
-                && g.workspaces[0].1.setup_status == crate::data::store::SetupStatus::Cancelled
+                && g.workspaces[0].1.setup_status == crate::data::store::SetupStatus::Ok
         })
         .await;
         let g = app.lock().await;
         assert_eq!(g.workspaces.len(), 1);
         assert_eq!(
             g.workspaces[0].1.setup_status,
-            crate::data::store::SetupStatus::Cancelled
+            crate::data::store::SetupStatus::Ok
         );
-        // Modal should still be None — the late reconcile must not pop an error.
         assert!(g.modal.is_none());
+        assert!(g.in_flight.is_empty());
     }
 
     #[tokio::test]
-    async fn y_in_confirm_archive_transitions_to_archive_running_and_spawns_task() {
+    async fn y_in_confirm_archive_backgrounds_immediately_and_spawns_task() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -5838,49 +5852,32 @@ mod pm_state_tests {
         {
             let mut g = app.lock().await;
             handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
-            // Immediately after 'y', modal should be ArchiveRunning.
-            match &g.modal {
-                Some(Modal::ArchiveRunning {
-                    step,
-                    script_present,
-                }) => {
-                    assert_eq!(
-                        *step,
-                        crate::ui::modal::ArchiveStep::Script,
-                        "initial step should be Script"
-                    );
-                    // The fixture repo at this test site has no
-                    // archive script configured, so script_present
-                    // must be false.
-                    assert!(
-                        !*script_present,
-                        "fixture has no archive script; script_present should be false"
-                    );
-                }
-                other => {
-                    panic!("modal should transition to ArchiveRunning immediately; got {other:?}")
-                }
-            }
+            // Archive is backgrounded immediately: no modal pops up, and the
+            // workspace is registered in in_flight as Archive so the row
+            // badges right away.
+            assert!(
+                g.modal.is_none(),
+                "archive should background without opening a modal; got {:?}",
+                g.modal
+            );
+            let f = g.in_flight.get(&ws_id).expect("archive entry registered");
+            assert_eq!(f.kind, crate::data::in_flight::InFlightKind::Archive);
             assert!(g.pending_archive_gen.is_some());
         }
-        // Wait for the spawned archive task to complete: the modal clears,
-        // the pending generation resets, and the workspace is removed.
+        // Wait for the spawned archive task to complete: the in_flight entry
+        // and pending generation clear, and the workspace is removed.
         wait_until(
             &app,
-            "archive to finish (modal cleared, workspace gone)",
+            "archive to finish (in_flight cleared, workspace gone)",
             |g| {
-                g.modal.is_none()
+                g.in_flight.is_empty()
                     && g.pending_archive_gen.is_none()
                     && g.workspaces.iter().all(|(_, w)| w.id != ws_id)
             },
         )
         .await;
         let g = app.lock().await;
-        assert!(
-            g.modal.is_none(),
-            "modal should clear after archive succeeds; got {:?}",
-            g.modal
-        );
+        assert!(g.in_flight.is_empty());
         assert!(g.pending_archive_gen.is_none());
         assert!(
             g.workspaces.iter().all(|(_, w)| w.id != ws_id),
@@ -5889,7 +5886,7 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
-    async fn esc_in_archive_running_is_noop() {
+    async fn y_in_confirm_archive_registers_in_flight_and_keeps_running_past_esc() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -5943,12 +5940,15 @@ mod pm_state_tests {
                 crossterm::event::KeyModifiers::empty(),
             );
             handle_event(&mut g, &app, CtEvent::Key(y)).await.unwrap();
-            assert!(matches!(g.modal, Some(Modal::ArchiveRunning { .. })));
+            assert!(g.modal.is_none(), "archive backgrounds without a modal");
+            assert!(g.in_flight.contains_key(&ws_id));
         }
         // Yield briefly so the archive script kicks off but is still
         // running (sleep 1 gives us a 1s window).
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        // Press Esc — should be a no-op.
+        // Press Esc — there is no modal open, so this is a no-op; in
+        // particular it must not disturb the running archive (archive is
+        // not cancellable, and there is nothing wired to Esc here anyway).
         {
             let mut g = app.lock().await;
             let esc = crossterm::event::KeyEvent::new(
@@ -5956,28 +5956,127 @@ mod pm_state_tests {
                 crossterm::event::KeyModifiers::empty(),
             );
             handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
+            assert!(g.modal.is_none());
             assert!(
-                matches!(g.modal, Some(Modal::ArchiveRunning { .. })),
-                "Esc must not close ArchiveRunning; got {:?}",
-                g.modal
+                g.in_flight.contains_key(&ws_id),
+                "archive must still be running"
             );
-            assert!(g.pending_archive_gen.is_some());
         }
         // Wait for the archive to actually finish.
         wait_until(
             &app,
-            "archive to finish (modal cleared, workspace gone)",
-            |g| g.modal.is_none() && g.workspaces.iter().all(|(_, w)| w.id != ws_id),
+            "archive to finish (in_flight cleared, workspace gone)",
+            |g| g.in_flight.is_empty() && g.workspaces.iter().all(|(_, w)| w.id != ws_id),
         )
         .await;
         let g = app.lock().await;
-        assert!(
-            g.modal.is_none(),
-            "modal should clear once archive finishes"
-        );
+        assert!(g.in_flight.is_empty());
         assert!(
             g.workspaces.iter().all(|(_, w)| w.id != ws_id),
             "workspace should be archived"
+        );
+    }
+
+    /// A workspace that already has a live `in_flight` entry — of either
+    /// kind — must refuse to open the archive-confirm modal on `d`. Without
+    /// this guard, a second `d`,`y` on a workspace already archiving would
+    /// replace its `in_flight` entry and spawn a second concurrent archive;
+    /// the first archive's completion would then remove the entry (and thus
+    /// the badge and `attach_is_blocked`'s guard) while the second archive
+    /// is still tearing down the worktree, letting a subsequent attach
+    /// respawn an agent into a directory being deleted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn d_is_inert_when_an_in_flight_entry_already_exists() {
+        use crate::data::in_flight::{InFlight, InFlightKind};
+        use crate::data::progress::SetupProgress;
+        use crate::data::store::NewWorkspace;
+
+        for kind in [InFlightKind::Create, InFlightKind::Archive] {
+            let store = Store::open_in_memory().unwrap();
+            let repo_id = store
+                .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+                .unwrap();
+            let ws_id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name: "busy",
+                    branch: "repo/busy",
+                    worktree_path: std::path::Path::new("/tmp/wsx-busy"),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+            app.selectable = vec![SelectionTarget::Workspace(ws_id)];
+            app.select_index(0);
+            let entry = match kind {
+                InFlightKind::Create => InFlight::create(
+                    SetupProgress::shared(),
+                    tokio_util::sync::CancellationToken::new(),
+                ),
+                InFlightKind::Archive => InFlight::archive(
+                    SetupProgress::shared(),
+                    tokio_util::sync::CancellationToken::new(),
+                ),
+            };
+            app.in_flight.insert(ws_id, entry);
+
+            handle_key_dashboard(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            )
+            .await
+            .unwrap();
+
+            assert!(
+                app.modal.is_none(),
+                "'d' must not open the archive-confirm modal for a workspace \
+                 with a {kind:?} entry already in flight; got {:?}",
+                app.modal
+            );
+        }
+    }
+
+    /// Sanity check for the guard above: with no `in_flight` entry for the
+    /// selected workspace, `d` still opens the archive-confirm modal as
+    /// normal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn d_opens_confirm_archive_when_no_entry_in_flight() {
+        use crate::data::store::NewWorkspace;
+        use crate::ui::modal::Modal;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "idle",
+                branch: "repo/idle",
+                worktree_path: std::path::Path::new("/tmp/wsx-idle"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.selectable = vec![SelectionTarget::Workspace(ws_id)];
+        app.select_index(0);
+        assert!(app.in_flight.is_empty());
+
+        handle_key_dashboard(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(app.modal, Some(Modal::ConfirmArchive { workspace_id, .. }) if workspace_id == ws_id),
+            "'d' with no in-flight work should still open ConfirmArchive; got {:?}",
+            app.modal
         );
     }
 
@@ -6123,6 +6222,7 @@ mod pm_state_tests {
                 yolo: false,
                 shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                notice: None,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -6177,6 +6277,7 @@ mod pm_state_tests {
                 yolo: false,
                 shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                notice: None,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -6240,7 +6341,14 @@ mod pm_state_tests {
         app.dashboard.folded.insert(repo_id.0 as u64, true);
         let my_gen = app.alloc_create_gen();
         let shared = Arc::new(Mutex::new(app));
-        crate::app::reconcile_create_result(shared.clone(), my_gen, Ok(created)).await;
+        crate::app::reconcile_create_result(
+            shared.clone(),
+            my_gen,
+            repo_id,
+            "feature".to_string(),
+            Ok(created),
+        )
+        .await;
 
         let mut g = shared.lock().await;
         let app: &mut App = &mut g;
@@ -6658,6 +6766,130 @@ mod pm_state_tests {
         );
         // Modal closed.
         assert!(app.modal.is_none(), "modal should be cleared on success");
+    }
+}
+
+/// F5 regression: a create failure that happens BEFORE a row exists —
+/// typically the `UNIQUE(repo_id, name)` violation when the user types a
+/// name that's already taken — used to be completely silent: no row, no
+/// badge, no feedback, the modal just closed. Part 1 validates the name up
+/// front in the modal (this module); part 2 is `reconcile_create_result`'s
+/// `Err(_)` backstop, tested directly against `app.rs` in
+/// `app::reconcile_create_tests` alongside the other reconcile tests.
+#[cfg(test)]
+mod new_workspace_notice_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, Store};
+    use crossterm::event::KeyEvent;
+    use std::path::PathBuf;
+
+    fn app_with_existing_workspace() -> (App, crate::data::store::RepoId) {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/r/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        (app, repo_id)
+    }
+
+    fn dummy_shared() -> std::sync::Arc<tokio::sync::Mutex<App>> {
+        std::sync::Arc::new(tokio::sync::Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enter_with_a_taken_name_shows_inline_notice_and_does_not_spawn() {
+        let (mut app, repo_id) = app_with_existing_workspace();
+        app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+            repo_id,
+            name_buffer: "alpha".to_string(),
+            yolo: false,
+            shared: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            notice: None,
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.modal {
+            Some(crate::ui::modal::Modal::NewWorkspace {
+                name_buffer,
+                notice,
+                ..
+            }) => {
+                assert_eq!(name_buffer, "alpha", "buffer must survive the refusal");
+                assert_eq!(
+                    notice.as_deref(),
+                    Some("a workspace named 'alpha' already exists")
+                );
+            }
+            other => panic!("expected NewWorkspace modal with a notice, got {other:?}"),
+        }
+        assert!(
+            app.in_flight.is_empty(),
+            "a duplicate name must never spawn a create task"
+        );
+        assert_eq!(
+            app.store.workspaces(repo_id).unwrap().len(),
+            1,
+            "no second row should be inserted"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn typing_after_a_duplicate_notice_clears_it() {
+        let (mut app, repo_id) = app_with_existing_workspace();
+        // Simulate: user already hit a duplicate once (notice set), then
+        // starts editing the buffer — mirrors `RenameWorkspace`'s Backspace/
+        // Char arms, which clear `notice` on any edit.
+        app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+            repo_id,
+            name_buffer: "alpha".to_string(),
+            yolo: false,
+            shared: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            notice: Some("a workspace named 'alpha' already exists".to_string()),
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.modal {
+            Some(crate::ui::modal::Modal::NewWorkspace {
+                name_buffer,
+                notice,
+                ..
+            }) => {
+                assert_eq!(name_buffer, "alpha2");
+                assert!(notice.is_none(), "editing must clear the stale notice");
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
     }
 }
 
@@ -8369,5 +8601,182 @@ mod ctrl_z_suppression_tests {
         // Sanity: a neighboring control key like Ctrl-C is untouched (0x03).
         let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(encode_key(ev), vec![0x03]);
+    }
+}
+
+/// F6 regression: firing an in-flight create's cancellation token and
+/// setting `app.quit = true` in the same breath is not enough — the
+/// detached task never gets scheduled again before shutdown to observe the
+/// token and persist `SetupStatus::Cancelled` itself, and a create still in
+/// its fetch phase hasn't even written `SetupStatus::Running` yet, so the
+/// startup sweep (which only repairs `Running` rows) would not repair it
+/// either. `y` on `Modal::ConfirmQuit` must persist a terminal status
+/// synchronously, in the handler itself, before quitting.
+#[cfg(test)]
+mod confirm_quit_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, SetupStatus, Store, WorkspaceState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn shared() -> SharedApp {
+        Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn y_persists_cancelled_for_every_in_flight_create_before_quitting() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        // One create still mid-fetch (setup_status is still the default —
+        // `Running` was never written yet, the exact case the startup sweep
+        // cannot repair), and one create already past that point.
+        let fetching = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "fetching",
+                branch: "repo/fetching",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/fetching"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let running = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "running",
+                branch: "repo/running",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/running"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(running, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_setup_status(running, SetupStatus::Running)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let fetching_token = tokio_util::sync::CancellationToken::new();
+        app.in_flight.insert(
+            fetching,
+            crate::data::in_flight::InFlight::create(
+                crate::data::progress::SetupProgress::shared(),
+                fetching_token.clone(),
+            ),
+        );
+        let running_token = tokio_util::sync::CancellationToken::new();
+        app.in_flight.insert(
+            running,
+            crate::data::in_flight::InFlight::create(
+                crate::data::progress::SetupProgress::shared(),
+                running_token.clone(),
+            ),
+        );
+        app.modal = Some(Modal::ConfirmQuit {
+            creates: 2,
+            archives: 0,
+        });
+        let shared_app = shared();
+
+        handle_key_modal(
+            &mut app,
+            &shared_app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(app.quit, "quit must be set");
+        assert!(fetching_token.is_cancelled());
+        assert!(running_token.is_cancelled());
+        assert_eq!(
+            app.store
+                .workspace_by_id(fetching)
+                .unwrap()
+                .unwrap()
+                .setup_status,
+            SetupStatus::Cancelled,
+            "a create still in its fetch phase (never wrote Running) must \
+             still land on Cancelled, not be left for a startup sweep that \
+             only repairs Running rows"
+        );
+        assert_eq!(
+            app.store
+                .workspace_by_id(running)
+                .unwrap()
+                .unwrap()
+                .setup_status,
+            SetupStatus::Cancelled,
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn y_does_not_touch_archive_rows() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let archiving = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "archiving",
+                branch: "repo/archiving",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/archiving"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(archiving, WorkspaceState::Ready)
+            .unwrap();
+        store.set_setup_status(archiving, SetupStatus::Ok).unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.in_flight.insert(
+            archiving,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        app.modal = Some(Modal::ConfirmQuit {
+            creates: 0,
+            archives: 1,
+        });
+        let shared_app = shared();
+
+        handle_key_modal(
+            &mut app,
+            &shared_app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(app.quit);
+        // Archive has no cancellation and is simply abandoned — its row's
+        // setup_status (a `create` concept) must be untouched.
+        assert_eq!(
+            app.store
+                .workspace_by_id(archiving)
+                .unwrap()
+                .unwrap()
+                .setup_status,
+            SetupStatus::Ok,
+            "quitting must not rewrite an archiving row's setup_status"
+        );
     }
 }

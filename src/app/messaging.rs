@@ -47,24 +47,110 @@ fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Option<S
     Some(format!("{}/{}", repo.name, w.name))
 }
 
+/// How many times a message may fail to be injected before wsx stops retrying
+/// it. Each attempt already waits `DELIVERY_TIMEOUT_MS` for the agent to become
+/// ready, so exhausting the ceiling means the target has been unable to accept
+/// input for many minutes.
+pub(crate) const MAX_DELIVERY_ATTEMPTS: u32 = 5;
+
+/// How long one injection waits for the target agent to be ready before giving
+/// up and reporting failure.
+///
+/// Generously long on purpose. The wait is cheap (a detached task polling every
+/// 50ms) and the common reasons for not being ready — a cold agent still
+/// booting, or a live agent midway through a turn — resolve on their own. The
+/// old 5s budget turned both into dropped messages.
+const DELIVERY_TIMEOUT_MS: u64 = 120_000;
+
+/// Quiet window the target's PTY must show before injecting, on top of
+/// `ready_for_input`. Keeps a message from landing in the middle of a burst of
+/// the agent's own output.
+const DELIVERY_QUIET_MS: u64 = 400;
+
+/// What one detached injection task reports back to the App loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeliveryOutcome {
+    pub id: i64,
+    /// Whether the text actually reached the PTY. `false` means the target
+    /// never became ready — the message must stay queued.
+    pub written: bool,
+}
+
+/// The queued messages worth dispatching right now: those with no injection
+/// already in flight, and not past the attempt ceiling.
+///
+/// Exhausted messages are filtered out rather than marked delivered, so the row
+/// survives for inspection instead of disappearing the way a dropped message
+/// used to.
+pub(crate) fn deliverable(
+    pending: Vec<AgentMessage>,
+    in_flight: &std::collections::HashSet<i64>,
+    attempts: &std::collections::HashMap<i64, u32>,
+) -> Vec<AgentMessage> {
+    pending
+        .into_iter()
+        .filter(|m| !in_flight.contains(&m.id))
+        .filter(|m| attempts.get(&m.id).copied().unwrap_or(0) < MAX_DELIVERY_ATTEMPTS)
+        .collect()
+}
+
 impl crate::app::App {
+    /// Apply the outcomes reported by finished injection tasks: mark the
+    /// messages that actually landed as delivered, and count an attempt against
+    /// the ones that didn't so they can be retried.
+    ///
+    /// Returns whether anything was applied, which is the run loop's signal to
+    /// run `drain_agent_messages` again — a failed injection has to be
+    /// redispatched by someone, and the external-change poll won't fire for it.
+    pub(crate) fn apply_delivery_outcomes(&mut self) -> bool {
+        let outcomes: Vec<DeliveryOutcome> = {
+            let mut guard = self.delivery_outcomes.lock().unwrap();
+            if guard.is_empty() {
+                return false;
+            }
+            std::mem::take(&mut *guard)
+        };
+        for outcome in &outcomes {
+            self.delivering.remove(&outcome.id);
+            if outcome.written {
+                let _ = self.store.mark_delivered(outcome.id);
+                self.delivery_attempts.remove(&outcome.id);
+                continue;
+            }
+            let attempts = self.delivery_attempts.entry(outcome.id).or_insert(0);
+            *attempts += 1;
+            if *attempts >= MAX_DELIVERY_ATTEMPTS {
+                tracing::warn!(
+                    id = outcome.id,
+                    attempts = *attempts,
+                    "deliver: giving up injecting agent message; it stays queued"
+                );
+            }
+        }
+        true
+    }
+
     /// Deliver all undelivered inbox messages into their target sessions
     /// (spawning on demand). Best-effort; called from the tick when an
-    /// external DB commit is detected. Never blocks: the actual injection is
-    /// a detached task because `send_text_when_settled` may wait seconds.
+    /// external DB commit is detected or an injection reported back. Never
+    /// blocks: the actual injection is a detached task because
+    /// `send_text_when_settled` may wait minutes for the agent to be ready.
     ///
     /// Messages are grouped by target so that two messages to the same agent
     /// are delivered sequentially (in id/FIFO order) in a single detached
     /// task, preventing interleaving in the PTY.
     ///
+    /// Nothing is marked delivered here. The injection task reports back
+    /// through `delivery_outcomes` and `apply_delivery_outcomes` records the
+    /// result — a message is only delivered once it has actually been written
+    /// to the target's PTY.
+    ///
     /// Outcome semantics per target:
-    /// - `Ok(Ok)` + session found  → spawn one task, mark all delivered
-    ///   optimistically on spawn (best-effort; a crash before the task drains
-    ///   can lose an injection — acceptable for a long-lived TUI).
+    /// - `Ok(Ok)` + session found  → spawn one task, mark the ids in flight.
     /// - `Ok(AgentMissing)`        → binary not installed; drop (mark
     ///   delivered) so we never retry against a never-installable agent.
-    /// - `Err(_)` (transient)      → leave pending; next external-change tick
-    ///   retries. Do NOT mark delivered.
+    /// - `Err(_)` (transient)      → leave pending; a later tick retries.
+    ///   Do NOT mark delivered.
     /// - `Ok(Ok)` but no session   → leave pending to retry rather than
     ///   silently dropping (shouldn't happen right after a successful ensure).
     pub(crate) fn drain_agent_messages(&mut self) {
@@ -72,6 +158,7 @@ impl crate::app::App {
             Ok(p) => p,
             Err(_) => return, // transient; retry next external-change tick
         };
+        let pending = deliverable(pending, &self.delivering, &self.delivery_attempts);
         if pending.is_empty() {
             return;
         }
@@ -123,30 +210,39 @@ impl crate::app::App {
             // Build one banner per message (FIFO), then deliver them
             // SEQUENTIALLY in a single detached task so two messages to the
             // same target can't interleave in the PTY. Order is preserved
-            // (id order). Messages are marked delivered OPTIMISTICALLY here
-            // (on spawn, not on completion) — best-effort: if wsx exits
-            // before the task drains, an injection can be lost. Acceptable
-            // for a long-lived TUI delivering agent prompts.
-            let banners: Vec<String> = msgs
+            // (id order).
+            let items: Vec<(i64, String)> = msgs
                 .iter()
                 .map(|m| {
                     let from = sender_label(&self.store, m);
-                    delivery_banner(from.as_deref(), &m.body)
+                    (m.id, delivery_banner(from.as_deref(), &m.body))
                 })
                 .collect();
+            for m in &msgs {
+                self.delivering.insert(m.id);
+            }
             let sess = session.clone();
+            let outcomes = self.delivery_outcomes.clone();
             tokio::spawn(async move {
-                for b in banners {
-                    // The `false` (timed out, nothing written) case still can't
-                    // be acted on here: the messages were already marked
-                    // delivered below. Wiring the outcome back so a failed
-                    // injection retries is the next commit.
-                    let _ = sess.send_text_when_settled(&b, 400, 5_000).await;
+                let mut failed = false;
+                for (id, banner) in items {
+                    // Once one injection fails, abandon the rest of this
+                    // target's batch rather than writing them out of order:
+                    // report them as unwritten so they are redispatched
+                    // together, still in id order, on a later tick.
+                    let written = if failed {
+                        false
+                    } else {
+                        sess.send_text_when_settled(&banner, DELIVERY_QUIET_MS, DELIVERY_TIMEOUT_MS)
+                            .await
+                    };
+                    failed |= !written;
+                    outcomes
+                        .lock()
+                        .unwrap()
+                        .push(DeliveryOutcome { id, written });
                 }
             });
-            for m in &msgs {
-                let _ = self.store.mark_delivered(m.id);
-            }
         }
     }
 }
@@ -157,6 +253,124 @@ mod tests {
 
     use crate::data::store::{NewWorkspace, Store};
     use crate::pty::session::AgentKind;
+
+    /// A store with one workspace, one primary agent, and `n` queued messages
+    /// to it. Returns the App plus the queued message ids in FIFO order.
+    fn app_with_queued_messages(n: usize) -> (crate::app::App, Vec<i64>) {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "wsx/w",
+                worktree_path: std::path::Path::new("/tmp/r/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let target = store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
+        for i in 0..n {
+            store
+                .enqueue_message(ws, target.id, None, &format!("msg {i}"))
+                .unwrap();
+        }
+        let ids = store
+            .undelivered_messages()
+            .unwrap()
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        let app = crate::app::App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        (app, ids)
+    }
+
+    #[test]
+    fn a_failed_injection_stays_queued_and_counts_an_attempt() {
+        // The bug: the old code marked messages delivered when it SPAWNED the
+        // injection task, so a `send_text_when_settled` that timed out without
+        // writing lost the message permanently. A failed write must leave the
+        // row undelivered so the next tick retries it.
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.delivering.insert(ids[0]);
+        app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
+            id: ids[0],
+            written: false,
+        });
+
+        assert!(app.apply_delivery_outcomes(), "an outcome was applied");
+        assert_eq!(
+            app.store.undelivered_messages().unwrap().len(),
+            1,
+            "a message that was never written must stay queued"
+        );
+        assert_eq!(app.delivery_attempts.get(&ids[0]), Some(&1));
+        assert!(
+            !app.delivering.contains(&ids[0]),
+            "no longer in flight, so the next drain can retry it"
+        );
+    }
+
+    #[test]
+    fn a_successful_injection_marks_the_message_delivered() {
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.delivering.insert(ids[0]);
+        app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
+            id: ids[0],
+            written: true,
+        });
+
+        assert!(app.apply_delivery_outcomes());
+        assert!(app.store.undelivered_messages().unwrap().is_empty());
+        assert!(app.delivering.is_empty());
+    }
+
+    #[test]
+    fn apply_delivery_outcomes_is_a_no_op_when_nothing_reported() {
+        let (mut app, _ids) = app_with_queued_messages(1);
+        assert!(
+            !app.apply_delivery_outcomes(),
+            "no outcomes reported means no redelivery work to do"
+        );
+    }
+
+    #[test]
+    fn deliverable_skips_messages_already_in_flight() {
+        // `drain_agent_messages` runs on every tick while a delivery is
+        // waiting for the agent to settle. Without this filter each tick would
+        // spawn another injection task for the same row and the agent would
+        // receive the message several times.
+        let (app, ids) = app_with_queued_messages(2);
+        let pending = app.store.undelivered_messages().unwrap();
+        let in_flight = std::collections::HashSet::from([ids[0]]);
+
+        let out = deliverable(pending, &in_flight, &std::collections::HashMap::new());
+
+        assert_eq!(
+            out.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![ids[1]],
+            "the in-flight message must not be dispatched twice"
+        );
+    }
+
+    #[test]
+    fn deliverable_gives_up_after_the_attempt_ceiling() {
+        let (app, ids) = app_with_queued_messages(2);
+        let pending = app.store.undelivered_messages().unwrap();
+        let attempts =
+            std::collections::HashMap::from([(ids[0], MAX_DELIVERY_ATTEMPTS), (ids[1], 1)]);
+
+        let out = deliverable(pending, &std::collections::HashSet::new(), &attempts);
+
+        assert_eq!(
+            out.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![ids[1]],
+            "an exhausted message stops being retried, but is not dropped"
+        );
+    }
 
     #[test]
     fn banner_tags_sender() {

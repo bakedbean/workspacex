@@ -616,6 +616,22 @@ pub struct App {
     pub shared_detached: std::collections::HashSet<crate::data::store::WorkspaceId>,
     /// Epoch-ms of the last `refresh_shared_detached` sweep (throttle key).
     pub shared_detached_polled_ms: u64,
+    /// Inbox message ids with an injection task currently in flight. An
+    /// injection waits for the target agent to be ready, which can take many
+    /// seconds; without this the retry drain would dispatch the same row again
+    /// on every tick and the agent would receive it several times.
+    pub(crate) delivering: std::collections::HashSet<i64>,
+    /// Outcomes reported back by those detached injection tasks. Written from
+    /// the tasks (hence the `Arc<Mutex<_>>`; `Store` holds a bare
+    /// `rusqlite::Connection` and can't cross the spawn), applied on the next
+    /// tick by `apply_delivery_outcomes` — the only place that touches the DB.
+    pub(crate) delivery_outcomes:
+        std::sync::Arc<std::sync::Mutex<Vec<crate::app::messaging::DeliveryOutcome>>>,
+    /// Failed injection attempts per inbox message id. Cleared on success;
+    /// at `MAX_DELIVERY_ATTEMPTS` the message stops being retried. In memory
+    /// rather than on the row, so a wsx restart — which also restarts the
+    /// agents — gets a fresh set of attempts.
+    pub(crate) delivery_attempts: std::collections::HashMap<i64, u32>,
 }
 
 impl App {
@@ -665,6 +681,9 @@ impl App {
             activity_history: std::collections::VecDeque::new(),
             last_proc_scan_ms: 0,
             pending_workspace_refresh: std::collections::HashSet::new(),
+            delivering: std::collections::HashSet::new(),
+            delivery_outcomes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delivery_attempts: std::collections::HashMap::new(),
             pending_edit: None,
             theme,
             pm_visible: false,
@@ -1689,7 +1708,13 @@ pub async fn run<B: Backend + std::io::Write>(
                 // is in-process and only triggers refresh on external commits.
                 // Only scan the inbox when a sibling commit was detected
                 // (e.g. a `wsx agent send`), avoiding a per-frame DB query.
-                if g.poll_external_changes() {
+                // `apply_delivery_outcomes` must run unconditionally: an
+                // injection that finished (landed, or gave up waiting for the
+                // agent to be ready) reports back through shared state, not
+                // through the DB, so `poll_external_changes` never sees it. It
+                // is a lock + is_empty when nothing is in flight.
+                let redeliver = g.apply_delivery_outcomes();
+                if g.poll_external_changes() || redeliver {
                     g.drain_agent_messages();
                 }
                 let now_secs = crate::time::now_secs();

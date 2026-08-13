@@ -432,15 +432,15 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     Ok(archive_result)
 }
 
-/// Advance the `step` field of the `ArchiveRunning` modal, if the
-/// modal still belongs to this archive flow. Called between phases of
-/// `archive_with_app`. The check guards against a stale archive task
-/// updating a modal that was replaced (e.g. by `Modal::Error` or by a
-/// second archive flow).
-async fn advance_archive_step(app: &crate::app::SharedApp, next: crate::ui::modal::ArchiveStep) {
-    let mut g = app.lock().await;
-    if let Some(crate::ui::modal::Modal::ArchiveRunning { step, .. }) = &mut g.modal {
-        *step = next;
+/// Record archive progress for the row badge and the progress viewer.
+/// Replaces the old modal-step mutation: with the archive backgrounded,
+/// there is no modal to advance.
+async fn note_archive_step(app: &crate::app::SharedApp, ws_id: WorkspaceId, label: &str) {
+    let g = app.lock().await;
+    if let Some(f) = g.in_flight.get(&ws_id)
+        && let Ok(mut p) = f.progress.lock()
+    {
+        p.push_line(label);
     }
 }
 
@@ -473,7 +473,7 @@ pub async fn archive_with_app(
     )
     .await?;
 
-    advance_archive_step(&app, crate::ui::modal::ArchiveStep::RemoveWorktree).await;
+    note_archive_step(&app, ws.id, "removing worktree").await;
 
     // --- Phase 2 (unlocked, async): remove the worktree from disk. ---
     if !opts.keep_worktree && ws.worktree_path.exists() {
@@ -482,13 +482,13 @@ pub async fn archive_with_app(
         git::remove_worktree(&repo.path, &ws.worktree_path).await?;
     }
 
-    advance_archive_step(&app, crate::ui::modal::ArchiveStep::DeleteBranch).await;
+    note_archive_step(&app, ws.id, "deleting branch").await;
 
     // --- Phase 3 (unlocked, async): delete the branch. Failures here
     //     are non-fatal and intentionally swallowed, matching `archive`. ---
     let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
 
-    advance_archive_step(&app, crate::ui::modal::ArchiveStep::Cleanup).await;
+    note_archive_step(&app, ws.id, "cleaning up").await;
 
     // --- Phase 4 (short, locked): delete the store row + clean up MCP. ---
     {
@@ -1173,17 +1173,16 @@ mod tests {
         );
     }
 
-    /// Regression test for the `advance_archive_step` wiring inside
-    /// `archive_with_app`. The three calls between phases are easy to
-    /// drop accidentally in a refactor; this test catches that. We
-    /// seed the modal as `ArchiveRunning { Script }`, drive the full
-    /// archive, and assert the modal ends on `Cleanup` (the last step
-    /// advanced to, just before phase 4 begins). This test calls
-    /// `archive_with_app` directly, so `reconcile_archive_result`
-    /// never runs and the modal is left in its final advanced state.
+    /// Regression test for the `note_archive_step` wiring inside
+    /// `archive_with_app`. The three calls between phases are easy to drop
+    /// accidentally in a refactor; this test catches that. We seed an
+    /// `in_flight` archive entry keyed by the workspace id (mirroring what
+    /// the `y` handler does before spawning), drive the full archive, and
+    /// assert its progress sink recorded all three phase labels in order.
+    /// This test calls `archive_with_app` directly, so `reconcile_archive_result`
+    /// never runs and the in_flight entry is left in place for inspection.
     #[tokio::test]
-    async fn archive_with_app_advances_modal_step_through_phases() {
-        use crate::ui::modal::{ArchiveStep, Modal};
+    async fn archive_with_app_notes_progress_through_phases() {
         use std::sync::Arc;
         use tokio::sync::Mutex;
         let store = Store::open_in_memory().unwrap();
@@ -1211,14 +1210,18 @@ mod tests {
         )
         .await
         .unwrap();
+        let progress = crate::data::progress::SetupProgress::shared();
         let app = crate::app::App::new(store, base.path().to_path_buf()).unwrap();
         let shared = Arc::new(Mutex::new(app));
         {
             let mut g = shared.lock().await;
-            g.modal = Some(Modal::ArchiveRunning {
-                step: ArchiveStep::Script,
-                script_present: false,
-            });
+            g.in_flight.insert(
+                created.workspace.id,
+                crate::data::in_flight::InFlight::archive(
+                    progress.clone(),
+                    tokio_util::sync::CancellationToken::new(),
+                ),
+            );
         }
         let result = archive_with_app(
             shared.clone(),
@@ -1231,17 +1234,19 @@ mod tests {
         )
         .await;
         assert!(result.is_ok(), "archive_with_app failed: {result:?}");
-        let g = shared.lock().await;
-        match &g.modal {
-            Some(Modal::ArchiveRunning { step, .. }) => {
-                assert_eq!(
-                    *step,
-                    ArchiveStep::Cleanup,
-                    "modal step should have advanced to Cleanup (the last step set before phase 4)"
-                );
-            }
-            other => panic!("expected ArchiveRunning, got {other:?}"),
-        }
+        let recent = progress.lock().unwrap().recent(10);
+        assert!(
+            recent.iter().any(|l| l.contains("removing worktree")),
+            "{recent:?}"
+        );
+        assert!(
+            recent.iter().any(|l| l.contains("deleting branch")),
+            "{recent:?}"
+        );
+        assert!(
+            recent.iter().any(|l| l.contains("cleaning up")),
+            "{recent:?}"
+        );
     }
 
     #[tokio::test]
@@ -1543,8 +1548,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn advance_archive_step_updates_step_when_modal_is_archive_running() {
-        use crate::ui::modal::{ArchiveStep, Modal};
+    async fn note_archive_step_pushes_a_line_when_entry_present() {
         use std::sync::Arc;
         use tokio::sync::Mutex;
         let store = Store::open_in_memory().unwrap();
@@ -1552,34 +1556,28 @@ mod tests {
         let app = Arc::new(Mutex::new(
             crate::app::App::new(store, tmp.path().to_path_buf()).unwrap(),
         ));
+        let ws_id = crate::data::store::WorkspaceId(1);
+        let progress = crate::data::progress::SetupProgress::shared();
         {
             let mut g = app.lock().await;
-            g.modal = Some(Modal::ArchiveRunning {
-                step: ArchiveStep::Script,
-                script_present: true,
-            });
+            g.in_flight.insert(
+                ws_id,
+                crate::data::in_flight::InFlight::archive(
+                    progress.clone(),
+                    tokio_util::sync::CancellationToken::new(),
+                ),
+            );
         }
-        super::advance_archive_step(&app, ArchiveStep::RemoveWorktree).await;
-        let g = app.lock().await;
-        match &g.modal {
-            Some(Modal::ArchiveRunning {
-                step,
-                script_present,
-            }) => {
-                assert_eq!(
-                    *step,
-                    ArchiveStep::RemoveWorktree,
-                    "step should be advanced"
-                );
-                assert!(*script_present, "script_present should not change");
-            }
-            other => panic!("expected ArchiveRunning, got {other:?}"),
-        }
+        super::note_archive_step(&app, ws_id, "removing worktree").await;
+        let recent = progress.lock().unwrap().recent(10);
+        assert!(
+            recent.iter().any(|l| l.contains("removing worktree")),
+            "{recent:?}"
+        );
     }
 
     #[tokio::test]
-    async fn advance_archive_step_is_noop_when_modal_is_different_variant() {
-        use crate::ui::modal::{ArchiveStep, Modal};
+    async fn note_archive_step_is_noop_when_no_in_flight_entry() {
         use std::sync::Arc;
         use tokio::sync::Mutex;
         let store = Store::open_in_memory().unwrap();
@@ -1587,36 +1585,15 @@ mod tests {
         let app = Arc::new(Mutex::new(
             crate::app::App::new(store, tmp.path().to_path_buf()).unwrap(),
         ));
-        {
-            let mut g = app.lock().await;
-            g.modal = Some(Modal::Error {
-                message: "boom".to_string(),
-            });
-        }
-        super::advance_archive_step(&app, ArchiveStep::RemoveWorktree).await;
+        // No in_flight entry seeded — must not panic and must be a no-op.
+        super::note_archive_step(
+            &app,
+            crate::data::store::WorkspaceId(1),
+            "removing worktree",
+        )
+        .await;
         let g = app.lock().await;
-        match &g.modal {
-            Some(Modal::Error { message }) => {
-                assert_eq!(message, "boom", "Error modal should be untouched");
-            }
-            other => panic!("expected Error, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn advance_archive_step_is_noop_when_modal_is_none() {
-        use crate::ui::modal::ArchiveStep;
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-        let store = Store::open_in_memory().unwrap();
-        let tmp = TempDir::new().unwrap();
-        let app = Arc::new(Mutex::new(
-            crate::app::App::new(store, tmp.path().to_path_buf()).unwrap(),
-        ));
-        // modal starts as None.
-        super::advance_archive_step(&app, ArchiveStep::RemoveWorktree).await;
-        let g = app.lock().await;
-        assert!(g.modal.is_none(), "modal should remain None");
+        assert!(g.in_flight.is_empty());
     }
 
     #[tokio::test]

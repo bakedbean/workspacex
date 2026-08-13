@@ -571,7 +571,21 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
         return Ok(());
     }
     match (k.code, k.modifiers) {
-        (KeyCode::Char('q'), _) => app.quit = true,
+        (KeyCode::Char('q'), _) => {
+            if app.in_flight.is_empty() {
+                app.quit = true;
+            } else {
+                let creates = app
+                    .in_flight
+                    .values()
+                    .filter(|f| f.kind == crate::data::in_flight::InFlightKind::Create)
+                    .count();
+                app.modal = Some(Modal::ConfirmQuit {
+                    creates,
+                    archives: app.in_flight.len() - creates,
+                });
+            }
+        }
         (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
             let max = app.selectable.len().saturating_sub(1);
             let idx = if app.dashboard.selected == 0 {
@@ -1349,16 +1363,17 @@ async fn handle_key_modal(
                     }
                 };
                 let archive_gen = app.alloc_archive_gen();
-                let script_present = repo
-                    .archive_script
-                    .as_deref()
-                    .map(|s| !s.trim().is_empty())
-                    .unwrap_or(false);
-                app.modal = Some(Modal::ArchiveRunning {
-                    step: crate::ui::modal::ArchiveStep::Script,
-                    script_present,
-                });
+                let progress = crate::data::progress::SetupProgress::shared();
+                app.in_flight.insert(
+                    ws.id,
+                    crate::data::in_flight::InFlight::archive(
+                        progress.clone(),
+                        tokio_util::sync::CancellationToken::new(),
+                    ),
+                );
+                app.modal = None;
                 let shared_clone = shared.clone();
+                let ws_id = ws.id;
                 tokio::spawn(async move {
                     let result = crate::data::workspace::archive_with_app(
                         shared_clone.clone(),
@@ -1370,12 +1385,30 @@ async fn handle_key_modal(
                         },
                     )
                     .await;
-                    crate::app::reconcile_archive_result(shared_clone, archive_gen, result).await;
+                    crate::app::reconcile_archive_result(shared_clone, archive_gen, ws_id, result)
+                        .await;
                 });
             }
             KeyCode::Char('n') | KeyCode::Esc => {
                 app.modal = None;
             }
+            _ => {}
+        },
+        Modal::ConfirmQuit { .. } => match k.code {
+            KeyCode::Char('y') => {
+                // Cancel creates on the way out so their rows land on Cancelled
+                // rather than waiting for the next startup sweep to resolve them.
+                // Archive has no cancellation and is simply abandoned; it is
+                // self-healing, since remove_worktree falls back to remove_dir_all
+                // once git no longer recognises the path.
+                for f in app.in_flight.values() {
+                    if f.kind == crate::data::in_flight::InFlightKind::Create {
+                        f.cancel.cancel();
+                    }
+                }
+                app.quit = true;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => app.modal = None,
             _ => {}
         },
         Modal::ConfirmShare { workspace_id, .. } => match k.code {
@@ -1404,10 +1437,6 @@ async fn handle_key_modal(
             if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
                 app.modal = None;
             }
-        }
-        Modal::ArchiveRunning { .. } => {
-            // Archive is non-cancellable. Swallow all keys until the
-            // spawned task completes and reconciles the modal.
         }
         Modal::Error { .. } => {
             if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {

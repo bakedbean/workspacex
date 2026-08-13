@@ -10,15 +10,12 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::{HashMap, HashSet};
 
 mod agents_panel;
-mod archive;
 mod process_list;
 mod remote_workspace_list;
 mod repo_settings;
 mod updates_panel;
 mod usage_picker;
 
-// `render()` below dispatches the ArchiveRunning variant to this.
-use archive::render_archive_steps;
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
 pub use process_list::render_process_list;
@@ -26,20 +23,6 @@ pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
 pub use updates_panel::{UpdatesSort, ordered_workspaces_for_panel, render_updates_panel};
 pub use usage_picker::render_usage_window_picker;
-
-/// Which phase of `workspace::archive_with_app` is currently running.
-/// Used by `Modal::ArchiveRunning` to drive the per-step progress UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArchiveStep {
-    /// Phase 1: running the repo's archive script (if any).
-    Script,
-    /// Phase 2: `git worktree remove` — usually the slow one.
-    RemoveWorktree,
-    /// Phase 3: `git branch -D`.
-    DeleteBranch,
-    /// Phase 4: sqlite row + MCP entry cleanup.
-    Cleanup,
-}
 
 #[derive(Debug, Clone)]
 pub enum Modal {
@@ -72,12 +55,13 @@ pub enum Modal {
     SetupProgress {
         workspace_id: crate::data::store::WorkspaceId,
     },
-    ArchiveRunning {
-        step: ArchiveStep,
-        /// Whether the repo has an archive script configured. Drives
-        /// whether the Script row renders as in-progress/done or
-        /// "(skipped)".
-        script_present: bool,
+    /// Shown when `q` is pressed while `App::in_flight` is non-empty.
+    /// `y` cancels any in-flight creates and quits; archive is abandoned
+    /// mid-flight, which is safe because it is self-healing (see the
+    /// key handler for detail).
+    ConfirmQuit {
+        creates: usize,
+        archives: usize,
     },
     Error {
         message: String,
@@ -330,12 +314,24 @@ pub fn render(
                 ("workspace setup", body)
             }
         },
-        Modal::ArchiveRunning {
-            step,
-            script_present,
-        } => {
-            let body = render_archive_steps(*step, *script_present, tick);
-            ("archive workspace", body)
+        Modal::ConfirmQuit { creates, archives } => {
+            let mut what = Vec::new();
+            if *creates > 0 {
+                what.push(format!("{creates} setup(s)"));
+            }
+            if *archives > 0 {
+                what.push(format!("{archives} archive(s)"));
+            }
+            (
+                "work in progress",
+                format!(
+                    "{} still running.\n\n\
+                     Quitting stops them: setups are cancelled, and an archive is\n\
+                     left part-done (archiving again finishes it).\n\n\
+                     [y] quit anyway   [n]/[esc] stay",
+                    what.join(" and ")
+                ),
+            )
         }
         Modal::Error { message } => ("error", message.clone()),
         // UpdatesPanel is handled by the early-return above; this arm is

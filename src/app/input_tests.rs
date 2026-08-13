@@ -5798,7 +5798,7 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
-    async fn y_in_confirm_archive_transitions_to_archive_running_and_spawns_task() {
+    async fn y_in_confirm_archive_backgrounds_immediately_and_spawns_task() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -5849,49 +5849,32 @@ mod pm_state_tests {
         {
             let mut g = app.lock().await;
             handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
-            // Immediately after 'y', modal should be ArchiveRunning.
-            match &g.modal {
-                Some(Modal::ArchiveRunning {
-                    step,
-                    script_present,
-                }) => {
-                    assert_eq!(
-                        *step,
-                        crate::ui::modal::ArchiveStep::Script,
-                        "initial step should be Script"
-                    );
-                    // The fixture repo at this test site has no
-                    // archive script configured, so script_present
-                    // must be false.
-                    assert!(
-                        !*script_present,
-                        "fixture has no archive script; script_present should be false"
-                    );
-                }
-                other => {
-                    panic!("modal should transition to ArchiveRunning immediately; got {other:?}")
-                }
-            }
+            // Archive is backgrounded immediately: no modal pops up, and the
+            // workspace is registered in in_flight as Archive so the row
+            // badges right away.
+            assert!(
+                g.modal.is_none(),
+                "archive should background without opening a modal; got {:?}",
+                g.modal
+            );
+            let f = g.in_flight.get(&ws_id).expect("archive entry registered");
+            assert_eq!(f.kind, crate::data::in_flight::InFlightKind::Archive);
             assert!(g.pending_archive_gen.is_some());
         }
-        // Wait for the spawned archive task to complete: the modal clears,
-        // the pending generation resets, and the workspace is removed.
+        // Wait for the spawned archive task to complete: the in_flight entry
+        // and pending generation clear, and the workspace is removed.
         wait_until(
             &app,
-            "archive to finish (modal cleared, workspace gone)",
+            "archive to finish (in_flight cleared, workspace gone)",
             |g| {
-                g.modal.is_none()
+                g.in_flight.is_empty()
                     && g.pending_archive_gen.is_none()
                     && g.workspaces.iter().all(|(_, w)| w.id != ws_id)
             },
         )
         .await;
         let g = app.lock().await;
-        assert!(
-            g.modal.is_none(),
-            "modal should clear after archive succeeds; got {:?}",
-            g.modal
-        );
+        assert!(g.in_flight.is_empty());
         assert!(g.pending_archive_gen.is_none());
         assert!(
             g.workspaces.iter().all(|(_, w)| w.id != ws_id),
@@ -5900,7 +5883,7 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
-    async fn esc_in_archive_running_is_noop() {
+    async fn y_in_confirm_archive_registers_in_flight_and_keeps_running_past_esc() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -5954,12 +5937,15 @@ mod pm_state_tests {
                 crossterm::event::KeyModifiers::empty(),
             );
             handle_event(&mut g, &app, CtEvent::Key(y)).await.unwrap();
-            assert!(matches!(g.modal, Some(Modal::ArchiveRunning { .. })));
+            assert!(g.modal.is_none(), "archive backgrounds without a modal");
+            assert!(g.in_flight.contains_key(&ws_id));
         }
         // Yield briefly so the archive script kicks off but is still
         // running (sleep 1 gives us a 1s window).
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        // Press Esc — should be a no-op.
+        // Press Esc — there is no modal open, so this is a no-op; in
+        // particular it must not disturb the running archive (archive is
+        // not cancellable, and there is nothing wired to Esc here anyway).
         {
             let mut g = app.lock().await;
             let esc = crossterm::event::KeyEvent::new(
@@ -5967,25 +5953,21 @@ mod pm_state_tests {
                 crossterm::event::KeyModifiers::empty(),
             );
             handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
+            assert!(g.modal.is_none());
             assert!(
-                matches!(g.modal, Some(Modal::ArchiveRunning { .. })),
-                "Esc must not close ArchiveRunning; got {:?}",
-                g.modal
+                g.in_flight.contains_key(&ws_id),
+                "archive must still be running"
             );
-            assert!(g.pending_archive_gen.is_some());
         }
         // Wait for the archive to actually finish.
         wait_until(
             &app,
-            "archive to finish (modal cleared, workspace gone)",
-            |g| g.modal.is_none() && g.workspaces.iter().all(|(_, w)| w.id != ws_id),
+            "archive to finish (in_flight cleared, workspace gone)",
+            |g| g.in_flight.is_empty() && g.workspaces.iter().all(|(_, w)| w.id != ws_id),
         )
         .await;
         let g = app.lock().await;
-        assert!(
-            g.modal.is_none(),
-            "modal should clear once archive finishes"
-        );
+        assert!(g.in_flight.is_empty());
         assert!(
             g.workspaces.iter().all(|(_, w)| w.id != ws_id),
             "workspace should be archived"

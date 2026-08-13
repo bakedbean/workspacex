@@ -265,8 +265,9 @@ pub async fn create_with_app(
     };
 
     if cancel.is_cancelled() {
-        let g = app.lock().await;
+        let mut g = app.lock().await;
         g.store.set_workspace_state(id, WorkspaceState::Failed)?;
+        g.in_flight.remove(&id);
         return Err(Error::Cancelled);
     }
 
@@ -277,8 +278,9 @@ pub async fn create_with_app(
     let worktree_result =
         crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await;
     if let Err(e) = worktree_result {
-        let g = app.lock().await;
+        let mut g = app.lock().await;
         g.store.set_workspace_state(id, WorkspaceState::Failed)?;
+        g.in_flight.remove(&id);
         return Err(e);
     }
     {
@@ -287,8 +289,9 @@ pub async fn create_with_app(
     }
 
     if cancel.is_cancelled() {
-        let g = app.lock().await;
+        let mut g = app.lock().await;
         g.store.set_setup_status(id, SetupStatus::Cancelled)?;
+        g.in_flight.remove(&id);
         return Err(Error::Cancelled);
     }
 
@@ -315,18 +318,24 @@ pub async fn create_with_app(
     let setup_result = match setup_result {
         Ok(r) => r,
         Err(Error::Cancelled) => {
-            let g = app.lock().await;
+            let mut g = app.lock().await;
             g.store.set_setup_status(id, SetupStatus::Cancelled)?;
+            g.in_flight.remove(&id);
             return Err(Error::Cancelled);
         }
-        Err(e) => return Err(e),
+        Err(e) => {
+            let mut g = app.lock().await;
+            g.in_flight.remove(&id);
+            return Err(e);
+        }
     };
     let status = setup_status_for(&setup_result);
 
     // --- Phase 6 (short, locked): finalize. ---
     let ws = {
-        let g = app.lock().await;
+        let mut g = app.lock().await;
         g.store.set_setup_status(id, status)?;
+        g.in_flight.remove(&id);
         g.store
             .workspaces(repo.id)?
             .into_iter()
@@ -1276,7 +1285,106 @@ mod tests {
         assert_eq!(created.workspace.name, "alpha");
         // The lock should NOT be held at this point — we can grab it.
         let g = app.try_lock().expect("lock should be free");
+        assert!(
+            !g.in_flight.contains_key(&created.workspace.id),
+            "create_with_app must remove its own in_flight entry on success"
+        );
         drop(g);
+    }
+
+    /// Regression test for the fix-round-1 finding: `reconcile_create_result`
+    /// used to remove EVERY `InFlightKind::Create` entry on any non-`Ok`
+    /// result, on the theory that `pending_create_gen` meant only one create
+    /// could ever be in flight. That theory is false once the blocking modal
+    /// is gone — nothing prevents a second create from starting while a
+    /// first is still running, so a blanket sweep on failure could evict a
+    /// different, still-live create's entry. The fix moved entry removal
+    /// into `create_with_app` itself, which only ever removes the id it
+    /// inserted. This drives a real create through to a genuine failure
+    /// (Phase 4's `git worktree add`, forced to fail by pre-occupying its
+    /// target path with a plain file) with an unrelated in_flight entry
+    /// already seeded, and asserts only the failing create's own entry is
+    /// gone.
+    #[tokio::test]
+    async fn failing_create_removes_only_its_own_in_flight_entry() {
+        use crate::app::App;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, base.path().to_path_buf()).unwrap(),
+        ));
+        let repo = {
+            let g = app.lock().await;
+            g.repos[0].clone()
+        };
+
+        // Pre-occupy the exact path create_with_app will target with a
+        // plain file, so `git worktree add` fails deterministically at
+        // Phase 4 — a genuine `Err` return AFTER Phase 3 has already
+        // inserted this create's in_flight entry.
+        let doomed_path = base.path().join(&repo.name).join("doomed");
+        std::fs::create_dir_all(doomed_path.parent().unwrap()).unwrap();
+        std::fs::write(&doomed_path, b"occupying the worktree path").unwrap();
+
+        // Seed an unrelated in_flight entry standing in for a second,
+        // concurrent create that must survive the first one's failure.
+        let other_id = crate::data::store::WorkspaceId(999_999);
+        {
+            let mut g = app.lock().await;
+            g.in_flight.insert(
+                other_id,
+                crate::data::in_flight::InFlight::create(
+                    crate::data::progress::SetupProgress::shared(),
+                    CancellationToken::new(),
+                ),
+            );
+        }
+
+        let cancel = CancellationToken::new();
+        let progress = crate::data::progress::SetupProgress::shared();
+        let repo_id = repo.id;
+        let result = create_with_app(
+            app.clone(),
+            repo,
+            Some("doomed".to_string()),
+            base.path().to_path_buf(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            progress,
+            cancel,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "worktree add should fail against an occupied path: {result:?}"
+        );
+
+        let g = app.lock().await;
+        let failed_id = g
+            .store
+            .workspaces(repo_id)
+            .unwrap()
+            .into_iter()
+            .find(|w| w.name == "doomed")
+            .expect("the row is inserted in Phase 3 even though the create fails")
+            .id;
+        assert!(
+            !g.in_flight.contains_key(&failed_id),
+            "the failing create's own entry should be removed"
+        );
+        assert!(
+            g.in_flight.contains_key(&other_id),
+            "an unrelated in_flight entry must survive another create's failure"
+        );
     }
 
     #[tokio::test]

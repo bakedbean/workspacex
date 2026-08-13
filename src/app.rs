@@ -2510,13 +2510,17 @@ pub(crate) fn schedule_detach_refresh(app: &mut App, ids: impl IntoIterator<Item
     }
 }
 /// Reconcile the outcome of a spawned `workspace::create_with_app` task.
-/// Locks the app briefly, removes the finished task's `in_flight` entry, and
-/// — on success — selects the new workspace. There is no modal bookkeeping
-/// here: a failed create is carried by the row badge (not the transient
-/// error modal this replaced), and `Modal::SetupProgress` is a viewer the
-/// user may already have closed, so it is never touched here. Regardless of
-/// the modal, `refresh()` runs so the dashboard reflects any state written
-/// to the store.
+/// Locks the app briefly and — on success — selects the new workspace.
+/// Does NOT touch `in_flight`: with concurrent creates reachable (the
+/// blocking modal that used to serialize them is gone), only the task that
+/// inserted an entry knows for certain it's the one that finished, so
+/// `create_with_app` itself removes its own entry by id on every exit path.
+/// A blanket removal here could delete a different, still-running create's
+/// entry. There is no modal bookkeeping either: a failed create is carried
+/// by the row badge (not the transient error modal this replaced), and
+/// `Modal::SetupProgress` is a viewer the user may already have closed, so
+/// it is never touched here. Regardless of outcome, `refresh()` runs so the
+/// dashboard reflects any state written to the store.
 pub(crate) async fn reconcile_create_result(
     app: SharedApp,
     my_gen: u64,
@@ -2531,9 +2535,6 @@ pub(crate) async fn reconcile_create_result(
         .as_ref()
         .ok()
         .map(|c| (c.workspace.id, c.workspace.repo_id));
-    if let Some((id, _)) = new_ws {
-        g.in_flight.remove(&id);
-    }
     match result {
         Ok(_) => {
             let _ = g.refresh();
@@ -2562,13 +2563,9 @@ pub(crate) async fn reconcile_create_result(
             // still checks its token, so this arm stays reachable for
             // whatever later cancels it. Refresh so the dashboard reflects
             // setup_status=Cancelled.
-            g.in_flight
-                .retain(|_, f| f.kind != crate::data::in_flight::InFlightKind::Create);
             let _ = g.refresh();
         }
         Err(_) => {
-            g.in_flight
-                .retain(|_, f| f.kind != crate::data::in_flight::InFlightKind::Create);
             let _ = g.refresh();
         }
     }

@@ -359,6 +359,14 @@ impl crate::app::App {
                     }
                     continue;
                 }
+                Ok(crate::app::AttachReady::Refused) => {
+                    // A live archive is tearing this workspace down. Unlike
+                    // AgentMissing this is expected to be temporary, so
+                    // leave the messages pending rather than dropping them —
+                    // same treatment as the transient-failure arm below.
+                    self.schedule_mail_retry(now_ms);
+                    continue;
+                }
                 Err(e) => {
                     // TRANSIENT failure (DB lock, PTY alloc, etc.): leave the
                     // messages pending so the next external-change tick retries.

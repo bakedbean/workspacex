@@ -32,6 +32,9 @@ pub enum Modal {
         yolo: bool,
         shared: bool,
         agent: crate::pty::session::AgentKind,
+        /// Inline error line (e.g. a duplicate name), cleared on next edit.
+        /// Mirrors `RenameWorkspace`'s `notice` field.
+        notice: Option<String>,
     },
     ConfirmArchive {
         workspace_id: crate::data::store::WorkspaceId,
@@ -218,6 +221,7 @@ pub fn render(
             yolo,
             shared,
             agent,
+            notice,
             ..
         } => {
             let agent_label = agent.display_name();
@@ -226,6 +230,10 @@ pub fn render(
             } else {
                 "shared (tmux): off — ^s toggles\n"
             };
+            let notice_line = notice
+                .as_deref()
+                .map(|n| format!("{n}\n"))
+                .unwrap_or_default();
             (
                 if *yolo {
                     "new workspace (permissive)"
@@ -233,7 +241,7 @@ pub fn render(
                     "new workspace"
                 },
                 format!(
-                    "name: {name_buffer}\nagent: {agent_label}  [tab] toggle\n{shared_line}\n[enter] create   [esc] cancel"
+                    "name: {name_buffer}\nagent: {agent_label}  [tab] toggle\n{shared_line}\n{notice_line}[enter] create   [esc] cancel"
                 ),
             )
         }
@@ -295,14 +303,32 @@ pub fn render(
                 "  setup finished.\n\n  [esc] close".to_string(),
             ),
             Some(f) => {
+                use crate::data::in_flight::InFlightKind;
                 let frame = crate::ui::dashboard::spinner::frame(tick);
-                let (phase_label, tail) = match f.progress.lock() {
-                    Ok(p) => (p.phase().label(), p.recent(6)),
-                    Err(_) => ("Working", Vec::new()),
+                // Archive never sets a `SetupPhase` (there is no phase concept
+                // for it), so reading `p.phase().label()` unconditionally
+                // always shows create's default phase ("Fetching base…")
+                // even while a worktree is mid-deletion. Derive both the
+                // title and the status line from the entry's `InFlightKind`
+                // instead so archive gets something truthful; create's
+                // rendering is unchanged.
+                let (title, status_label) = match f.kind {
+                    InFlightKind::Create => {
+                        let label = match f.progress.lock() {
+                            Ok(p) => p.phase().label(),
+                            Err(_) => "Working",
+                        };
+                        ("workspace setup", label)
+                    }
+                    InFlightKind::Archive => ("archiving workspace", "Archiving"),
+                };
+                let tail = match f.progress.lock() {
+                    Ok(p) => p.recent(6),
+                    Err(_) => Vec::new(),
                 };
                 let secs = f.started.elapsed().as_secs();
                 let elapsed = format!("{:02}:{:02}", secs / 60, secs % 60);
-                let mut body = format!("  {frame} {phase_label}…   ({elapsed})\n\n");
+                let mut body = format!("  {frame} {status_label}…   ({elapsed})\n\n");
                 if tail.is_empty() {
                     body.push_str("  (waiting for output…)\n");
                 } else {
@@ -311,7 +337,7 @@ pub fn render(
                     }
                 }
                 body.push_str("\n  [esc] close");
-                ("workspace setup", body)
+                (title, body)
             }
         },
         Modal::ConfirmQuit { creates, archives } => {
@@ -533,6 +559,46 @@ mod tests {
             "missing line:\n{text}"
         );
         assert!(text.contains("[esc] close"), "missing footer:\n{text}");
+    }
+
+    /// F7 regression: an archive entry never sets a `SetupPhase` (there is no
+    /// phase concept for it), so reading `p.phase().label()` unconditionally
+    /// showed create's default phase ("Fetching base…") while a worktree was
+    /// mid-deletion, under a "workspace setup" title. The renderer must
+    /// derive both the title and the status line from the entry's
+    /// `InFlightKind` instead, so an archive viewer reads truthfully.
+    #[test]
+    fn setup_progress_labels_archive_truthfully_not_as_workspace_setup() {
+        use crate::data::progress::SetupProgress;
+        let progress = SetupProgress::shared();
+        progress.lock().unwrap().push_line("removing worktree");
+        let workspace_id = crate::data::store::WorkspaceId(1);
+        let mut in_flight = HashMap::new();
+        in_flight.insert(
+            workspace_id,
+            crate::data::in_flight::InFlight::archive(
+                progress,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let modal = Modal::SetupProgress { workspace_id };
+        let text = render_to_text(&modal, &in_flight);
+        assert!(
+            text.contains("archiving workspace"),
+            "expected an archive-truthful title:\n{text}"
+        );
+        assert!(
+            !text.contains("workspace setup"),
+            "must not show create's title for an archive:\n{text}"
+        );
+        assert!(
+            !text.contains("Fetching base"),
+            "must not show create's default phase for an archive:\n{text}"
+        );
+        assert!(
+            text.contains("removing worktree"),
+            "missing appended progress line:\n{text}"
+        );
     }
 
     /// Sharing eagerly starts stopped agents (see `toggle_workspace_shared`),

@@ -5418,6 +5418,7 @@ mod pm_state_tests {
             yolo: false,
             shared: false,
             agent: crate::pty::session::AgentKind::Claude,
+            notice: None,
         });
         let shared_app = Arc::new(Mutex::new(
             App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
@@ -5686,6 +5687,7 @@ mod pm_state_tests {
                 yolo: false,
                 shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                notice: None,
             });
         }
         // Send Enter.
@@ -5748,6 +5750,7 @@ mod pm_state_tests {
                 yolo: false,
                 shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                notice: None,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -6219,6 +6222,7 @@ mod pm_state_tests {
                 yolo: false,
                 shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                notice: None,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -6273,6 +6277,7 @@ mod pm_state_tests {
                 yolo: false,
                 shared: false,
                 agent: crate::pty::session::AgentKind::Claude,
+                notice: None,
             });
             let enter = crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Enter,
@@ -6336,7 +6341,14 @@ mod pm_state_tests {
         app.dashboard.folded.insert(repo_id.0 as u64, true);
         let my_gen = app.alloc_create_gen();
         let shared = Arc::new(Mutex::new(app));
-        crate::app::reconcile_create_result(shared.clone(), my_gen, Ok(created)).await;
+        crate::app::reconcile_create_result(
+            shared.clone(),
+            my_gen,
+            repo_id,
+            "feature".to_string(),
+            Ok(created),
+        )
+        .await;
 
         let mut g = shared.lock().await;
         let app: &mut App = &mut g;
@@ -6754,6 +6766,130 @@ mod pm_state_tests {
         );
         // Modal closed.
         assert!(app.modal.is_none(), "modal should be cleared on success");
+    }
+}
+
+/// F5 regression: a create failure that happens BEFORE a row exists —
+/// typically the `UNIQUE(repo_id, name)` violation when the user types a
+/// name that's already taken — used to be completely silent: no row, no
+/// badge, no feedback, the modal just closed. Part 1 validates the name up
+/// front in the modal (this module); part 2 is `reconcile_create_result`'s
+/// `Err(_)` backstop, tested directly against `app.rs` in
+/// `app::reconcile_create_tests` alongside the other reconcile tests.
+#[cfg(test)]
+mod new_workspace_notice_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, Store};
+    use crossterm::event::KeyEvent;
+    use std::path::PathBuf;
+
+    fn app_with_existing_workspace() -> (App, crate::data::store::RepoId) {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("/tmp/r/alpha"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        (app, repo_id)
+    }
+
+    fn dummy_shared() -> std::sync::Arc<tokio::sync::Mutex<App>> {
+        std::sync::Arc::new(tokio::sync::Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enter_with_a_taken_name_shows_inline_notice_and_does_not_spawn() {
+        let (mut app, repo_id) = app_with_existing_workspace();
+        app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+            repo_id,
+            name_buffer: "alpha".to_string(),
+            yolo: false,
+            shared: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            notice: None,
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.modal {
+            Some(crate::ui::modal::Modal::NewWorkspace {
+                name_buffer,
+                notice,
+                ..
+            }) => {
+                assert_eq!(name_buffer, "alpha", "buffer must survive the refusal");
+                assert_eq!(
+                    notice.as_deref(),
+                    Some("a workspace named 'alpha' already exists")
+                );
+            }
+            other => panic!("expected NewWorkspace modal with a notice, got {other:?}"),
+        }
+        assert!(
+            app.in_flight.is_empty(),
+            "a duplicate name must never spawn a create task"
+        );
+        assert_eq!(
+            app.store.workspaces(repo_id).unwrap().len(),
+            1,
+            "no second row should be inserted"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn typing_after_a_duplicate_notice_clears_it() {
+        let (mut app, repo_id) = app_with_existing_workspace();
+        // Simulate: user already hit a duplicate once (notice set), then
+        // starts editing the buffer — mirrors `RenameWorkspace`'s Backspace/
+        // Char arms, which clear `notice` on any edit.
+        app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+            repo_id,
+            name_buffer: "alpha".to_string(),
+            yolo: false,
+            shared: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            notice: Some("a workspace named 'alpha' already exists".to_string()),
+        });
+        let shared = dummy_shared();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        match &app.modal {
+            Some(crate::ui::modal::Modal::NewWorkspace {
+                name_buffer,
+                notice,
+                ..
+            }) => {
+                assert_eq!(name_buffer, "alpha2");
+                assert!(notice.is_none(), "editing must clear the stale notice");
+            }
+            other => panic!("expected NewWorkspace modal, got {other:?}"),
+        }
     }
 }
 
@@ -8465,5 +8601,182 @@ mod ctrl_z_suppression_tests {
         // Sanity: a neighboring control key like Ctrl-C is untouched (0x03).
         let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(encode_key(ev), vec![0x03]);
+    }
+}
+
+/// F6 regression: firing an in-flight create's cancellation token and
+/// setting `app.quit = true` in the same breath is not enough — the
+/// detached task never gets scheduled again before shutdown to observe the
+/// token and persist `SetupStatus::Cancelled` itself, and a create still in
+/// its fetch phase hasn't even written `SetupStatus::Running` yet, so the
+/// startup sweep (which only repairs `Running` rows) would not repair it
+/// either. `y` on `Modal::ConfirmQuit` must persist a terminal status
+/// synchronously, in the handler itself, before quitting.
+#[cfg(test)]
+mod confirm_quit_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, SetupStatus, Store, WorkspaceState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn shared() -> SharedApp {
+        Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn y_persists_cancelled_for_every_in_flight_create_before_quitting() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        // One create still mid-fetch (setup_status is still the default —
+        // `Running` was never written yet, the exact case the startup sweep
+        // cannot repair), and one create already past that point.
+        let fetching = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "fetching",
+                branch: "repo/fetching",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/fetching"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let running = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "running",
+                branch: "repo/running",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/running"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(running, WorkspaceState::Ready)
+            .unwrap();
+        store
+            .set_setup_status(running, SetupStatus::Running)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let fetching_token = tokio_util::sync::CancellationToken::new();
+        app.in_flight.insert(
+            fetching,
+            crate::data::in_flight::InFlight::create(
+                crate::data::progress::SetupProgress::shared(),
+                fetching_token.clone(),
+            ),
+        );
+        let running_token = tokio_util::sync::CancellationToken::new();
+        app.in_flight.insert(
+            running,
+            crate::data::in_flight::InFlight::create(
+                crate::data::progress::SetupProgress::shared(),
+                running_token.clone(),
+            ),
+        );
+        app.modal = Some(Modal::ConfirmQuit {
+            creates: 2,
+            archives: 0,
+        });
+        let shared_app = shared();
+
+        handle_key_modal(
+            &mut app,
+            &shared_app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(app.quit, "quit must be set");
+        assert!(fetching_token.is_cancelled());
+        assert!(running_token.is_cancelled());
+        assert_eq!(
+            app.store
+                .workspace_by_id(fetching)
+                .unwrap()
+                .unwrap()
+                .setup_status,
+            SetupStatus::Cancelled,
+            "a create still in its fetch phase (never wrote Running) must \
+             still land on Cancelled, not be left for a startup sweep that \
+             only repairs Running rows"
+        );
+        assert_eq!(
+            app.store
+                .workspace_by_id(running)
+                .unwrap()
+                .unwrap()
+                .setup_status,
+            SetupStatus::Cancelled,
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn y_does_not_touch_archive_rows() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let archiving = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "archiving",
+                branch: "repo/archiving",
+                worktree_path: std::path::Path::new("/tmp/wsx-test/archiving"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(archiving, WorkspaceState::Ready)
+            .unwrap();
+        store.set_setup_status(archiving, SetupStatus::Ok).unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.in_flight.insert(
+            archiving,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        app.modal = Some(Modal::ConfirmQuit {
+            creates: 0,
+            archives: 1,
+        });
+        let shared_app = shared();
+
+        handle_key_modal(
+            &mut app,
+            &shared_app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+
+        assert!(app.quit);
+        // Archive has no cancellation and is simply abandoned — its row's
+        // setup_status (a `create` concept) must be untouched.
+        assert_eq!(
+            app.store
+                .workspace_by_id(archiving)
+                .unwrap()
+                .unwrap()
+                .setup_status,
+            SetupStatus::Ok,
+            "quitting must not rewrite an archiving row's setup_status"
+        );
     }
 }

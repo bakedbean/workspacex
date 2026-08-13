@@ -87,7 +87,12 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     // Seed the primary agent instance so the roster is authoritative from birth.
     store.add_primary_agent(id, agent, crate::data::store::now_ms())?;
 
-    if let Err(e) = git::fetch_for_base(&repo.path, base).await {
+    let fetch_result = {
+        let lock = crate::data::repo_lock::for_repo(repo.id);
+        let _guard = lock.lock().await;
+        git::fetch_for_base(&repo.path, base).await
+    };
+    if let Err(e) = fetch_result {
         store.set_workspace_state(id, WorkspaceState::Failed)?;
         return Err(e);
     }
@@ -127,7 +132,14 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
             store.set_setup_status(id, SetupStatus::Cancelled)?;
             return Err(Error::Cancelled);
         }
-        Err(e) => return Err(e),
+        Err(e) => {
+            // A shell spawn/read/wait failure, not a cancellation. Without
+            // this, the row is left recorded as `Running` forever (or until
+            // some later TUI startup sweeps it), even though nothing is
+            // actually running.
+            store.set_setup_status(id, SetupStatus::Failed)?;
+            return Err(e);
+        }
     };
     let status = setup_status_for(&setup_result);
     store.set_setup_status(id, status)?;
@@ -283,7 +295,12 @@ pub async fn create_with_app(
         if let Ok(mut p) = progress.lock() {
             p.set_phase(SetupPhase::Fetching);
         }
-        if let Err(e) = crate::git::fetch_for_base(&repo.path, base).await {
+        let fetch_result = {
+            let lock = crate::data::repo_lock::for_repo(repo.id);
+            let _guard = lock.lock().await;
+            crate::git::fetch_for_base(&repo.path, base).await
+        };
+        if let Err(e) = fetch_result {
             let g = app.lock().await;
             g.store.set_workspace_state(id, WorkspaceState::Failed)?;
             return Err(e);
@@ -347,7 +364,15 @@ pub async fn create_with_app(
                 g.store.set_setup_status(id, SetupStatus::Cancelled)?;
                 return Err(Error::Cancelled);
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                // A shell spawn/read/wait failure, not a cancellation.
+                // Without this, the row is left recorded as `Running`
+                // forever (or until some later TUI startup sweeps it), even
+                // though nothing is actually running.
+                let g = app.lock().await;
+                g.store.set_setup_status(id, SetupStatus::Failed)?;
+                return Err(e);
+            }
         };
         let status = setup_status_for(&setup_result);
 
@@ -410,14 +435,24 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     // removal run — a detached agent still writing to the worktree would
     // otherwise dirty it mid-archive.
     kill_tmux_sessions_for(store, ws);
-    let archive_result = setup::run_archive(
-        repo.archive_script.as_deref(),
-        &repo.path,
-        &ws.worktree_path,
-        tokio_util::sync::CancellationToken::new(),
-        on_archive_line,
-    )
-    .await?;
+    // A fetch or checkout failure can now deliberately leave a row whose
+    // worktree never existed on disk. `run_script` sets `.current_dir` to
+    // the worktree, so running the archive script against a nonexistent
+    // directory would fail the spawn and strand the row forever. Skip the
+    // script and fall through to branch deletion / row removal so the row
+    // can always be cleaned up.
+    let archive_result = if ws.worktree_path.exists() {
+        setup::run_archive(
+            repo.archive_script.as_deref(),
+            &repo.path,
+            &ws.worktree_path,
+            tokio_util::sync::CancellationToken::new(),
+            on_archive_line,
+        )
+        .await?
+    } else {
+        SetupResult::Skipped
+    };
     if !opts.keep_worktree && ws.worktree_path.exists() {
         let lock = crate::data::repo_lock::for_repo(repo.id);
         let _guard = lock.lock().await;
@@ -464,15 +499,23 @@ pub async fn archive_with_app(
         kill_tmux_sessions_for(&g.store, &ws);
     }
 
-    // --- Phase 1 (unlocked, async): run the archive script if any. ---
-    let archive_result = setup::run_archive(
-        repo.archive_script.as_deref(),
-        &repo.path,
-        &ws.worktree_path,
-        tokio_util::sync::CancellationToken::new(),
-        |_| {},
-    )
-    .await?;
+    // --- Phase 1 (unlocked, async): run the archive script if any. Skipped
+    // when the worktree never made it to disk (e.g. a fetch/checkout
+    // failure left a row with no worktree) — `run_script` sets
+    // `.current_dir` to the worktree, so spawning against a nonexistent
+    // directory would fail and strand the row forever. ---
+    let archive_result = if ws.worktree_path.exists() {
+        setup::run_archive(
+            repo.archive_script.as_deref(),
+            &repo.path,
+            &ws.worktree_path,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await?
+    } else {
+        SetupResult::Skipped
+    };
 
     note_archive_step(&app, ws.id, "removing worktree").await;
 
@@ -1295,8 +1338,23 @@ mod tests {
         let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
-        // Configure a slow setup script via the store.
-        store.set_repo_setup_script(id, Some("sleep 10")).unwrap();
+        // A setup script that signals it has actually started (touches a
+        // marker file) before sleeping. The canceller below polls for that
+        // marker rather than racing a fixed sleep against `create`'s
+        // fetch/worktree phases: both now take the process-global
+        // `repo_lock` guard (F1), which is keyed by raw integer repo id and
+        // so can be held by an unrelated, concurrently-running test whose
+        // fresh in-memory store happens to assign the same small id —
+        // pushing those phases' latency past a fixed short sleep under
+        // parallel test load.
+        let marker_dir = TempDir::new().unwrap();
+        let marker = marker_dir.path().join("started");
+        store
+            .set_repo_setup_script(
+                id,
+                Some(&format!("touch '{}' && sleep 10", marker.display())),
+            )
+            .unwrap();
         let repo = store
             .repos()
             .unwrap()
@@ -1306,8 +1364,12 @@ mod tests {
         let base = TempDir::new().unwrap();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
+        let marker_clone = marker.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !marker_clone.exists() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
             cancel_clone.cancel();
         });
         let result = create(
@@ -1584,10 +1646,20 @@ mod tests {
         let repo_id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
             .await
             .unwrap();
-        // A slow setup script gives the spawned canceller time to fire after
-        // Phase 4/5's Ready and Running writes have both already succeeded.
+        // A setup script that touches a marker file before sleeping, so the
+        // canceller below can poll for actual Phase 5 entry (Ready/Running
+        // both already written) instead of racing a fixed sleep against
+        // Phases 3/4's fetch/worktree — both now take the process-global
+        // `repo_lock` guard (F1), keyed by raw integer repo id, so they can
+        // be delayed by an unrelated concurrently-running test whose own
+        // fresh in-memory store happens to land on the same small id.
+        let marker_dir = TempDir::new().unwrap();
+        let marker = marker_dir.path().join("started");
         store
-            .set_repo_setup_script(repo_id, Some("sleep 10"))
+            .set_repo_setup_script(
+                repo_id,
+                Some(&format!("touch '{}' && sleep 10", marker.display())),
+            )
             .unwrap();
         let base = TempDir::new().unwrap();
         let app = Arc::new(Mutex::new(
@@ -1600,8 +1672,12 @@ mod tests {
 
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
+        let marker_clone = marker.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !marker_clone.exists() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
             cancel_clone.cancel();
         });
 
@@ -2025,5 +2101,234 @@ mod tests {
         for name in ["alpha", "beta", "gamma"] {
             assert!(base.path().join("demo").join(name).join(".git").exists());
         }
+    }
+
+    /// F1 regression: `concurrent_creates_in_one_repo_all_succeed` above passes
+    /// `base = None`, so `fetch_for_base` always no-ops there and the fetch
+    /// path is never exercised. This sibling test configures a real,
+    /// fetchable remote so `fetch_for_base` performs an actual `git fetch`,
+    /// and drives several of them concurrently — each under its own,
+    /// separately-acquired `repo_lock` guard, then a second separately-
+    /// acquired guard around `create_worktree`, mirroring how
+    /// `create`/`create_with_app` guard the two phases independently rather
+    /// than holding one guard across both. A guard, not a reproduction:
+    /// unserialized concurrent `git fetch`/`git worktree add` calls against
+    /// the same repo usually succeed too, so this does not reliably fail
+    /// without the lock; it exists so a future change that drops the fetch
+    /// guard is caught.
+    #[tokio::test]
+    async fn concurrent_creates_fetch_and_worktree_phases_are_each_serialized() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        // A real, fetchable remote so `fetch_for_base` runs an actual `git
+        // fetch` rather than a no-op.
+        let remote_dir = TempDir::new().unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args([
+                    "clone",
+                    "--bare",
+                    repo_dir.path().to_str().unwrap(),
+                    remote_dir.path().to_str().unwrap(),
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(repo_dir.path())
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    remote_dir.path().to_str().unwrap(),
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store.set_repo_base_branch(id, Some("origin/main")).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+
+        let mut handles = Vec::new();
+        for name in ["alpha", "beta", "gamma"] {
+            let repo_path = repo.path.clone();
+            let repo_id = repo.id;
+            let branch = format!("wsx/{name}");
+            let path = base.path().join("demo").join(name);
+            handles.push(tokio::spawn(async move {
+                // Separate guard acquisition for the fetch, mirroring
+                // `create`/`create_with_app` — never one guard held across
+                // both phases.
+                {
+                    let lock = crate::data::repo_lock::for_repo(repo_id);
+                    let _guard = lock.lock().await;
+                    git::fetch_for_base(&repo_path, Some("origin/main"))
+                        .await
+                        .unwrap();
+                }
+                let lock = crate::data::repo_lock::for_repo(repo_id);
+                let _guard = lock.lock().await;
+                git::create_worktree(&repo_path, &branch, Some("origin/main"), &path).await
+            }));
+        }
+        for h in handles {
+            h.await
+                .unwrap()
+                .expect("every concurrent create (fetch + worktree) must succeed");
+        }
+        for name in ["alpha", "beta", "gamma"] {
+            assert!(base.path().join("demo").join(name).join(".git").exists());
+        }
+    }
+
+    /// F3 regression: a fetch/checkout failure can leave a row whose
+    /// worktree never made it to disk. Archive used to run the archive
+    /// script unconditionally first; `run_script` sets `.current_dir` to
+    /// the (nonexistent) worktree, so the spawn failed with ENOENT and `?`
+    /// propagated before branch deletion or the store-row removal ran,
+    /// stranding the row permanently. This drives `archive` against a
+    /// workspace whose worktree has been removed from disk, with an
+    /// archive script configured that would leave a marker file if it ran,
+    /// and asserts the row is still cleaned up and the script did NOT run.
+    #[tokio::test]
+    async fn archive_skips_script_and_cleans_up_when_worktree_missing() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let scratch = TempDir::new().unwrap();
+        let marker = scratch.path().join("would-have-run");
+        let script = format!("touch '{}'", marker.display());
+        store.set_repo_archive_script(id, Some(&script)).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("ghost"),
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let wt = created.workspace.worktree_path.clone();
+        git::remove_worktree(repo_dir.path(), &wt).await.unwrap();
+        assert!(!wt.exists(), "worktree must be gone before archiving");
+
+        let result = archive(
+            &store,
+            &repo,
+            &created.workspace,
+            ArchiveOpts {
+                force_branch_delete: true,
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "archive must succeed even with no worktree on disk: {result:?}"
+        );
+        assert!(
+            store.workspaces(repo.id).unwrap().is_empty(),
+            "the row must still be removed"
+        );
+        assert!(
+            !marker.exists(),
+            "the archive script must be skipped when there is no worktree"
+        );
+    }
+
+    /// Same as `archive_skips_script_and_cleans_up_when_worktree_missing`
+    /// but through `archive_with_app`, which has its own separate call to
+    /// `run_archive` guarded the same way.
+    #[tokio::test]
+    async fn archive_with_app_skips_script_and_cleans_up_when_worktree_missing() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let scratch = TempDir::new().unwrap();
+        let marker = scratch.path().join("would-have-run");
+        let script = format!("touch '{}'", marker.display());
+        store.set_repo_archive_script(id, Some(&script)).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("ghost"),
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let wt = created.workspace.worktree_path.clone();
+        git::remove_worktree(repo_dir.path(), &wt).await.unwrap();
+        assert!(!wt.exists(), "worktree must be gone before archiving");
+
+        let ws_id = created.workspace.id;
+        let app = crate::app::App::new(store, base.path().to_path_buf()).unwrap();
+        let shared = Arc::new(Mutex::new(app));
+        let result = archive_with_app(
+            shared.clone(),
+            repo.clone(),
+            created.workspace.clone(),
+            ArchiveOpts {
+                force_branch_delete: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "archive_with_app must succeed even with no worktree on disk: {result:?}"
+        );
+        assert!(!marker.exists(), "the archive script must be skipped");
+        let g = shared.lock().await;
+        assert!(
+            g.store
+                .workspaces(repo.id)
+                .unwrap()
+                .iter()
+                .all(|w| w.id != ws_id),
+            "the row must still be removed"
+        );
     }
 }

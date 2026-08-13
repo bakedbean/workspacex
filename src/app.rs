@@ -42,11 +42,15 @@ pub enum SelectionTarget {
 /// Outcome of `ensure_workspace_session`. `AgentMissing` signals to callers
 /// that the spawn failed because the agent binary was not on PATH; the
 /// helper already set `Modal::AgentMissing`, so callers should skip the
-/// view switch and leave the modal up.
+/// view switch and leave the modal up. `Refused` signals that the session
+/// was not touched because `attach_is_blocked` refused it (a live archive
+/// is tearing the workspace down) — callers should treat this exactly like
+/// `AgentMissing`: skip the view switch, set no session, leave things alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachReady {
     Ok,
     AgentMissing,
+    Refused,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1099,10 +1103,11 @@ impl App {
         // returns AgentMissing WITHOUT spawning — retargeting anyway would
         // point the focused leaf at a sessionless instance, and the next
         // draw's "leaf session missing -> bounce to Dashboard" guard would
-        // then collapse the whole split. Mirror attach_workspace and bail.
+        // then collapse the whole split. Same for Refused (a live archive
+        // refused the ensure). Mirror attach_workspace and bail.
         match ensure_instance_session(self, inst, true)? {
             AttachReady::Ok => {}
-            AttachReady::AgentMissing => return Ok(()),
+            AttachReady::AgentMissing | AttachReady::Refused => return Ok(()),
         }
         let Some(instance) = self.store.workspace_agents_by_id(inst)? else {
             return Ok(());
@@ -2213,10 +2218,19 @@ pub(crate) fn restore_attached_state(
 /// don't silently drop on workspaces the user hasn't attached to.
 /// No-op when the workspace already has a session, or when
 /// `build_spawn_info` returns `None` (e.g., setup hasn't completed).
+///
+/// This is the single enforcement point for `attach_is_blocked`: every
+/// caller — `attach_workspace`, the inline-dispatch paths, and (via
+/// `ensure_instance_session`'s delegation) primary-instance retargeting —
+/// goes through here, so a live archive can't be raced by a respawn from
+/// any of them.
 pub(crate) fn ensure_workspace_session(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<AttachReady> {
+    if attach_is_blocked(app, ws_id) {
+        return Ok(AttachReady::Refused);
+    }
     if app
         .primary_instance(ws_id)
         .and_then(|i| app.sessions.get(i))
@@ -2279,14 +2293,16 @@ pub(crate) fn ensure_workspace_session(
 /// handlers, `switch_focused_pane_to`, `restore_attached_state`) so the user
 /// sees the modal. Pass `false` for background callers (e.g. the message drain)
 /// so a missing binary doesn't pop a modal over the user's unrelated view.
+///
+/// Enforces `attach_is_blocked` for non-primary instances directly (they
+/// never reach `ensure_workspace_session`). Primary instances delegate
+/// above and get the check there instead — do not duplicate it here, or a
+/// primary would be guarded twice.
 pub(crate) fn ensure_instance_session(
     app: &mut App,
     inst: crate::data::store::AgentInstanceId,
     surface_missing: bool,
 ) -> Result<AttachReady> {
-    if app.sessions.get(inst).is_some() {
-        return Ok(AttachReady::Ok);
-    }
     // Unknown instance id: treat as a no-op (matches `build_spawn_info`
     // returning `None` for a workspace whose setup hasn't completed).
     let Some(instance) = app.store.workspace_agents_by_id(inst)? else {
@@ -2296,6 +2312,12 @@ pub(crate) fn ensure_instance_session(
         return ensure_workspace_session(app, instance.workspace_id);
     }
     let ws_id = instance.workspace_id;
+    if attach_is_blocked(app, ws_id) {
+        return Ok(AttachReady::Refused);
+    }
+    if app.sessions.get(inst).is_some() {
+        return Ok(AttachReady::Ok);
+    }
     if let Some((path, mode, repo_path)) = build_added_spawn_info(app, &instance) {
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
@@ -2472,15 +2494,16 @@ pub(crate) fn attach_workspace(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<()> {
-    if attach_is_blocked(app, ws_id) {
-        return Ok(());
-    }
+    // `ensure_workspace_session` is the enforcement point for
+    // `attach_is_blocked` (a live archive refuses); no need to check here
+    // too — see `AttachReady::Refused`.
     match ensure_workspace_session(app, ws_id)? {
         AttachReady::Ok => {}
-        // Attach didn't happen (AgentMissing modal is up) — leave the
-        // workspace's attention marker alone so a failed open doesn't
-        // silently dismiss it.
-        AttachReady::AgentMissing => return Ok(()),
+        // Attach didn't happen (AgentMissing modal is up, or attach was
+        // refused because an archive is tearing this workspace down) —
+        // leave the workspace's attention marker alone so a failed open
+        // doesn't silently dismiss it.
+        AttachReady::AgentMissing | AttachReady::Refused => return Ok(()),
     }
     app.workspace_needs_attention.remove(&ws_id);
     if app
@@ -2534,11 +2557,21 @@ pub(crate) fn schedule_detach_refresh(app: &mut App, ids: impl IntoIterator<Item
 /// entry. There is no modal bookkeeping either: a failed create is carried
 /// by the row badge (not the transient error modal this replaced), and
 /// `Modal::SetupProgress` is a viewer the user may already have closed, so
-/// it is never touched here. Regardless of outcome, `refresh()` runs so the
-/// dashboard reflects any state written to the store.
+/// it is never touched here — EXCEPT for the `Err(_)` backstop below.
+/// Regardless of outcome, `refresh()` runs so the dashboard reflects any
+/// state written to the store.
+///
+/// `repo_id`/`name` are the exact `(repo_id, name)` the caller resolved and
+/// asked `create_with_app` to insert (the caller pre-resolves an auto-
+/// generated name too, rather than letting `create_with_app` pick one, so
+/// this is always the real attempted name). They are only consulted on
+/// `Err(_)`, to answer "did a row for this attempt ever get inserted?" —
+/// see that arm.
 pub(crate) async fn reconcile_create_result(
     app: SharedApp,
     my_gen: u64,
+    repo_id: crate::data::store::RepoId,
+    name: String,
     result: Result<crate::data::workspace::CreatedWorkspace>,
 ) {
     let mut g = app.lock().await;
@@ -2573,15 +2606,36 @@ pub(crate) async fn reconcile_create_result(
             }
         }
         Err(crate::error::Error::Cancelled) => {
-            // Nothing in this task's UI fires `cancel` yet (Esc on
-            // `Modal::SetupProgress` only closes the viewer), but the task
-            // still checks its token, so this arm stays reachable for
-            // whatever later cancels it. Refresh so the dashboard reflects
-            // setup_status=Cancelled.
+            // The `x` binding on the workspace-actions card fires `cancel`
+            // on a live create's token; a `Modal::ConfirmQuit` `y` does too.
+            // Refresh so the dashboard reflects setup_status=Cancelled.
             let _ = g.refresh();
         }
         Err(_) => {
             let _ = g.refresh();
+            // F5 backstop: failures AFTER the row exists are carried by the
+            // row badge — deliberately silent here, same as any other
+            // `Err(_)`. But `create_with_app` can also fail BEFORE the row
+            // is ever inserted (`resolve_branch_prefix`, `insert_workspace`,
+            // or `add_primary_agent` erroring in Phase 1/2, ahead of the
+            // wrapped async block) — most commonly a `UNIQUE(repo_id, name)`
+            // violation, though the Enter handler now validates that case
+            // up front. With no row there is no badge and therefore no
+            // feedback at all; the modal would just have closed. Whether a
+            // row exists is the simplest reliable signal available here (no
+            // id is returned on `Err`, so this is the only way to tell) —
+            // look it up by the exact `(repo_id, name)` this attempt used,
+            // and only pop `Modal::Error` when it's genuinely missing.
+            let row_exists = g
+                .store
+                .workspaces(repo_id)
+                .map(|rows| rows.iter().any(|w| w.name == name))
+                .unwrap_or(false);
+            if !row_exists {
+                g.modal = Some(crate::ui::modal::Modal::Error {
+                    message: format!("failed to create workspace '{name}'"),
+                });
+            }
         }
     }
 }
@@ -2651,6 +2705,115 @@ pub(crate) async fn reconcile_remote_list(
                 message: e.to_string(),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod reconcile_create_tests {
+    use super::*;
+    use crate::data::store::NewWorkspace;
+    use crate::error::Error;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn make_app_with_repo() -> (App, crate::data::store::RepoId) {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        (app, repo_id)
+    }
+
+    /// F5 part 2: a create can fail before its row is ever inserted
+    /// (`resolve_branch_prefix`, `insert_workspace`, or `add_primary_agent`
+    /// erroring in Phase 1/2, ahead of `create_with_app`'s wrapped async
+    /// block). With no row there is no badge and therefore no feedback at
+    /// all. The `Err(_)` backstop must pop `Modal::Error` in exactly this
+    /// case — detected here by no row existing for the attempted
+    /// `(repo_id, name)`.
+    #[tokio::test]
+    async fn err_with_no_matching_row_pops_an_error_modal() {
+        let (app, repo_id) = make_app_with_repo();
+        let my_gen = 0;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_create_result(
+            shared.clone(),
+            my_gen,
+            repo_id,
+            "ghost".to_string(),
+            Err(Error::UserInput("boom".into())),
+        )
+        .await;
+        let g = shared.lock().await;
+        assert!(
+            matches!(g.modal, Some(crate::ui::modal::Modal::Error { .. })),
+            "a create that failed before any row existed must surface an \
+             error modal — nothing else can carry that feedback: {:?}",
+            g.modal
+        );
+    }
+
+    /// Failures AFTER the row exists are carried by the row badge — a
+    /// deliberate design decision — so the `Err(_)` arm must stay silent
+    /// when a row for the attempted `(repo_id, name)` is actually present
+    /// (e.g. a fetch/checkout/setup failure inside the wrapped async block,
+    /// all of which run after the row is inserted).
+    #[tokio::test]
+    async fn err_with_a_matching_row_stays_silent() {
+        let (app, repo_id) = make_app_with_repo();
+        app.store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "ghost",
+                branch: "repo/ghost",
+                worktree_path: std::path::Path::new("/tmp/r/ghost"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let my_gen = 0;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_create_result(
+            shared.clone(),
+            my_gen,
+            repo_id,
+            "ghost".to_string(),
+            Err(Error::Setup("boom".into())),
+        )
+        .await;
+        let g = shared.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "a failure after the row exists must stay silent — the row \
+             badge carries it: {:?}",
+            g.modal
+        );
+    }
+
+    /// A cancellation must never pop `Modal::Error` either way — cancelling
+    /// is a deliberate user action (the `x` binding, or `ConfirmQuit`'s `y`),
+    /// not a failure that needs surfacing.
+    #[tokio::test]
+    async fn cancelled_never_pops_an_error_modal_even_with_no_row() {
+        let (app, repo_id) = make_app_with_repo();
+        let my_gen = 0;
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_create_result(
+            shared.clone(),
+            my_gen,
+            repo_id,
+            "ghost".to_string(),
+            Err(Error::Cancelled),
+        )
+        .await;
+        let g = shared.lock().await;
+        assert!(
+            g.modal.is_none(),
+            "cancellation must stay silent: {:?}",
+            g.modal
+        );
     }
 }
 
@@ -3155,6 +3318,82 @@ mod live_instances_tests {
             !attach_is_blocked(&app, ws),
             "provisioning must not block attach"
         );
+    }
+
+    /// F4 regression: `ensure_workspace_session` itself must refuse while an
+    /// archive is in flight, not merely `attach_workspace`'s wrapper. This is
+    /// what closes the bypass routes (chip click / chord / reply Enter,
+    /// `restore_attached_state`'s side-pane spawns, `switch_focused_pane_to`)
+    /// that called `ensure_workspace_session`/`ensure_instance_session`
+    /// directly without ever consulting `attach_is_blocked`.
+    #[test]
+    fn ensure_workspace_session_refuses_when_archive_in_flight() {
+        let mut app = test_app();
+        let ws = app.test_workspace("archiving");
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        assert!(
+            app.primary_instance(ws)
+                .and_then(|i| app.sessions.get(i))
+                .is_none(),
+            "must not spawn a session while an archive is tearing the workspace down"
+        );
+    }
+
+    /// F4 regression, non-primary half: `ensure_instance_session` delegates
+    /// to `ensure_workspace_session` for primary instances (covered above),
+    /// but a non-primary (added) instance never reaches that delegation, so
+    /// it needs its own `attach_is_blocked` check — this is exactly the
+    /// "make sure non-primary instances are guarded too" requirement.
+    #[test]
+    fn ensure_instance_session_refuses_non_primary_when_archive_in_flight() {
+        let mut app = test_app();
+        let ws = app.test_workspace("archiving-peer");
+        let peer = app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let outcome = crate::app::ensure_instance_session(&mut app, peer.id, false).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        assert!(
+            app.sessions.get(peer.id).is_none(),
+            "must not spawn a peer session while an archive is tearing the workspace down"
+        );
+    }
+
+    /// A primary instance routed through `ensure_instance_session` must be
+    /// refused too — via delegation to `ensure_workspace_session` — and must
+    /// NOT be double-guarded (i.e. this must not panic/loop and must return
+    /// the same single `Refused`, proving the delegation path is taken
+    /// rather than a duplicate local check).
+    #[test]
+    fn ensure_instance_session_refuses_primary_via_delegation_when_archive_in_flight() {
+        let mut app = test_app();
+        let ws = app.test_workspace("archiving-primary");
+        let primary = app
+            .store
+            .add_primary_agent(ws, AgentKind::Claude, 0)
+            .unwrap();
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::archive(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let outcome = crate::app::ensure_instance_session(&mut app, primary.id, false).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
     }
 }
 

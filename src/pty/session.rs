@@ -86,9 +86,22 @@ pub enum SessionStatus {
     Exited { code: i32 },
 }
 
+/// One item on a session's write channel.
+///
+/// The channel is shared by every writer into the PTY — keystrokes from an
+/// attached pane, resize sequences, injected peer mail — so a *shared* progress
+/// signal can't tell one writer's bytes from another's. `Acked` carries a
+/// one-shot the writer task fires only after this item's own `write_all`
+/// succeeds, and drops (without firing) if the write fails or the task exits.
+/// That makes the answer specific to the bytes the caller cares about.
+pub enum WriteReq {
+    Bytes(Vec<u8>),
+    Acked(Vec<u8>, tokio::sync::oneshot::Sender<()>),
+}
+
 pub struct Session {
     pub parser: Arc<Mutex<Parser>>,
-    pub writer: mpsc::Sender<Vec<u8>>,
+    pub writer: mpsc::Sender<WriteReq>,
     pub status: Arc<RwLock<SessionStatus>>,
     pub activity_ms: Arc<AtomicU64>,
     /// Which agent backs this session. Drives input quirks like how an
@@ -266,7 +279,9 @@ impl Session {
     ///
     /// Used to gate the PM auto-summary message on claude having finished
     /// rendering its banner + input prompt.
-    pub async fn send_text_when_settled(&self, text: &str, quiet_ms: u64, timeout_ms: u64) {
+    #[must_use = "a false return means nothing was written; the caller must not \
+                  treat the message as delivered"]
+    pub async fn send_text_when_settled(&self, text: &str, quiet_ms: u64, timeout_ms: u64) -> bool {
         use std::sync::atomic::Ordering;
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_millis(timeout_ms);
@@ -276,10 +291,18 @@ impl Session {
                     text = %text,
                     "send_text_when_settled: timed out waiting for PTY to settle"
                 );
-                return;
+                return false;
             }
             let last = self.activity_ms.load(Ordering::Relaxed);
-            if last > 0 {
+            // A quiet window alone only means "no bytes moved recently", which
+            // during a fresh agent boot is also true in the pauses *before* the
+            // agent can accept input. `ready_for_input` adds the missing
+            // "the composer exists" half of the condition.
+            let ready = {
+                let parser = self.parser.lock().unwrap();
+                ready_for_input(self.agent, parser.screen())
+            };
+            if last > 0 && ready {
                 let now_ms = now_ms();
                 let since_last = now_ms.saturating_sub(last);
                 if since_last >= quiet_ms {
@@ -287,15 +310,92 @@ impl Session {
                     // `submit_writes` for the per-agent byte shapes). The CR is
                     // a separate write so the agent's TUI sees it as a distinct
                     // Enter rather than part of the typed/pasted text.
+                    //
+                    // A send only fails when the writer task has dropped the
+                    // receiver, which it does as soon as a PTY write errors —
+                    // i.e. the agent is gone. Report that as "not written" so
+                    // the message stays queued rather than being acked into a
+                    // dead terminal. A failed `body` also means the CR is
+                    // pointless, so give up on the pair together.
                     let (body, enter) = submit_writes(self.agent, text);
-                    let _ = self.writer.send(body).await;
+                    if self.writer.send(WriteReq::Bytes(body)).await.is_err() {
+                        tracing::warn!(
+                            text = %text,
+                            "send_text_when_settled: PTY writer is gone; not written"
+                        );
+                        return false;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                    let _ = self.writer.send(enter).await;
-                    return;
+                    // Only the CR is acked. The channel is FIFO with a single
+                    // consumer that stops on the first write failure, so the CR
+                    // having been written proves the body ahead of it was too —
+                    // one one-shot per injection rather than two.
+                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                    if self
+                        .writer
+                        .send(WriteReq::Acked(enter, ack_tx))
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            text = %text,
+                            "send_text_when_settled: PTY writer died before the \
+                             submitting CR; not written"
+                        );
+                        return false;
+                    }
+                    if !await_ack(ack_rx, WRITE_ACK_TIMEOUT_MS).await {
+                        tracing::warn!(
+                            text = %text,
+                            "send_text_when_settled: queued bytes never reached the \
+                             terminal; not written"
+                        );
+                        return false;
+                    }
+                    return true;
                 }
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+    }
+}
+
+/// How long an injection waits for the writer task to push its queued bytes
+/// through `write_all`. Generous: the writer only stalls behind a blocked PTY,
+/// and the alternative to waiting is a false claim of delivery.
+const WRITE_ACK_TIMEOUT_MS: u64 = 5_000;
+
+/// Wait for the writer task's acknowledgement that one specific write reached
+/// the terminal.
+///
+/// Three outcomes, all decisive for THAT write: the ack arrives (`write_all`
+/// succeeded), the sender is dropped (the write failed or the task exited), or
+/// nothing happens before the timeout (a wedged writer, bytes still queued).
+async fn await_ack(rx: tokio::sync::oneshot::Receiver<()>, timeout_ms: u64) -> bool {
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await,
+        Ok(Ok(()))
+    )
+}
+
+/// Whether `agent`'s TUI has drawn an input composer that will actually keep
+/// what we type into it.
+///
+/// Claude sets terminal modes for ~400ms before switching to the alternate
+/// screen and clearing it (`ESC[?1049h ESC[2J`). Text injected in that window
+/// goes into a terminal with no composer and is wiped by the clear — measured
+/// as a real, load-dependent message loss (roughly 1 in 3 injections on a
+/// loaded machine). The alternate screen being up is the signal that the
+/// composer exists.
+///
+/// Codex and hermes render inline and never emit `ESC[?1049h` (verified
+/// against both binaries), so for them the caller's quiet window is the whole
+/// readiness condition — gating them on an alternate screen would block every
+/// delivery until the timeout. Pi is grouped with the inline agents.
+pub(crate) fn ready_for_input(agent: AgentKind, screen: &vt100::Screen) -> bool {
+    match agent {
+        AgentKind::Claude => screen.alternate_screen(),
+        AgentKind::Codex | AgentKind::Hermes | AgentKind::Pi => true,
     }
 }
 
@@ -328,7 +428,7 @@ impl Session {
                 pixel_height: 0,
             })
             .expect("openpty for fake test session");
-        let (tx, _rx) = mpsc::channel::<Vec<u8>>(1);
+        let (tx, _rx) = mpsc::channel::<WriteReq>(1);
         Session {
             parser: Arc::new(Mutex::new(Parser::new(24, 80, 1000))),
             writer: tx,
@@ -545,7 +645,7 @@ pub fn spawn_command_session(
     let status = Arc::new(RwLock::new(SessionStatus::Running { pid }));
     let activity_ms = Arc::new(AtomicU64::new(0));
 
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
+    let (tx, mut rx) = mpsc::channel::<WriteReq>(64);
 
     // Reader thread (blocking I/O on PTY master clone).
     let mut reader = pair
@@ -592,11 +692,21 @@ pub fn spawn_command_session(
         .take_writer()
         .map_err(|e| Error::Pty(format!("take writer: {e}")))?;
     tokio::spawn(async move {
-        while let Some(bytes) = rx.recv().await {
+        while let Some(req) = rx.recv().await {
+            let (bytes, ack) = match req {
+                WriteReq::Bytes(b) => (b, None),
+                WriteReq::Acked(b, tx) => (b, Some(tx)),
+            };
             if writer.write_all(&bytes).is_err() {
+                // `ack` drops here without firing, and so do the acks of every
+                // item still queued behind us once `rx` drops — each waiter
+                // learns its own bytes never made it.
                 break;
             }
             let _ = writer.flush();
+            if let Some(tx) = ack {
+                let _ = tx.send(());
+            }
         }
     });
 
@@ -830,7 +940,10 @@ mod tests {
             None,
         )
         .unwrap();
-        s.writer.send(b"hello\n".to_vec()).await.unwrap();
+        s.writer
+            .send(WriteReq::Bytes(b"hello\n".to_vec()))
+            .await
+            .unwrap();
         // Give cat a moment to echo and the reader to process.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
@@ -876,7 +989,7 @@ mod tests {
         payload.extend_from_slice(b"\x1b[201~");
         let expected = payload.clone();
         // One send: the whole payload goes to the writer task as a single Vec.
-        s.writer.send(payload).await.unwrap();
+        s.writer.send(WriteReq::Bytes(payload)).await.unwrap();
 
         // Poll until the file stops growing.
         let mut last = 0usize;
@@ -1139,6 +1252,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn claude_is_not_ready_for_input_until_it_enters_the_alternate_screen() {
+        // Claude sets terminal modes ~400ms before it switches to the
+        // alternate screen and clears it (`ESC[?1049h ESC[2J`). A quiet window
+        // that lands in that gap injects into a terminal with no composer, and
+        // the clear wipes it — the message is silently lost.
+        let mut p = Parser::new(24, 80, 1000);
+        p.process(b"\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?2004h\x1b[>4;2m");
+        assert!(
+            !ready_for_input(AgentKind::Claude, p.screen()),
+            "pre-alt-screen claude must not be considered ready"
+        );
+        p.process(b"\x1b[?1049h\x1b[2J\x1b[H");
+        assert!(
+            ready_for_input(AgentKind::Claude, p.screen()),
+            "claude is ready once the alternate screen is up"
+        );
+    }
+
+    #[test]
+    fn inline_agents_are_ready_without_an_alternate_screen() {
+        // Verified against the real binaries: codex and hermes render inline
+        // and never emit `ESC[?1049h`. Gating them on it would block every
+        // delivery until the timeout, so for them the quiet window is the
+        // whole gate. Pi is grouped with them (same inline rendering); if it
+        // ever adopts an alt screen this is no worse than today's behavior.
+        let p = Parser::new(24, 80, 1000);
+        for agent in [AgentKind::Codex, AgentKind::Hermes, AgentKind::Pi] {
+            assert!(ready_for_input(agent, p.screen()), "agent {agent:?}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn await_ack_succeeds_when_the_writer_acknowledges_this_write() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            let _ = tx.send(());
+        });
+        assert!(await_ack(rx, 2_000).await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn await_ack_fails_when_the_writer_drops_without_acknowledging() {
+        // The writer task drops the ack sender when `write_all` fails or the
+        // task exits, so a receive error is the signal that THESE bytes never
+        // reached the terminal — no shared counter another writer could
+        // satisfy on our behalf.
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            drop(tx);
+        });
+        assert!(!await_ack(rx, 2_000).await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn await_ack_fails_when_the_writer_never_answers() {
+        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        assert!(!await_ack(rx, 200).await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_text_when_settled_reports_failure_when_the_pty_is_gone() {
+        // The writer task breaks out of its loop as soon as `write_all` fails
+        // (agent exited, PTY closed), which drops the receiver and closes the
+        // channel. Reporting success there would mark a message delivered that
+        // never reached anything — the exact loss this whole path exists to
+        // prevent. `Session::fake` drops its receiver at construction, which is
+        // the same closed-channel state.
+        let s = Session::fake(SessionStatus::Running { pid: 1 });
+        // Make the session look ready and settled so the write is attempted:
+        // alternate screen up (claude's readiness signal) and output long past.
+        s.parser.lock().unwrap().process(b"\x1b[?1049h\x1b[2J");
+        s.activity_ms
+            .store(now_ms().saturating_sub(10_000), Ordering::Relaxed);
+
+        assert!(
+            !s.send_text_when_settled("lost", 400, 2_000).await,
+            "a closed writer channel means nothing was written"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_text_when_settled_writes_after_quiet_window() {
         // Use AgentKind::Codex with an arg-ignoring wrapper that execs cat,
@@ -1167,10 +1363,16 @@ mod tests {
         )
         .unwrap();
         // Prime cat with some output so activity_ms is populated, then let it settle.
-        s.writer.send(b"prime\n".to_vec()).await.unwrap();
+        s.writer
+            .send(WriteReq::Bytes(b"prime\n".to_vec()))
+            .await
+            .unwrap();
         // The helper waits for the quiet window, then writes the payload.
         // With cat, the payload echoes back into the screen buffer.
-        s.send_text_when_settled("AUTO_MSG", 200, 3_000).await;
+        assert!(
+            s.send_text_when_settled("AUTO_MSG", 200, 3_000).await,
+            "a settled PTY must report that the write happened"
+        );
         // Allow cat to echo.
         tokio::time::sleep(Duration::from_millis(300)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
@@ -1207,7 +1409,11 @@ mod tests {
         .unwrap();
         // Do NOT send any input — cat stays silent, activity_ms never gets set.
         let start = std::time::Instant::now();
-        s.send_text_when_settled("NEVER_SENT", 200, 500).await;
+        assert!(
+            !s.send_text_when_settled("NEVER_SENT", 200, 500).await,
+            "a timed-out settle must report that nothing was written, so the \
+             caller can retry instead of marking the message delivered"
+        );
         let elapsed = start.elapsed();
         assert!(elapsed >= Duration::from_millis(450), "{elapsed:?}");
         assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");
@@ -1658,7 +1864,10 @@ mod tests {
             None,
         )
         .unwrap();
-        s.writer.send(b"hello-codex\n".to_vec()).await.unwrap();
+        s.writer
+            .send(WriteReq::Bytes(b"hello-codex\n".to_vec()))
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("hello-codex"), "screen: {screen:?}");

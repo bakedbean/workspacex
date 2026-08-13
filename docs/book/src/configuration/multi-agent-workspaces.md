@@ -71,6 +71,31 @@ Queued messages are injected by the running `wsx` TUI, so `wsx agent send`
 warns on stderr when no dashboard is running — the message stays queued and is
 delivered when one starts.
 
+Delivery waits for the target agent to be ready to accept input: its TUI must
+be up (not still booting) and its output quiet. A cold agent takes a second or
+two to get there, and one that's midway through a turn takes as long as the
+turn does — the message lands at its prompt rather than mid-work. A message is
+only marked delivered once it has actually been written to the agent's
+terminal; if the write doesn't happen, it stays queued and is retried. After
+several failed attempts wsx stops retrying and the workspace's dashboard row
+shows a red `✉!` badge, so an undeliverable message is visible rather than
+silently dropped. Restarting `wsx` clears the attempt counts and retries.
+
+Mail queued while no dashboard was running is delivered when one starts. Only
+one message at a time is injected into any given agent — messages that arrive
+while a delivery is in flight wait their turn, so they can't interleave in the
+agent's terminal.
+
+A message counts as delivered only when the terminal write for it is
+acknowledged, so a queued write that never reaches the agent is retried rather
+than recorded as sent.
+
+Delivery is *at-least-once* across a crash: if `wsx` dies after writing a
+message into an agent's terminal but before recording it as delivered, the
+message is still queued and will be injected again when `wsx` restarts. The
+in-flight bookkeeping that prevents duplicates is in memory, so it does not
+survive the process.
+
 Since all agents write to the same files, prefer messaging to hand off work rather than editing the same paths in parallel.
 
 ### Listing agents

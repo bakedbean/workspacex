@@ -616,6 +616,40 @@ pub struct App {
     pub shared_detached: std::collections::HashSet<crate::data::store::WorkspaceId>,
     /// Epoch-ms of the last `refresh_shared_detached` sweep (throttle key).
     pub shared_detached_polled_ms: u64,
+    /// Inbox message ids with an injection task currently in flight, mapped to
+    /// the agent they are being injected into. An injection waits for the
+    /// target agent to be ready, which can take many seconds; without this the
+    /// retry drain would dispatch the same row again on every tick and the
+    /// agent would receive it several times. The target half also gates a
+    /// second worker against the same session — see `target_in_flight`.
+    pub(crate) delivering: std::collections::HashMap<i64, crate::data::store::AgentInstanceId>,
+    /// Outcomes reported back by those detached injection tasks. Written from
+    /// the tasks (hence the `Arc<Mutex<_>>`; `Store` holds a bare
+    /// `rusqlite::Connection` and can't cross the spawn), applied on the next
+    /// tick by `apply_delivery_outcomes` — the only place that touches the DB.
+    pub(crate) delivery_outcomes:
+        std::sync::Arc<std::sync::Mutex<Vec<crate::app::messaging::DeliveryOutcome>>>,
+    /// Failed injection attempts per inbox message id. Cleared on success;
+    /// at `MAX_DELIVERY_ATTEMPTS` the message stops being retried. In memory
+    /// rather than on the row, so a wsx restart — which also restarts the
+    /// agents — gets a fresh set of attempts.
+    pub(crate) delivery_attempts: std::collections::HashMap<i64, u32>,
+    /// Workspaces with a queued message wsx has given up injecting. Drives the
+    /// row's `✉!` badge, so a message that can't be delivered is visible on the
+    /// dashboard instead of only in the log file.
+    pub(crate) stuck_mail: std::collections::HashSet<crate::data::store::WorkspaceId>,
+    /// When the inbox should next be drained, epoch-ms. `Some(0)` at startup so
+    /// mail queued while wsx was down is picked up on the first tick — nothing
+    /// else would, since `App::new` snapshots `last_data_version` and so
+    /// `poll_external_changes` sees no edge. Re-armed whenever a drain leaves a
+    /// message waiting on something no DB commit or outcome will announce (an
+    /// agent that failed to spawn, a session that wasn't there).
+    pub(crate) next_mail_drain_ms: Option<u64>,
+    /// Acks whose `mark_delivered` failed, parked until their backoff expires.
+    pub(crate) pending_acks: Vec<crate::app::messaging::PendingAck>,
+    /// Consecutive ack failures per message id, carried across the park so the
+    /// backoff keeps doubling.
+    pub(crate) ack_fails: std::collections::HashMap<i64, u32>,
 }
 
 impl App {
@@ -665,6 +699,15 @@ impl App {
             activity_history: std::collections::VecDeque::new(),
             last_proc_scan_ms: 0,
             pending_workspace_refresh: std::collections::HashSet::new(),
+            delivering: std::collections::HashMap::new(),
+            delivery_outcomes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delivery_attempts: std::collections::HashMap::new(),
+            stuck_mail: std::collections::HashSet::new(),
+            // Due immediately: the first tick recovers mail queued while wsx
+            // was not running.
+            next_mail_drain_ms: Some(0),
+            pending_acks: Vec::new(),
+            ack_fails: std::collections::HashMap::new(),
             pending_edit: None,
             theme,
             pm_visible: false,
@@ -1689,7 +1732,19 @@ pub async fn run<B: Backend + std::io::Write>(
                 // is in-process and only triggers refresh on external commits.
                 // Only scan the inbox when a sibling commit was detected
                 // (e.g. a `wsx agent send`), avoiding a per-frame DB query.
-                if g.poll_external_changes() {
+                // `apply_delivery_outcomes` must run unconditionally: an
+                // injection that finished (landed, or gave up waiting for the
+                // agent to be ready) reports back through shared state, not
+                // through the DB, so `poll_external_changes` never sees it. It
+                // is a lock + is_empty when nothing is in flight.
+                let redeliver = g.apply_delivery_outcomes();
+                // The heartbeat covers what neither of the other two triggers
+                // can: mail already queued at startup, and mail left pending by
+                // a failure that produced no outcome (agent spawn failed, no
+                // session). Both would otherwise wait for an unrelated sibling
+                // commit that may never come.
+                let mail_due = g.mail_drain_due(now_ms);
+                if g.poll_external_changes() || redeliver || mail_due {
                     g.drain_agent_messages();
                 }
                 let now_secs = crate::time::now_secs();

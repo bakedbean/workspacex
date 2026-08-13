@@ -835,6 +835,7 @@ fn build_row_inputs(
         now.saturating_sub(last) / 1000
     });
     let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
+    let undelivered_mail = app.stuck_mail.contains(&ws.id);
     // Badge liveness: a running client in this wsx (the tmux
     // attach client) or a detached-but-alive server session
     // (from the throttled has-session sweep) both mean the
@@ -878,6 +879,7 @@ fn build_row_inputs(
             Some(SelectionTarget::Workspace(id)) if id == ws.id),
         yolo: ws.yolo,
         setup_failed,
+        undelivered_mail,
         shared: ws.shared,
         shared_active,
         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),

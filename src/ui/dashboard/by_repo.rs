@@ -194,6 +194,7 @@ mod tests {
                 selected: i == 0,
                 yolo: false,
                 setup_failed: false,
+                undelivered_mail: false,
                 shared: false,
                 shared_active: false,
                 lifecycle: None,

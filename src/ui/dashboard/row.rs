@@ -105,6 +105,9 @@ pub struct RowInputs {
     pub selected: bool,
     pub yolo: bool,
     pub setup_failed: bool,
+    /// A peer message is queued for an agent here that wsx has stopped trying
+    /// to inject. Renders a `✉!` badge next to the branch.
+    pub undelivered_mail: bool,
     /// Workspace is tmux-backed ("shared"): its agent sessions live in a
     /// tmux server and survive wsx quitting. Renders a badge before the
     /// branch glyph.
@@ -257,10 +260,13 @@ pub fn render(
     // characters (then trailing padding fills the rest of `branch_width`)
     // so it stays attached to the branch even when truncated to `…`.
     let setup_badge_width = if inputs.setup_failed { 3 } else { 0 };
+    let mail_badge_width = if inputs.undelivered_mail { 3 } else { 0 };
     let branch_glyph = crate::ui::theme::branch_glyph(inputs.lifecycle, inputs.nerd_fonts);
     let branch_text = format!("{} {}", branch_glyph, inputs.branch);
     let branch_target = branch_width
-        .saturating_sub(layout_badge_width + shared_badge_width + setup_badge_width)
+        .saturating_sub(
+            layout_badge_width + shared_badge_width + setup_badge_width + mail_badge_width,
+        )
         .max(1);
     let branch_truncated = truncate(&branch_text, branch_target);
     let branch_visible_width = branch_truncated.chars().count();
@@ -291,8 +297,14 @@ pub fn render(
     if inputs.setup_failed {
         spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
     }
-    let consumed =
-        layout_badge_width + shared_badge_width + branch_visible_width + setup_badge_width;
+    if inputs.undelivered_mail {
+        spans.push(Span::styled(" ✉!".to_string(), theme.err_style()));
+    }
+    let consumed = layout_badge_width
+        + shared_badge_width
+        + branch_visible_width
+        + setup_badge_width
+        + mail_badge_width;
     if consumed < branch_width {
         spans.push(Span::raw(" ".repeat(branch_width - consumed)));
     }
@@ -610,6 +622,7 @@ mod tests {
             selected: false,
             yolo: false,
             setup_failed: false,
+            undelivered_mail: false,
             shared: false,
             shared_active: false,
             has_multi_pane_layout: false,
@@ -1045,6 +1058,31 @@ mod tests {
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("⚙!"), "setup badge present: {text:?}");
+    }
+
+    #[test]
+    fn undelivered_mail_appends_badge() {
+        // A peer message wsx gave up injecting stays queued rather than being
+        // silently dropped, so the row has to say so — otherwise the only
+        // trace is a WARN in the log file.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.undelivered_mail = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("✉!"), "mail badge present: {text:?}");
+    }
+
+    #[test]
+    fn undelivered_mail_and_setup_failed_badges_both_render() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.undelivered_mail = true;
+        inputs.setup_failed = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("⚙!"), "setup badge present: {text:?}");
+        assert!(text.contains("✉!"), "mail badge present: {text:?}");
     }
 
     #[test]

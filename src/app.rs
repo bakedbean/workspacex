@@ -632,6 +632,10 @@ pub struct App {
     /// rather than on the row, so a wsx restart — which also restarts the
     /// agents — gets a fresh set of attempts.
     pub(crate) delivery_attempts: std::collections::HashMap<i64, u32>,
+    /// Workspaces with a queued message wsx has given up injecting. Drives the
+    /// row's `✉!` badge, so a message that can't be delivered is visible on the
+    /// dashboard instead of only in the log file.
+    pub(crate) stuck_mail: std::collections::HashSet<crate::data::store::WorkspaceId>,
 }
 
 impl App {
@@ -684,6 +688,7 @@ impl App {
             delivering: std::collections::HashSet::new(),
             delivery_outcomes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delivery_attempts: std::collections::HashMap::new(),
+            stuck_mail: std::collections::HashSet::new(),
             pending_edit: None,
             theme,
             pm_visible: false,

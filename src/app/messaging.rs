@@ -94,6 +94,23 @@ pub(crate) fn deliverable(
         .collect()
 }
 
+/// Workspaces holding a queued message wsx has stopped trying to inject.
+///
+/// Derived from the queue itself rather than tracked alongside it: an exhausted
+/// message is still an undelivered row, so `undelivered_messages` plus the
+/// attempt counts is the whole story. That also means the flag clears itself
+/// when the attempt counts reset (a wsx restart, which restarts the agents too).
+pub(crate) fn stuck_workspaces(
+    pending: &[AgentMessage],
+    attempts: &std::collections::HashMap<i64, u32>,
+) -> std::collections::HashSet<crate::data::store::WorkspaceId> {
+    pending
+        .iter()
+        .filter(|m| attempts.get(&m.id).copied().unwrap_or(0) >= MAX_DELIVERY_ATTEMPTS)
+        .map(|m| m.workspace_id)
+        .collect()
+}
+
 impl crate::app::App {
     /// Apply the outcomes reported by finished injection tasks: mark the
     /// messages that actually landed as delivered, and count an attempt against
@@ -158,6 +175,9 @@ impl crate::app::App {
             Ok(p) => p,
             Err(_) => return, // transient; retry next external-change tick
         };
+        // Recomputed before the dispatch filter, because the messages being
+        // flagged are exactly the ones `deliverable` is about to drop.
+        self.stuck_mail = stuck_workspaces(&pending, &self.delivery_attempts);
         let pending = deliverable(pending, &self.delivering, &self.delivery_attempts);
         if pending.is_empty() {
             return;
@@ -334,6 +354,24 @@ mod tests {
         assert!(
             !app.apply_delivery_outcomes(),
             "no outcomes reported means no redelivery work to do"
+        );
+    }
+
+    #[test]
+    fn stuck_workspaces_flags_only_the_attempt_exhausted() {
+        let (app, ids) = app_with_queued_messages(2);
+        let pending = app.store.undelivered_messages().unwrap();
+        let ws = pending[0].workspace_id;
+        let attempts =
+            std::collections::HashMap::from([(ids[0], MAX_DELIVERY_ATTEMPTS), (ids[1], 1)]);
+
+        assert_eq!(
+            stuck_workspaces(&pending, &attempts),
+            std::collections::HashSet::from([ws]),
+        );
+        assert!(
+            stuck_workspaces(&pending, &std::collections::HashMap::new()).is_empty(),
+            "a message still being retried is not stuck"
         );
     }
 

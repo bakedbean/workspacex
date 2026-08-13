@@ -137,7 +137,11 @@ impl crate::app::App {
             let sess = session.clone();
             tokio::spawn(async move {
                 for b in banners {
-                    sess.send_text_when_settled(&b, 400, 5_000).await;
+                    // The `false` (timed out, nothing written) case still can't
+                    // be acted on here: the messages were already marked
+                    // delivered below. Wiring the outcome back so a failed
+                    // injection retries is the next commit.
+                    let _ = sess.send_text_when_settled(&b, 400, 5_000).await;
                 }
             });
             for m in &msgs {

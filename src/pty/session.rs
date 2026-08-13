@@ -266,7 +266,9 @@ impl Session {
     ///
     /// Used to gate the PM auto-summary message on claude having finished
     /// rendering its banner + input prompt.
-    pub async fn send_text_when_settled(&self, text: &str, quiet_ms: u64, timeout_ms: u64) {
+    #[must_use = "a false return means nothing was written; the caller must not \
+                  treat the message as delivered"]
+    pub async fn send_text_when_settled(&self, text: &str, quiet_ms: u64, timeout_ms: u64) -> bool {
         use std::sync::atomic::Ordering;
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_millis(timeout_ms);
@@ -276,10 +278,18 @@ impl Session {
                     text = %text,
                     "send_text_when_settled: timed out waiting for PTY to settle"
                 );
-                return;
+                return false;
             }
             let last = self.activity_ms.load(Ordering::Relaxed);
-            if last > 0 {
+            // A quiet window alone only means "no bytes moved recently", which
+            // during a fresh agent boot is also true in the pauses *before* the
+            // agent can accept input. `ready_for_input` adds the missing
+            // "the composer exists" half of the condition.
+            let ready = {
+                let parser = self.parser.lock().unwrap();
+                ready_for_input(self.agent, parser.screen())
+            };
+            if last > 0 && ready {
                 let now_ms = now_ms();
                 let since_last = now_ms.saturating_sub(last);
                 if since_last >= quiet_ms {
@@ -291,11 +301,32 @@ impl Session {
                     let _ = self.writer.send(body).await;
                     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
                     let _ = self.writer.send(enter).await;
-                    return;
+                    return true;
                 }
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+    }
+}
+
+/// Whether `agent`'s TUI has drawn an input composer that will actually keep
+/// what we type into it.
+///
+/// Claude sets terminal modes for ~400ms before switching to the alternate
+/// screen and clearing it (`ESC[?1049h ESC[2J`). Text injected in that window
+/// goes into a terminal with no composer and is wiped by the clear — measured
+/// as a real, load-dependent message loss (roughly 1 in 3 injections on a
+/// loaded machine). The alternate screen being up is the signal that the
+/// composer exists.
+///
+/// Codex and hermes render inline and never emit `ESC[?1049h` (verified
+/// against both binaries), so for them the caller's quiet window is the whole
+/// readiness condition — gating them on an alternate screen would block every
+/// delivery until the timeout. Pi is grouped with the inline agents.
+pub(crate) fn ready_for_input(agent: AgentKind, screen: &vt100::Screen) -> bool {
+    match agent {
+        AgentKind::Claude => screen.alternate_screen(),
+        AgentKind::Codex | AgentKind::Hermes | AgentKind::Pi => true,
     }
 }
 
@@ -1139,6 +1170,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn claude_is_not_ready_for_input_until_it_enters_the_alternate_screen() {
+        // Claude sets terminal modes ~400ms before it switches to the
+        // alternate screen and clears it (`ESC[?1049h ESC[2J`). A quiet window
+        // that lands in that gap injects into a terminal with no composer, and
+        // the clear wipes it — the message is silently lost.
+        let mut p = Parser::new(24, 80, 1000);
+        p.process(b"\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?2004h\x1b[>4;2m");
+        assert!(
+            !ready_for_input(AgentKind::Claude, p.screen()),
+            "pre-alt-screen claude must not be considered ready"
+        );
+        p.process(b"\x1b[?1049h\x1b[2J\x1b[H");
+        assert!(
+            ready_for_input(AgentKind::Claude, p.screen()),
+            "claude is ready once the alternate screen is up"
+        );
+    }
+
+    #[test]
+    fn inline_agents_are_ready_without_an_alternate_screen() {
+        // Verified against the real binaries: codex and hermes render inline
+        // and never emit `ESC[?1049h`. Gating them on it would block every
+        // delivery until the timeout, so for them the quiet window is the
+        // whole gate. Pi is grouped with them (same inline rendering); if it
+        // ever adopts an alt screen this is no worse than today's behavior.
+        let p = Parser::new(24, 80, 1000);
+        for agent in [AgentKind::Codex, AgentKind::Hermes, AgentKind::Pi] {
+            assert!(ready_for_input(agent, p.screen()), "agent {agent:?}");
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn send_text_when_settled_writes_after_quiet_window() {
         // Use AgentKind::Codex with an arg-ignoring wrapper that execs cat,
@@ -1170,7 +1233,10 @@ mod tests {
         s.writer.send(b"prime\n".to_vec()).await.unwrap();
         // The helper waits for the quiet window, then writes the payload.
         // With cat, the payload echoes back into the screen buffer.
-        s.send_text_when_settled("AUTO_MSG", 200, 3_000).await;
+        assert!(
+            s.send_text_when_settled("AUTO_MSG", 200, 3_000).await,
+            "a settled PTY must report that the write happened"
+        );
         // Allow cat to echo.
         tokio::time::sleep(Duration::from_millis(300)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
@@ -1207,7 +1273,11 @@ mod tests {
         .unwrap();
         // Do NOT send any input — cat stays silent, activity_ms never gets set.
         let start = std::time::Instant::now();
-        s.send_text_when_settled("NEVER_SENT", 200, 500).await;
+        assert!(
+            !s.send_text_when_settled("NEVER_SENT", 200, 500).await,
+            "a timed-out settle must report that nothing was written, so the \
+             caller can retry instead of marking the message delivered"
+        );
         let elapsed = start.elapsed();
         assert!(elapsed >= Duration::from_millis(450), "{elapsed:?}");
         assert!(elapsed < Duration::from_millis(1500), "{elapsed:?}");

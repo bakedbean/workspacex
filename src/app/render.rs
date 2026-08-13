@@ -812,6 +812,33 @@ fn draw_attached_nav_overlay(f: &mut ratatui::Frame, area: ratatui::layout::Rect
     );
 }
 
+/// Derive a row's lifecycle badge. A live `in_flight` entry always wins:
+/// it proves work is running right now, whereas the persisted statuses
+/// describe how the last attempt ended.
+pub(crate) fn lifecycle_badge_for(
+    state: &crate::data::store::WorkspaceState,
+    setup_status: &crate::data::store::SetupStatus,
+    in_flight: Option<crate::data::in_flight::InFlightKind>,
+) -> Option<crate::ui::dashboard::row::LifecycleBadge> {
+    use crate::data::in_flight::InFlightKind;
+    use crate::data::store::{SetupStatus, WorkspaceState};
+    use crate::ui::dashboard::row::LifecycleBadge;
+
+    match in_flight {
+        Some(InFlightKind::Create) => return Some(LifecycleBadge::Provisioning),
+        Some(InFlightKind::Archive) => return Some(LifecycleBadge::Archiving),
+        None => {}
+    }
+    match (state, setup_status) {
+        (WorkspaceState::Failed, _) => Some(LifecycleBadge::NoWorktree),
+        (_, SetupStatus::Failed) => Some(LifecycleBadge::SetupFailed),
+        (_, SetupStatus::Cancelled) => Some(LifecycleBadge::SetupCancelled),
+        // A persisted `Running` with no registry entry is crash residue that
+        // `sweep_stale_running` already resolved before the first draw.
+        _ => None,
+    }
+}
+
 /// Build one workspace's dashboard row inputs: status classification, live
 /// peer agents, activity age, and the assorted per-row cache lookups the
 /// renderer needs. Extracted from the per-workspace loop in `draw` so it's
@@ -834,7 +861,11 @@ fn build_row_inputs(
         let now = now_ms.max(0) as u64;
         now.saturating_sub(last) / 1000
     });
-    let setup_failed = ws.setup_status == crate::data::store::SetupStatus::Failed;
+    let badge = lifecycle_badge_for(
+        &ws.state,
+        &ws.setup_status,
+        app.in_flight.get(&ws.id).map(|f| f.kind),
+    );
     let undelivered_mail = app.stuck_mail.contains(&ws.id);
     // Badge liveness: a running client in this wsx (the tmux
     // attach client) or a detached-but-alive server session
@@ -878,7 +909,7 @@ fn build_row_inputs(
         selected: matches!(app.selected_target(),
             Some(SelectionTarget::Workspace(id)) if id == ws.id),
         yolo: ws.yolo,
-        setup_failed,
+        badge,
         undelivered_mail,
         shared: ws.shared,
         shared_active,

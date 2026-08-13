@@ -1398,10 +1398,10 @@ async fn handle_key_modal(
             _ => {}
         },
         Modal::SetupProgress { .. } => {
-            // A viewer onto App::in_flight, not an owner: Esc just closes it,
-            // leaving the background create running. Every other key is
-            // ignored.
-            if k.code == KeyCode::Esc {
+            // A viewer onto App::in_flight, not an owner: Esc/Enter just
+            // closes it, leaving the background create running. Every other
+            // key is ignored.
+            if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
                 app.modal = None;
             }
         }
@@ -1452,6 +1452,26 @@ async fn handle_key_modal(
                     name_buffer,
                     notice: None,
                 });
+            }
+            // Open the progress viewer for a workspace with work in flight.
+            KeyCode::Char('o') => {
+                if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target()
+                    && app.in_flight.contains_key(&ws_id)
+                {
+                    app.modal = Some(Modal::SetupProgress {
+                        workspace_id: ws_id,
+                    });
+                }
+            }
+            // Cancel an in-flight CREATE. Archive is not cancellable.
+            KeyCode::Char('x') => {
+                if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target()
+                    && let Some(f) = app.in_flight.get(&ws_id)
+                    && f.kind == crate::data::in_flight::InFlightKind::Create
+                {
+                    f.cancel.cancel();
+                    app.modal = None;
+                }
             }
             // Everything else is inert while the card is open.
             _ => {}

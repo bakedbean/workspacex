@@ -85,6 +85,47 @@ impl Default for ColumnWidths {
     }
 }
 
+/// A workspace lifecycle badge, rendered immediately after the branch name.
+/// Distinct from the agent-status glyph in column 3: that one tracks whether
+/// the *agent* is live, this one whether the *workspace* is ready. Both can
+/// animate at once — you can attach to a workspace while its setup runs —
+/// and conflating them would lose that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleBadge {
+    /// Create in flight: fetching, checking out, or running setup.
+    Provisioning,
+    /// Archive in flight: script, worktree removal, branch delete.
+    Archiving,
+    SetupFailed,
+    SetupCancelled,
+    /// The worktree was never created (a failed fetch or checkout).
+    NoWorktree,
+}
+
+impl LifecycleBadge {
+    /// Rendered text, including the leading space that separates it from the
+    /// branch name. `tick` drives the spinner on the in-flight variants, and
+    /// is `u32` to match `spinner::frame` (`src/ui/dashboard/spinner.rs:11`).
+    pub fn glyph(self, tick: u32) -> String {
+        match self {
+            LifecycleBadge::Provisioning => format!(" {}⚙", spinner::frame(tick)),
+            LifecycleBadge::Archiving => format!(" {}⌫", spinner::frame(tick)),
+            LifecycleBadge::SetupFailed => " ⚙!".to_string(),
+            LifecycleBadge::SetupCancelled => " ⚙?".to_string(),
+            LifecycleBadge::NoWorktree => " ✗".to_string(),
+        }
+    }
+
+    /// Display columns this badge consumes. Every variant is a space plus
+    /// two cells, except `NoWorktree`, which is a space plus one.
+    pub fn width(self) -> usize {
+        match self {
+            LifecycleBadge::NoWorktree => 2,
+            _ => 3,
+        }
+    }
+}
+
 /// Inputs the renderer needs about one workspace, gathered by the caller
 /// from `app.rs` state.
 #[derive(Debug, Clone)]
@@ -104,9 +145,13 @@ pub struct RowInputs {
     pub ago_secs: Option<u64>,
     pub selected: bool,
     pub yolo: bool,
-    pub setup_failed: bool,
+    /// Workspace lifecycle badge, rendered after the branch name. `None` for
+    /// a healthy, idle workspace.
+    pub badge: Option<LifecycleBadge>,
     /// A peer message is queued for an agent here that wsx has stopped trying
-    /// to inject. Renders a `✉!` badge next to the branch.
+    /// to inject. Renders a `✉!` badge next to the branch. Orthogonal to
+    /// `badge`: that one tracks the workspace's own lifecycle, this one the
+    /// mail queue, and both can be showing at once.
     pub undelivered_mail: bool,
     /// Workspace is tmux-backed ("shared"): its agent sessions live in a
     /// tmux server and survive wsx quitting. Renders a badge before the
@@ -259,7 +304,7 @@ pub fn render(
     // The setup-failed badge sits IMMEDIATELY after the visible branch
     // characters (then trailing padding fills the rest of `branch_width`)
     // so it stays attached to the branch even when truncated to `…`.
-    let setup_badge_width = if inputs.setup_failed { 3 } else { 0 };
+    let setup_badge_width = inputs.badge.map(|b| b.width()).unwrap_or(0);
     let mail_badge_width = if inputs.undelivered_mail { 3 } else { 0 };
     let branch_glyph = crate::ui::theme::branch_glyph(inputs.lifecycle, inputs.nerd_fonts);
     let branch_text = format!("{} {}", branch_glyph, inputs.branch);
@@ -294,8 +339,12 @@ pub fn render(
     if let Some(name_cell) = name_cell.filter(|n| !n.is_empty()) {
         spans.push(Span::styled(name_cell, name_style));
     }
-    if inputs.setup_failed {
-        spans.push(Span::styled(" ⚙!".to_string(), theme.err_style()));
+    if let Some(b) = inputs.badge {
+        let style = match b {
+            LifecycleBadge::Provisioning | LifecycleBadge::Archiving => theme.dim_style(),
+            _ => theme.err_style(),
+        };
+        spans.push(Span::styled(b.glyph(tick), style));
     }
     if inputs.undelivered_mail {
         spans.push(Span::styled(" ✉!".to_string(), theme.err_style()));
@@ -621,7 +670,7 @@ mod tests {
             ago_secs: Some(29),
             selected: false,
             yolo: false,
-            setup_failed: false,
+            badge: None,
             undelivered_mail: false,
             shared: false,
             shared_active: false,
@@ -1054,7 +1103,7 @@ mod tests {
     fn setup_failed_appends_badge() {
         let theme = Theme::wsx();
         let mut inputs = base();
-        inputs.setup_failed = true;
+        inputs.badge = Some(LifecycleBadge::SetupFailed);
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("⚙!"), "setup badge present: {text:?}");
@@ -1078,7 +1127,7 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.undelivered_mail = true;
-        inputs.setup_failed = true;
+        inputs.badge = Some(LifecycleBadge::SetupFailed);
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("⚙!"), "setup badge present: {text:?}");
@@ -1278,7 +1327,7 @@ mod tests {
             inputs.lifecycle = Some(BranchLifecycle::PrOpen);
             inputs.shared = true;
             inputs.has_multi_pane_layout = true;
-            inputs.setup_failed = true;
+            inputs.badge = Some(LifecycleBadge::SetupFailed);
             let widths = ColumnWidths::clamped(branch_width, DEFAULT_PR_WIDTH);
             let line = render(&inputs, widths, 0, &theme, 120);
             assert_eq!(
@@ -1470,7 +1519,7 @@ mod tests {
         let mut inputs = base();
         inputs.nerd_fonts = true;
         inputs.has_multi_pane_layout = true;
-        inputs.setup_failed = true;
+        inputs.badge = Some(LifecycleBadge::SetupFailed);
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         let text = line_text(&line);
         assert!(text.contains("⚙!"), "setup badge present: {text:?}");
@@ -1841,5 +1890,78 @@ mod tests {
                 "pad cell at x={x} must carry the selected row background"
             );
         }
+    }
+
+    #[test]
+    fn lifecycle_badge_derivation_table() {
+        use crate::app::render::lifecycle_badge_for;
+        use crate::data::in_flight::InFlightKind;
+        use crate::data::store::{SetupStatus, WorkspaceState};
+
+        let cases = [
+            // (state, setup_status, in_flight, expected)
+            (
+                WorkspaceState::Ready,
+                SetupStatus::Running,
+                Some(InFlightKind::Create),
+                Some(LifecycleBadge::Provisioning),
+            ),
+            (
+                WorkspaceState::Ready,
+                SetupStatus::Ok,
+                Some(InFlightKind::Archive),
+                Some(LifecycleBadge::Archiving),
+            ),
+            (
+                WorkspaceState::Ready,
+                SetupStatus::Failed,
+                None,
+                Some(LifecycleBadge::SetupFailed),
+            ),
+            (
+                WorkspaceState::Ready,
+                SetupStatus::Cancelled,
+                None,
+                Some(LifecycleBadge::SetupCancelled),
+            ),
+            (
+                WorkspaceState::Failed,
+                SetupStatus::NotRun,
+                None,
+                Some(LifecycleBadge::NoWorktree),
+            ),
+            (WorkspaceState::Ready, SetupStatus::Ok, None, None),
+            (WorkspaceState::Ready, SetupStatus::Skipped, None, None),
+            // The persisted Running status alone never badges: without a live
+            // registry entry it is the residue of a crash, already swept.
+            (WorkspaceState::Ready, SetupStatus::Running, None, None),
+            // In-flight always wins over the persisted status.
+            (
+                WorkspaceState::Failed,
+                SetupStatus::Failed,
+                Some(InFlightKind::Archive),
+                Some(LifecycleBadge::Archiving),
+            ),
+        ];
+        for (state, setup, kind, expected) in cases {
+            assert_eq!(
+                lifecycle_badge_for(&state, &setup, kind),
+                expected,
+                "state={state:?} setup={setup:?} in_flight={kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn in_flight_badges_animate_and_terminal_ones_do_not() {
+        let a = LifecycleBadge::Provisioning.glyph(0);
+        let b = LifecycleBadge::Provisioning.glyph(1);
+        assert_ne!(a, b, "provisioning must animate");
+        assert_eq!(
+            LifecycleBadge::SetupFailed.glyph(0),
+            LifecycleBadge::SetupFailed.glyph(1),
+            "terminal badges must be static"
+        );
+        assert_eq!(LifecycleBadge::SetupFailed.glyph(0), " ⚙!");
     }
 }

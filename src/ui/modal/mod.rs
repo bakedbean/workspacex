@@ -364,7 +364,8 @@ pub fn render(
             "These apply to the selected workspace:\n\n  \
              e   edit        t   term\n  \
              v   diff        g   lazygit\n  \
-             c   chronox     r   rename\n\n  \
+             c   chronox     r   rename\n  \
+             o   setup log   x   cancel setup\n\n  \
              ?/Esc  close"
                 .to_string(),
         ),

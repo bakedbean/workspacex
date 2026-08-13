@@ -86,6 +86,10 @@ one message at a time is injected into any given agent — messages that arrive
 while a delivery is in flight wait their turn, so they can't interleave in the
 agent's terminal.
 
+A message counts as delivered only when the terminal write for it is
+acknowledged, so a queued write that never reaches the agent is retried rather
+than recorded as sent.
+
 Delivery is *at-least-once* across a crash: if `wsx` dies after writing a
 message into an agent's terminal but before recording it as delivered, the
 message is still queued and will be injected again when `wsx` restarts. The

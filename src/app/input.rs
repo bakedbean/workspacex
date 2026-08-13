@@ -250,7 +250,10 @@ async fn fire_chip(app: &mut App, idx: usize) {
     let mut bytes = cmd.command.into_bytes();
     bytes.push(b'\r');
     session.scroll_to_live();
-    let _ = session.writer.send(bytes).await;
+    let _ = session
+        .writer
+        .send(crate::pty::session::WriteReq::Bytes(bytes))
+        .await;
     if matches!(app.view, View::Dashboard) {
         // Echo the dispatched command into the reply input so the user
         // sees what was sent. The tick handler clears it after the
@@ -929,7 +932,10 @@ async fn dispatch_leader_action(
         KeyCode::Char('x') => {
             // Send a literal Ctrl-x (0x18) to claude.
             session.scroll_to_live();
-            let _ = session.writer.send(vec![0x18]).await;
+            let _ = session
+                .writer
+                .send(crate::pty::session::WriteReq::Bytes(vec![0x18]))
+                .await;
             Ok(())
         }
         KeyCode::Char('u') => {
@@ -1002,7 +1008,10 @@ async fn dispatch_leader_action(
                 let mut bytes = cmd.command.as_bytes().to_vec();
                 bytes.push(b'\r');
                 session.scroll_to_live();
-                let _ = session.writer.send(bytes).await;
+                let _ = session
+                    .writer
+                    .send(crate::pty::session::WriteReq::Bytes(bytes))
+                    .await;
             }
             Ok(())
         }
@@ -1084,7 +1093,10 @@ async fn handle_key_attached(
     let bytes = encode_key(k);
     if !bytes.is_empty() {
         session.scroll_to_live();
-        let _ = session.writer.send(bytes).await;
+        let _ = session
+            .writer
+            .send(crate::pty::session::WriteReq::Bytes(bytes))
+            .await;
     }
     // Auto-rename capture (local mode only): buffer printable chars; on Enter,
     // attempt rename if the workspace name is still a generated slug. In the
@@ -1173,7 +1185,10 @@ async fn handle_key_attached_remote(app: &mut App, k: crossterm::event::KeyEvent
                 let mut bytes = cmd.command.as_bytes().to_vec();
                 bytes.push(b'\r');
                 session.scroll_to_live();
-                let _ = session.writer.send(bytes).await;
+                let _ = session
+                    .writer
+                    .send(crate::pty::session::WriteReq::Bytes(bytes))
+                    .await;
             }
             return Ok(());
         }
@@ -1188,7 +1203,10 @@ async fn handle_key_attached_remote(app: &mut App, k: crossterm::event::KeyEvent
     let bytes = encode_key(k);
     if !bytes.is_empty() {
         session.scroll_to_live();
-        let _ = session.writer.send(bytes).await;
+        let _ = session
+            .writer
+            .send(crate::pty::session::WriteReq::Bytes(bytes))
+            .await;
     }
     Ok(())
 }
@@ -2217,7 +2235,10 @@ async fn handle_detail_bar_reply_key(app: &mut App, k: crossterm::event::KeyEven
                     let mut bytes = draft.into_bytes();
                     bytes.push(b'\r');
                     session.scroll_to_live();
-                    let _ = session.writer.send(bytes).await;
+                    let _ = session
+                        .writer
+                        .send(crate::pty::session::WriteReq::Bytes(bytes))
+                        .await;
                 }
             }
             app.focus = crate::ui::PaneFocus::Dashboard;
@@ -2275,7 +2296,10 @@ async fn handle_paste(app: &mut App, shared: &SharedApp, content: String) -> Res
             );
         }
         session.scroll_to_live();
-        let _ = session.writer.send(bytes).await;
+        let _ = session
+            .writer
+            .send(crate::pty::session::WriteReq::Bytes(bytes))
+            .await;
         return Ok(());
     }
     if input_trace_enabled() {
@@ -2437,7 +2461,10 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
             let rel_col = m.column.saturating_sub(rect.x).saturating_add(1);
             let rel_row = m.row.saturating_sub(rect.y).saturating_add(1);
             if let Some(bytes) = session.wheel_report_bytes(up, rel_col, rel_row) {
-                let _ = session.writer.send(bytes).await;
+                let _ = session
+                    .writer
+                    .send(crate::pty::session::WriteReq::Bytes(bytes))
+                    .await;
                 return;
             }
         }

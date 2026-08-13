@@ -86,18 +86,24 @@ pub enum SessionStatus {
     Exited { code: i32 },
 }
 
+/// One item on a session's write channel.
+///
+/// The channel is shared by every writer into the PTY — keystrokes from an
+/// attached pane, resize sequences, injected peer mail — so a *shared* progress
+/// signal can't tell one writer's bytes from another's. `Acked` carries a
+/// one-shot the writer task fires only after this item's own `write_all`
+/// succeeds, and drops (without firing) if the write fails or the task exits.
+/// That makes the answer specific to the bytes the caller cares about.
+pub enum WriteReq {
+    Bytes(Vec<u8>),
+    Acked(Vec<u8>, tokio::sync::oneshot::Sender<()>),
+}
+
 pub struct Session {
     pub parser: Arc<Mutex<Parser>>,
-    pub writer: mpsc::Sender<Vec<u8>>,
+    pub writer: mpsc::Sender<WriteReq>,
     pub status: Arc<RwLock<SessionStatus>>,
     pub activity_ms: Arc<AtomicU64>,
-    /// Writes the writer task has successfully pushed through `write_all`.
-    /// Paired with `writer_alive` by `await_writes` so an injection can tell
-    /// "queued" from "actually written". See `await_writes`.
-    pub writes_completed: Arc<AtomicU64>,
-    /// Cleared when the writer task exits — on a `write_all` failure (dead
-    /// PTY) or when the channel closes.
-    pub writer_alive: Arc<std::sync::atomic::AtomicBool>,
     /// Which agent backs this session. Drives input quirks like how an
     /// injected message is submitted (see `submit_writes`).
     pub agent: AgentKind,
@@ -312,8 +318,7 @@ impl Session {
                     // dead terminal. A failed `body` also means the CR is
                     // pointless, so give up on the pair together.
                     let (body, enter) = submit_writes(self.agent, text);
-                    let before = self.writes_completed.load(Ordering::Acquire);
-                    if self.writer.send(body).await.is_err() {
+                    if self.writer.send(WriteReq::Bytes(body)).await.is_err() {
                         tracing::warn!(
                             text = %text,
                             "send_text_when_settled: PTY writer is gone; not written"
@@ -321,7 +326,17 @@ impl Session {
                         return false;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                    if self.writer.send(enter).await.is_err() {
+                    // Only the CR is acked. The channel is FIFO with a single
+                    // consumer that stops on the first write failure, so the CR
+                    // having been written proves the body ahead of it was too —
+                    // one one-shot per injection rather than two.
+                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                    if self
+                        .writer
+                        .send(WriteReq::Acked(enter, ack_tx))
+                        .await
+                        .is_err()
+                    {
                         tracing::warn!(
                             text = %text,
                             "send_text_when_settled: PTY writer died before the \
@@ -329,17 +344,7 @@ impl Session {
                         );
                         return false;
                     }
-                    // Both writes are queued; wait for the writer task to
-                    // actually push them through `write_all` before claiming
-                    // delivery.
-                    if !await_writes(
-                        &self.writes_completed,
-                        &self.writer_alive,
-                        before + 2,
-                        WRITE_ACK_TIMEOUT_MS,
-                    )
-                    .await
-                    {
+                    if !await_ack(ack_rx, WRITE_ACK_TIMEOUT_MS).await {
                         tracing::warn!(
                             text = %text,
                             "send_text_when_settled: queued bytes never reached the \
@@ -360,40 +365,17 @@ impl Session {
 /// and the alternative to waiting is a false claim of delivery.
 const WRITE_ACK_TIMEOUT_MS: u64 = 5_000;
 
-/// Wait for the PTY writer task to report `target` completed writes, or for it
-/// to die. Returns whether the writes actually made it out.
+/// Wait for the writer task's acknowledgement that one specific write reached
+/// the terminal.
 ///
-/// `Session::writer` is an mpsc channel: a successful `send` only means the
-/// bytes were *queued*, and the writer task calls `write_all` afterwards. So
-/// "the channel accepted it" is not "the terminal received it" — a `write_all`
-/// failure after a successful enqueue would otherwise be invisible.
-///
-/// Residual window: if the writer is alive and the counter has advanced, the
-/// bytes reached `write_all`; the counter can also be advanced by an unrelated
-/// concurrent write (a keystroke into an attached pane), in which case we may
-/// return a tick early. That degrades to "queued in a healthy writer", which is
-/// the strongest claim available without a per-item ack.
-async fn await_writes(
-    completed: &AtomicU64,
-    alive: &std::sync::atomic::AtomicBool,
-    target: u64,
-    timeout_ms: u64,
-) -> bool {
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_millis(timeout_ms);
-    loop {
-        if !alive.load(Ordering::Acquire) {
-            return false;
-        }
-        if completed.load(Ordering::Acquire) >= target {
-            // Re-check liveness: the writer may have died on our very bytes.
-            return alive.load(Ordering::Acquire);
-        }
-        if start.elapsed() >= timeout {
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+/// Three outcomes, all decisive for THAT write: the ack arrives (`write_all`
+/// succeeded), the sender is dropped (the write failed or the task exited), or
+/// nothing happens before the timeout (a wedged writer, bytes still queued).
+async fn await_ack(rx: tokio::sync::oneshot::Receiver<()>, timeout_ms: u64) -> bool {
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await,
+        Ok(Ok(()))
+    )
 }
 
 /// Whether `agent`'s TUI has drawn an input composer that will actually keep
@@ -446,14 +428,12 @@ impl Session {
                 pixel_height: 0,
             })
             .expect("openpty for fake test session");
-        let (tx, _rx) = mpsc::channel::<Vec<u8>>(1);
+        let (tx, _rx) = mpsc::channel::<WriteReq>(1);
         Session {
             parser: Arc::new(Mutex::new(Parser::new(24, 80, 1000))),
             writer: tx,
             status: Arc::new(RwLock::new(status)),
             activity_ms: Arc::new(AtomicU64::new(0)),
-            writes_completed: Arc::new(AtomicU64::new(0)),
-            writer_alive: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             agent: AgentKind::Claude,
             scrollback_offset: std::sync::atomic::AtomicUsize::new(0),
             visible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -665,7 +645,7 @@ pub fn spawn_command_session(
     let status = Arc::new(RwLock::new(SessionStatus::Running { pid }));
     let activity_ms = Arc::new(AtomicU64::new(0));
 
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
+    let (tx, mut rx) = mpsc::channel::<WriteReq>(64);
 
     // Reader thread (blocking I/O on PTY master clone).
     let mut reader = pair
@@ -711,23 +691,23 @@ pub fn spawn_command_session(
         .master
         .take_writer()
         .map_err(|e| Error::Pty(format!("take writer: {e}")))?;
-    let writes_completed = Arc::new(AtomicU64::new(0));
-    let writer_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let writes_w = writes_completed.clone();
-    let alive_w = writer_alive.clone();
     tokio::spawn(async move {
-        while let Some(bytes) = rx.recv().await {
+        while let Some(req) = rx.recv().await {
+            let (bytes, ack) = match req {
+                WriteReq::Bytes(b) => (b, None),
+                WriteReq::Acked(b, tx) => (b, Some(tx)),
+            };
             if writer.write_all(&bytes).is_err() {
+                // `ack` drops here without firing, and so do the acks of every
+                // item still queued behind us once `rx` drops — each waiter
+                // learns its own bytes never made it.
                 break;
             }
             let _ = writer.flush();
-            // Only counted AFTER a successful write_all, so the counter means
-            // "reached the terminal", not "reached the queue".
-            writes_w.fetch_add(1, Ordering::Release);
+            if let Some(tx) = ack {
+                let _ = tx.send(());
+            }
         }
-        // Covers both exits: a failed write and a closed channel. Either way
-        // nothing further can be written through this session.
-        alive_w.store(false, Ordering::Release);
     });
 
     let prompt = Arc::new(Mutex::new(PromptCapture::default()));
@@ -737,8 +717,6 @@ pub fn spawn_command_session(
         writer: tx,
         status,
         activity_ms,
-        writes_completed,
-        writer_alive,
         agent,
         scrollback_offset: std::sync::atomic::AtomicUsize::new(0),
         visible,
@@ -962,7 +940,10 @@ mod tests {
             None,
         )
         .unwrap();
-        s.writer.send(b"hello\n".to_vec()).await.unwrap();
+        s.writer
+            .send(WriteReq::Bytes(b"hello\n".to_vec()))
+            .await
+            .unwrap();
         // Give cat a moment to echo and the reader to process.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
@@ -1008,7 +989,7 @@ mod tests {
         payload.extend_from_slice(b"\x1b[201~");
         let expected = payload.clone();
         // One send: the whole payload goes to the writer task as a single Vec.
-        s.writer.send(payload).await.unwrap();
+        s.writer.send(WriteReq::Bytes(payload)).await.unwrap();
 
         // Poll until the file stops growing.
         let mut last = 0usize;
@@ -1304,38 +1285,33 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn await_writes_succeeds_once_the_writer_task_catches_up() {
-        let completed = Arc::new(AtomicU64::new(7));
-        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let c = completed.clone();
+    async fn await_ack_succeeds_when_the_writer_acknowledges_this_write() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(60)).await;
-            c.fetch_add(2, Ordering::Release);
+            let _ = tx.send(());
         });
-        assert!(await_writes(&completed, &alive, 9, 2_000).await);
+        assert!(await_ack(rx, 2_000).await);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn await_writes_fails_when_the_writer_task_dies() {
-        // `write_all` failing is the whole reason a queued byte never reaches
-        // the terminal. The writer task clears `writer_alive` on its way out,
-        // and that must surface as a failed delivery rather than a silent ack.
-        let completed = Arc::new(AtomicU64::new(0));
-        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let a = alive.clone();
+    async fn await_ack_fails_when_the_writer_drops_without_acknowledging() {
+        // The writer task drops the ack sender when `write_all` fails or the
+        // task exits, so a receive error is the signal that THESE bytes never
+        // reached the terminal — no shared counter another writer could
+        // satisfy on our behalf.
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(60)).await;
-            a.store(false, Ordering::Release);
+            drop(tx);
         });
-        assert!(!await_writes(&completed, &alive, 2, 2_000).await);
+        assert!(!await_ack(rx, 2_000).await);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn await_writes_fails_when_the_writer_never_catches_up() {
-        // A wedged writer means the bytes are still sitting in the channel.
-        let completed = Arc::new(AtomicU64::new(0));
-        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        assert!(!await_writes(&completed, &alive, 2, 200).await);
+    async fn await_ack_fails_when_the_writer_never_answers() {
+        let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+        assert!(!await_ack(rx, 200).await);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1387,7 +1363,10 @@ mod tests {
         )
         .unwrap();
         // Prime cat with some output so activity_ms is populated, then let it settle.
-        s.writer.send(b"prime\n".to_vec()).await.unwrap();
+        s.writer
+            .send(WriteReq::Bytes(b"prime\n".to_vec()))
+            .await
+            .unwrap();
         // The helper waits for the quiet window, then writes the payload.
         // With cat, the payload echoes back into the screen buffer.
         assert!(
@@ -1885,7 +1864,10 @@ mod tests {
             None,
         )
         .unwrap();
-        s.writer.send(b"hello-codex\n".to_vec()).await.unwrap();
+        s.writer
+            .send(WriteReq::Bytes(b"hello-codex\n".to_vec()))
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("hello-codex"), "screen: {screen:?}");

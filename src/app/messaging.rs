@@ -178,6 +178,24 @@ impl crate::app::App {
         self.next_mail_drain_ms = None;
     }
 
+    /// Retire a message we will never deliver (the target's binary isn't
+    /// installed) by marking it delivered.
+    ///
+    /// The write can fail, and a dropped message has no injection task to
+    /// report an outcome, so a failure here would strand the row with nothing
+    /// left to wake the drain — the drain clears the heartbeat before dropping.
+    /// Re-arm it instead.
+    pub(crate) fn drop_message(&mut self, id: i64, now_ms: u64) {
+        if let Err(e) = self.store.mark_delivered(id) {
+            tracing::warn!(
+                error = %e,
+                id,
+                "deliver: dropping an undeliverable message failed; will retry"
+            );
+            self.schedule_mail_retry(now_ms);
+        }
+    }
+
     /// Move any parked acks whose backoff expired back onto the outcome queue.
     fn requeue_due_acks(&mut self, now_ms: u64) {
         if self.pending_acks.is_empty() {
@@ -335,8 +353,9 @@ impl crate::app::App {
                 Ok(crate::app::AttachReady::AgentMissing) => {
                     // Binary not installed: drop these messages (mark
                     // delivered) so we don't retry forever.
-                    for m in &msgs {
-                        let _ = self.store.mark_delivered(m.id);
+                    let ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
+                    for id in ids {
+                        self.drop_message(id, now_ms);
                     }
                     continue;
                 }
@@ -493,6 +512,38 @@ mod tests {
         assert!(app.apply_delivery_outcomes());
         assert!(app.store.undelivered_messages().unwrap().is_empty());
         assert!(app.delivering.is_empty());
+    }
+
+    #[test]
+    fn a_drop_whose_db_write_fails_reschedules_the_drain() {
+        // The AgentMissing arm drops a message by marking it delivered. If
+        // that write fails the row is still queued, and nothing else will wake
+        // the drain for it — the drain had just cleared the heartbeat and no
+        // injection task exists to report an outcome.
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.clear_mail_retry();
+        app.store
+            .conn()
+            .execute("DROP TABLE agent_messages", [])
+            .unwrap();
+
+        app.drop_message(ids[0], 10_000);
+
+        assert!(
+            app.mail_drain_due(10_000 + MAIL_RETRY_INTERVAL_MS),
+            "a failed drop must leave the heartbeat armed"
+        );
+    }
+
+    #[test]
+    fn a_drop_that_succeeds_leaves_the_heartbeat_alone() {
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.clear_mail_retry();
+
+        app.drop_message(ids[0], 10_000);
+
+        assert!(app.store.undelivered_messages().unwrap().is_empty());
+        assert!(!app.mail_drain_due(u64::MAX), "a clean drop needs no retry");
     }
 
     #[test]

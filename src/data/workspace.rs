@@ -96,7 +96,12 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         return Err(Error::Cancelled);
     }
 
-    if let Err(e) = git::create_worktree(&repo.path, &branch, base, &worktree_path).await {
+    let worktree_result = {
+        let lock = crate::data::repo_lock::for_repo(repo.id);
+        let _guard = lock.lock().await;
+        git::create_worktree(&repo.path, &branch, base, &worktree_path).await
+    };
+    if let Err(e) = worktree_result {
         store.set_workspace_state(id, WorkspaceState::Failed)?;
         return Err(e);
     }
@@ -293,8 +298,11 @@ pub async fn create_with_app(
         if let Ok(mut p) = progress.lock() {
             p.set_phase(SetupPhase::CreatingWorktree);
         }
-        let worktree_result =
-            crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await;
+        let worktree_result = {
+            let lock = crate::data::repo_lock::for_repo(repo.id);
+            let _guard = lock.lock().await;
+            crate::git::create_worktree(&repo.path, &branch, base, &worktree_path).await
+        };
         if let Err(e) = worktree_result {
             let g = app.lock().await;
             g.store.set_workspace_state(id, WorkspaceState::Failed)?;
@@ -410,6 +418,8 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     )
     .await?;
     if !opts.keep_worktree && ws.worktree_path.exists() {
+        let lock = crate::data::repo_lock::for_repo(repo.id);
+        let _guard = lock.lock().await;
         git::remove_worktree(&repo.path, &ws.worktree_path).await?;
     }
     let _ = git::branch_delete(&repo.path, &ws.branch, opts.force_branch_delete).await;
@@ -467,6 +477,8 @@ pub async fn archive_with_app(
 
     // --- Phase 2 (unlocked, async): remove the worktree from disk. ---
     if !opts.keep_worktree && ws.worktree_path.exists() {
+        let lock = crate::data::repo_lock::for_repo(repo.id);
+        let _guard = lock.lock().await;
         git::remove_worktree(&repo.path, &ws.worktree_path).await?;
     }
 
@@ -1911,5 +1923,48 @@ mod tests {
             calls.is_empty(),
             "direct workspace archive must not call tmux, got: {calls:?}"
         );
+    }
+
+    // A guard, not a reproduction: unserialized concurrent `git worktree add`
+    // calls usually succeed, so this does not reliably fail without the lock.
+    // It exists so a future change that breaks concurrent creation outright is
+    // caught, and to document that N-at-once is now a supported flow.
+    #[tokio::test]
+    async fn concurrent_creates_in_one_repo_all_succeed() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+
+        // `Store` is not Sync, so drive the concurrency through the git layer
+        // directly — that is what the lock guards.
+        let mut handles = Vec::new();
+        for name in ["alpha", "beta", "gamma"] {
+            let repo_path = repo.path.clone();
+            let branch = format!("wsx/{name}");
+            let path = base.path().join("demo").join(name);
+            let repo_id = repo.id;
+            handles.push(tokio::spawn(async move {
+                let lock = crate::data::repo_lock::for_repo(repo_id);
+                let _guard = lock.lock().await;
+                crate::git::create_worktree(&repo_path, &branch, None, &path).await
+            }));
+        }
+        for h in handles {
+            h.await
+                .unwrap()
+                .expect("every concurrent worktree add must succeed");
+        }
+        for name in ["alpha", "beta", "gamma"] {
+            assert!(base.path().join("demo").join(name).join(".git").exists());
+        }
     }
 }

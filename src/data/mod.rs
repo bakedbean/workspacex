@@ -9,6 +9,7 @@ pub mod in_flight;
 pub mod messages;
 pub mod progress;
 pub mod repo;
+pub mod repo_lock;
 pub mod scm_cache;
 pub mod setup;
 pub mod setup_log;

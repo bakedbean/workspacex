@@ -616,11 +616,13 @@ pub struct App {
     pub shared_detached: std::collections::HashSet<crate::data::store::WorkspaceId>,
     /// Epoch-ms of the last `refresh_shared_detached` sweep (throttle key).
     pub shared_detached_polled_ms: u64,
-    /// Inbox message ids with an injection task currently in flight. An
-    /// injection waits for the target agent to be ready, which can take many
-    /// seconds; without this the retry drain would dispatch the same row again
-    /// on every tick and the agent would receive it several times.
-    pub(crate) delivering: std::collections::HashSet<i64>,
+    /// Inbox message ids with an injection task currently in flight, mapped to
+    /// the agent they are being injected into. An injection waits for the
+    /// target agent to be ready, which can take many seconds; without this the
+    /// retry drain would dispatch the same row again on every tick and the
+    /// agent would receive it several times. The target half also gates a
+    /// second worker against the same session — see `target_in_flight`.
+    pub(crate) delivering: std::collections::HashMap<i64, crate::data::store::AgentInstanceId>,
     /// Outcomes reported back by those detached injection tasks. Written from
     /// the tasks (hence the `Arc<Mutex<_>>`; `Store` holds a bare
     /// `rusqlite::Connection` and can't cross the spawn), applied on the next
@@ -685,7 +687,7 @@ impl App {
             activity_history: std::collections::VecDeque::new(),
             last_proc_scan_ms: 0,
             pending_workspace_refresh: std::collections::HashSet::new(),
-            delivering: std::collections::HashSet::new(),
+            delivering: std::collections::HashMap::new(),
             delivery_outcomes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delivery_attempts: std::collections::HashMap::new(),
             stuck_mail: std::collections::HashSet::new(),

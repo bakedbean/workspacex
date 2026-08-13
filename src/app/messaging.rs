@@ -71,9 +71,29 @@ const DELIVERY_QUIET_MS: u64 = 400;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DeliveryOutcome {
     pub id: i64,
+    /// The agent this message was being injected into. Lets the App tell when
+    /// a target's whole batch has finished and a new worker may start.
+    pub target: crate::data::store::AgentInstanceId,
     /// Whether the text actually reached the PTY. `false` means the target
     /// never became ready — the message must stay queued.
     pub written: bool,
+    /// Whether an injection was actually tried. False for the tail of a batch
+    /// abandoned after an earlier message failed: those were never offered to
+    /// the agent, so they must not be charged an attempt.
+    pub attempted: bool,
+}
+
+/// Whether an injection worker is already running against `target`.
+///
+/// Injection is not atomic — a worker waits for its own quiet window, then
+/// writes the body and the submitting CR 80ms apart. Two workers on one
+/// session interleave those writes, so messages arrive out of order or with
+/// one message's Enter spliced into another's text. One worker per target.
+pub(crate) fn target_in_flight(
+    in_flight: &std::collections::HashMap<i64, crate::data::store::AgentInstanceId>,
+    target: crate::data::store::AgentInstanceId,
+) -> bool {
+    in_flight.values().any(|t| *t == target)
 }
 
 /// The queued messages worth dispatching right now: those with no injection
@@ -84,12 +104,12 @@ pub(crate) struct DeliveryOutcome {
 /// used to.
 pub(crate) fn deliverable(
     pending: Vec<AgentMessage>,
-    in_flight: &std::collections::HashSet<i64>,
+    in_flight: &std::collections::HashMap<i64, crate::data::store::AgentInstanceId>,
     attempts: &std::collections::HashMap<i64, u32>,
 ) -> Vec<AgentMessage> {
     pending
         .into_iter()
-        .filter(|m| !in_flight.contains(&m.id))
+        .filter(|m| !in_flight.contains_key(&m.id))
         .filter(|m| attempts.get(&m.id).copied().unwrap_or(0) < MAX_DELIVERY_ATTEMPTS)
         .collect()
 }
@@ -149,6 +169,11 @@ impl crate::app::App {
                 continue;
             }
             self.delivering.remove(&outcome.id);
+            if !outcome.attempted {
+                // Abandoned tail of a failed batch — never offered to the
+                // agent, so it keeps its full attempt budget.
+                continue;
+            }
             let attempts = self.delivery_attempts.entry(outcome.id).or_insert(0);
             *attempts += 1;
             if *attempts >= MAX_DELIVERY_ATTEMPTS {
@@ -210,6 +235,13 @@ impl crate::app::App {
         }
 
         for (target, msgs) in groups {
+            // One injection worker per target. Messages that arrive while a
+            // worker is mid-flight wait for it to finish rather than racing it
+            // through the same PTY — checked before `ensure_instance_session`
+            // so a busy target costs nothing.
+            if target_in_flight(&self.delivering, target) {
+                continue;
+            }
             // Resolve the target session ONCE per target. Quiet
             // (surface_missing=false) so a missing binary doesn't pop a modal
             // over the user's unrelated view.
@@ -254,7 +286,7 @@ impl crate::app::App {
                 })
                 .collect();
             for m in &msgs {
-                self.delivering.insert(m.id);
+                self.delivering.insert(m.id, target);
             }
             let sess = session.clone();
             let outcomes = self.delivery_outcomes.clone();
@@ -263,19 +295,25 @@ impl crate::app::App {
                 for (id, banner) in items {
                     // Once one injection fails, abandon the rest of this
                     // target's batch rather than writing them out of order:
-                    // report them as unwritten so they are redispatched
-                    // together, still in id order, on a later tick.
-                    let written = if failed {
-                        false
+                    // report them unwritten AND unattempted so they are
+                    // redispatched together, still in id order, on a later
+                    // tick without being charged for an injection that never
+                    // happened.
+                    let (written, attempted) = if failed {
+                        (false, false)
                     } else {
-                        sess.send_text_when_settled(&banner, DELIVERY_QUIET_MS, DELIVERY_TIMEOUT_MS)
-                            .await
+                        let ok = sess
+                            .send_text_when_settled(&banner, DELIVERY_QUIET_MS, DELIVERY_TIMEOUT_MS)
+                            .await;
+                        (ok, true)
                     };
                     failed |= !written;
-                    outcomes
-                        .lock()
-                        .unwrap()
-                        .push(DeliveryOutcome { id, written });
+                    outcomes.lock().unwrap().push(DeliveryOutcome {
+                        id,
+                        target,
+                        written,
+                        attempted,
+                    });
                 }
             });
         }
@@ -330,10 +368,13 @@ mod tests {
         // writing lost the message permanently. A failed write must leave the
         // row undelivered so the next tick retries it.
         let (mut app, ids) = app_with_queued_messages(1);
-        app.delivering.insert(ids[0]);
+        app.delivering
+            .insert(ids[0], crate::data::store::AgentInstanceId(1));
         app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
             id: ids[0],
+            target: crate::data::store::AgentInstanceId(1),
             written: false,
+            attempted: true,
         });
 
         assert!(app.apply_delivery_outcomes(), "an outcome was applied");
@@ -344,7 +385,7 @@ mod tests {
         );
         assert_eq!(app.delivery_attempts.get(&ids[0]), Some(&1));
         assert!(
-            !app.delivering.contains(&ids[0]),
+            !app.delivering.contains_key(&ids[0]),
             "no longer in flight, so the next drain can retry it"
         );
     }
@@ -352,10 +393,13 @@ mod tests {
     #[test]
     fn a_successful_injection_marks_the_message_delivered() {
         let (mut app, ids) = app_with_queued_messages(1);
-        app.delivering.insert(ids[0]);
+        app.delivering
+            .insert(ids[0], crate::data::store::AgentInstanceId(1));
         app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
             id: ids[0],
+            target: crate::data::store::AgentInstanceId(1),
             written: true,
+            attempted: true,
         });
 
         assert!(app.apply_delivery_outcomes());
@@ -371,10 +415,13 @@ mod tests {
         // twice — worse than the loss this PR is fixing. The ack is retried
         // instead, and the row stays in flight until it sticks.
         let (mut app, ids) = app_with_queued_messages(1);
-        app.delivering.insert(ids[0]);
+        app.delivering
+            .insert(ids[0], crate::data::store::AgentInstanceId(1));
         app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
             id: ids[0],
+            target: crate::data::store::AgentInstanceId(1),
             written: true,
+            attempted: true,
         });
         // Force `mark_delivered` to error the way a locked/ousted DB would.
         app.store
@@ -384,7 +431,7 @@ mod tests {
 
         assert!(app.apply_delivery_outcomes());
         assert!(
-            app.delivering.contains(&ids[0]),
+            app.delivering.contains_key(&ids[0]),
             "a message whose ack failed must stay in flight so no drain \
              redispatches it"
         );
@@ -392,7 +439,9 @@ mod tests {
             app.delivery_outcomes.lock().unwrap().as_slice(),
             &[DeliveryOutcome {
                 id: ids[0],
-                written: true
+                target: crate::data::store::AgentInstanceId(1),
+                written: true,
+                attempted: true
             }],
             "the ack is requeued so a later tick retries the DB write"
         );
@@ -404,6 +453,98 @@ mod tests {
         assert!(
             !app.apply_delivery_outcomes(),
             "no outcomes reported means no redelivery work to do"
+        );
+    }
+
+    #[test]
+    fn a_target_with_a_worker_in_flight_blocks_a_second_one() {
+        // Two injection tasks against one Session each wait for their own
+        // quiet window and then write body-then-CR with an 80ms gap. Run
+        // concurrently they interleave, reversing FIFO order or splicing one
+        // message's Enter into the other's text. Only one worker per target.
+        let (_app, ids) = app_with_queued_messages(2);
+        let target = crate::data::store::AgentInstanceId(42);
+        let other = crate::data::store::AgentInstanceId(43);
+        let delivering = std::collections::HashMap::from([(ids[0], target)]);
+
+        assert!(target_in_flight(&delivering, target));
+        assert!(!target_in_flight(&delivering, other));
+        assert!(
+            !target_in_flight(&std::collections::HashMap::new(), target),
+            "nothing in flight leaves every target free"
+        );
+    }
+
+    #[test]
+    fn a_tail_item_that_was_never_attempted_does_not_burn_an_attempt() {
+        // When the head of a batch fails, the rest are abandoned to preserve
+        // FIFO order. Charging them an attempt would exhaust their budget
+        // without a single injection ever being tried against them.
+        let (mut app, ids) = app_with_queued_messages(2);
+        let target = crate::data::store::AgentInstanceId(1);
+        app.delivering.insert(ids[0], target);
+        app.delivering.insert(ids[1], target);
+        let mut queue = app.delivery_outcomes.lock().unwrap();
+        queue.push(DeliveryOutcome {
+            id: ids[0],
+            target,
+            written: false,
+            attempted: true,
+        });
+        queue.push(DeliveryOutcome {
+            id: ids[1],
+            target,
+            written: false,
+            attempted: false,
+        });
+        drop(queue);
+
+        assert!(app.apply_delivery_outcomes());
+        assert_eq!(
+            app.delivery_attempts.get(&ids[0]),
+            Some(&1),
+            "the head was actually attempted"
+        );
+        assert_eq!(
+            app.delivery_attempts.get(&ids[1]),
+            None,
+            "the abandoned tail was never injected, so it owes no attempt"
+        );
+        assert!(
+            app.delivering.is_empty(),
+            "both are released for the next drain"
+        );
+    }
+
+    #[test]
+    fn a_finished_batch_frees_its_target_for_the_next_drain() {
+        let (mut app, ids) = app_with_queued_messages(2);
+        let target = crate::data::store::AgentInstanceId(1);
+        app.delivering.insert(ids[0], target);
+        app.delivering.insert(ids[1], target);
+        app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
+            id: ids[0],
+            target,
+            written: true,
+            attempted: true,
+        });
+
+        app.apply_delivery_outcomes();
+        assert!(
+            target_in_flight(&app.delivering, target),
+            "one message of the batch is still in flight"
+        );
+
+        app.delivery_outcomes.lock().unwrap().push(DeliveryOutcome {
+            id: ids[1],
+            target,
+            written: true,
+            attempted: true,
+        });
+        app.apply_delivery_outcomes();
+        assert!(
+            !target_in_flight(&app.delivering, target),
+            "the batch is done; the target accepts a new worker"
         );
     }
 
@@ -433,7 +574,8 @@ mod tests {
         // receive the message several times.
         let (app, ids) = app_with_queued_messages(2);
         let pending = app.store.undelivered_messages().unwrap();
-        let in_flight = std::collections::HashSet::from([ids[0]]);
+        let in_flight =
+            std::collections::HashMap::from([(ids[0], crate::data::store::AgentInstanceId(1))]);
 
         let out = deliverable(pending, &in_flight, &std::collections::HashMap::new());
 
@@ -451,7 +593,7 @@ mod tests {
         let attempts =
             std::collections::HashMap::from([(ids[0], MAX_DELIVERY_ATTEMPTS), (ids[1], 1)]);
 
-        let out = deliverable(pending, &std::collections::HashSet::new(), &attempts);
+        let out = deliverable(pending, &std::collections::HashMap::new(), &attempts);
 
         assert_eq!(
             out.iter().map(|m| m.id).collect::<Vec<_>>(),

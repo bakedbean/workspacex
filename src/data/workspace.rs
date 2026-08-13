@@ -69,13 +69,12 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    // Fetch before inserting the workspace row so a fetch failure
-    // (network down, bad remote ref) doesn't leave an orphan Pending row.
-    git::fetch_for_base(&repo.path, base).await?;
-    if cancel.is_cancelled() {
-        return Err(Error::Cancelled);
-    }
-
+    // Insert the row BEFORE any slow I/O so the dashboard can show it the
+    // instant creation starts — that immediacy is the whole point of
+    // backgrounding. This reverses the original order, which fetched first
+    // to avoid leaving an orphan row behind a failed fetch. With a Failed
+    // state that the dashboard now badges, that "orphan" is a visible,
+    // actionable row rather than a silent one.
     let id = store.insert_workspace(&NewWorkspace {
         repo_id: repo.id,
         name: &name,
@@ -85,10 +84,13 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
         agent,
         shared,
     })?;
-
     // Seed the primary agent instance so the roster is authoritative from birth.
     store.add_primary_agent(id, agent, crate::data::store::now_ms())?;
 
+    if let Err(e) = git::fetch_for_base(&repo.path, base).await {
+        store.set_workspace_state(id, WorkspaceState::Failed)?;
+        return Err(e);
+    }
     if cancel.is_cancelled() {
         store.set_workspace_state(id, WorkspaceState::Failed)?;
         return Err(Error::Cancelled);
@@ -219,27 +221,19 @@ pub async fn create_with_app(
         let worktree_path = worktree_base.join(&repo.name).join(&resolved_name);
         (resolved_name, branch, worktree_path)
     };
-
-    if cancel.is_cancelled() {
-        return Err(Error::Cancelled);
-    }
-
-    // --- Phase 2 (unlocked, async): fetch base branch. ---
-    if let Ok(mut p) = progress.lock() {
-        p.set_phase(SetupPhase::Fetching);
-    }
     let base = repo
         .base_branch
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    crate::git::fetch_for_base(&repo.path, base).await?;
 
     if cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
 
-    // --- Phase 3 (short, locked): insert workspace row. ---
+    // --- Phase 2 (short, locked): insert the row before any slow I/O so the
+    // dashboard can show it the instant creation starts, and register the
+    // `in_flight` entry. ---
     let id = {
         let mut g = app.lock().await;
         let ws_id = g.store.insert_workspace(&NewWorkspace {
@@ -265,9 +259,9 @@ pub async fn create_with_app(
     };
 
     // From here on, `id` has a live `in_flight` entry. Every remaining exit
-    // path — a cancellation check, any Phase 4/5/6 error, and the final
-    // success — must remove it exactly once. Hand-placing a `remove` at
-    // each of the half-dozen early returns below is exactly what caused
+    // path — the fetch, a cancellation check, any Phase 4/5/6 error, and the
+    // final success — must remove it exactly once. Hand-placing a `remove`
+    // at each of the half-dozen early returns below is exactly what caused
     // fix-round-1's regression: every block ran its `g.store.<call>()?`
     // BEFORE the removal, so a store failure skipped it, and two blocks
     // (`set_workspace_state(Ready)`, `set_setup_status(Running)`) had no
@@ -277,6 +271,18 @@ pub async fn create_with_app(
     // unconditionally, after it completes — regardless of which path was
     // taken or whether it succeeded.
     let result: Result<CreatedWorkspace> = async {
+        // --- Phase 3 (unlocked, async): fetch base branch. A fetch failure
+        // marks the row Failed rather than leaving it Pending forever, since
+        // the row is now visible on the dashboard from before the fetch ran. ---
+        if let Ok(mut p) = progress.lock() {
+            p.set_phase(SetupPhase::Fetching);
+        }
+        if let Err(e) = crate::git::fetch_for_base(&repo.path, base).await {
+            let g = app.lock().await;
+            g.store.set_workspace_state(id, WorkspaceState::Failed)?;
+            return Err(e);
+        }
+
         if cancel.is_cancelled() {
             let g = app.lock().await;
             g.store.set_workspace_state(id, WorkspaceState::Failed)?;
@@ -612,6 +618,56 @@ mod tests {
         r(&["config", "user.name", "t"]);
         r(&["commit", "--allow-empty", "-q", "-m", "init"]);
         dir
+    }
+
+    #[tokio::test]
+    async fn fetch_failure_leaves_a_failed_row_not_no_row() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        // A remote that resolves by name but cannot be fetched from, so
+        // `fetch_for_base` gets past its remote-name check and then fails.
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(repo_dir.path())
+                .args(["remote", "add", "origin", "/nonexistent/bare.git"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store.set_repo_base_branch(id, Some("origin/main")).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+
+        let err = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await;
+        assert!(err.is_err(), "fetch against a bogus remote must fail");
+
+        let rows = store.workspaces(repo.id).unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the row must survive so the failure is visible"
+        );
+        assert_eq!(rows[0].name, "alpha");
+        assert_eq!(rows[0].state, WorkspaceState::Failed);
     }
 
     #[tokio::test]

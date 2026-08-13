@@ -396,6 +396,14 @@ pub struct App {
     /// Used by the reconcile step to detect stale completions (user cancelled,
     /// new create started, etc.).
     pub pending_create_gen: Option<u64>,
+    /// Background create/archive work, keyed by the workspace it targets.
+    /// Sole source of truth for the dashboard's in-flight badges. An entry is
+    /// inserted when the task is spawned and removed by the reconciler on
+    /// every exit path — success, failure, and cancellation alike.
+    pub in_flight: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::data::in_flight::InFlight,
+    >,
     /// Monotonic counter handed out to in-flight workspace archive tasks.
     pub next_archive_gen: u64,
     /// Generation id of the currently in-flight workspace archive, if any.
@@ -717,6 +725,7 @@ impl App {
             pm_filter: None,
             next_create_gen: 0,
             pending_create_gen: None,
+            in_flight: std::collections::HashMap::new(),
             next_archive_gen: 0,
             pending_archive_gen: None,
             remote_list: None,
@@ -2501,11 +2510,13 @@ pub(crate) fn schedule_detach_refresh(app: &mut App, ids: impl IntoIterator<Item
     }
 }
 /// Reconcile the outcome of a spawned `workspace::create_with_app` task.
-/// Locks the app briefly; if the modal is still `SetupRunning` AND the
-/// generation matches ours, applies the outcome (close modal on success,
-/// switch to `Modal::Error` on failure). Otherwise — user dismissed or
-/// started a new create — leaves the modal alone but still calls
-/// `refresh()` so the dashboard reflects any state we wrote to the store.
+/// Locks the app briefly, removes the finished task's `in_flight` entry, and
+/// — on success — selects the new workspace. There is no modal bookkeeping
+/// here: a failed create is carried by the row badge (not the transient
+/// error modal this replaced), and `Modal::SetupProgress` is a viewer the
+/// user may already have closed, so it is never touched here. Regardless of
+/// the modal, `refresh()` runs so the dashboard reflects any state written
+/// to the store.
 pub(crate) async fn reconcile_create_result(
     app: SharedApp,
     my_gen: u64,
@@ -2520,11 +2531,11 @@ pub(crate) async fn reconcile_create_result(
         .as_ref()
         .ok()
         .map(|c| (c.workspace.id, c.workspace.repo_id));
+    if let Some((id, _)) = new_ws {
+        g.in_flight.remove(&id);
+    }
     match result {
         Ok(_) => {
-            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::SetupRunning { .. })) {
-                g.modal = None;
-            }
             let _ = g.refresh();
             // Select the newly created workspace so the dashboard lands on it.
             if let Some((id, repo_id)) = new_ws {
@@ -2546,16 +2557,18 @@ pub(crate) async fn reconcile_create_result(
             }
         }
         Err(crate::error::Error::Cancelled) => {
-            // User cancelled — modal already cleared by Esc handler. Refresh
-            // so the dashboard reflects setup_status=Cancelled.
+            // Nothing in this task's UI fires `cancel` yet (Esc on
+            // `Modal::SetupProgress` only closes the viewer), but the task
+            // still checks its token, so this arm stays reachable for
+            // whatever later cancels it. Refresh so the dashboard reflects
+            // setup_status=Cancelled.
+            g.in_flight
+                .retain(|_, f| f.kind != crate::data::in_flight::InFlightKind::Create);
             let _ = g.refresh();
         }
-        Err(e) => {
-            if is_mine && matches!(g.modal, Some(crate::ui::modal::Modal::SetupRunning { .. })) {
-                g.modal = Some(crate::ui::modal::Modal::Error {
-                    message: e.to_string(),
-                });
-            }
+        Err(_) => {
+            g.in_flight
+                .retain(|_, f| f.kind != crate::data::in_flight::InFlightKind::Create);
             let _ = g.refresh();
         }
     }

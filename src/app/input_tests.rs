@@ -5667,7 +5667,7 @@ mod pm_state_tests {
     }
 
     #[tokio::test]
-    async fn enter_in_new_workspace_modal_transitions_to_setup_running_and_spawns_task() {
+    async fn enter_in_new_workspace_modal_backgrounds_create_and_registers_in_flight() {
         use crate::ui::modal::Modal;
         let store = crate::data::store::Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
@@ -5696,33 +5696,34 @@ mod pm_state_tests {
         {
             let mut g = app.lock().await;
             handle_event(&mut g, &app, CtEvent::Key(evt)).await.unwrap();
-            // Immediately after Enter, modal should be SetupRunning.
+            // Create is backgrounded immediately: no modal pops up, so the
+            // dashboard is usable right away instead of blocked behind it.
             assert!(
-                matches!(g.modal, Some(Modal::SetupRunning { .. })),
-                "modal should transition to SetupRunning immediately; got {:?}",
+                g.modal.is_none(),
+                "create should background without opening a modal; got {:?}",
                 g.modal
             );
             assert!(g.pending_create_gen.is_some());
         }
-        // Wait for the spawned create task to finish: the modal clears, the
-        // pending generation is reset, and the workspace materializes.
-        wait_until(&app, "create to finish (modal cleared, 1 workspace)", |g| {
-            g.modal.is_none() && g.pending_create_gen.is_none() && g.workspaces.len() == 1
+        // Wait for the spawned create task to finish: the pending generation
+        // is reset and the workspace materializes.
+        wait_until(&app, "create to finish (1 workspace)", |g| {
+            g.pending_create_gen.is_none() && g.workspaces.len() == 1
         })
         .await;
         let g = app.lock().await;
-        assert!(
-            g.modal.is_none(),
-            "modal should clear after create succeeds; got {:?}",
-            g.modal
-        );
         assert!(g.pending_create_gen.is_none());
         assert_eq!(g.workspaces.len(), 1);
+        // The reconciler must have removed the finished task's registry entry.
+        assert!(
+            g.in_flight.is_empty(),
+            "in_flight entry should be removed once create finishes"
+        );
         let _ = repo_id; // suppress unused warning if not referenced above
     }
 
     #[tokio::test]
-    async fn esc_in_setup_running_cancels_and_closes_modal() {
+    async fn create_registers_in_flight_and_keeps_running_past_esc() {
         use crate::ui::modal::Modal;
         use std::sync::Arc;
         use tokio::sync::Mutex;
@@ -5755,11 +5756,18 @@ mod pm_state_tests {
             handle_event(&mut g, &app, CtEvent::Key(enter))
                 .await
                 .unwrap();
-            assert!(matches!(g.modal, Some(Modal::SetupRunning { .. })));
+            assert!(g.modal.is_none(), "create backgrounds without a modal");
         }
-        // Brief yield so the spawned task gets to start the setup script.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        // Press Esc.
+        // Wait for Phase 3 to register the in_flight entry now that the
+        // workspace id exists.
+        wait_until(&app, "in_flight entry to appear", |g| {
+            !g.in_flight.is_empty()
+        })
+        .await;
+        // Press Esc — there is no modal open, so this is a no-op; in
+        // particular it must NOT cancel the running create (Esc only
+        // cancels when it closes a SetupProgress viewer, which requires the
+        // modal to be open).
         {
             let mut g = app.lock().await;
             let esc = crossterm::event::KeyEvent::new(
@@ -5767,23 +5775,26 @@ mod pm_state_tests {
                 crossterm::event::KeyModifiers::empty(),
             );
             handle_event(&mut g, &app, CtEvent::Key(esc)).await.unwrap();
-            assert!(g.modal.is_none(), "modal should close immediately on Esc");
-            assert!(g.pending_create_gen.is_none());
+            assert!(g.modal.is_none());
+            assert!(
+                g.pending_create_gen.is_some(),
+                "create must still be running"
+            );
         }
-        // Wait for the spawned task to wind down and record the cancellation.
-        wait_until(&app, "setup task to record Cancelled status", |g| {
+        // Wait for the spawned task to finish normally (not cancelled).
+        wait_until(&app, "create to finish successfully", |g| {
             g.workspaces.len() == 1
-                && g.workspaces[0].1.setup_status == crate::data::store::SetupStatus::Cancelled
+                && g.workspaces[0].1.setup_status == crate::data::store::SetupStatus::Ok
         })
         .await;
         let g = app.lock().await;
         assert_eq!(g.workspaces.len(), 1);
         assert_eq!(
             g.workspaces[0].1.setup_status,
-            crate::data::store::SetupStatus::Cancelled
+            crate::data::store::SetupStatus::Ok
         );
-        // Modal should still be None — the late reconcile must not pop an error.
         assert!(g.modal.is_none());
+        assert!(g.in_flight.is_empty());
     }
 
     #[tokio::test]

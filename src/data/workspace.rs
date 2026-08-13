@@ -241,7 +241,7 @@ pub async fn create_with_app(
 
     // --- Phase 3 (short, locked): insert workspace row. ---
     let id = {
-        let g = app.lock().await;
+        let mut g = app.lock().await;
         let ws_id = g.store.insert_workspace(&NewWorkspace {
             repo_id: repo.id,
             name: &final_name,
@@ -254,6 +254,13 @@ pub async fn create_with_app(
         // Seed the primary agent instance so the roster is authoritative from birth.
         g.store
             .add_primary_agent(ws_id, agent, crate::data::store::now_ms())?;
+        // Register in App's in_flight registry now that the workspace id
+        // exists — this is what lets the dashboard show an in-flight badge
+        // and what a later-opened SetupProgress viewer reads from.
+        g.in_flight.insert(
+            ws_id,
+            crate::data::in_flight::InFlight::create(progress.clone(), cancel.clone()),
+        );
         ws_id
     };
 

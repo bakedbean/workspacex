@@ -1286,11 +1286,7 @@ async fn handle_key_modal(
                 let cancel = tokio_util::sync::CancellationToken::new();
                 let create_gen = app.alloc_create_gen();
                 let progress = crate::data::progress::SetupProgress::shared();
-                app.modal = Some(Modal::SetupRunning {
-                    cancel: cancel.clone(),
-                    progress: progress.clone(),
-                    started: std::time::Instant::now(),
-                });
+                app.modal = None;
                 let shared_clone = shared.clone();
                 tokio::spawn(async move {
                     let result = crate::data::workspace::create_with_app(
@@ -1401,13 +1397,12 @@ async fn handle_key_modal(
             }
             _ => {}
         },
-        Modal::SetupRunning { cancel, .. } => {
-            // Esc cancels in-flight create; every other key (including Enter)
-            // is intentionally ignored during creation.
+        Modal::SetupProgress { .. } => {
+            // A viewer onto App::in_flight, not an owner: Esc just closes it,
+            // leaving the background create running. Every other key is
+            // ignored.
             if k.code == KeyCode::Esc {
-                cancel.cancel();
                 app.modal = None;
-                app.pending_create_gen = None;
             }
         }
         Modal::ArchiveRunning { .. } => {

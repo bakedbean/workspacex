@@ -69,10 +69,8 @@ pub enum Modal {
         /// and the confirmation message must say so.
         stopped_count: usize,
     },
-    SetupRunning {
-        cancel: tokio_util::sync::CancellationToken,
-        progress: crate::data::progress::SharedProgress,
-        started: std::time::Instant,
+    SetupProgress {
+        workspace_id: crate::data::store::WorkspaceId,
     },
     ArchiveRunning {
         step: ArchiveStep,
@@ -205,7 +203,14 @@ fn panel_frame<'a>(
     inner
 }
 
-pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme) {
+pub fn render(
+    f: &mut Frame,
+    area: Rect,
+    modal: &Modal,
+    in_flight: &HashMap<crate::data::store::WorkspaceId, crate::data::in_flight::InFlight>,
+    tick: u32,
+    theme: &Theme,
+) {
     // UpdatesPanel, ProcessList, and RemoteWorkspaceList are rendered by
     // their dedicated helpers directly from `draw()` because they need live
     // App state. This function should never be called with those variants;
@@ -298,27 +303,33 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, tick: u32, theme: &Theme
                 ),
             )
         }
-        Modal::SetupRunning {
-            progress, started, ..
-        } => {
-            let frame = crate::ui::dashboard::spinner::frame(tick);
-            let (phase_label, tail) = match progress.lock() {
-                Ok(p) => (p.phase().label(), p.recent(6)),
-                Err(_) => ("Working", Vec::new()),
-            };
-            let secs = started.elapsed().as_secs();
-            let elapsed = format!("{:02}:{:02}", secs / 60, secs % 60);
-            let mut body = format!("  {frame} {phase_label}…   ({elapsed})\n\n");
-            if tail.is_empty() {
-                body.push_str("  (waiting for output…)\n");
-            } else {
-                for line in &tail {
-                    body.push_str(&format!("  {}\n", truncate_to(line, 54)));
+        Modal::SetupProgress { workspace_id } => match in_flight.get(workspace_id) {
+            // The task finished while the viewer was open. Say so rather than
+            // rendering a stale tail; the reconciler has already dropped the entry.
+            None => (
+                "workspace setup",
+                "  setup finished.\n\n  [esc] close".to_string(),
+            ),
+            Some(f) => {
+                let frame = crate::ui::dashboard::spinner::frame(tick);
+                let (phase_label, tail) = match f.progress.lock() {
+                    Ok(p) => (p.phase().label(), p.recent(6)),
+                    Err(_) => ("Working", Vec::new()),
+                };
+                let secs = f.started.elapsed().as_secs();
+                let elapsed = format!("{:02}:{:02}", secs / 60, secs % 60);
+                let mut body = format!("  {frame} {phase_label}…   ({elapsed})\n\n");
+                if tail.is_empty() {
+                    body.push_str("  (waiting for output…)\n");
+                } else {
+                    for line in &tail {
+                        body.push_str(&format!("  {}\n", truncate_to(line, 54)));
+                    }
                 }
+                body.push_str("\n  [esc] close");
+                ("workspace setup", body)
             }
-            body.push_str("\n  [esc] cancel");
-            ("new workspace", body)
-        }
+        },
         Modal::ArchiveRunning {
             step,
             script_present,
@@ -479,10 +490,13 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    fn render_to_text(modal: &Modal) -> String {
+    fn render_to_text(
+        modal: &Modal,
+        in_flight: &HashMap<crate::data::store::WorkspaceId, crate::data::in_flight::InFlight>,
+    ) -> String {
         let theme = Theme::wsx();
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        term.draw(|f| render(f, f.area(), modal, 0, &theme))
+        term.draw(|f| render(f, f.area(), modal, in_flight, 0, &theme))
             .unwrap();
         let buf = term.backend().buffer();
         (0..buf.area.height)
@@ -505,18 +519,23 @@ mod tests {
             p.push_line("mise install");
             p.push_line("Installing dependencies");
         }
-        let modal = Modal::SetupRunning {
-            cancel: tokio_util::sync::CancellationToken::new(),
-            progress,
-            started: std::time::Instant::now(),
-        };
-        let text = render_to_text(&modal);
+        let workspace_id = crate::data::store::WorkspaceId(1);
+        let mut in_flight = HashMap::new();
+        in_flight.insert(
+            workspace_id,
+            crate::data::in_flight::InFlight::create(
+                progress,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let modal = Modal::SetupProgress { workspace_id };
+        let text = render_to_text(&modal, &in_flight);
         assert!(text.contains("Running setup"), "missing phase:\n{text}");
         assert!(
             text.contains("Installing dependencies"),
             "missing line:\n{text}"
         );
-        assert!(text.contains("[esc] cancel"), "missing footer:\n{text}");
+        assert!(text.contains("[esc] close"), "missing footer:\n{text}");
     }
 
     /// Sharing eagerly starts stopped agents (see `toggle_workspace_shared`),
@@ -533,7 +552,7 @@ mod tests {
             running_count: 1,
             stopped_count: 2,
         };
-        let text = render_to_text(&modal);
+        let text = render_to_text(&modal, &HashMap::new());
         assert!(
             text.contains("Restarts 1 running session(s)"),
             "missing running-restart note:\n{text}"
@@ -555,7 +574,7 @@ mod tests {
             running_count: 0,
             stopped_count: 2,
         };
-        let text = render_to_text(&modal);
+        let text = render_to_text(&modal, &HashMap::new());
         assert!(
             text.contains("No running sessions to restart."),
             "missing no-op note:\n{text}"
@@ -587,12 +606,17 @@ mod tests {
         use crate::data::progress::SetupProgress;
         let progress = SetupProgress::shared();
         progress.lock().unwrap().push_line(&"x".repeat(200));
-        let modal = Modal::SetupRunning {
-            cancel: tokio_util::sync::CancellationToken::new(),
-            progress,
-            started: std::time::Instant::now(),
-        };
-        let text = render_to_text(&modal);
+        let workspace_id = crate::data::store::WorkspaceId(1);
+        let mut in_flight = HashMap::new();
+        in_flight.insert(
+            workspace_id,
+            crate::data::in_flight::InFlight::create(
+                progress,
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let modal = Modal::SetupProgress { workspace_id };
+        let text = render_to_text(&modal, &in_flight);
         assert!(
             text.contains('…'),
             "over-wide line should be truncated:\n{text}"
@@ -601,7 +625,7 @@ mod tests {
 
     #[test]
     fn workspace_actions_overlay_lists_all_actions() {
-        let text = render_to_text(&Modal::WorkspaceActions);
+        let text = render_to_text(&Modal::WorkspaceActions, &HashMap::new());
         assert!(text.contains("edit"), "missing 'edit':\n{text}");
         assert!(text.contains("term"), "missing 'term':\n{text}");
         assert!(text.contains("diff"), "missing 'diff':\n{text}");

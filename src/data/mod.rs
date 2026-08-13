@@ -5,6 +5,7 @@
 //! runs the per-worktree setup script during workspace creation.
 
 pub mod agents;
+pub mod in_flight;
 pub mod messages;
 pub mod progress;
 pub mod repo;

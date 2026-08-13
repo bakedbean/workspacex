@@ -765,7 +765,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             crate::ui::modal::Modal::UsageWindowPicker { .. } => {
                 // Rendered separately below, anchored to the footer graph.
             }
-            other => modal::render(f, area, other, app.tick, &app.theme),
+            other => modal::render(f, area, other, &app.in_flight, app.tick, &app.theme),
         }
     }
     // The usage-window picker renders anchored over the footer graph rather

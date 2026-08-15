@@ -19,8 +19,8 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Create, list, rename, and archive workspaces",
         commands: &[
             CmdInfo {
-                usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--agent <kind>]",
-                blurb: "Create a workspace (branch + worktree)",
+                usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--agent <kind>] [--prompt <text>]",
+                blurb: "Create a workspace (branch + worktree), optionally seeding its agent",
             },
             CmdInfo {
                 usage: "list [<repo>]",
@@ -436,6 +436,9 @@ pub enum CliAction {
         yolo: bool,
         shared: bool,
         agent: Option<String>,
+        /// Seed the new workspace's primary agent with this prompt, as if
+        /// `wsx agent send` had been run against it immediately after.
+        prompt: Option<String>,
     },
     WorkspaceList {
         repo: Option<String>,
@@ -950,19 +953,26 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             let repo = it.next().ok_or_else(|| Error::Usage {
                 group: None,
                 msg:
-                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex]"
+                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex] [--prompt <text>]"
                         .into(),
             })?;
             let mut name: Option<String> = None;
             let mut yolo = false;
             let mut shared = false;
             let mut agent: Option<String> = None;
+            let mut prompt: Option<String> = None;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
                     "--name" => {
                         name = Some(it.next().ok_or_else(|| Error::Usage {
                             group: None,
                             msg: "--name needs value".into(),
+                        })?);
+                    }
+                    "--prompt" => {
+                        prompt = Some(it.next().ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--prompt needs value (the text to seed the agent with)".into(),
                         })?);
                     }
                     "--yolo" => yolo = true,
@@ -998,6 +1008,7 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                 yolo,
                 shared,
                 agent,
+                prompt,
             })
         }
         Some("list") => {
@@ -1805,6 +1816,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             yolo,
             shared,
             agent,
+            prompt,
         } => {
             let r = lookup_repo(&store, &repo)?;
             let worktree_base = dirs.app_dir().join("worktrees");
@@ -1858,6 +1870,40 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
             if let crate::data::setup::SetupResult::Failed { exit_code } = created.setup_result {
                 println!("warning: setup script exited with code {exit_code}");
+            }
+            // Seed the agent LAST: `create` above already awaited the setup
+            // script, and the dashboard skips workspaces whose setup hasn't
+            // finished, so queueing here can't land on a workspace that isn't
+            // ready to spawn.
+            if let Some(prompt) = prompt.as_deref() {
+                let ws_id = created.workspace.id;
+                // `create` seeds a primary agent row at birth, so this
+                // resolves immediately — but report rather than unwrap, since
+                // the workspace itself already exists on disk either way.
+                // Every failure from here on must reach the recovery arm
+                // below: the worktree already exists, so propagating with `?`
+                // would abort with a bare error and no way to resend.
+                let seeded = store
+                    .primary_instance_id(ws_id)
+                    .and_then(|found| {
+                        found.ok_or_else(|| {
+                            Error::UserInput("new workspace has no primary agent".to_string())
+                        })
+                    })
+                    .and_then(|target| enqueue_for_agent(&store, ws_id, target, prompt));
+                match seeded {
+                    Ok(()) => println!("queued starter prompt to primary"),
+                    // The worktree is live and the prompt is not. Hand back a
+                    // command that actually resends THIS prompt, rather than
+                    // leaving a workspace that looks created but never wakes.
+                    Err(e) => {
+                        eprintln!(
+                            "warning: workspace created but the starter prompt was not queued: {e}\n\
+                             retry with: {}",
+                            retry_send_hint(&r.name, &created.workspace.name, prompt)
+                        );
+                    }
+                }
             }
         }
         CliAction::WorkspaceList { repo } => {
@@ -1969,20 +2015,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         target_ws.name
                     ))
                 })?;
-            let from = std::env::var("WSX_AGENT_INSTANCE_ID")
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
-                .map(crate::data::store::AgentInstanceId);
-            store.enqueue_message(target_ws.id, target_id, from, &prompt)?;
-            if !crate::tui_ipc::any_live_tui() {
-                // The TUI is the only thing that injects queued messages, so
-                // without one this send is a no-op the sender would never
-                // notice. Not an error: the row is queued, not lost.
-                eprintln!(
-                    "warning: no wsx dashboard is running — this message is queued and \
-                     will not be delivered until one starts. Tell the user to open `wsx`."
-                );
-            }
+            enqueue_for_agent(&store, target_ws.id, target_id, &prompt)?;
             match workspace.as_deref() {
                 Some(_) => println!("queued message to {target} in {}", target_ws.name),
                 None => println!("queued message to {target}"),
@@ -2263,6 +2296,59 @@ fn join_or_none<'a>(names: impl Iterator<Item = &'a str>) -> String {
     } else {
         v.join(", ")
     }
+}
+
+/// The `wsx agent send` invocation that resends a starter prompt whose
+/// enqueue failed after the workspace was already created.
+///
+/// Every dynamic part is shell-quoted: repo names may contain spaces (the
+/// `<repo>/<slug>` spec splits on the LAST slash precisely because of that)
+/// and a prompt is arbitrary text. An unquoted hint would be a command the
+/// user cannot actually paste.
+fn retry_send_hint(repo: &str, slug: &str, prompt: &str) -> String {
+    fn shquote(s: &str) -> String {
+        shlex::try_quote(s)
+            .map(|c| c.into_owned())
+            // Only fails on interior NUL, which cannot reach here through
+            // sqlite TEXT or a CLI arg; drop the byte rather than emit an
+            // unquoted arg.
+            .unwrap_or_else(|_| format!("'{}'", s.replace(['\'', '\0'], "")))
+    }
+    format!(
+        "wsx agent send --workspace {} primary {}",
+        shquote(&format!("{repo}/{slug}")),
+        shquote(prompt)
+    )
+}
+
+/// Queue `body` for `target` and warn when nothing will deliver it.
+///
+/// The CLI only ever writes to the store; the dashboard is the sole thing
+/// that injects queued messages into an agent PTY (`App::drain_agent_messages`
+/// spawns the target on demand). So without a live TUI the enqueue is a no-op
+/// the sender would never notice — not an error, since the row is queued
+/// rather than lost, but worth saying out loud.
+///
+/// Shared by `agent send` and `workspace create --prompt` so the two can't
+/// drift apart on sender attribution or on that warning.
+fn enqueue_for_agent(
+    store: &crate::data::store::Store,
+    workspace: crate::data::store::WorkspaceId,
+    target: crate::data::store::AgentInstanceId,
+    body: &str,
+) -> Result<()> {
+    let from = std::env::var("WSX_AGENT_INSTANCE_ID")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .map(crate::data::store::AgentInstanceId);
+    store.enqueue_message(workspace, target, from, body)?;
+    if !crate::tui_ipc::any_live_tui() {
+        eprintln!(
+            "warning: no wsx dashboard is running — this message is queued and \
+             will not be delivered until one starts. Tell the user to open `wsx`."
+        );
+    }
+    Ok(())
 }
 
 fn open_in_editor(key: &str, initial: &str) -> Result<String> {
@@ -3082,11 +3168,13 @@ mod tests {
                 yolo,
                 shared,
                 agent: None,
+                prompt,
             } => {
                 assert_eq!(repo, "backend");
                 assert!(name.is_none());
                 assert!(!yolo);
                 assert!(!shared);
+                assert!(prompt.is_none());
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -3110,6 +3198,7 @@ mod tests {
                 yolo,
                 shared,
                 agent: None,
+                prompt: None,
             } => {
                 assert_eq!(repo, "backend");
                 assert_eq!(name.as_deref(), Some("add-widgets"));
@@ -3118,6 +3207,71 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    /// The phone flow: one command creates the workspace AND seeds its
+    /// agent, so the only thing typed on a phone keyboard is the prompt.
+    #[test]
+    fn parses_workspace_create_with_prompt() {
+        match parse(&[
+            "workspace",
+            "create",
+            "backend",
+            "--prompt",
+            "fix the flaky tests",
+        ])
+        .unwrap()
+        {
+            CliAction::WorkspaceCreate { repo, prompt, .. } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(prompt.as_deref(), Some("fix the flaky tests"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// `--prompt` composes with every other create flag — the phone flow
+    /// still wants `--yolo` and an explicit `--name` sometimes.
+    #[test]
+    fn parses_workspace_create_prompt_alongside_other_flags() {
+        match parse(&[
+            "workspace",
+            "create",
+            "backend",
+            "--name",
+            "flaky-tests",
+            "--yolo",
+            "--agent",
+            "claude",
+            "--prompt",
+            "fix the flaky tests",
+        ])
+        .unwrap()
+        {
+            CliAction::WorkspaceCreate {
+                repo,
+                name,
+                yolo,
+                shared,
+                agent,
+                prompt,
+            } => {
+                assert_eq!(repo, "backend");
+                assert_eq!(name.as_deref(), Some("flaky-tests"));
+                assert!(yolo);
+                assert!(!shared);
+                assert_eq!(agent.as_deref(), Some("claude"));
+                assert_eq!(prompt.as_deref(), Some("fix the flaky tests"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// A bare `--prompt` must be a usage error rather than silently
+    /// creating an unseeded workspace the sender believes is running.
+    #[test]
+    fn parses_workspace_create_rejects_prompt_without_value() {
+        assert!(parse(&["workspace", "create", "backend", "--prompt"]).is_err());
     }
 
     #[test]
@@ -3135,6 +3289,186 @@ mod tests {
     #[test]
     fn parses_workspace_create_rejects_unknown_arg() {
         assert!(parse(&["workspace", "create", "backend", "--bogus"]).is_err());
+    }
+
+    /// The recovery hint has to be pasteable verbatim, so it must carry the
+    /// real prompt — not a placeholder — and survive the two things that
+    /// routinely break a hand-built command line: spaces in a repo name and
+    /// arbitrary text in a prompt.
+    #[test]
+    fn retry_hint_resends_the_actual_prompt() {
+        let hint = retry_send_hint("backend", "add-widgets", "fix the flaky tests");
+        assert!(
+            hint.contains("fix the flaky tests"),
+            "must carry the real prompt, not a placeholder: {hint}"
+        );
+        assert!(
+            !hint.contains("\"...\""),
+            "a placeholder makes the hint unusable: {hint}"
+        );
+        assert!(hint.contains("--workspace"), "{hint}");
+        assert!(hint.contains("primary"), "{hint}");
+    }
+
+    #[test]
+    fn retry_hint_quotes_spaces_and_metacharacters() {
+        // Repo names may contain spaces — `resolve_workspace_spec` splits on
+        // the LAST slash for exactly this reason.
+        let spaced = retry_send_hint("meals backend", "add-widgets", "do it");
+        assert!(
+            spaced.contains("'meals backend/add-widgets'"),
+            "a spaced repo name must stay one argument: {spaced}"
+        );
+
+        // A prompt is arbitrary text; quotes and shell metacharacters in it
+        // must not escape into the command.
+        let nasty = retry_send_hint("r", "w", "it's $HOME; rm -rf /");
+        let parsed = shlex::split(&nasty).expect("hint must be valid shell");
+        assert_eq!(
+            parsed.last().map(String::as_str),
+            Some("it's $HOME; rm -rf /"),
+            "the prompt must round-trip as a single literal argument: {nasty}"
+        );
+        assert_eq!(
+            parsed,
+            vec![
+                "wsx",
+                "agent",
+                "send",
+                "--workspace",
+                "r/w",
+                "primary",
+                "it's $HOME; rm -rf /"
+            ],
+            "the hint must parse as exactly the intended argv"
+        );
+    }
+
+    fn init_git_repo() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let r = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        r(&["init", "-q", "-b", "main"]);
+        r(&["config", "user.email", "t@e"]);
+        r(&["config", "user.name", "t"]);
+        r(&["commit", "--allow-empty", "-q", "-m", "init"]);
+        dir
+    }
+
+    /// `--prompt` must queue against the workspace it just created, aimed at
+    /// the primary agent seeded at birth. This is the whole phone flow: the
+    /// dashboard spawns that agent on demand when it drains the inbox, so a
+    /// message on the wrong target (or no message at all) is a workspace that
+    /// silently never starts.
+    #[tokio::test]
+    async fn workspace_create_with_prompt_queues_it_to_the_new_primary() {
+        use crate::config::Dirs;
+        use crate::data::store::Store;
+        use crate::test_support::EnvGuard;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::for_test(tmp.path());
+        let repo_dir = init_git_repo();
+        {
+            let store = Store::open(&dirs.db_path()).unwrap();
+            crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+                .await
+                .unwrap();
+        }
+
+        let mut env = EnvGuard::new();
+        // Point the "is a TUI running" check at an empty scratch dir so the
+        // no-dashboard warning path is deterministic regardless of whether
+        // this process is itself running under a live wsx dashboard.
+        env.set("XDG_RUNTIME_DIR", tmp.path());
+        env.remove("WSX_AGENT_INSTANCE_ID");
+
+        run_cli(
+            CliAction::WorkspaceCreate {
+                repo: "demo".to_string(),
+                name: Some("seeded".to_string()),
+                yolo: false,
+                shared: false,
+                agent: None,
+                prompt: Some("fix the flaky tests".to_string()),
+            },
+            &dirs,
+        )
+        .await
+        .unwrap();
+
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let ws = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .flat_map(|r| store.workspaces(r.id).unwrap())
+            .find(|w| w.name == "seeded")
+            .expect("workspace must exist");
+        let primary = store
+            .primary_instance_id(ws.id)
+            .unwrap()
+            .expect("create seeds a primary agent at birth");
+
+        let queued = store.undelivered_messages().unwrap();
+        assert_eq!(queued.len(), 1, "exactly one seeded prompt");
+        assert_eq!(queued[0].workspace_id, ws.id);
+        assert_eq!(
+            queued[0].target_agent_id, primary,
+            "must target the new workspace's primary agent"
+        );
+        assert_eq!(queued[0].body, "fix the flaky tests");
+    }
+
+    /// Without `--prompt`, create must not invent an inbox message —
+    /// otherwise every plain `workspace create` would wake an agent.
+    #[tokio::test]
+    async fn workspace_create_without_prompt_queues_nothing() {
+        use crate::config::Dirs;
+        use crate::data::store::Store;
+        use crate::test_support::EnvGuard;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::for_test(tmp.path());
+        let repo_dir = init_git_repo();
+        {
+            let store = Store::open(&dirs.db_path()).unwrap();
+            crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+                .await
+                .unwrap();
+        }
+
+        let mut env = EnvGuard::new();
+        env.set("XDG_RUNTIME_DIR", tmp.path());
+        env.remove("WSX_AGENT_INSTANCE_ID");
+
+        run_cli(
+            CliAction::WorkspaceCreate {
+                repo: "demo".to_string(),
+                name: Some("quiet".to_string()),
+                yolo: false,
+                shared: false,
+                agent: None,
+                prompt: None,
+            },
+            &dirs,
+        )
+        .await
+        .unwrap();
+
+        let store = Store::open(&dirs.db_path()).unwrap();
+        assert!(
+            store.undelivered_messages().unwrap().is_empty(),
+            "a create without --prompt must leave the inbox untouched"
+        );
     }
 
     use crate::pty::session::AgentKind;

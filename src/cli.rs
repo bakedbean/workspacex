@@ -1880,22 +1880,27 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 // `create` seeds a primary agent row at birth, so this
                 // resolves immediately — but report rather than unwrap, since
                 // the workspace itself already exists on disk either way.
+                // Every failure from here on must reach the recovery arm
+                // below: the worktree already exists, so propagating with `?`
+                // would abort with a bare error and no way to resend.
                 let seeded = store
-                    .primary_instance_id(ws_id)?
-                    .ok_or_else(|| {
-                        Error::UserInput("new workspace has no primary agent".to_string())
+                    .primary_instance_id(ws_id)
+                    .and_then(|found| {
+                        found.ok_or_else(|| {
+                            Error::UserInput("new workspace has no primary agent".to_string())
+                        })
                     })
                     .and_then(|target| enqueue_for_agent(&store, ws_id, target, prompt));
                 match seeded {
                     Ok(()) => println!("queued starter prompt to primary"),
-                    // The worktree is live and the prompt is not. Name the
-                    // exact recovery command rather than leaving a workspace
-                    // that looks created but never wakes up.
+                    // The worktree is live and the prompt is not. Hand back a
+                    // command that actually resends THIS prompt, rather than
+                    // leaving a workspace that looks created but never wakes.
                     Err(e) => {
                         eprintln!(
                             "warning: workspace created but the starter prompt was not queued: {e}\n\
-                             retry with: wsx agent send --workspace {}/{} primary \"...\"",
-                            r.name, created.workspace.name
+                             retry with: {}",
+                            retry_send_hint(&r.name, &created.workspace.name, prompt)
                         );
                     }
                 }
@@ -2291,6 +2296,29 @@ fn join_or_none<'a>(names: impl Iterator<Item = &'a str>) -> String {
     } else {
         v.join(", ")
     }
+}
+
+/// The `wsx agent send` invocation that resends a starter prompt whose
+/// enqueue failed after the workspace was already created.
+///
+/// Every dynamic part is shell-quoted: repo names may contain spaces (the
+/// `<repo>/<slug>` spec splits on the LAST slash precisely because of that)
+/// and a prompt is arbitrary text. An unquoted hint would be a command the
+/// user cannot actually paste.
+fn retry_send_hint(repo: &str, slug: &str, prompt: &str) -> String {
+    fn shquote(s: &str) -> String {
+        shlex::try_quote(s)
+            .map(|c| c.into_owned())
+            // Only fails on interior NUL, which cannot reach here through
+            // sqlite TEXT or a CLI arg; drop the byte rather than emit an
+            // unquoted arg.
+            .unwrap_or_else(|_| format!("'{}'", s.replace(['\'', '\0'], "")))
+    }
+    format!(
+        "wsx agent send --workspace {} primary {}",
+        shquote(&format!("{repo}/{slug}")),
+        shquote(prompt)
+    )
 }
 
 /// Queue `body` for `target` and warn when nothing will deliver it.
@@ -3261,6 +3289,59 @@ mod tests {
     #[test]
     fn parses_workspace_create_rejects_unknown_arg() {
         assert!(parse(&["workspace", "create", "backend", "--bogus"]).is_err());
+    }
+
+    /// The recovery hint has to be pasteable verbatim, so it must carry the
+    /// real prompt — not a placeholder — and survive the two things that
+    /// routinely break a hand-built command line: spaces in a repo name and
+    /// arbitrary text in a prompt.
+    #[test]
+    fn retry_hint_resends_the_actual_prompt() {
+        let hint = retry_send_hint("backend", "add-widgets", "fix the flaky tests");
+        assert!(
+            hint.contains("fix the flaky tests"),
+            "must carry the real prompt, not a placeholder: {hint}"
+        );
+        assert!(
+            !hint.contains("\"...\""),
+            "a placeholder makes the hint unusable: {hint}"
+        );
+        assert!(hint.contains("--workspace"), "{hint}");
+        assert!(hint.contains("primary"), "{hint}");
+    }
+
+    #[test]
+    fn retry_hint_quotes_spaces_and_metacharacters() {
+        // Repo names may contain spaces — `resolve_workspace_spec` splits on
+        // the LAST slash for exactly this reason.
+        let spaced = retry_send_hint("meals backend", "add-widgets", "do it");
+        assert!(
+            spaced.contains("'meals backend/add-widgets'"),
+            "a spaced repo name must stay one argument: {spaced}"
+        );
+
+        // A prompt is arbitrary text; quotes and shell metacharacters in it
+        // must not escape into the command.
+        let nasty = retry_send_hint("r", "w", "it's $HOME; rm -rf /");
+        let parsed = shlex::split(&nasty).expect("hint must be valid shell");
+        assert_eq!(
+            parsed.last().map(String::as_str),
+            Some("it's $HOME; rm -rf /"),
+            "the prompt must round-trip as a single literal argument: {nasty}"
+        );
+        assert_eq!(
+            parsed,
+            vec![
+                "wsx",
+                "agent",
+                "send",
+                "--workspace",
+                "r/w",
+                "primary",
+                "it's $HOME; rm -rf /"
+            ],
+            "the hint must parse as exactly the intended argv"
+        );
     }
 
     fn init_git_repo() -> tempfile::TempDir {

@@ -52,9 +52,10 @@ pub fn order_repos(repos: &mut [RepoView<'_>]) {
 const RULE_PAD: usize = 2;
 
 /// The clickable "my open PRs" link's glyph with nerd fonts on:
-/// `nf-oct-git_merge_queue`. It reads as a queue of pull requests, which is
-/// what the link opens and what the `PR` fallback below says in words.
-const PR_LINK_NERD: &str = "\u{f4db}";
+/// `nf-oct-git_pull_request`, the same glyph a workspace row uses for an
+/// open PR — so the header and the rows below it name the same concept at
+/// two scales, the way the shared open-PR green already does.
+const PR_LINK_NERD: &str = "\u{f407}";
 /// Fallback glyph. Plain text rather than a lookalike symbol — an icon
 /// nobody can decode isn't an affordance.
 const PR_LINK_PLAIN: &str = "PR";
@@ -733,6 +734,19 @@ mod tests {
         );
         let span = span.expect("github repo gets a clickable PR link");
         assert_eq!(span_text(&line, span), PR_LINK_NERD);
+    }
+
+    /// The header link deliberately reuses the glyph a workspace row shows
+    /// for an open PR, so the two name the same concept at two scales —
+    /// mirroring the open-PR green they already share. Pinned here because
+    /// the two live in different modules and are easy to drift apart.
+    #[test]
+    fn pr_link_glyph_matches_the_row_open_pr_glyph() {
+        use crate::git::forge::BranchLifecycle::PrOpen;
+        assert_eq!(
+            PR_LINK_NERD,
+            crate::ui::theme::branch_glyph(Some(PrOpen), true)
+        );
     }
 
     /// The span must slice exactly the glyph out of the painted line — no

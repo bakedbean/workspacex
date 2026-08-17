@@ -39,11 +39,12 @@ renders as the literal text `PR`:
            ▲ click here
 ```
 
-With `nerd_fonts` on it renders instead as the merge-queue octicon
-(`nf-oct-git_merge_queue`) at **U+F4DB**. That codepoint lives in the
-Private Use Area, so it only appears if your terminal font actually
-patches it; if you see a blank or a tofu box in that position, the link
-is still there and still clickable.
+With `nerd_fonts` on it renders instead as the git-pull-request octicon
+(`nf-oct-git_pull_request`) at **U+F407** — the same glyph a workspace row
+uses for an open PR. That codepoint lives in the Private Use Area, so it
+only appears if your terminal font actually patches it; if you see a blank
+or a tofu box in that position, the link is still there and still
+clickable.
 
 Repos without a link keep those columns blank rather than closing the
 gap, so every path starts in the same column either way.

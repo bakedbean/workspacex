@@ -125,6 +125,30 @@ pub(crate) fn open_pr_in_browser(worktree: &Path, branch: &str) {
     }
 }
 
+/// The argv (after the `gh` program name) that opens the signed-in user's
+/// open PRs for the repo in the browser. `gh` expands this to
+/// `https://github.com/<owner>/<repo>/pulls?q=is:pr+is:open+author:@me`,
+/// so wsx never has to learn the owner/repo slug or the user's login.
+pub(crate) fn author_prs_web_argv() -> Vec<&'static str> {
+    vec!["pr", "list", "--web", "--author", "@me"]
+}
+
+/// Open the signed-in user's open PRs for `repo` in the default browser.
+/// Fire-and-forget on the same contract as [`open_pr_in_browser`]: gh
+/// resolves the repo from `current_dir` and reports its own auth errors,
+/// so only spawn failures are worth logging.
+pub(crate) fn open_author_prs_in_browser(repo: &Path) {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(author_prs_web_argv())
+        .current_dir(repo)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Err(e) = cmd.spawn() {
+        tracing::warn!(error = %e, repo = %repo.display(), "failed to open author PRs in browser");
+    }
+}
+
 /// The host component of a git remote URL, for the two forms git accepts:
 /// `scheme://[user@]host[:port]/path` and scp-like `[user@]host:path`.
 /// `None` for anything that names a local path rather than a host.
@@ -315,6 +339,14 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let result = fetch_pr_status(tmp.path(), "main").await;
         assert!(matches!(result, Ok(None)), "got {result:?}");
+    }
+
+    #[test]
+    fn author_prs_web_argv_builds_expected() {
+        assert_eq!(
+            author_prs_web_argv(),
+            vec!["pr", "list", "--web", "--author", "@me"]
+        );
     }
 
     #[test]

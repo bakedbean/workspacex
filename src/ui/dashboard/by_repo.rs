@@ -65,6 +65,18 @@ const PR_LINK_PAD: usize = 2;
 /// A repo header's clickable PR link: `(char offset in the line, width)`.
 type PrLinkSpan = (u16, u16);
 
+/// Whether any of a repo's workspaces has a pull request that GitHub still
+/// counts as open — including drafts and conflicted ones, since both are
+/// listed by the `is:pr is:open author:@me` query the link opens. So the
+/// colour predicts whether the link leads anywhere; merged and closed PRs
+/// have dropped out of that list and leave it dim.
+fn has_open_pr(view: &RepoView<'_>) -> bool {
+    use crate::git::forge::BranchLifecycle::*;
+    view.workspaces
+        .iter()
+        .any(|w| matches!(w.lifecycle, Some(PrOpen | PrDraft | PrConflicted)))
+}
+
 /// The PR link's glyph for a view, or `None` when it shouldn't be painted.
 fn pr_link_glyph(view: &RepoView<'_>) -> Option<&'static str> {
     if !view.show_pr_link {
@@ -153,7 +165,17 @@ fn header_line(
         // name would otherwise slide the painted glyph out from under its
         // click rect.
         let offset: usize = spans.iter().map(|s| s.width()).sum();
-        let glyph = Span::styled(glyph.to_string(), theme.dim_style());
+        // Dim by default so the link and the path read as one quiet cluster,
+        // but lit in the open-PR green — the same one a row's PR chip takes —
+        // when this repo actually has something waiting behind it.
+        let style = if has_open_pr(view) {
+            theme
+                .lifecycle_style(Some(crate::git::forge::BranchLifecycle::PrOpen))
+                .unwrap_or_else(|| theme.dim_style())
+        } else {
+            theme.dim_style()
+        };
+        let glyph = Span::styled(glyph.to_string(), style);
         let glyph_width = glyph.width();
         spans.push(glyph);
         // Pad out the rest of the gutter, keeping the pad outside the hit
@@ -593,11 +615,32 @@ mod tests {
         );
     }
 
-    /// The link takes the same dim as the path it introduces, so the two
-    /// read as one quiet cluster identifying the repo rather than the link
-    /// competing with the status counts for attention.
+    /// Style of the first span whose content is exactly `needle`.
+    fn style_of(line: &Line<'_>, needle: &str) -> ratatui::style::Style {
+        line.spans
+            .iter()
+            .find(|s| s.content == needle)
+            .unwrap_or_else(|| panic!("{needle} span painted"))
+            .style
+    }
+
+    /// Render `view`'s header and return the PR link's style.
+    fn pr_link_style(view: &RepoView<'_>, theme: &Theme) -> ratatui::style::Style {
+        let (line, _) = header_line(
+            view,
+            name_align_width(std::slice::from_ref(view)),
+            pr_link_gutter(std::slice::from_ref(view)),
+            120,
+            theme,
+        );
+        style_of(&line, PR_LINK_PLAIN)
+    }
+
+    /// With nothing open behind it the link takes the same dim as the path it
+    /// introduces, so the two read as one quiet cluster identifying the repo
+    /// rather than the link competing with the status counts for attention.
     #[test]
-    fn pr_link_is_dimmed_like_the_path() {
+    fn pr_link_without_open_prs_is_dimmed_like_the_path() {
         let theme = Theme::wsx();
         let repos = fixture::repos();
         let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
@@ -609,16 +652,70 @@ mod tests {
             120,
             &theme,
         );
-        let style_of = |needle: &str| {
-            line.spans
-                .iter()
-                .find(|s| s.content == needle)
-                .unwrap_or_else(|| panic!("{needle} span painted"))
-                .style
-        };
-        assert_eq!(style_of(PR_LINK_PLAIN), theme.dim_style());
+        assert_eq!(style_of(&line, PR_LINK_PLAIN), theme.dim_style());
         // Not merely equal to a constant — equal to the path beside it.
-        assert_eq!(style_of(PR_LINK_PLAIN), style_of(&view.path));
+        assert_eq!(style_of(&line, PR_LINK_PLAIN), style_of(&line, &view.path));
+    }
+
+    /// A repo with something waiting behind the link lights it up, in the same
+    /// green a workspace row's open-PR chip uses.
+    #[test]
+    fn pr_link_goes_green_when_a_workspace_has_an_open_pr() {
+        use crate::git::forge::BranchLifecycle::*;
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let green = theme.lifecycle_style(Some(PrOpen)).expect("open-PR style");
+        assert_ne!(green, theme.dim_style(), "fixture theme must distinguish");
+
+        // Every state still listed by `is:pr is:open author:@me` lights it up.
+        for lc in [PrOpen, PrDraft, PrConflicted] {
+            let mut view = pr_link_view(wsx, true, false);
+            view.workspaces[0].lifecycle = Some(lc);
+            assert_eq!(
+                pr_link_style(&view, &theme),
+                green,
+                "{lc:?} is open on GitHub, so the link should be green"
+            );
+        }
+
+        // States that no longer appear in that list leave it dim.
+        for lc in [NoPr, PrMerged, PrClosed] {
+            let mut view = pr_link_view(wsx, true, false);
+            view.workspaces[0].lifecycle = Some(lc);
+            assert_eq!(
+                pr_link_style(&view, &theme),
+                theme.dim_style(),
+                "{lc:?} is not open, so the link should stay dim"
+            );
+        }
+    }
+
+    /// The signal is about the repo, not the selected row: any one workspace
+    /// with an open PR is enough, and a folded repo still reports it.
+    #[test]
+    fn any_single_workspace_with_an_open_pr_lights_the_link() {
+        use crate::git::forge::BranchLifecycle::*;
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let green = theme.lifecycle_style(Some(PrOpen)).expect("open-PR style");
+
+        let mut view = pr_link_view(wsx, true, false);
+        // Bury the only open PR at the end, behind several closed ones.
+        for w in view.workspaces.iter_mut() {
+            w.lifecycle = Some(PrClosed);
+        }
+        *view.workspaces.last_mut().unwrap() = {
+            let mut w = view.workspaces.last().unwrap().clone();
+            w.lifecycle = Some(PrOpen);
+            w
+        };
+        assert_eq!(pr_link_style(&view, &theme), green, "expanded repo");
+
+        // Folding hides the rows but must not hide the signal.
+        view.expanded = false;
+        assert_eq!(pr_link_style(&view, &theme), green, "folded repo");
     }
 
     #[test]

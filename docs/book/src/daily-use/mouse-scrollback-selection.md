@@ -21,10 +21,18 @@ Mouse capture also makes parts of the dashboard clickable:
   filtered to your own open ones — the GitHub PRs tab with
   `is:pr is:open author:@me` already applied.
 
-The repo PR link sits just before the repo's path, in the same dim
-colour, so the two read as one cluster identifying the repo. With
-[`nerd_fonts`](../configuration/global-settings.md) off it renders as the
-literal text `PR`:
+The repo PR link sits just before the repo's path, normally in the same
+dim colour, so the two read as one cluster identifying the repo. It turns
+**green** — the same green a row's open-PR chip uses — when at least one
+of that repo's workspaces has a pull request GitHub still counts as open,
+so the colour tells you whether the link leads anywhere before you click
+it. Drafts and conflicted PRs count, since the link's
+`is:pr is:open author:@me` query lists them too; merged and closed ones
+have dropped out of that list and leave the link dim. Folding a repo
+hides its rows but not this signal.
+
+With [`nerd_fonts`](../configuration/global-settings.md) off the link
+renders as the literal text `PR`:
 
 ```
 ▾ ─── wsx  PR  /home/eben/workspace/wsx  ──────────────  ? 1  ! 1    4 ws

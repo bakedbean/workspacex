@@ -21,20 +21,24 @@ Mouse capture also makes parts of the dashboard clickable:
   filtered to your own open ones — the GitHub PRs tab with
   `is:pr is:open author:@me` already applied.
 
-The repo PR link sits just after the repo's path, in the open-PR
-colour. With [`nerd_fonts`](../configuration/global-settings.md) off it
-renders as the literal text `PR`:
+The repo PR link sits just before the repo's path, in the same dim
+colour, so the two read as one cluster identifying the repo. With
+[`nerd_fonts`](../configuration/global-settings.md) off it renders as the
+literal text `PR`:
 
 ```
-▾ ─── wsx  /home/eben/workspace/wsx  PR  ──────────────  ? 1  ! 1    4 ws
-                                     ▲ click here
+▾ ─── wsx  PR  /home/eben/workspace/wsx  ──────────────  ? 1  ! 1    4 ws
+           ▲ click here
 ```
 
-With `nerd_fonts` on it renders instead as the git-pull-request octicon
-at **U+F407** — the same glyph a workspace row uses for an open PR. That
-codepoint lives in the Private Use Area, so it only appears if your
-terminal font actually patches it; if you see a blank or a tofu box in
-that position, the link is still there and still clickable.
+With `nerd_fonts` on it renders instead as the go-to-changes codicon
+(`nf-cod-git_pull_request_go_to_changes`) at **U+EC0B**. That codepoint
+lives in the Private Use Area, so it only appears if your terminal font
+actually patches it; if you see a blank or a tofu box in that position, the
+link is still there and still clickable.
+
+Repos without a link keep those columns blank rather than closing the
+gap, so every path starts in the same column either way.
 
 It appears only on repos whose `origin` remote points at github.com,
 so a repo wsx can't build that view for shows nothing rather than a

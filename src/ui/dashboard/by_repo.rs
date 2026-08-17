@@ -2,10 +2,10 @@
 //! repo name with its path and embeds per-status counts on a horizontal rule,
 //! and a nested list of workspace rows underneath when expanded.
 //!
-//! The header reads `▾ ── name  /path/to/repo  PR  ────  ? 1  ✓ 2    3 ws`:
-//! names right-justified to a shared column, each path left-justified in the
-//! column that opens up after them, the PR link closing that identity cluster,
-//! counts flush-right, and the rule filling whatever is left between.
+//! The header reads `▾ ── name  PR  /path/to/repo  ────  ? 1  ✓ 2    3 ws`:
+//! names right-justified to a shared column, then the PR link in a gutter
+//! reserved across every repo, then each path left-justified in the column
+//! that opens up after it, counts flush-right, and the rule filling between.
 
 use crate::ui::dashboard::row::{self, RowInputs};
 use crate::ui::dashboard::sort::StatusCounts;
@@ -51,15 +51,15 @@ pub fn order_repos(repos: &mut [RepoView<'_>]) {
 /// Spaces flanking the filler rule on each side.
 const RULE_PAD: usize = 2;
 
-/// The clickable "my open PRs" link's glyph with nerd fonts on: the
-/// git-pull-request octicon, the same one `branch_glyph` uses for an open
-/// PR, so the two read as the same concept at two scales.
-const PR_LINK_NERD: &str = "\u{f407}";
+/// The clickable "my open PRs" link's glyph with nerd fonts on:
+/// `nf-cod-git_pull_request_go_to_changes`. It names the action — go to the
+/// pull requests — which is what the `PR` fallback below says in words.
+const PR_LINK_NERD: &str = "\u{ec0b}";
 /// Fallback glyph. Plain text rather than a lookalike symbol — an icon
 /// nobody can decode isn't an affordance.
 const PR_LINK_PLAIN: &str = "PR";
-/// Blank columns between the path and the PR link. Excluded from the hit
-/// span so a click on the gap doesn't open a browser.
+/// Blank columns between the PR link and the path that follows it. Excluded
+/// from the hit span so a click on the gap doesn't open a browser.
 const PR_LINK_PAD: usize = 2;
 
 /// A repo header's clickable PR link: `(char offset in the line, width)`.
@@ -75,6 +75,21 @@ fn pr_link_glyph(view: &RepoView<'_>) -> Option<&'static str> {
     } else {
         PR_LINK_PLAIN
     })
+}
+
+/// Columns reserved between the name and the path for the PR link, so that
+/// every path starts in the same column whether or not its repo has one —
+/// the alignment the left-justified path column depends on. Zero when no
+/// repo in the list has a link, so a non-GitHub setup pays nothing for a
+/// gutter it would never fill.
+fn pr_link_gutter(repos: &[RepoView<'_>]) -> usize {
+    repos
+        .iter()
+        .filter_map(pr_link_glyph)
+        .map(|glyph| Span::raw(glyph).width())
+        .max()
+        .map(|w| w + PR_LINK_PAD)
+        .unwrap_or(0)
 }
 
 /// Width that right-justifies every repo's `name` to a shared right edge: the
@@ -95,6 +110,7 @@ fn name_align_width(repos: &[RepoView<'_>]) -> usize {
 fn header_line(
     view: &RepoView<'_>,
     name_width: usize,
+    gutter: usize,
     width: usize,
     theme: &Theme,
 ) -> (Line<'static>, Option<PrLinkSpan>) {
@@ -121,10 +137,33 @@ fn header_line(
     }
     spans.push(Span::styled(view.name.to_string(), theme.header_style()));
 
-    // Path sits immediately after the name, left-justified. Because the names
-    // are right-justified to a shared column, every path starts in that same
+    // Then the PR link, then the path. The link takes the same dim as the path
+    // it introduces: the two read as one quiet cluster identifying the repo,
+    // rather than the link competing with the status counts for attention.
+    //
+    // It occupies a gutter reserved across every repo, so a repo without a
+    // link leaves those columns blank instead of sliding its path left out of
+    // the shared column. Because the names are right-justified to a shared
+    // column and the gutter is a constant, every path starts in the same
     // column for free — no second alignment pass needed.
     spans.push(Span::raw("  ".to_string()));
+    let pr_link = pr_link_glyph(view).map(|glyph| {
+        // Measured in terminal cells, not Unicode scalars: mouse columns
+        // and ratatui's layout both count cells, so a double-width repo
+        // name would otherwise slide the painted glyph out from under its
+        // click rect.
+        let offset: usize = spans.iter().map(|s| s.width()).sum();
+        let glyph = Span::styled(glyph.to_string(), theme.dim_style());
+        let glyph_width = glyph.width();
+        spans.push(glyph);
+        // Pad out the rest of the gutter, keeping the pad outside the hit
+        // span so a click on the gap doesn't open a browser.
+        spans.push(Span::raw(" ".repeat(gutter.saturating_sub(glyph_width))));
+        (offset as u16, glyph_width as u16)
+    });
+    if pr_link.is_none() {
+        spans.push(Span::raw(" ".repeat(gutter)));
+    }
     spans.push(Span::styled(view.path.to_string(), theme.dim_style()));
 
     // Status counts are flush-right, built separately so the rule between the
@@ -165,30 +204,6 @@ fn header_line(
             theme.dim_style(),
         ));
     }
-
-    // The PR link closes the repo-identity cluster (name, path, link), before
-    // the filler rule hands the line over to the counts. It stays beside the
-    // identity rather than the counts because it acts on the repo, not on its
-    // workspaces — and being pushed into `spans` here keeps its offset
-    // derivable from what has already been painted.
-    let pr_link = pr_link_glyph(view).map(|glyph| {
-        // Measured in terminal cells, not Unicode scalars: mouse columns
-        // and ratatui's layout both count cells, so a double-width repo
-        // name would otherwise slide the painted glyph out from under its
-        // click rect.
-        let offset: usize = spans.iter().map(|s| s.width()).sum();
-        spans.push(Span::raw(" ".repeat(PR_LINK_PAD)));
-        // Open-PR colour, not the dim of the counts beside it: this names
-        // the same thing a row's PR chip does, and a click target that
-        // blends into its neighbours goes unnoticed.
-        let style = theme
-            .lifecycle_style(Some(crate::git::forge::BranchLifecycle::PrOpen))
-            .unwrap_or_else(|| theme.dim_style());
-        let glyph = Span::styled(glyph.to_string(), style);
-        let glyph_width = glyph.width();
-        spans.push(glyph);
-        ((offset + PR_LINK_PAD) as u16, glyph_width as u16)
-    });
 
     // The rule fills the gap between the path and the flush-right counts,
     // flanked by RULE_PAD spaces. Size it from the *actual* gap so the counts'
@@ -233,8 +248,9 @@ pub fn render_list(
     let mut items: Vec<ListItem<'static>> = Vec::new();
     let mut links: Vec<RepoPrLinkSpan> = Vec::new();
     let name_width = name_align_width(repos);
+    let gutter = pr_link_gutter(repos);
     for view in repos {
-        let (line, pr_link) = header_line(view, name_width, width, theme);
+        let (line, pr_link) = header_line(view, name_width, gutter, width, theme);
         if let Some(span) = pr_link {
             links.push((view.id, items.len(), span));
         }
@@ -319,7 +335,8 @@ mod tests {
         let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
         let view = make_view(wsx, 1, true);
         let align = name_align_width(std::slice::from_ref(&view));
-        let (line, _) = header_line(&view, align, 120, &theme);
+        let gutter = pr_link_gutter(std::slice::from_ref(&view));
+        let (line, _) = header_line(&view, align, gutter, 120, &theme);
         let t = header_text(&line);
         assert!(t.starts_with("▾ wsx"), "expanded fold + name: {t:?}");
         assert!(t.contains("? 1"));
@@ -343,7 +360,8 @@ mod tests {
         let frontend = repos.iter().find(|r| r.name == "frontend").unwrap();
         let view = make_view(frontend, 2, false);
         let align = name_align_width(std::slice::from_ref(&view));
-        let (line, _) = header_line(&view, align, 120, &theme);
+        let gutter = pr_link_gutter(std::slice::from_ref(&view));
+        let (line, _) = header_line(&view, align, gutter, 120, &theme);
         let t = header_text(&line);
         assert!(
             t.starts_with("  frontend"),
@@ -386,9 +404,10 @@ mod tests {
         let long = repos.iter().find(|r| r.name == "scp-admin").unwrap();
         let views = [make_view(short, 1, true), make_view(long, 2, false)];
         let name_width = name_align_width(&views);
+        let gutter = pr_link_gutter(&views);
 
-        let (short_line, _) = header_line(&views[0], name_width, width, &theme);
-        let (long_line, _) = header_line(&views[1], name_width, width, &theme);
+        let (short_line, _) = header_line(&views[0], name_width, gutter, width, &theme);
+        let (long_line, _) = header_line(&views[1], name_width, gutter, width, &theme);
 
         // Names are right-justified: both end in the same column.
         assert_eq!(
@@ -406,6 +425,49 @@ mod tests {
         // The counts are what's flush to the terminal's right edge now.
         assert_eq!(substr_end_col(&short_line, "4 ws"), width);
         assert_eq!(substr_end_col(&long_line, "1 ws"), width);
+    }
+
+    /// The PR link sits between the name and the path, so a repo without one
+    /// has to hold those columns open — otherwise a non-GitHub repo's path
+    /// slides left out of the shared column and the alignment above breaks.
+    #[test]
+    fn paths_align_whether_or_not_a_repo_has_a_pr_link() {
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let admin = repos.iter().find(|r| r.name == "scp-admin").unwrap();
+        for nerd_fonts in [false, true] {
+            // Same name length either side, so only the link can move the path.
+            let mut linked = pr_link_view(wsx, true, nerd_fonts);
+            linked.name = "aaa";
+            let mut bare = make_view(admin, 2, false);
+            bare.name = "bbb";
+            let views = [linked, bare];
+            let name_width = name_align_width(&views);
+            let gutter = pr_link_gutter(&views);
+            assert!(gutter > 0, "a linked repo in the list opens a gutter");
+
+            let (linked_line, span) = header_line(&views[0], name_width, gutter, 120, &theme);
+            let (bare_line, none) = header_line(&views[1], name_width, gutter, 120, &theme);
+            assert!(none.is_none(), "no link, no click target");
+            assert_eq!(
+                substr_start_col(&linked_line, &views[0].path),
+                substr_start_col(&bare_line, &views[1].path),
+                "the gutter must hold the path column open (nerd_fonts={nerd_fonts})"
+            );
+            // And the reserved columns are blank on the bare header, not
+            // silently swallowed by shifting the path.
+            let span = span.expect("linked repo gets a click target");
+            assert_eq!(
+                span_text(&linked_line, span),
+                if nerd_fonts {
+                    PR_LINK_NERD
+                } else {
+                    PR_LINK_PLAIN
+                },
+                "hit span lands on the glyph (nerd_fonts={nerd_fonts})"
+            );
+        }
     }
 
     #[test]
@@ -428,12 +490,13 @@ mod tests {
             ("nerd link", pr_link_view(wsx, true, true)),
         ] {
             let name_width = name_align_width(std::slice::from_ref(&view));
+            let gutter = pr_link_gutter(std::slice::from_ref(&view));
             // Minimum content width = the line with a zero gap (width 0).
-            let min_content = header_text(&header_line(&view, name_width, 0, &theme).0)
+            let min_content = header_text(&header_line(&view, name_width, gutter, 0, &theme).0)
                 .chars()
                 .count();
             for width in 0..=200 {
-                let (line, _) = header_line(&view, name_width, width, &theme);
+                let (line, _) = header_line(&view, name_width, gutter, width, &theme);
                 let len = header_text(&line).chars().count();
                 assert_eq!(
                     len,
@@ -460,14 +523,15 @@ mod tests {
         let long = repos.iter().find(|r| r.name == "scp-admin").unwrap();
         let views = [make_view(short, 1, true), make_view(long, 2, true)];
         let name_width = name_align_width(&views);
+        let gutter = pr_link_gutter(&views);
 
         // The shorter name's left-pad is filled with a rule (one space before
         // the name), matching the pinned-command row's filler.
-        let short_t = header_text(&header_line(&views[0], name_width, 120, &theme).0);
+        let short_t = header_text(&header_line(&views[0], name_width, gutter, 120, &theme).0);
         assert!(short_t.contains("─ wsx"), "left-fill rule: {short_t:?}");
 
         // The widest name has no left pad, so it hugs the glyph — no rule.
-        let long_t = header_text(&header_line(&views[1], name_width, 120, &theme).0);
+        let long_t = header_text(&header_line(&views[1], name_width, gutter, 120, &theme).0);
         assert!(long_t.starts_with("▾ scp-admin"), "no rule: {long_t:?}");
     }
 
@@ -500,6 +564,7 @@ mod tests {
         let (line, span) = header_line(
             &view,
             name_align_width(std::slice::from_ref(&view)),
+            pr_link_gutter(std::slice::from_ref(&view)),
             120,
             &theme,
         );
@@ -516,6 +581,7 @@ mod tests {
         let (line, span) = header_line(
             &view,
             name_align_width(std::slice::from_ref(&view)),
+            pr_link_gutter(std::slice::from_ref(&view)),
             120,
             &theme,
         );
@@ -527,11 +593,11 @@ mod tests {
         );
     }
 
-    /// The link carries the open-PR colour rather than the dim of the
-    /// counts beside it: it names the same concept as a row's PR chip, and
-    /// a click target that blends into its neighbours isn't discoverable.
+    /// The link takes the same dim as the path it introduces, so the two
+    /// read as one quiet cluster identifying the repo rather than the link
+    /// competing with the status counts for attention.
     #[test]
-    fn pr_link_is_styled_like_an_open_pr() {
+    fn pr_link_is_dimmed_like_the_path() {
         let theme = Theme::wsx();
         let repos = fixture::repos();
         let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
@@ -539,20 +605,20 @@ mod tests {
         let (line, _) = header_line(
             &view,
             name_align_width(std::slice::from_ref(&view)),
+            pr_link_gutter(std::slice::from_ref(&view)),
             120,
             &theme,
         );
-        let link = line
-            .spans
-            .iter()
-            .find(|s| s.content == PR_LINK_PLAIN)
-            .expect("link span painted");
-        assert_eq!(
-            link.style,
-            theme
-                .lifecycle_style(Some(crate::git::forge::BranchLifecycle::PrOpen))
-                .expect("open PRs have a colour")
-        );
+        let style_of = |needle: &str| {
+            line.spans
+                .iter()
+                .find(|s| s.content == needle)
+                .unwrap_or_else(|| panic!("{needle} span painted"))
+                .style
+        };
+        assert_eq!(style_of(PR_LINK_PLAIN), theme.dim_style());
+        // Not merely equal to a constant — equal to the path beside it.
+        assert_eq!(style_of(PR_LINK_PLAIN), style_of(&view.path));
     }
 
     #[test]
@@ -564,6 +630,7 @@ mod tests {
         let (line, span) = header_line(
             &view,
             name_align_width(std::slice::from_ref(&view)),
+            pr_link_gutter(std::slice::from_ref(&view)),
             120,
             &theme,
         );
@@ -582,13 +649,14 @@ mod tests {
             for nerd_fonts in [false, true] {
                 let view = pr_link_view(r, true, nerd_fonts);
                 let name_width = name_align_width(std::slice::from_ref(&view));
+                let gutter = pr_link_gutter(std::slice::from_ref(&view));
                 let glyph = if nerd_fonts {
                     PR_LINK_NERD
                 } else {
                     PR_LINK_PLAIN
                 };
                 for width in 0..=200 {
-                    let (line, span) = header_line(&view, name_width, width, &theme);
+                    let (line, span) = header_line(&view, name_width, gutter, width, &theme);
                     let span = span.expect("link present regardless of width");
                     assert_eq!(
                         span_text(&line, span),

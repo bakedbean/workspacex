@@ -170,6 +170,49 @@ fn repo_pr_link_rects_land_on_rendered_glyphs() {
     }
 }
 
+/// A repo name of double-width characters pushes the link two cells right
+/// per character. The hit span must be measured in terminal cells, like the
+/// rendering is — counting Unicode scalars would leave the rect behind.
+#[test]
+fn repo_pr_link_rect_survives_a_wide_repo_name() {
+    let fixtures = fixture::repos();
+    let mut repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    repos[0].name = "倉庫名".to_string(); // 3 chars, 6 cells
+    let github = crate::git::github_remotes::GithubRemotes::probed([(repos[0].id, true)]);
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
+    let activity: Vec<u32> = (0..24).collect();
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+        github_remotes: &github,
+        nerd_fonts: false,
+    };
+    let mut state = DashboardState {
+        group_mode: GroupMode::Repo,
+        ..Default::default()
+    };
+    let theme = Theme::wsx();
+    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    let mut rects: Vec<(RepoId, Rect)> = Vec::new();
+    term.draw(|f| {
+        rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme).repo_pr_links
+    })
+    .unwrap();
+    let buf = term.backend().buffer().clone();
+
+    let (_, r) = rects.first().expect("the wide-named repo is linked");
+    let text: String = (r.x..r.x + r.width)
+        .map(|x| buf[(x, r.y)].symbol().to_string())
+        .collect();
+    assert_eq!(text, "PR", "rect must track the link past a wide name");
+}
+
 /// The by-attention view has no repo headers, so it offers no repo links.
 #[test]
 fn by_attention_view_has_no_repo_pr_links() {

@@ -21,13 +21,20 @@ Mouse capture also makes parts of the dashboard clickable:
   filtered to your own open ones — the GitHub PRs tab with
   `is:pr is:open author:@me` already applied.
 
-The repo PR link renders as the git-pull-request glyph (``) with
-[`nerd_fonts`](../configuration/global-settings.md) on and the
-literal `PR` with it off, in the open-PR colour:
+The repo PR link sits just after the status counts, in the open-PR
+colour. With [`nerd_fonts`](../configuration/global-settings.md) off it
+renders as the literal text `PR`:
 
 ```
-▾ ─── wsx  ? 1  ! 1    4 ws    ────────────────  /home/eben/workspace/wsx
+▾ ─── wsx  ? 1  ! 1    4 ws  PR  ──────────────  /home/eben/workspace/wsx
+                             ▲ click here
 ```
+
+With `nerd_fonts` on it renders instead as the git-pull-request octicon
+at **U+F407** — the same glyph a workspace row uses for an open PR. That
+codepoint lives in the Private Use Area, so it only appears if your
+terminal font actually patches it; if you see a blank or a tofu box in
+that position, the link is still there and still clickable.
 
 It appears only on repos whose `origin` remote points at github.com,
 so a repo wsx can't build that view for shows nothing rather than a

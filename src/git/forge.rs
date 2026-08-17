@@ -160,10 +160,17 @@ fn remote_host(url: &str) -> Option<&str> {
         // `file://` URLs are local paths wearing a scheme.
         Some((scheme, _)) if scheme.eq_ignore_ascii_case("file") => return None,
         Some((_, rest)) => rest,
-        // No scheme: only the scp-like form carries a host, so a value that
-        // opens like a path is one.
-        None if url.starts_with(['/', '.', '~']) => return None,
-        None => url,
+        // No scheme: git reads the value as scp-like only when a colon
+        // precedes any slash. Everything else — `/abs/path`, `./rel`, and
+        // bare relative paths like `github.com/o/r.git` — is a local
+        // directory that happens to be spelled like a host.
+        None => {
+            let colon = url.find(':')?;
+            if url[..colon].contains('/') {
+                return None;
+            }
+            url
+        }
     };
     let authority = rest.split('/').next()?;
     let after_userinfo = authority.rsplit('@').next()?;
@@ -357,6 +364,8 @@ mod tests {
             "http://github.com/o/r",
             "https://eben@github.com/o/r.git",
             "git@github.com:o/r.git",
+            // scp-like without a user is still scp-like.
+            "github.com:o/r.git",
             "ssh://git@github.com/o/r.git",
             "ssh://git@github.com:22/o/r.git",
             "git://github.com/o/r.git",
@@ -381,6 +390,13 @@ mod tests {
             "/home/eben/mirrors/r.git",
             "file:///home/eben/mirrors/r.git",
             "",
+            // A bare relative path. Git only reads a no-scheme value as
+            // scp-like when a colon precedes any slash, so this names a
+            // local directory, not github.com — and `gh` can't resolve it.
+            "github.com/o/r.git",
+            "./github.com/o/r.git",
+            // Colon present, but after a slash: still a local path.
+            "mirrors/github.com:o/r.git",
         ] {
             assert!(!url_is_github(url), "should not be GitHub: {url}");
         }

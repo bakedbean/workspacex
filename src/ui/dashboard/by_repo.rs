@@ -156,7 +156,11 @@ fn header_line(
     // The PR link closes the repo-identity cluster (name, counts, link),
     // before the filler rule hands the line over to the path.
     let pr_link = pr_link_glyph(view).map(|glyph| {
-        let offset: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        // Measured in terminal cells, not Unicode scalars: mouse columns
+        // and ratatui's layout both count cells, so a double-width repo
+        // name would otherwise slide the painted glyph out from under its
+        // click rect.
+        let offset: usize = spans.iter().map(|s| s.width()).sum();
         spans.push(Span::raw(" ".repeat(PR_LINK_PAD)));
         // Open-PR colour, not the dim of the counts beside it: this names
         // the same thing a row's PR chip does, and a click target that
@@ -164,8 +168,10 @@ fn header_line(
         let style = theme
             .lifecycle_style(Some(crate::git::forge::BranchLifecycle::PrOpen))
             .unwrap_or_else(|| theme.dim_style());
-        spans.push(Span::styled(glyph.to_string(), style));
-        ((offset + PR_LINK_PAD) as u16, glyph.chars().count() as u16)
+        let glyph = Span::styled(glyph.to_string(), style);
+        let glyph_width = glyph.width();
+        spans.push(glyph);
+        ((offset + PR_LINK_PAD) as u16, glyph_width as u16)
     });
 
     // Path is flush-right; the rule fills the gap between the counts and the

@@ -46,6 +46,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.agent_chip_rects.clear();
     app.pr_link_rect = None;
     app.dashboard_pr_rects.clear();
+    app.dashboard_repo_pr_rects.clear();
     app.procs_link_rect = None;
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();
@@ -186,6 +187,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 workspaces,
                 activity: &activity,
                 column_widths,
+                github_remotes: &app.github_remotes,
+                nerd_fonts,
             };
             // Rebuild `selectable` in the V5 visible order (repos ordered
             // by persisted `sort_order`, priority-sort within repo, hide
@@ -212,7 +215,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             app.selectable = new_selectable;
             app.dashboard.selection = selection;
             app.dashboard.selected = selected;
-            app.dashboard_pr_rects = dashboard::render_without_footer(
+            let click_targets = dashboard::render_without_footer(
                 f,
                 dashboard_area,
                 &inputs,
@@ -220,6 +223,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 app.tick,
                 &app.theme,
             );
+            app.dashboard_pr_rects = click_targets.pr_chips;
+            app.dashboard_repo_pr_rects = click_targets.repo_pr_links;
             if let Some(pm_area) = pm_area {
                 let digest = app.build_pm_digest();
                 let selected = app

@@ -346,6 +346,33 @@ fn open_pr_for_workspace(app: &App, ws_id: crate::data::store::WorkspaceId) {
     }
 }
 
+/// The repo path a click should open the author-filtered PR list for, or
+/// `None` if the click missed every repo header's PR link. Resolving the
+/// path here (rather than in the mouse handler) keeps the decision
+/// testable without spawning a browser. A rect whose repo was unregistered
+/// between the draw and the click resolves to `None`.
+pub(crate) fn repo_pr_link_target(
+    app: &App,
+    m: &crossterm::event::MouseEvent,
+) -> Option<std::path::PathBuf> {
+    let (repo_id, _) = app
+        .dashboard_repo_pr_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))?;
+    app.repos
+        .iter()
+        .find(|r| r.id == *repo_id)
+        .map(|r| r.path.clone())
+}
+
+/// Whether a click landed inside `r`.
+fn rect_contains(r: &ratatui::layout::Rect, m: &crossterm::event::MouseEvent) -> bool {
+    m.column >= r.x
+        && m.column < r.x.saturating_add(r.width)
+        && m.row >= r.y
+        && m.row < r.y.saturating_add(r.height)
+}
+
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
 /// [`toggle_focused_fold`], this is idempotent: pressing `h` on an
 /// already-folded repo leaves it folded.
@@ -2697,6 +2724,11 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 // Clicking a row's PR chip in the dashboard PR column opens
                 // that PR in the browser, same as the detail-bar chip.
                 open_pr_for_workspace(app, ws_id);
+            } else if let Some(repo_path) = repo_pr_link_target(app, &m) {
+                // Clicking a repo header's PR link opens that repo's open
+                // PRs filtered to the signed-in user — the by-hand route of
+                // "PRs tab, then filter by me", in one click.
+                crate::git::forge::open_author_prs_in_browser(&repo_path);
             } else if let Some((ws_id, _)) = app.procs_link_rect.filter(|(_, r)| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

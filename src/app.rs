@@ -461,11 +461,18 @@ pub struct App {
     /// mouse handler to open that row's PR in the browser — same action as
     /// the detail-bar chip (`pr_link_rect`), just reachable per row.
     pub dashboard_pr_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
+    /// Screen rects of the clickable PR links on the dashboard's by-repo
+    /// headers, one per visible header that has one. Set during draw, read
+    /// by the mouse handler to open that repo's open PRs in the browser.
+    pub dashboard_repo_pr_rects: Vec<(crate::data::store::RepoId, ratatui::layout::Rect)>,
     /// Screen rect of the clickable running-process count (`● Np`) on the
     /// attached view's chip row, with the workspace it belongs to. Set during
     /// draw, read by the mouse handler to open the process-list modal on click.
     /// Mirrors the `pr_link_rect` draw-populates / input-reads pattern.
     pub procs_link_rect: Option<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
+    /// Which repos live on github.com, probed once each in `refresh`. Gates
+    /// the per-repo PR affordance on the by-repo dashboard headers.
+    pub github_remotes: crate::git::github_remotes::GithubRemotes,
     /// Last epoch-ms we attempted a PR fetch per workspace (throttle key).
     pub pr_last_poll_ms: std::collections::HashMap<crate::data::store::WorkspaceId, i64>,
     /// Last epoch-ms we attempted a `git diff --shortstat` per workspace
@@ -694,7 +701,9 @@ impl App {
             pr_number: std::collections::HashMap::new(),
             pr_link_rect: None,
             dashboard_pr_rects: Vec::new(),
+            dashboard_repo_pr_rects: Vec::new(),
             procs_link_rect: None,
+            github_remotes: Default::default(),
             pr_last_poll_ms: std::collections::HashMap::new(),
             diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
@@ -802,6 +811,9 @@ impl App {
 
     pub fn refresh(&mut self) -> Result<()> {
         self.repos = self.store.repos()?;
+        // Probes only repos it hasn't seen before, so this stays free after
+        // the first refresh even though refresh runs on every data change.
+        self.github_remotes.sync(&self.repos);
         self.workspaces = Vec::new();
         for r in &self.repos {
             for w in self.store.workspaces(r.id)? {

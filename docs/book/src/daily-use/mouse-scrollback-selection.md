@@ -31,11 +31,11 @@ literal text `PR`:
            ▲ click here
 ```
 
-With `nerd_fonts` on it renders instead as the go-to-changes codicon
-(`nf-cod-git_pull_request_go_to_changes`) at **U+EC0B**. That codepoint
-lives in the Private Use Area, so it only appears if your terminal font
-actually patches it; if you see a blank or a tofu box in that position, the
-link is still there and still clickable.
+With `nerd_fonts` on it renders instead as the merge-queue octicon
+(`nf-oct-git_merge_queue`) at **U+F4DB**. That codepoint lives in the
+Private Use Area, so it only appears if your terminal font actually
+patches it; if you see a blank or a tofu box in that position, the link
+is still there and still clickable.
 
 Repos without a link keep those columns blank rather than closing the
 gap, so every path starts in the same column either way.

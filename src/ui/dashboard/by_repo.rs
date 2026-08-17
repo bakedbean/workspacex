@@ -52,9 +52,9 @@ pub fn order_repos(repos: &mut [RepoView<'_>]) {
 const RULE_PAD: usize = 2;
 
 /// The clickable "my open PRs" link's glyph with nerd fonts on:
-/// `nf-cod-git_pull_request_go_to_changes`. It names the action — go to the
-/// pull requests — which is what the `PR` fallback below says in words.
-const PR_LINK_NERD: &str = "\u{ec0b}";
+/// `nf-oct-git_merge_queue`. It reads as a queue of pull requests, which is
+/// what the link opens and what the `PR` fallback below says in words.
+const PR_LINK_NERD: &str = "\u{f4db}";
 /// Fallback glyph. Plain text rather than a lookalike symbol — an icon
 /// nobody can decode isn't an affordance.
 const PR_LINK_PLAIN: &str = "PR";

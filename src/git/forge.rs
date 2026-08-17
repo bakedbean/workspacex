@@ -125,6 +125,54 @@ pub(crate) fn open_pr_in_browser(worktree: &Path, branch: &str) {
     }
 }
 
+/// The host component of a git remote URL, for the two forms git accepts:
+/// `scheme://[user@]host[:port]/path` and scp-like `[user@]host:path`.
+/// `None` for anything that names a local path rather than a host.
+///
+/// Both forms reduce to the same slice — everything before the first `/` —
+/// because a scp-like URL's first `/` can only appear inside its path.
+fn remote_host(url: &str) -> Option<&str> {
+    let rest = match url.split_once("://") {
+        // `file://` URLs are local paths wearing a scheme.
+        Some((scheme, _)) if scheme.eq_ignore_ascii_case("file") => return None,
+        Some((_, rest)) => rest,
+        // No scheme: only the scp-like form carries a host, so a value that
+        // opens like a path is one.
+        None if url.starts_with(['/', '.', '~']) => return None,
+        None => url,
+    };
+    let authority = rest.split('/').next()?;
+    let after_userinfo = authority.rsplit('@').next()?;
+    // Trailing `:port` (URL form) or `:path` (scp-like form).
+    after_userinfo.split(':').next()
+}
+
+/// Whether a git remote URL points at github.com. Self-hosted GitHub
+/// Enterprise hosts deliberately don't count: `gh` may well handle them,
+/// but we only claim what we can recognise.
+fn url_is_github(url: &str) -> bool {
+    remote_host(url).is_some_and(|h| {
+        h.eq_ignore_ascii_case("github.com") || h.eq_ignore_ascii_case("www.github.com")
+    })
+}
+
+/// Whether `repo`'s `origin` remote points at github.com. Blocking (it runs
+/// one `git remote get-url`), so callers must memoise it rather than probe
+/// per frame. Any failure — no origin, not a git repo, no `git` — reads as
+/// "not GitHub", which hides the affordance rather than offering a dead one.
+pub fn repo_has_github_remote(repo: &Path) -> bool {
+    let out = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["remote", "get-url", "origin"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match out {
+        Ok(o) if o.status.success() => url_is_github(String::from_utf8_lossy(&o.stdout).trim()),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +315,89 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let result = fetch_pr_status(tmp.path(), "main").await;
         assert!(matches!(result, Ok(None)), "got {result:?}");
+    }
+
+    #[test]
+    fn url_is_github_accepts_every_remote_form() {
+        for url in [
+            "https://github.com/o/r.git",
+            "https://github.com/o/r",
+            "http://github.com/o/r",
+            "https://eben@github.com/o/r.git",
+            "git@github.com:o/r.git",
+            "ssh://git@github.com/o/r.git",
+            "ssh://git@github.com:22/o/r.git",
+            "git://github.com/o/r.git",
+            // Host comparison is case-insensitive.
+            "https://GitHub.com/o/r.git",
+            "https://www.github.com/o/r.git",
+        ] {
+            assert!(url_is_github(url), "should be GitHub: {url}");
+        }
+    }
+
+    #[test]
+    fn url_is_github_rejects_lookalike_and_other_hosts() {
+        for url in [
+            "https://gitlab.com/o/r.git",
+            // Self-hosted GHE: `gh` may well handle it, but we only claim
+            // github.com. A naive `contains("github.com")` passes these.
+            "git@github.example.com:o/r.git",
+            "https://github.example.com/o/r.git",
+            "https://github.com.evil.example/o/r.git",
+            // Local paths and file:// remotes have no GitHub host at all.
+            "/home/eben/mirrors/r.git",
+            "file:///home/eben/mirrors/r.git",
+            "",
+        ] {
+            assert!(!url_is_github(url), "should not be GitHub: {url}");
+        }
+    }
+
+    /// Test helper: a git repo whose `origin` is `url` (or no origin at all
+    /// when `url` is `None`). The remote is never contacted, so a bogus URL
+    /// is fine.
+    fn repo_with_origin(url: Option<&str>) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+        };
+        git(&["init", "-q"]);
+        if let Some(url) = url {
+            git(&["remote", "add", "origin", url]);
+        }
+        dir
+    }
+
+    #[test]
+    fn detects_a_github_origin() {
+        let repo = repo_with_origin(Some("git@github.com:bakedbean/workspacex.git"));
+        assert!(repo_has_github_remote(repo.path()));
+    }
+
+    #[test]
+    fn non_github_origin_is_not_a_github_remote() {
+        let repo = repo_with_origin(Some("https://gitlab.com/o/r.git"));
+        assert!(!repo_has_github_remote(repo.path()));
+    }
+
+    #[test]
+    fn repo_without_origin_is_not_a_github_remote() {
+        let repo = repo_with_origin(None);
+        assert!(!repo_has_github_remote(repo.path()));
+    }
+
+    /// A path that isn't a git repo at all must degrade quietly, not panic —
+    /// the dashboard probes every registered repo path on refresh.
+    #[test]
+    fn non_git_path_is_not_a_github_remote() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(!repo_has_github_remote(tmp.path()));
     }
 }

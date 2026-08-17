@@ -23,7 +23,7 @@ impl GithubRemotes {
     /// Probe every repo in `repos` that hasn't been probed yet, and forget
     /// repos that are no longer registered.
     pub fn sync(&mut self, repos: &[Repo]) {
-        self.sync_with(repos, crate::git::forge::repo_has_github_remote);
+        self.sync_with(repos, super::forge::repo_has_github_remote);
     }
 
     /// `sync` with the probe injected, so tests can drive it without git.
@@ -41,6 +41,15 @@ impl GithubRemotes {
     /// affordance rather than offering a dead one.
     pub fn is_github(&self, id: RepoId) -> bool {
         self.known.get(&id).copied().unwrap_or(false)
+    }
+
+    /// A cache with `answers` already filled in, for tests elsewhere in the
+    /// crate that need a known set of GitHub repos without touching git.
+    #[cfg(test)]
+    pub(crate) fn probed(answers: impl IntoIterator<Item = (RepoId, bool)>) -> Self {
+        Self {
+            known: answers.into_iter().collect(),
+        }
     }
 }
 

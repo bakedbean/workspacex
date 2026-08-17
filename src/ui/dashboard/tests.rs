@@ -94,6 +94,8 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -112,6 +114,76 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
                 .collect::<String>()
         })
         .collect()
+}
+
+/// Only repos the `GithubRemotes` cache says live on github.com get a
+/// header PR link, and each returned rect must land exactly on the glyph
+/// painted in the buffer — not on the padding beside it.
+#[test]
+fn repo_pr_link_rects_land_on_rendered_glyphs() {
+    let fixtures = fixture::repos();
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    // Every repo but the first is on GitHub.
+    let github = crate::git::github_remotes::GithubRemotes::probed(
+        repos.iter().map(|r| (r.id, r.id != repos[0].id)),
+    );
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
+    let activity: Vec<u32> = (0..24).collect();
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+        github_remotes: &github,
+        nerd_fonts: false,
+    };
+    let mut state = DashboardState {
+        group_mode: GroupMode::Repo,
+        ..Default::default()
+    };
+    let theme = Theme::wsx();
+    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    let mut rects: Vec<(RepoId, Rect)> = Vec::new();
+    term.draw(|f| {
+        rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme).repo_pr_links
+    })
+    .unwrap();
+    let buf = term.backend().buffer().clone();
+
+    let linked: Vec<RepoId> = rects.iter().map(|(id, _)| *id).collect();
+    let expected: Vec<RepoId> = repos
+        .iter()
+        .map(|r| r.id)
+        .filter(|id| *id != repos[0].id)
+        .collect();
+    assert_eq!(linked, expected, "only GitHub repos are clickable");
+
+    for (repo_id, r) in &rects {
+        let text: String = (r.x..r.x + r.width)
+            .map(|x| buf[(x, r.y)].symbol().to_string())
+            .collect();
+        assert_eq!(text, "PR", "rect for repo {repo_id:?} must cover its link");
+    }
+}
+
+/// The by-attention view has no repo headers, so it offers no repo links.
+#[test]
+fn by_attention_view_has_no_repo_pr_links() {
+    let inputs = fixture_dashboard_inputs();
+    let mut state = DashboardState {
+        group_mode: GroupMode::Attention,
+        ..Default::default()
+    };
+    let theme = Theme::wsx();
+    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    let mut targets = ListClickTargets::default();
+    term.draw(|f| targets = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme))
+        .unwrap();
+    assert!(targets.repo_pr_links.is_empty());
 }
 
 /// Render `render_without_footer` with every fixture workspace given an open
@@ -140,6 +212,8 @@ fn assert_pr_rects_match_buffer(group: GroupMode, height: u16, select_last: bool
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -154,8 +228,10 @@ fn assert_pr_rects_match_buffer(group: GroupMode, height: u16, select_last: bool
     let backend = TestBackend::new(160, height);
     let mut term = Terminal::new(backend).unwrap();
     let mut rects: Vec<(WorkspaceId, Rect)> = Vec::new();
-    term.draw(|f| rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme))
-        .unwrap();
+    term.draw(|f| {
+        rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme).pr_chips
+    })
+    .unwrap();
     let buf = term.backend().buffer().clone();
     assert!(!rects.is_empty(), "chip rects returned ({group:?})");
     assert!(
@@ -232,6 +308,8 @@ fn footer_row_paints_chip_bg_but_no_bar_bg() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
     };
     let mut state = DashboardState::default();
     let theme = Theme::wsx();
@@ -292,6 +370,8 @@ fn render_sets_list_state_to_selected_workspace_index() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -335,6 +415,8 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -391,6 +473,8 @@ fn visible_targets_by_repo_matches_render_order() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -405,7 +489,7 @@ fn visible_targets_by_repo_matches_render_order() {
     // Repos were assigned distinct, reversed sort_order above, so the
     // expected order is the reverse of the fixture/input order — proving
     // both paths actually sort and don't just echo input order.
-    let nav_repo_order: Vec<crate::data::store::RepoId> = targets
+    let nav_repo_order: Vec<RepoId> = targets
         .iter()
         .filter_map(|t| match t {
             SelectionTarget::Repo(id) => Some(*id),
@@ -425,17 +509,15 @@ fn visible_targets_by_repo_matches_render_order() {
             expanded: true,
             sort_order: r.sort_order,
             workspaces: Vec::new(),
+            show_pr_link: false,
+            nerd_fonts: false,
         })
         .collect();
     crate::ui::dashboard::by_repo::order_repos(&mut render_views);
-    let render_repo_order: Vec<crate::data::store::RepoId> = render_views
-        .iter()
-        .map(|v| crate::data::store::RepoId(v.id as i64))
-        .collect();
+    let render_repo_order: Vec<RepoId> = render_views.iter().map(|v| RepoId(v.id as i64)).collect();
     // Expected: repos sorted ascending by the sort_order we injected,
     // which is the reverse of input order.
-    let mut expected_order: Vec<crate::data::store::RepoId> =
-        inputs.repos.iter().map(|r| r.id).collect();
+    let mut expected_order: Vec<RepoId> = inputs.repos.iter().map(|r| r.id).collect();
     expected_order.sort_by_key(|id| {
         inputs
             .repos
@@ -454,7 +536,7 @@ fn visible_targets_by_repo_matches_render_order() {
     );
     // Sanity: the chosen sort_order really does reorder repos (so the
     // assertions above are not trivially satisfied by input order).
-    let input_order: Vec<crate::data::store::RepoId> = inputs.repos.iter().map(|r| r.id).collect();
+    let input_order: Vec<RepoId> = inputs.repos.iter().map(|r| r.id).collect();
     assert_ne!(
         nav_repo_order, input_order,
         "fixture must exercise a non-trivial reordering"
@@ -506,6 +588,8 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
         workspaces: Vec::new(),
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -535,6 +619,8 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
             expanded: true,
             sort_order: r.sort_order,
             workspaces: Vec::new(),
+            show_pr_link: false,
+            nerd_fonts: false,
         })
         .collect();
     crate::ui::dashboard::by_repo::order_repos(&mut views);
@@ -668,6 +754,8 @@ fn fixture_dashboard_inputs() -> DashboardInputs<'static> {
         workspaces,
         activity,
         column_widths: row::ColumnWidths::default(),
+        github_remotes: Box::leak(Box::default()),
+        nerd_fonts: false,
     }
 }
 
@@ -741,7 +829,7 @@ fn folded_repos_do_not_widen_the_strip() {
     let folded_repo_id = inputs.workspaces[0].repo.id;
     let mut state = DashboardState::default();
     state.folded.insert(folded_repo_id.0 as u64, true);
-    let (items, chips) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (items, chips, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
     assert!(!chips.is_empty(), "other repos still render rows");
     let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
@@ -771,7 +859,7 @@ fn chip_hit_spans_use_the_widened_strip() {
     let mut inputs = fixture_dashboard_inputs_with_pr();
     give_workspace_peers(&mut inputs, 0, 2);
     let mut state = DashboardState::default();
-    let (items, chips) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (items, chips, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
     let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
     assert_eq!(

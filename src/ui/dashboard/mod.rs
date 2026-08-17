@@ -44,6 +44,11 @@ pub struct DashboardInputs<'a> {
     pub workspaces: Vec<WorkspaceItem<'a>>,
     pub activity: &'a [u32],
     pub column_widths: row::ColumnWidths,
+    /// Which repos live on github.com — gates the per-repo PR link on the
+    /// by-repo headers.
+    pub github_remotes: &'a crate::git::github_remotes::GithubRemotes,
+    /// The global nerd-fonts setting, for glyphs chosen outside `RowInputs`.
+    pub nerd_fonts: bool,
 }
 
 #[derive(Debug, Default)]
@@ -131,13 +136,58 @@ pub(crate) fn footer_hint_rects(
 /// `(workspace, flat item index, (char offset in row, char width))`.
 type PrChipSpan = (crate::data::store::WorkspaceId, usize, (u16, u16));
 
+/// Everything on the dashboard list a click can land on. Populated during
+/// draw and read by the mouse handler, per the `chip_rects` pattern.
+#[derive(Debug, Default)]
+pub struct ListClickTargets {
+    /// Each visible workspace row's PR chip — opens that PR in the browser.
+    pub pr_chips: Vec<(crate::data::store::WorkspaceId, Rect)>,
+    /// Each visible repo header's PR link — opens that repo's open PRs
+    /// filtered to the signed-in user. Empty outside the by-repo view.
+    pub repo_pr_links: Vec<(crate::data::store::RepoId, Rect)>,
+}
+
+/// Resolve `(key, flat item index, (char offset, width))` spans into screen
+/// rects within a just-rendered list: `offset` is the list's scroll
+/// position, and every item is one row tall, so a flat index maps straight
+/// to a y offset. Spans scrolled out of view or off the right edge drop.
+fn spans_to_rects<K: Copy>(
+    list_area: Rect,
+    offset: usize,
+    spans: impl IntoIterator<Item = (K, usize, (u16, u16))>,
+) -> Vec<(K, Rect)> {
+    let max_x = list_area.x.saturating_add(list_area.width);
+    spans
+        .into_iter()
+        .filter_map(|(key, flat_idx, (dx, w))| {
+            let dy = flat_idx.checked_sub(offset)?;
+            if dy >= list_area.height as usize {
+                return None;
+            }
+            let x = list_area.x.saturating_add(dx);
+            if x >= max_x {
+                return None;
+            }
+            Some((
+                key,
+                Rect {
+                    x,
+                    y: list_area.y + dy as u16,
+                    width: w.min(max_x - x),
+                    height: 1,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Render chrome, status strip, and the workspace list into `area` without
 /// painting a footer row. The caller is responsible for rendering the footer
 /// (usually in a separately-carved row below the detail/PM regions so the
 /// spec order list/detail/pm/footer is respected).
 ///
-/// Returns the on-screen rect of each visible row's PR chip so the caller
-/// can hit-test clicks on them (open-PR-in-browser, matching the detail bar).
+/// Returns the on-screen rects of everything clickable in the list so the
+/// caller can hit-test against them.
 pub fn render_without_footer(
     f: &mut Frame,
     area: Rect,
@@ -145,7 +195,7 @@ pub fn render_without_footer(
     state: &mut DashboardState,
     tick: u32,
     theme: &Theme,
-) -> Vec<(crate::data::store::WorkspaceId, Rect)> {
+) -> ListClickTargets {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -174,42 +224,31 @@ pub fn render_without_footer(
         chunks[1],
     );
 
-    let (items, chip_spans) = match state.group_mode {
+    let (items, chip_spans, repo_link_spans) = match state.group_mode {
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
-        GroupMode::Attention => render_by_attention(inputs, state, tick, width, theme),
+        GroupMode::Attention => {
+            let (items, chips) = render_by_attention(inputs, state, tick, width, theme);
+            (items, chips, Vec::new())
+        }
     };
     let list = List::new(items).highlight_style(theme.selected_bg_style());
     f.render_stateful_widget(list, chunks[3], &mut state.list_state);
 
-    // Convert flat-index chip spans into screen rects. The list has just
+    // Convert flat-index spans into screen rects. The list has just
     // rendered, so `list_state.offset()` reflects this frame's scroll
-    // position; every item is one row tall, so a flat index maps straight
-    // to a y offset within the list area.
+    // position.
     let list_area = chunks[3];
     let offset = state.list_state.offset();
-    let max_x = list_area.x.saturating_add(list_area.width);
-    chip_spans
-        .into_iter()
-        .filter_map(|(ws_id, flat_idx, (dx, w))| {
-            let dy = flat_idx.checked_sub(offset)?;
-            if dy >= list_area.height as usize {
-                return None;
-            }
-            let x = list_area.x.saturating_add(dx);
-            if x >= max_x {
-                return None;
-            }
-            Some((
-                ws_id,
-                Rect {
-                    x,
-                    y: list_area.y + dy as u16,
-                    width: w.min(max_x - x),
-                    height: 1,
-                },
-            ))
-        })
-        .collect()
+    ListClickTargets {
+        pr_chips: spans_to_rects(list_area, offset, chip_spans),
+        repo_pr_links: spans_to_rects(
+            list_area,
+            offset,
+            repo_link_spans
+                .into_iter()
+                .map(|(id, idx, span)| (crate::data::store::RepoId(id as i64), idx, span)),
+        ),
+    }
 }
 
 /// Render only the footer line (key hints + sparkline) into `area`.
@@ -456,7 +495,11 @@ fn render_by_repo<'a>(
     tick: u32,
     width: usize,
     theme: &Theme,
-) -> (Vec<ratatui::widgets::ListItem<'static>>, Vec<PrChipSpan>) {
+) -> (
+    Vec<ratatui::widgets::ListItem<'static>>,
+    Vec<PrChipSpan>,
+    Vec<by_repo::RepoPrLinkSpan>,
+) {
     let filter = state.filter.as_deref().filter(|f| !f.is_empty());
     let mut views: Vec<RepoView<'a>> = inputs
         .repos
@@ -484,6 +527,8 @@ fn render_by_repo<'a>(
                 expanded,
                 sort_order: r.sort_order,
                 workspaces,
+                show_pr_link: inputs.github_remotes.is_github(r.id),
+                nerd_fonts: inputs.nerd_fonts,
             }
         })
         .collect();
@@ -534,10 +579,8 @@ fn render_by_repo<'a>(
     }
     state.list_state.select(selected_idx);
 
-    (
-        by_repo::render_list(&views, widths, tick, width, theme),
-        chip_spans,
-    )
+    let (items, repo_links) = by_repo::render_list(&views, widths, tick, width, theme);
+    (items, chip_spans, repo_links)
 }
 
 fn render_by_attention<'a>(

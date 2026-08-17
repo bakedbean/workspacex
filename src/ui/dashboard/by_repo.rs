@@ -1,6 +1,11 @@
-//! By-repo view: renders one section per repo, with a header that
-//! embeds per-status counts on a horizontal rule, and a nested list of
-//! workspace rows underneath when expanded.
+//! By-repo view: renders one section per repo, with a header that pairs the
+//! repo name with its path and embeds per-status counts on a horizontal rule,
+//! and a nested list of workspace rows underneath when expanded.
+//!
+//! The header reads `▾ ── name  /path/to/repo  PR  ────  ? 1  ✓ 2    3 ws`:
+//! names right-justified to a shared column, each path left-justified in the
+//! column that opens up after them, the PR link closing that identity cluster,
+//! counts flush-right, and the rule filling whatever is left between.
 
 use crate::ui::dashboard::row::{self, RowInputs};
 use crate::ui::dashboard::sort::StatusCounts;
@@ -53,8 +58,8 @@ const PR_LINK_NERD: &str = "\u{f407}";
 /// Fallback glyph. Plain text rather than a lookalike symbol — an icon
 /// nobody can decode isn't an affordance.
 const PR_LINK_PLAIN: &str = "PR";
-/// Blank columns between the counts (or name) and the PR link. Excluded
-/// from the hit span so a click on the gap doesn't open a browser.
+/// Blank columns between the path and the PR link. Excluded from the hit
+/// span so a click on the gap doesn't open a browser.
 const PR_LINK_PAD: usize = 2;
 
 /// A repo header's clickable PR link: `(char offset in the line, width)`.
@@ -116,10 +121,18 @@ fn header_line(
     }
     spans.push(Span::styled(view.name.to_string(), theme.header_style()));
 
-    // Status counts immediately follow the name. Empty repos show nothing —
-    // the absence of workspace rows is self-explanatory, no label needed.
+    // Path sits immediately after the name, left-justified. Because the names
+    // are right-justified to a shared column, every path starts in that same
+    // column for free — no second alignment pass needed.
+    spans.push(Span::raw("  ".to_string()));
+    spans.push(Span::styled(view.path.to_string(), theme.dim_style()));
+
+    // Status counts are flush-right, built separately so the rule between the
+    // path and the counts can be sized from the gap they leave. Empty repos
+    // show nothing — the absence of workspace rows is self-explanatory, no
+    // label needed — and the rule then runs to the right edge on its own.
+    let mut right: Vec<Span<'static>> = Vec::new();
     if view.counts.total() > 0 {
-        spans.push(Span::raw("  ".to_string()));
         let cells = [
             (Status::Question, view.counts.question, true),
             (Status::Stalled, view.counts.stalled, true),
@@ -134,7 +147,7 @@ fn header_line(
                 continue;
             }
             if !first {
-                spans.push(Span::raw("  ".to_string()));
+                right.push(Span::raw("  ".to_string()));
             }
             first = false;
             let mut style = theme.status_style(status);
@@ -144,17 +157,20 @@ fn header_line(
             if matches!(status, Status::Idle) {
                 style = theme.dim_style();
             }
-            spans.push(Span::styled(format!("{} {}", status.glyph(), n), style));
+            right.push(Span::styled(format!("{} {}", status.glyph(), n), style));
         }
-        spans.push(Span::raw("    ".to_string()));
-        spans.push(Span::styled(
+        right.push(Span::raw("    ".to_string()));
+        right.push(Span::styled(
             format!("{} ws", view.counts.total()),
             theme.dim_style(),
         ));
     }
 
-    // The PR link closes the repo-identity cluster (name, counts, link),
-    // before the filler rule hands the line over to the path.
+    // The PR link closes the repo-identity cluster (name, path, link), before
+    // the filler rule hands the line over to the counts. It stays beside the
+    // identity rather than the counts because it acts on the repo, not on its
+    // workspaces — and being pushed into `spans` here keeps its offset
+    // derivable from what has already been painted.
     let pr_link = pr_link_glyph(view).map(|glyph| {
         // Measured in terminal cells, not Unicode scalars: mouse columns
         // and ratatui's layout both count cells, so a double-width repo
@@ -174,24 +190,29 @@ fn header_line(
         ((offset + PR_LINK_PAD) as u16, glyph_width as u16)
     });
 
-    // Path is flush-right; the rule fills the gap between the counts and the
-    // path, flanked by RULE_PAD spaces. Size the rule from the *actual* gap so
-    // the path's right edge lands exactly at `width` — never force a minimum
-    // rule, which would push the line one column past `width` and clip the
-    // path. When the gap is too small for a padded rule, fall back to plain
-    // spaces; if the left content + path already overflow, the gap is zero.
-    let path_len = view.path.chars().count();
+    // The rule fills the gap between the path and the flush-right counts,
+    // flanked by RULE_PAD spaces. Size it from the *actual* gap so the counts'
+    // right edge lands exactly at `width` — never force a minimum rule, which
+    // would push the line one column past `width` and clip them. With no counts
+    // there is nothing to separate on the right, so the trailing pad is dropped
+    // and the rule runs to the edge. When the gap is too small for a padded
+    // rule, fall back to plain spaces; if the left content plus the counts
+    // already overflow, the gap is zero.
+    let trail = if right.is_empty() { 0 } else { RULE_PAD };
     let used_left: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    let gap = width.saturating_sub(used_left + path_len);
-    if gap > RULE_PAD * 2 {
-        let rule = "─".repeat(gap - RULE_PAD * 2);
+    let used_right: usize = right.iter().map(|s| s.content.chars().count()).sum();
+    let gap = width.saturating_sub(used_left + used_right);
+    if gap > RULE_PAD + trail {
+        let rule = "─".repeat(gap - RULE_PAD - trail);
         spans.push(Span::raw(" ".repeat(RULE_PAD)));
         spans.push(Span::styled(rule, theme.dim_style()));
-        spans.push(Span::raw(" ".repeat(RULE_PAD)));
+        if trail > 0 {
+            spans.push(Span::raw(" ".repeat(trail)));
+        }
     } else {
         spans.push(Span::raw(" ".repeat(gap)));
     }
-    spans.push(Span::styled(view.path.to_string(), theme.dim_style()));
+    spans.extend(right);
     (Line::from(spans), pr_link)
 }
 
@@ -306,8 +327,13 @@ mod tests {
         assert!(t.contains("… 1"));
         assert!(t.contains("✓ 1"));
         assert!(t.contains("4 ws"));
-        // Path is now flush-right, so it lands at the end of the line.
-        assert!(t.trim_end().ends_with("/home/eben/workspace/wsx"));
+        // Path sits immediately after the name; the counts are flush-right, so
+        // they — not the path — land at the end of the line.
+        assert!(
+            t.starts_with("▾ wsx  /home/eben/workspace/wsx  "),
+            "path follows the name: {t:?}"
+        );
+        assert!(t.trim_end().ends_with("4 ws"), "counts flush-right: {t:?}");
     }
 
     #[test]
@@ -329,19 +355,29 @@ mod tests {
             "empty repo label dropped: {t:?}"
         );
         assert!(!t.contains(" ws"), "no count suffix for empty repo: {t:?}");
-        // Path still renders flush-right.
-        assert!(t.trim_end().ends_with("/home/eben/meals/frontend"));
+        // Path still follows the name, and with no counts to separate on the
+        // right the rule runs all the way to the edge.
+        assert!(
+            t.starts_with("  frontend  /home/eben/meals/frontend  ─"),
+            "path then rule to the edge: {t:?}"
+        );
+        assert!(t.ends_with('─'), "no trailing pad without counts: {t:?}");
     }
 
     /// Char column where the first occurrence of `needle` ends in the text.
     fn substr_end_col(line: &Line<'_>, needle: &str) -> usize {
+        substr_start_col(line, needle) + needle.chars().count()
+    }
+
+    /// Char column where the first occurrence of `needle` starts in the text.
+    fn substr_start_col(line: &Line<'_>, needle: &str) -> usize {
         let text = header_text(line);
         let byte_idx = text.find(needle).expect("substring present in header");
-        text[..byte_idx].chars().count() + needle.chars().count()
+        text[..byte_idx].chars().count()
     }
 
     #[test]
-    fn names_right_justified_and_paths_flush_right() {
+    fn names_right_justified_and_paths_left_justified() {
         let theme = Theme::wsx();
         let width = 120;
         let repos = fixture::repos();
@@ -360,40 +396,58 @@ mod tests {
             substr_end_col(&long_line, views[1].name),
             "right-justified names must end in the same column"
         );
-        // Paths are flush to the terminal's right edge.
-        assert_eq!(substr_end_col(&short_line, &views[0].path), width);
-        assert_eq!(substr_end_col(&long_line, &views[1].path), width);
+        // Which puts every path — of whatever length — in the same left-
+        // justified start column, right after the name.
+        assert_eq!(
+            substr_start_col(&short_line, &views[0].path),
+            substr_start_col(&long_line, &views[1].path),
+            "left-justified paths must start in the same column"
+        );
+        // The counts are what's flush to the terminal's right edge now.
+        assert_eq!(substr_end_col(&short_line, "4 ws"), width);
+        assert_eq!(substr_end_col(&long_line, "1 ws"), width);
     }
 
     #[test]
-    fn path_stays_flush_right_without_overflow() {
+    fn counts_stay_flush_right_without_overflow() {
         // Across every width, the rendered line is exactly `width` once the
         // content fits, and never longer (which would clip the flush-right
-        // path). Below the fit threshold it stays pinned at the minimum
+        // counts). Below the fit threshold it stays pinned at the minimum
         // content width. Regression for forcing a >=1 rule that overshot by one
         // column at the boundary.
+        //
+        // Swept with and without the PR link, since the link adds columns to
+        // the left of the rule and so has to be absorbed by the gap: a link
+        // left out of the sizing would push the counts past the right edge.
         let theme = Theme::wsx();
         let repos = fixture::repos();
-        let view = make_view(repos.iter().find(|r| r.name == "wsx").unwrap(), 1, true);
-        let name_width = name_align_width(std::slice::from_ref(&view));
-        // Minimum content width = the line with a zero gap (rendered at width 0).
-        let min_content = header_text(&header_line(&view, name_width, 0, &theme).0)
-            .chars()
-            .count();
-        for width in 0..=200 {
-            let (line, _) = header_line(&view, name_width, width, &theme);
-            let len = header_text(&line).chars().count();
-            assert_eq!(
-                len,
-                width.max(min_content),
-                "line width must be exactly `width` when it fits (never +1): width={width}"
-            );
-            if width >= min_content {
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        for (label, view) in [
+            ("no link", make_view(wsx, 1, true)),
+            ("plain link", pr_link_view(wsx, true, false)),
+            ("nerd link", pr_link_view(wsx, true, true)),
+        ] {
+            let name_width = name_align_width(std::slice::from_ref(&view));
+            // Minimum content width = the line with a zero gap (width 0).
+            let min_content = header_text(&header_line(&view, name_width, 0, &theme).0)
+                .chars()
+                .count();
+            for width in 0..=200 {
+                let (line, _) = header_line(&view, name_width, width, &theme);
+                let len = header_text(&line).chars().count();
                 assert_eq!(
-                    substr_end_col(&line, &view.path),
-                    width,
-                    "path stays flush to the right edge at width={width}"
+                    len,
+                    width.max(min_content),
+                    "line width must be exactly `width` when it fits (never +1): \
+                     {label} width={width}"
                 );
+                if width >= min_content {
+                    assert_eq!(
+                        substr_end_col(&line, "4 ws"),
+                        width,
+                        "counts stay flush to the right edge: {label} width={width}"
+                    );
+                }
             }
         }
     }

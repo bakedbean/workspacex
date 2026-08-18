@@ -51,6 +51,50 @@ fn seed_claude_session(home: &Path, worktree: &Path, id: &str) {
     std::fs::write(dir.join(format!("{id}.jsonl")), "{}\n").unwrap();
 }
 
+/// Fractional Unix epoch seconds recorded in a worktree's epoch marker.
+fn read_epoch(repo: &Path, worktree_name: &str) -> f64 {
+    let marker = repo
+        .join(".git/worktrees")
+        .join(worktree_name)
+        .join("info/wsx-worktree-epoch");
+    std::fs::read_to_string(&marker)
+        .unwrap_or_else(|e| panic!("no marker at {}: {e}", marker.display()))
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+/// What the filesystem thinks a session file's start instant is, by the same
+/// rule the detector uses (birth time, falling back to mtime).
+fn session_ts(home: &Path, worktree: &Path, id: &str) -> f64 {
+    let abs = std::fs::canonicalize(worktree).unwrap();
+    let file = home
+        .join(".claude/projects")
+        .join(wsx::activity::events::encode_cwd(&abs))
+        .join(format!("{id}.jsonl"));
+    let md = std::fs::metadata(&file).unwrap();
+    md.created()
+        .or_else(|_| md.modified())
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64()
+}
+
+/// Assertion context for the "is this session mine?" comparison. Worth
+/// printing on every failure: the two timestamps come from different clocks
+/// (userspace `SystemTime::now` for the marker, the kernel's coarse clock via
+/// the filesystem for the session file), so a bare true/false says nothing
+/// about which way they actually landed.
+fn timing(repo: &Path, worktree_name: &str, home: &Path, worktree: &Path, id: &str) -> String {
+    let epoch = read_epoch(repo, worktree_name);
+    let session = session_ts(home, worktree, id);
+    format!(
+        "worktree epoch={epoch:.6}, session={session:.6}, session-epoch={:.6}s",
+        session - epoch
+    )
+}
+
 fn delete_branch(repo: &Path, branch: &str) {
     assert!(
         StdCmd::new("git")
@@ -80,7 +124,14 @@ async fn recycled_slug_does_not_inherit_the_previous_occupants_session() {
         env.set("HOME", home.path());
         assert!(
             has_prior_session_for(&wt, AgentKind::Claude),
-            "the workspace that owns this session must resume it"
+            "the workspace that owns this session must resume it — {}",
+            timing(
+                repo.path(),
+                "phantom-fern",
+                home.path(),
+                &wt,
+                "656c166a-911b-4375-9db9-007b8456f3e3"
+            )
         );
     }
 
@@ -109,7 +160,14 @@ async fn recycled_slug_does_not_inherit_the_previous_occupants_session() {
     assert!(
         !has_prior_session_for(&wt, AgentKind::Claude),
         "a workspace on a recycled slug must spawn fresh, not --continue into \
-         the previous occupant's conversation"
+         the previous occupant's conversation — {}",
+        timing(
+            repo.path(),
+            "phantom-fern",
+            home.path(),
+            &wt,
+            "656c166a-911b-4375-9db9-007b8456f3e3"
+        )
     );
 }
 
@@ -131,7 +189,14 @@ async fn a_workspaces_own_session_still_resumes_after_the_fix() {
     env.set("HOME", home.path());
     assert!(
         has_prior_session_for(&wt, AgentKind::Claude),
-        "a session started inside this worktree's lifetime must still resume"
+        "a session started inside this worktree's lifetime must still resume — {}",
+        timing(
+            repo.path(),
+            "ancient-olive",
+            home.path(),
+            &wt,
+            "11111111-2222-3333-4444-555555555555"
+        )
     );
 }
 

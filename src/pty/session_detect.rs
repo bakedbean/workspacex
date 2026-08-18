@@ -69,36 +69,60 @@ fn read_worktree_epoch(worktree: &Path) -> Option<f64> {
     std::fs::read_to_string(&path).ok()?.trim().parse().ok()
 }
 
-/// When a session file came into being, as fractional Unix epoch seconds.
+/// The earliest instant a session file can be shown to have existed, as
+/// fractional Unix epoch seconds.
 ///
-/// Prefers birth time — Claude and Pi both create the JSONL at session start
-/// and then *append* for the life of the session (including across
-/// `--continue`), so birth time is the session's true start while mtime is
-/// merely its last write. Falls back to mtime on platforms/filesystems that
-/// don't record a birth time; for the stale-session case the two are
-/// interchangeable anyway, since an abandoned session stopped being written
-/// long before the new worktree existed.
+/// Takes the *minimum* of birth time and mtime rather than picking one:
+///
+/// - Birth time is the session's true start — Claude and Pi both create the
+///   JSONL when the session begins and then *append* for its lifetime
+///   (including across `--continue`), so mtime alone would let a stale file
+///   that got touched recently pass as current.
+/// - Birth time is not universally available, and where it is missing the
+///   fallback must not be "unknown"; mtime still bounds the file's age.
+///
+/// The minimum satisfies both, and reads naturally as the conservative
+/// question this gate actually asks: what is the earliest moment this file is
+/// known to have existed? For an ordinary session the two agree to within the
+/// session's own duration; where they disagree, the earlier one is the honest
+/// answer.
 fn session_start_ts(session: &Path) -> Option<f64> {
     let md = std::fs::metadata(session).ok()?;
-    md.created()
-        .or_else(|_| md.modified())
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_secs_f64())
+    let secs = |t: std::time::SystemTime| {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs_f64())
+    };
+    let modified = secs(md.modified().ok()?)?;
+    let created = md.created().ok().and_then(secs);
+    Some(created.map_or(modified, |c| c.min(modified)))
 }
 
-/// True if `session` plausibly belongs to the current occupant of this
-/// worktree, i.e. it started at or after the worktree did.
+/// Slack allowed when comparing a session's start against the worktree epoch.
 ///
-/// No clock-skew buffer, unlike the Hermes db query: both timestamps are
-/// written by this machine, and a session can only start once the worktree it
-/// runs in exists, so the ordering is causal rather than racy.
+/// The two timestamps come from different clocks. The epoch is
+/// `SystemTime::now()` — userspace, fine-grained. A session file's stamp is
+/// written by the kernel from its *coarse* clock and then stored at whatever
+/// granularity the filesystem offers. Causal ordering therefore does not imply
+/// numeric ordering: CI caught a session file created microseconds AFTER the
+/// marker carrying a timestamp 858µs BEFORE it, reproducibly on Linux and
+/// never on macOS, since it only bites when both land in the same coarse tick.
+///
+/// Two seconds absorbs that lag and also covers filesystems that truncate
+/// timestamps to whole seconds. It costs nothing in discrimination: the
+/// sessions this gate exists to reject belong to a previous occupant of the
+/// path and are minutes to days old, never seconds — a workspace cannot be
+/// archived and recreated inside the window.
+const EPOCH_SLACK_SECS: f64 = 2.0;
+
+/// True if `session` plausibly belongs to the current occupant of this
+/// worktree, i.e. it started no more than [`EPOCH_SLACK_SECS`] before the
+/// worktree did.
 fn started_after(epoch: Option<f64>, session: &Path) -> bool {
     let Some(epoch) = epoch else {
         return true;
     };
-    session_start_ts(session).is_some_and(|ts| ts >= epoch)
+    session_start_ts(session).is_some_and(|ts| ts >= epoch - EPOCH_SLACK_SECS)
 }
 
 /// True if Claude Code has a persisted session JSONL for this worktree
@@ -470,6 +494,26 @@ mod tests {
         assert!(
             has_prior_session(work.path()),
             "a session started after the worktree must still resume"
+        );
+    }
+
+    #[test]
+    fn has_prior_session_tolerates_sub_second_clock_skew() {
+        // Regression (caught by Linux CI, invisible on macOS): the epoch comes
+        // from userspace `SystemTime::now()` while the session file's stamp
+        // comes from the kernel's coarse clock, so a session created just
+        // AFTER the worktree can carry a timestamp just BEFORE it — observed
+        // at -858µs. Such a session is ours and must still resume.
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        seed_claude_session(home.path(), work.path());
+        stamp_epoch(work.path(), 1.0);
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(
+            has_prior_session(work.path()),
+            "a sub-second clock-skew wobble must not be read as a stale session"
         );
     }
 

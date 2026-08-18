@@ -43,12 +43,28 @@ fn init_repo() -> TempDir {
 }
 
 /// Write a Claude session JSONL into the index Claude would use for `worktree`.
-fn seed_claude_session(home: &Path, worktree: &Path, id: &str) {
+fn seed_claude_session(home: &Path, worktree: &Path, id: &str) -> std::path::PathBuf {
     let abs = std::fs::canonicalize(worktree).unwrap();
     let encoded = wsx::activity::events::encode_cwd(&abs);
     let dir = home.join(".claude/projects").join(encoded);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(format!("{id}.jsonl")), "{}\n").unwrap();
+    let file = dir.join(format!("{id}.jsonl"));
+    std::fs::write(&file, "{}\n").unwrap();
+    file
+}
+
+/// Age a session file by `days`, so a test can express the real timeline —
+/// the reported case sat a week between the two workspaces — instead of
+/// leaning on the sub-second gap between two statements.
+fn backdate(file: &Path, days: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+    let f = std::fs::File::options().write(true).open(file).unwrap();
+    f.set_times(
+        std::fs::FileTimes::new()
+            .set_accessed(when)
+            .set_modified(when),
+    )
+    .unwrap();
 }
 
 /// Fractional Unix epoch seconds recorded in a worktree's epoch marker.
@@ -117,7 +133,7 @@ async fn recycled_slug_does_not_inherit_the_previous_occupants_session() {
     wsx::git::create_worktree(repo.path(), "eben/phantom-fern", None, &wt)
         .await
         .unwrap();
-    seed_claude_session(home.path(), &wt, "656c166a-911b-4375-9db9-007b8456f3e3");
+    let stale = seed_claude_session(home.path(), &wt, "656c166a-911b-4375-9db9-007b8456f3e3");
 
     {
         let mut env = wsx::test_support::EnvGuard::new();
@@ -138,18 +154,15 @@ async fn recycled_slug_does_not_inherit_the_previous_occupants_session() {
     // --- Archive. The worktree goes; the session index under ~/.claude stays. ---
     wsx::git::remove_worktree(repo.path(), &wt).await.unwrap();
     delete_branch(repo.path(), "eben/phantom-fern");
+    // A week passes, as it did in the reported case. Ageing the file is what
+    // makes this a stale-session test rather than a same-instant one.
+    backdate(&stale, 7);
 
     // --- Second life: same slug, same repo, byte-identical path. ---
     wsx::git::create_worktree(repo.path(), "eben/phantom-fern", None, &wt)
         .await
         .unwrap();
 
-    let abs = std::fs::canonicalize(&wt).unwrap();
-    let stale = home
-        .path()
-        .join(".claude/projects")
-        .join(wsx::activity::events::encode_cwd(&abs))
-        .join("656c166a-911b-4375-9db9-007b8456f3e3.jsonl");
     assert!(
         stale.exists(),
         "precondition: the old session index survives archival — that is the whole hazard"
@@ -183,7 +196,7 @@ async fn a_workspaces_own_session_still_resumes_after_the_fix() {
     wsx::git::create_worktree(repo.path(), "eben/ancient-olive", None, &wt)
         .await
         .unwrap();
-    seed_claude_session(home.path(), &wt, "11111111-2222-3333-4444-555555555555");
+    let _ = seed_claude_session(home.path(), &wt, "11111111-2222-3333-4444-555555555555");
 
     let mut env = wsx::test_support::EnvGuard::new();
     env.set("HOME", home.path());
@@ -221,7 +234,7 @@ async fn an_adopted_worktree_keeps_its_pre_existing_session() {
             .unwrap()
             .success()
     );
-    seed_claude_session(home.path(), &wt, "99999999-8888-7777-6666-555555555555");
+    let _ = seed_claude_session(home.path(), &wt, "99999999-8888-7777-6666-555555555555");
 
     let marker = repo
         .path()

@@ -397,6 +397,14 @@ pub async fn create_worktree(
         args.push(b);
     }
     run(repo, &args).await?;
+    // Stamp the worktree's birth instant while we are the only ones who know
+    // it is brand new. Agent session indexes are keyed on this path and
+    // outlive the worktree, so without the stamp a recycled slug makes the
+    // next occupant resume the previous one's conversation. Every caller
+    // funnels through here, which is why the stamp lives at this choke point
+    // rather than in `data::workspace`'s two create paths — and why
+    // `import_existing`, which never calls this, correctly stays unstamped.
+    crate::pty::session::write_worktree_epoch(path);
     Ok(())
 }
 
@@ -610,6 +618,77 @@ mod worktree_tests {
                 .unwrap_or(false)
                 && w.branch.as_deref() == Some("feature")
         }));
+    }
+
+    #[tokio::test]
+    async fn create_worktree_stamps_the_session_epoch() {
+        // Prior-session detection reads this marker to tell "my session" from
+        // one left by a previous occupant of the same path. It has to exist
+        // from the moment the worktree does, since the agent may spawn
+        // immediately after creation.
+        let repo = init_repo();
+        let wt_root = TempDir::new().unwrap();
+        let wt = wt_root.path().join("stamped");
+        create_worktree(repo.path(), "stamped", None, &wt)
+            .await
+            .unwrap();
+        let marker = repo
+            .path()
+            .join(".git/worktrees/stamped/info/wsx-worktree-epoch");
+        assert!(
+            marker.exists(),
+            "expected epoch marker at {}",
+            marker.display()
+        );
+        let epoch: f64 = std::fs::read_to_string(&marker)
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("marker should hold a float");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        assert!((now - epoch).abs() < 60.0, "epoch {epoch} far from {now}");
+    }
+
+    #[tokio::test]
+    async fn recreated_worktree_gets_a_fresh_epoch() {
+        // The whole point: same repo, same branch name, same path, second
+        // life. `git worktree remove` takes the gitdir (and the marker) with
+        // it, so the new occupant must be stamped anew rather than inheriting
+        // the first one's epoch.
+        let repo = init_repo();
+        let wt_root = TempDir::new().unwrap();
+        let wt = wt_root.path().join("recycled");
+        create_worktree(repo.path(), "recycled", None, &wt)
+            .await
+            .unwrap();
+        let marker = repo
+            .path()
+            .join(".git/worktrees/recycled/info/wsx-worktree-epoch");
+        let first = std::fs::read_to_string(&marker).unwrap();
+
+        remove_worktree(repo.path(), &wt).await.unwrap();
+        assert!(
+            !marker.exists(),
+            "worktree removal should take the marker with it"
+        );
+
+        // Same slug drawn again. The branch survived removal, so reuse it the
+        // way a re-created workspace on a fresh branch name would not.
+        run(repo.path(), &["branch", "-D", "recycled"])
+            .await
+            .unwrap();
+        create_worktree(repo.path(), "recycled", None, &wt)
+            .await
+            .unwrap();
+        let second = std::fs::read_to_string(&marker).unwrap();
+        assert!(marker.exists(), "recreated worktree must be re-stamped");
+        assert_ne!(
+            first, second,
+            "recreated worktree inherited the previous occupant's epoch"
+        );
     }
 
     #[tokio::test]

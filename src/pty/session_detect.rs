@@ -406,7 +406,10 @@ mod tests {
 
     /// Build a fake `$HOME`-rooted Claude session index for `worktree` and
     /// drop one JSONL in it. Returns the session file's path.
-    fn seed_claude_session(home: &std::path::Path, worktree: &std::path::Path) -> std::path::PathBuf {
+    fn seed_claude_session(
+        home: &std::path::Path,
+        worktree: &std::path::Path,
+    ) -> std::path::PathBuf {
         let abs = std::fs::canonicalize(worktree).unwrap();
         let encoded = crate::activity::events::encode_cwd(&abs);
         let dir = home.join(".claude/projects").join(&encoded);
@@ -482,10 +485,7 @@ mod tests {
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
-        assert!(
-            has_prior_session(work.path()),
-            "no marker means no gate"
-        );
+        assert!(has_prior_session(work.path()), "no marker means no gate");
     }
 
     #[test]

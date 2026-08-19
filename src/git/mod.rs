@@ -397,14 +397,20 @@ pub async fn create_worktree(
         args.push(b);
     }
     run(repo, &args).await?;
-    // Stamp the worktree's birth instant while we are the only ones who know
-    // it is brand new. Agent session indexes are keyed on this path and
-    // outlive the worktree, so without the stamp a recycled slug makes the
-    // next occupant resume the previous one's conversation. Every caller
-    // funnels through here, which is why the stamp lives at this choke point
-    // rather than in `data::workspace`'s two create paths — and why
-    // `import_existing`, which never calls this, correctly stays unstamped.
-    crate::pty::session::write_worktree_epoch(path);
+    // Snapshot the agent sessions already sitting at this path while we are
+    // the only ones who know the worktree is brand new. Those indexes are
+    // keyed on path and outlive the worktree, so without the snapshot a
+    // recycled slug makes the next occupant resume the previous one's
+    // conversation. Every caller funnels through here, which is why the
+    // snapshot lives at this choke point rather than in `data::workspace`'s
+    // two create paths — and why `import_existing`, which never calls this,
+    // correctly stays unsnapshotted.
+    //
+    // A failure is fatal to creation rather than best-effort: the gitdir was
+    // just written by git, so a write that fails here means something is
+    // genuinely wrong with the filesystem, and a silently unsnapshotted
+    // worktree is one the session-bleed bug can still reach.
+    crate::pty::session::write_worktree_sessions(path)?;
     Ok(())
 }
 
@@ -621,43 +627,37 @@ mod worktree_tests {
     }
 
     #[tokio::test]
-    async fn create_worktree_stamps_the_session_epoch() {
-        // Prior-session detection reads this marker to tell "my session" from
-        // one left by a previous occupant of the same path. It has to exist
-        // from the moment the worktree does, since the agent may spawn
+    async fn create_worktree_snapshots_existing_sessions() {
+        // Prior-session detection reads this snapshot to tell "my session"
+        // from one left by a previous occupant of the same path. It has to
+        // exist from the moment the worktree does, since the agent may spawn
         // immediately after creation.
+        let home = TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+
         let repo = init_repo();
         let wt_root = TempDir::new().unwrap();
-        let wt = wt_root.path().join("stamped");
-        create_worktree(repo.path(), "stamped", None, &wt)
+        let wt = wt_root.path().join("snapshotted");
+        create_worktree(repo.path(), "snapshotted", None, &wt)
             .await
             .unwrap();
         let marker = repo
             .path()
-            .join(".git/worktrees/stamped/info/wsx-worktree-epoch");
-        assert!(
-            marker.exists(),
-            "expected epoch marker at {}",
-            marker.display()
-        );
-        let epoch: f64 = std::fs::read_to_string(&marker)
-            .unwrap()
-            .trim()
-            .parse()
-            .expect("marker should hold a float");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
-        assert!((now - epoch).abs() < 60.0, "epoch {epoch} far from {now}");
+            .join(".git/worktrees/snapshotted/info/wsx-worktree-sessions");
+        assert!(marker.exists(), "expected snapshot at {}", marker.display());
     }
 
     #[tokio::test]
-    async fn recreated_worktree_gets_a_fresh_epoch() {
+    async fn recreated_worktree_gets_a_fresh_snapshot() {
         // The whole point: same repo, same branch name, same path, second
-        // life. `git worktree remove` takes the gitdir (and the marker) with
-        // it, so the new occupant must be stamped anew rather than inheriting
-        // the first one's epoch.
+        // life. `git worktree remove` takes the gitdir (and the snapshot) with
+        // it, so the new occupant must be snapshotted anew — this time naming
+        // the session the first occupant left behind.
+        let home = TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+
         let repo = init_repo();
         let wt_root = TempDir::new().unwrap();
         let wt = wt_root.path().join("recycled");
@@ -666,17 +666,28 @@ mod worktree_tests {
             .unwrap();
         let marker = repo
             .path()
-            .join(".git/worktrees/recycled/info/wsx-worktree-epoch");
-        let first = std::fs::read_to_string(&marker).unwrap();
+            .join(".git/worktrees/recycled/info/wsx-worktree-sessions");
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().trim(),
+            "",
+            "a worktree on a clean path snapshots nothing"
+        );
+
+        // The first occupant holds a conversation.
+        let abs = std::fs::canonicalize(&wt).unwrap();
+        let sessions = home
+            .path()
+            .join(".claude/projects")
+            .join(crate::activity::events::encode_cwd(&abs));
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("first-life.jsonl"), "{}").unwrap();
 
         remove_worktree(repo.path(), &wt).await.unwrap();
         assert!(
             !marker.exists(),
-            "worktree removal should take the marker with it"
+            "worktree removal should take the snapshot with it"
         );
 
-        // Same slug drawn again. The branch survived removal, so reuse it the
-        // way a re-created workspace on a fresh branch name would not.
         run(repo.path(), &["branch", "-D", "recycled"])
             .await
             .unwrap();
@@ -684,10 +695,9 @@ mod worktree_tests {
             .await
             .unwrap();
         let second = std::fs::read_to_string(&marker).unwrap();
-        assert!(marker.exists(), "recreated worktree must be re-stamped");
-        assert_ne!(
-            first, second,
-            "recreated worktree inherited the previous occupant's epoch"
+        assert!(
+            second.contains("claude:first-life.jsonl"),
+            "the recreated worktree must name its predecessor's session; got {second:?}"
         );
     }
 

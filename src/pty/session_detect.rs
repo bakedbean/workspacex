@@ -16,146 +16,178 @@ use crate::pty::agent_kind::AgentKind;
 use crate::pty::session::resolve_gitdir;
 use std::path::Path;
 
-/// Gitdir-relative location of the worktree-epoch marker.
-const WORKTREE_EPOCH_MARKER: &str = "info/wsx-worktree-epoch";
+/// Gitdir-relative location of the session snapshot.
+const WORKTREE_SESSIONS_MARKER: &str = "info/wsx-worktree-sessions";
 
-/// Record the instant this worktree came into existence, as fractional Unix
-/// epoch seconds in `<gitdir>/info/wsx-worktree-epoch`.
+/// The agent sessions that already existed at this worktree path the moment
+/// the worktree was created — i.e. everything left behind by a *previous*
+/// occupant of the path.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct SessionSnapshot {
+    /// Claude session JSONL file names.
+    claude: std::collections::HashSet<String>,
+    /// Pi session JSONL file names.
+    pi: std::collections::HashSet<String>,
+    /// Newest Codex rollout matching this cwd, as an absolute path.
+    codex: Option<String>,
+}
+
+impl SessionSnapshot {
+    /// True if `name` is one of the Claude sessions that predate this worktree.
+    fn has_claude(&self, name: &str) -> bool {
+        self.claude.contains(name)
+    }
+
+    /// True if `name` is one of the Pi sessions that predate this worktree.
+    fn has_pi(&self, name: &str) -> bool {
+        self.pi.contains(name)
+    }
+
+    /// True if `rollout` is the Codex rollout that predates this worktree.
+    fn is_codex(&self, rollout: &Path) -> bool {
+        self.codex.as_deref() == Some(rollout.to_string_lossy().as_ref())
+    }
+}
+
+/// Claude's session directory for `worktree`, or None if the path can't be
+/// canonicalized. Claude stores sessions at
+/// `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`, where the cwd encoding
+/// maps every non-alphanumeric character to `-` (see
+/// [`crate::activity::events::encode_cwd`], which delegates to sessionx).
+fn claude_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
+    let abs = std::fs::canonicalize(worktree).ok()?;
+    let encoded = crate::activity::events::encode_cwd(&abs);
+    Some(dirs::home_dir()?.join(".claude/projects").join(encoded))
+}
+
+/// Pi's session directory for `worktree`, or None if the path can't be
+/// canonicalized. Pi stores sessions at
+/// `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`, where the
+/// encoding replaces `/` with `-`.
+fn pi_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
+    let abs = std::fs::canonicalize(worktree).ok()?;
+    let encoded = abs.to_string_lossy().replace('/', "-");
+    Some(
+        dirs::home_dir()?
+            .join(".pi/agent/sessions")
+            .join(format!("--{}--", encoded)),
+    )
+}
+
+/// JSONL file names directly inside `dir`. Empty when `dir` is absent.
+fn jsonl_names(dir: &Path) -> std::collections::HashSet<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Default::default();
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|x| x == "jsonl").unwrap_or(false))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect()
+}
+
+/// Record which agent sessions already exist at this worktree's path, so a
+/// later "does this worktree have a prior session?" question can tell the
+/// current occupant's conversations from its predecessor's.
+///
+/// Claude, Pi and Codex all index sessions by worktree PATH, and those indexes
+/// outlive the workspace: archiving removes the worktree but leaves
+/// `~/.claude/projects/<encoded-path>/` (and the pi/codex equivalents) on disk.
+/// wsx also recycles paths — archiving frees a slug, and the next workspace
+/// drawing that slug for the same repo lands on the byte-identical
+/// `<base>/<repo>/<slug>`. Without this snapshot the new workspace inherits its
+/// predecessor's session index and spawns with `--continue`, resuming a
+/// conversation that belongs to unrelated work.
+///
+/// Identity, not timing: an earlier design compared the session's file
+/// timestamp against a recorded worktree-creation instant, which fails both
+/// ways. The two timestamps come from different clocks (CI caught a session
+/// stamped 858µs *before* the marker it was created *after*), and the slack
+/// needed to absorb that reopens the hole whenever a slug is recycled inside
+/// the slack window. Naming the pre-existing sessions outright has neither
+/// problem: archive and recreate a slug a millisecond apart and the verdict is
+/// still exact.
 ///
 /// Written by [`crate::git::create_worktree`] the moment `git worktree add`
-/// succeeds, and read back by prior-session detection to reject sessions left
-/// behind by an *earlier* workspace that occupied this same path. Without it,
-/// a recycled slug makes a brand-new workspace inherit the previous occupant's
-/// session index and spawn with `--continue`, resuming a conversation that
-/// belongs to unrelated work.
+/// succeeds. Lives in the gitdir (`<repo>/.git/worktrees/<name>/`) rather than
+/// the worktree so it never shows up in `git status`, and because
+/// `git worktree remove` deletes that directory along with the worktree — so a
+/// recreated worktree always starts unsnapshotted and gets a fresh one here.
 ///
-/// Lives in the gitdir (`<repo>/.git/worktrees/<name>/`) rather than the
-/// worktree itself so it never shows up in `git status`. `git worktree remove`
-/// deletes that directory along with the worktree, so a recreated worktree
-/// always starts markerless and gets a fresh stamp here.
+/// An **absent** file means "no snapshot", which degrades to the pre-snapshot
+/// behaviour of treating any session at the path as resumable. That is what
+/// worktrees adopted via `crate::data::workspace::import_existing` want: they
+/// already existed on disk, so their sessions legitimately predate the
+/// registry row. An **empty** file is different and meaningful — it records
+/// that the path was clean when this worktree was created.
 ///
-/// Unconditional overwrite: unlike [`write_hermes_spawn_marker`] (spawn-time,
-/// must be idempotent across respawns) this fires exactly once per worktree
-/// creation, and a stale marker surviving a manual `git worktree` juggle would
-/// be worse than a rewritten one.
-///
-/// Best-effort: silent on IO error. A missing marker degrades to the
-/// pre-marker behaviour (no gate), which is also what worktrees adopted via
-/// `crate::data::workspace::import_existing` want — their sessions legitimately
-/// predate the registry row.
-pub fn write_worktree_epoch(worktree: &Path) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0);
-    let Some(gitdir) = resolve_gitdir(&worktree.join(".git"), worktree) else {
-        return;
-    };
-    let path = gitdir.join(WORKTREE_EPOCH_MARKER);
-    if let Some(parent) = path.parent() {
-        if !parent.exists() && std::fs::create_dir_all(parent).is_err() {
-            return;
+/// Errors propagate rather than being swallowed: this caller knows a snapshot
+/// is mandatory, and a worktree that silently missed one is a worktree the
+/// session-bleed bug can still reach.
+pub fn write_worktree_sessions(worktree: &Path) -> crate::error::Result<()> {
+    let gitdir = resolve_gitdir(&worktree.join(".git"), worktree).ok_or_else(|| {
+        crate::error::Error::Io(std::io::Error::other(format!(
+            "cannot resolve gitdir for worktree {}",
+            worktree.display()
+        )))
+    })?;
+    let mut out = String::new();
+    if let Some(dir) = claude_session_dir(worktree) {
+        for name in jsonl_names(&dir) {
+            out.push_str(&format!("claude:{name}\n"));
         }
     }
-    let _ = std::fs::write(path, format!("{now}\n"));
-}
-
-/// Read this worktree's epoch stamp, or `None` when absent/unparseable.
-///
-/// `None` means "no gate": worktrees created before this marker existed, and
-/// imported worktrees, keep resuming exactly as they did before.
-fn read_worktree_epoch(worktree: &Path) -> Option<f64> {
-    let path = resolve_gitdir(&worktree.join(".git"), worktree)?.join(WORKTREE_EPOCH_MARKER);
-    std::fs::read_to_string(&path).ok()?.trim().parse().ok()
-}
-
-/// The earliest instant a session file can be shown to have existed, as
-/// fractional Unix epoch seconds.
-///
-/// Takes the *minimum* of birth time and mtime rather than picking one:
-///
-/// - Birth time is the session's true start — Claude and Pi both create the
-///   JSONL when the session begins and then *append* for its lifetime
-///   (including across `--continue`), so mtime alone would let a stale file
-///   that got touched recently pass as current.
-/// - Birth time is not universally available, and where it is missing the
-///   fallback must not be "unknown"; mtime still bounds the file's age.
-///
-/// The minimum satisfies both, and reads naturally as the conservative
-/// question this gate actually asks: what is the earliest moment this file is
-/// known to have existed? For an ordinary session the two agree to within the
-/// session's own duration; where they disagree, the earlier one is the honest
-/// answer.
-fn session_start_ts(session: &Path) -> Option<f64> {
-    let md = std::fs::metadata(session).ok()?;
-    let secs = |t: std::time::SystemTime| {
-        t.duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_secs_f64())
-    };
-    let modified = secs(md.modified().ok()?)?;
-    let created = md.created().ok().and_then(secs);
-    Some(created.map_or(modified, |c| c.min(modified)))
-}
-
-/// Slack allowed when comparing a session's start against the worktree epoch.
-///
-/// The two timestamps come from different clocks. The epoch is
-/// `SystemTime::now()` — userspace, fine-grained. A session file's stamp is
-/// written by the kernel from its *coarse* clock and then stored at whatever
-/// granularity the filesystem offers. Causal ordering therefore does not imply
-/// numeric ordering: CI caught a session file created microseconds AFTER the
-/// marker carrying a timestamp 858µs BEFORE it, reproducibly on Linux and
-/// never on macOS, since it only bites when both land in the same coarse tick.
-///
-/// Two seconds absorbs that lag and also covers filesystems that truncate
-/// timestamps to whole seconds. It costs nothing in discrimination: the
-/// sessions this gate exists to reject belong to a previous occupant of the
-/// path and are minutes to days old, never seconds — a workspace cannot be
-/// archived and recreated inside the window.
-const EPOCH_SLACK_SECS: f64 = 2.0;
-
-/// True if `session` plausibly belongs to the current occupant of this
-/// worktree, i.e. it started no more than [`EPOCH_SLACK_SECS`] before the
-/// worktree did.
-fn started_after(epoch: Option<f64>, session: &Path) -> bool {
-    let Some(epoch) = epoch else {
-        return true;
-    };
-    session_start_ts(session).is_some_and(|ts| ts >= epoch - EPOCH_SLACK_SECS)
-}
-
-/// True if Claude Code has a persisted session JSONL for this worktree
-/// *belonging to the current occupant* of the path.
-///
-/// Claude Code stores sessions at `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`,
-/// where the cwd encoding maps every non-alphanumeric character to `-`
-/// (see [`crate::activity::events::encode_cwd`], which delegates to sessionx).
-/// That index is keyed on path alone and outlives the workspace, so sessions
-/// predating this worktree's epoch are skipped — see [`write_worktree_epoch`].
-pub fn has_prior_session(worktree: &Path) -> bool {
-    let Some(home) = dirs::home_dir() else {
-        return false;
-    };
-    let abs = match std::fs::canonicalize(worktree) {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    let encoded = crate::activity::events::encode_cwd(&abs);
-    let session_dir = home.join(".claude/projects").join(encoded);
-    if !session_dir.is_dir() {
-        return false;
+    if let Some(dir) = pi_session_dir(worktree) {
+        for name in jsonl_names(&dir) {
+            out.push_str(&format!("pi:{name}\n"));
+        }
     }
-    let epoch = read_worktree_epoch(worktree);
-    std::fs::read_dir(&session_dir)
-        .map(|entries| {
-            entries.filter_map(|e| e.ok()).any(|e| {
-                let path = e.path();
-                path.extension().map(|x| x == "jsonl").unwrap_or(false)
-                    && started_after(epoch, &path)
-            })
-        })
-        .unwrap_or(false)
+    if let Some(rollout) = crate::activity::codex_events::locate_session_file(worktree) {
+        out.push_str(&format!("codex:{}\n", rollout.display()));
+    }
+    let path = gitdir.join(WORKTREE_SESSIONS_MARKER);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, out)?;
+    Ok(())
+}
+
+/// Read this worktree's session snapshot, or `None` when it was never written.
+///
+/// `None` means "no gate" — see [`write_worktree_sessions`] for which
+/// worktrees legitimately have no snapshot.
+fn read_worktree_sessions(worktree: &Path) -> Option<SessionSnapshot> {
+    let path = resolve_gitdir(&worktree.join(".git"), worktree)?.join(WORKTREE_SESSIONS_MARKER);
+    let contents = std::fs::read_to_string(&path).ok()?;
+    let mut snap = SessionSnapshot::default();
+    for line in contents.lines() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix("claude:") {
+            snap.claude.insert(name.to_string());
+        } else if let Some(name) = line.strip_prefix("pi:") {
+            snap.pi.insert(name.to_string());
+        } else if let Some(path) = line.strip_prefix("codex:") {
+            snap.codex = Some(path.to_string());
+        }
+    }
+    Some(snap)
+}
+
+/// True if Claude Code has a persisted session JSONL for this worktree that
+/// belongs to the *current* occupant of the path.
+///
+/// Claude's index is keyed on path alone and outlives the workspace, so a
+/// session named in this worktree's snapshot was left by a previous occupant
+/// and must not be resumed — see [`write_worktree_sessions`].
+pub fn has_prior_session(worktree: &Path) -> bool {
+    let Some(dir) = claude_session_dir(worktree) else {
+        return false;
+    };
+    let snapshot = read_worktree_sessions(worktree);
+    jsonl_names(&dir)
+        .iter()
+        .any(|name| snapshot.as_ref().is_none_or(|s| !s.has_claude(name)))
 }
 
 /// Marker recorded when wsx first spawns Hermes for a worktree.
@@ -234,37 +266,19 @@ fn cache_hermes_session_id_in_marker(worktree: &Path, session_id: &str) {
     }
 }
 
-/// True if pi has a persisted session JSONL for this worktree *belonging to
-/// the current occupant* of the path.
+/// True if pi has a persisted session JSONL for this worktree that belongs to
+/// the *current* occupant of the path.
 ///
-/// Pi stores sessions at `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`,
-/// where the encoding replaces `/` with `-`. Path-keyed and worktree-outliving
-/// exactly like Claude's index, so the same epoch gate applies.
+/// Path-keyed and worktree-outliving exactly like Claude's index, so the same
+/// snapshot rule applies.
 pub fn has_prior_pi_session(worktree: &Path) -> bool {
-    let Some(home) = dirs::home_dir() else {
+    let Some(dir) = pi_session_dir(worktree) else {
         return false;
     };
-    let abs = match std::fs::canonicalize(worktree) {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    let encoded = abs.to_string_lossy().replace('/', "-");
-    let session_dir = home
-        .join(".pi/agent/sessions")
-        .join(format!("--{}--", encoded));
-    if !session_dir.is_dir() {
-        return false;
-    }
-    let epoch = read_worktree_epoch(worktree);
-    std::fs::read_dir(&session_dir)
-        .map(|entries| {
-            entries.filter_map(|e| e.ok()).any(|e| {
-                let path = e.path();
-                path.extension().map(|x| x == "jsonl").unwrap_or(false)
-                    && started_after(epoch, &path)
-            })
-        })
-        .unwrap_or(false)
+    let snapshot = read_worktree_sessions(worktree);
+    jsonl_names(&dir)
+        .iter()
+        .any(|name| snapshot.as_ref().is_none_or(|s| !s.has_pi(name)))
 }
 
 /// Return the most recent Hermes session ID started at or after `spawn_ts`.
@@ -366,17 +380,24 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
     }
 }
 
-/// True if Codex has a recorded session whose `cwd` matches this worktree
-/// *and* which started after the worktree did.
+/// True if Codex has a recorded session whose `cwd` matches this worktree and
+/// which belongs to the *current* occupant of the path.
 ///
 /// Delegates to `codex_events::locate_session_file`, which scans
-/// `~/.codex/sessions` for the newest rollout whose embedded cwd matches — a
-/// cwd match is a path match, so a rollout left by a previous occupant of this
-/// path would otherwise qualify. The epoch gate rejects it.
+/// `~/.codex/sessions` for the **newest** rollout whose embedded cwd matches —
+/// a cwd match is a path match, so a rollout left by a previous occupant would
+/// otherwise qualify. If the newest match is still the one the snapshot
+/// recorded, no session has started since this worktree was created.
+///
+/// Only the newest rollout is recorded, because that is all sessionx exposes.
+/// The gap that leaves is narrow: were that exact rollout deleted, an older
+/// one would surface and read as new. Codex prunes oldest-first, so the
+/// recorded rollout outlives the ones behind it.
 pub fn has_prior_codex_session(worktree: &Path) -> bool {
-    let epoch = read_worktree_epoch(worktree);
-    crate::activity::codex_events::locate_session_file(worktree)
-        .is_some_and(|rollout| started_after(epoch, &rollout))
+    let Some(rollout) = crate::activity::codex_events::locate_session_file(worktree) else {
+        return false;
+    };
+    read_worktree_sessions(worktree).is_none_or(|s| !s.is_codex(&rollout))
 }
 
 #[cfg(test)]
@@ -429,39 +450,31 @@ mod tests {
     }
 
     /// Build a fake `$HOME`-rooted Claude session index for `worktree` and
-    /// drop one JSONL in it. Returns the session file's path.
-    fn seed_claude_session(
-        home: &std::path::Path,
-        worktree: &std::path::Path,
-    ) -> std::path::PathBuf {
+    /// drop one JSONL in it. Returns the session file's name.
+    fn seed_claude_session(home: &std::path::Path, worktree: &std::path::Path) -> String {
         let abs = std::fs::canonicalize(worktree).unwrap();
         let encoded = crate::activity::events::encode_cwd(&abs);
         let dir = home.join(".claude/projects").join(&encoded);
         std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("656c166a-911b-4375-9db9-007b8456f3e3.jsonl");
-        std::fs::write(&file, "{}").unwrap();
-        file
+        let name = "656c166a-911b-4375-9db9-007b8456f3e3.jsonl";
+        std::fs::write(dir.join(name), "{}").unwrap();
+        name.to_string()
     }
 
-    /// Stamp a worktree epoch marker `offset_secs` away from now.
-    /// A positive offset stands in for "the worktree is newer than the
-    /// session" without having to backdate file birth times.
-    fn stamp_epoch(worktree: &std::path::Path, offset_secs: f64) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
-        let gitdir = worktree.join(".git/info");
-        std::fs::create_dir_all(&gitdir).unwrap();
-        std::fs::write(
-            gitdir.join("wsx-worktree-epoch"),
-            format!("{}\n", now + offset_secs),
-        )
-        .unwrap();
+    /// Write a snapshot listing `lines` verbatim, standing in for whatever the
+    /// path held when the worktree was created.
+    fn snapshot(worktree: &std::path::Path, lines: &[&str]) {
+        let info = worktree.join(".git/info");
+        std::fs::create_dir_all(&info).unwrap();
+        let mut body = lines.join("\n");
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        std::fs::write(info.join("wsx-worktree-sessions"), body).unwrap();
     }
 
     #[test]
-    fn has_prior_session_ignores_session_predating_worktree_epoch() {
+    fn has_prior_session_ignores_a_session_named_in_the_snapshot() {
         // Regression: archiving a workspace frees its slug but leaves
         // ~/.claude/projects/<encoded-path>/ behind. A new workspace drawing
         // the same slug lands on the identical worktree path and used to
@@ -469,24 +482,24 @@ mod tests {
         // conversation.
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
-        seed_claude_session(home.path(), work.path());
-        // Worktree created AFTER the session existed → session isn't ours.
-        stamp_epoch(work.path(), 60.0);
+        let name = seed_claude_session(home.path(), work.path());
+        snapshot(work.path(), &[&format!("claude:{name}")]);
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
         assert!(
             !has_prior_session(work.path()),
-            "a session predating the worktree must not count as a prior session"
+            "a session that predates the worktree must not count as a prior session"
         );
     }
 
     #[test]
-    fn has_prior_session_keeps_session_started_after_worktree_epoch() {
+    fn has_prior_session_keeps_a_session_absent_from_the_snapshot() {
+        // The worktree was created on a clean path; this session started
+        // inside its lifetime and is therefore its own.
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
-        // Worktree created well before the session → session is ours.
-        stamp_epoch(work.path(), -60.0);
+        snapshot(work.path(), &[]);
         seed_claude_session(home.path(), work.path());
 
         let mut env = EnvGuard::new();
@@ -498,30 +511,33 @@ mod tests {
     }
 
     #[test]
-    fn has_prior_session_tolerates_sub_second_clock_skew() {
-        // Regression (caught by Linux CI, invisible on macOS): the epoch comes
-        // from userspace `SystemTime::now()` while the session file's stamp
-        // comes from the kernel's coarse clock, so a session created just
-        // AFTER the worktree can carry a timestamp just BEFORE it — observed
-        // at -858µs. Such a session is ours and must still resume.
+    fn has_prior_session_sees_a_new_session_alongside_a_snapshotted_one() {
+        // The discriminator is identity, not count: a stale session sitting
+        // next to a fresh one must not mask the fresh one.
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
-        seed_claude_session(home.path(), work.path());
-        stamp_epoch(work.path(), 1.0);
+        let stale = seed_claude_session(home.path(), work.path());
+        snapshot(work.path(), &[&format!("claude:{stale}")]);
+        let abs = std::fs::canonicalize(work.path()).unwrap();
+        let dir = home
+            .path()
+            .join(".claude/projects")
+            .join(crate::activity::events::encode_cwd(&abs));
+        std::fs::write(dir.join("fresh-session.jsonl"), "{}").unwrap();
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
         assert!(
             has_prior_session(work.path()),
-            "a sub-second clock-skew wobble must not be read as a stale session"
+            "a session outside the snapshot must be found even beside a snapshotted one"
         );
     }
 
     #[test]
-    fn has_prior_session_is_ungated_without_a_marker() {
+    fn has_prior_session_is_ungated_without_a_snapshot() {
         // Worktrees adopted via `import_existing`, and every worktree created
-        // before the marker shipped, carry no epoch. They must keep the
-        // original ungated behaviour rather than silently losing resume.
+        // before snapshots shipped, have none. They must keep the original
+        // ungated behaviour rather than silently losing resume.
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
         std::fs::create_dir_all(work.path().join(".git/info")).unwrap();
@@ -529,11 +545,11 @@ mod tests {
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
-        assert!(has_prior_session(work.path()), "no marker means no gate");
+        assert!(has_prior_session(work.path()), "no snapshot means no gate");
     }
 
     #[test]
-    fn has_prior_pi_session_ignores_session_predating_worktree_epoch() {
+    fn has_prior_pi_session_ignores_a_session_named_in_the_snapshot() {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
         let abs = std::fs::canonicalize(work.path()).unwrap();
@@ -544,13 +560,88 @@ mod tests {
             .join(format!("--{}--", encoded));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("1770000000_abc.jsonl"), "{}").unwrap();
-        stamp_epoch(work.path(), 60.0);
+        snapshot(work.path(), &["pi:1770000000_abc.jsonl"]);
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
         assert!(
             !has_prior_pi_session(work.path()),
             "pi inherits the same path-reuse hazard as claude"
+        );
+    }
+
+    /// Write a Codex rollout under `$HOME/.codex/sessions` whose embedded cwd
+    /// is `worktree`, the shape `locate_session_file` matches on. Returns its
+    /// absolute path.
+    fn seed_codex_rollout(
+        home: &std::path::Path,
+        worktree: &std::path::Path,
+        name: &str,
+    ) -> std::path::PathBuf {
+        let abs = std::fs::canonicalize(worktree).unwrap();
+        let dir = home.join(".codex/sessions/2026/08/18");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("rollout-{name}.jsonl"));
+        let line = format!(
+            r#"{{"type":"session_meta","payload":{{"cwd":"{}"}}}}"#,
+            abs.display()
+        );
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        path
+    }
+
+    #[test]
+    fn has_prior_codex_session_ignores_the_rollout_named_in_the_snapshot() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let rollout = seed_codex_rollout(home.path(), work.path(), "old");
+        snapshot(work.path(), &[&format!("codex:{}", rollout.display())]);
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(
+            !has_prior_codex_session(work.path()),
+            "the rollout the snapshot recorded belongs to the previous occupant"
+        );
+    }
+
+    #[test]
+    fn has_prior_codex_session_keeps_a_rollout_absent_from_the_snapshot() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let old = seed_codex_rollout(home.path(), work.path(), "old");
+        snapshot(work.path(), &[&format!("codex:{}", old.display())]);
+        // A newer rollout for the same cwd: this worktree's own session.
+        // `locate_session_file` sorts by mtime, so make it unambiguously newer.
+        let new = seed_codex_rollout(home.path(), work.path(), "new");
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&new)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(later))
+            .unwrap();
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(
+            has_prior_codex_session(work.path()),
+            "a rollout started after the worktree must still resume"
+        );
+    }
+
+    #[test]
+    fn has_prior_codex_session_is_ungated_without_a_snapshot() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(work.path().join(".git/info")).unwrap();
+        seed_codex_rollout(home.path(), work.path(), "adopted");
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(
+            has_prior_codex_session(work.path()),
+            "no snapshot means no gate for codex either"
         );
     }
 
@@ -717,45 +808,82 @@ mod tests {
         }
     }
 
-    mod worktree_epoch_marker {
+    mod worktree_sessions_snapshot {
+        use crate::test_support::EnvGuard;
+
         #[test]
         fn write_then_read_roundtrip() {
+            let home = tempfile::tempdir().unwrap();
             let tmp = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
-            super::write_worktree_epoch(tmp.path());
-            let epoch = super::read_worktree_epoch(tmp.path()).expect("marker should be present");
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64();
+            // One Claude session already sits at this path.
+            let abs = std::fs::canonicalize(tmp.path()).unwrap();
+            let dir = home
+                .path()
+                .join(".claude/projects")
+                .join(crate::activity::events::encode_cwd(&abs));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("pre-existing.jsonl"), "{}").unwrap();
+
+            let mut env = EnvGuard::new();
+            env.set("HOME", home.path());
+            super::write_worktree_sessions(tmp.path()).unwrap();
+            let snap =
+                super::read_worktree_sessions(tmp.path()).expect("snapshot should be present");
             assert!(
-                (now - epoch).abs() < 60.0,
-                "epoch {epoch} too far from now {now}"
+                snap.has_claude("pre-existing.jsonl"),
+                "snapshot should name the session that predates the worktree"
             );
+        }
+
+        #[test]
+        fn an_empty_snapshot_is_not_a_missing_one() {
+            // A clean path yields an empty file, which must still read as "a
+            // snapshot was taken" — otherwise every worktree created on a
+            // fresh path would fall back to the ungated behaviour.
+            let home = tempfile::tempdir().unwrap();
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+
+            let mut env = EnvGuard::new();
+            env.set("HOME", home.path());
+            super::write_worktree_sessions(tmp.path()).unwrap();
+            let snap = super::read_worktree_sessions(tmp.path())
+                .expect("an empty snapshot is still a snapshot");
+            assert!(!snap.has_claude("anything.jsonl"));
         }
 
         #[test]
         fn read_returns_none_when_absent() {
             let tmp = tempfile::tempdir().unwrap();
             std::fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
-            assert!(super::read_worktree_epoch(tmp.path()).is_none());
+            assert!(super::read_worktree_sessions(tmp.path()).is_none());
         }
 
         #[test]
-        fn read_returns_none_when_unparseable() {
+        fn unknown_lines_are_ignored() {
+            // Forward compatibility: a snapshot written by a newer wsx that
+            // knows an agent this build does not must not break parsing.
             let tmp = tempfile::tempdir().unwrap();
             let info = tmp.path().join(".git/info");
             std::fs::create_dir_all(&info).unwrap();
-            std::fs::write(info.join("wsx-worktree-epoch"), "not a float\n").unwrap();
-            assert!(super::read_worktree_epoch(tmp.path()).is_none());
+            std::fs::write(
+                info.join("wsx-worktree-sessions"),
+                "claude:a.jsonl\nsomethingelse:b\n\npi:c.jsonl\n",
+            )
+            .unwrap();
+            let snap = super::read_worktree_sessions(tmp.path()).unwrap();
+            assert!(snap.has_claude("a.jsonl"));
+            assert!(snap.has_pi("c.jsonl"));
         }
 
         #[test]
         fn write_handles_worktree_style_git_file() {
             // Real wsx shape: `.git` is a FILE pointing at
-            // `<repo>/.git/worktrees/<name>`. That is where the marker must
+            // `<repo>/.git/worktrees/<name>`. That is where the snapshot must
             // land, since `git worktree remove` deletes that directory and so
-            // guarantees a recreated worktree starts markerless.
+            // guarantees a recreated worktree starts unsnapshotted.
+            let home = tempfile::tempdir().unwrap();
             let tmp = tempfile::tempdir().unwrap();
             let external = tempfile::tempdir().unwrap();
             let gitdir = external.path().join("worktrees/feature-x");
@@ -765,23 +893,27 @@ mod tests {
                 format!("gitdir: {}\n", gitdir.display()),
             )
             .unwrap();
-            super::write_worktree_epoch(tmp.path());
-            let marker = gitdir.join("info/wsx-worktree-epoch");
-            assert!(marker.exists(), "expected marker at {}", marker.display());
+
+            let mut env = EnvGuard::new();
+            env.set("HOME", home.path());
+            super::write_worktree_sessions(tmp.path()).unwrap();
+            let marker = gitdir.join("info/wsx-worktree-sessions");
+            assert!(marker.exists(), "expected snapshot at {}", marker.display());
         }
 
         #[test]
-        fn write_overwrites_a_stale_marker() {
-            // Unconditional, unlike the hermes spawn marker: creation happens
-            // exactly once per worktree, and a marker surviving a manual
-            // `git worktree` juggle would wrongly gate the new occupant.
+        fn write_errors_when_the_gitdir_cannot_be_resolved() {
+            // A snapshot is mandatory for a worktree wsx creates, so an
+            // unwritable one must surface rather than silently leaving the
+            // worktree ungated.
+            let home = tempfile::tempdir().unwrap();
             let tmp = tempfile::tempdir().unwrap();
-            let info = tmp.path().join(".git/info");
-            std::fs::create_dir_all(&info).unwrap();
-            std::fs::write(info.join("wsx-worktree-epoch"), "1000.0\n").unwrap();
-            super::write_worktree_epoch(tmp.path());
-            let epoch = super::read_worktree_epoch(tmp.path()).unwrap();
-            assert!(epoch > 1_700_000_000.0, "stale epoch survived: {epoch}");
+            let mut env = EnvGuard::new();
+            env.set("HOME", home.path());
+            assert!(
+                super::write_worktree_sessions(tmp.path()).is_err(),
+                "a worktree with no .git must not report a successful snapshot"
+            );
         }
     }
 

@@ -13,8 +13,10 @@
 //! straight into the previous occupant's week-old conversation.
 //!
 //! These tests drive the real `git::create_worktree` / `git::remove_worktree`
-//! and the real detector, so they cover the marker's whole lifecycle rather
-//! than any one function's view of it.
+//! and the real detector, so they cover the snapshot's whole lifecycle rather
+//! than any one function's view of it. Each holds an `EnvGuard` for its whole
+//! body: the snapshot is taken *during* `create_worktree` and reads `$HOME`,
+//! so a guard scoped to the assertion alone would snapshot the real home.
 
 use std::path::Path;
 use std::process::Command as StdCmd;
@@ -53,62 +55,22 @@ fn seed_claude_session(home: &Path, worktree: &Path, id: &str) -> std::path::Pat
     file
 }
 
-/// Age a session file by `days`, so a test can express the real timeline —
-/// the reported case sat a week between the two workspaces — instead of
-/// leaning on the sub-second gap between two statements.
-fn backdate(file: &Path, days: u64) {
-    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
-    let f = std::fs::File::options().write(true).open(file).unwrap();
-    f.set_times(
-        std::fs::FileTimes::new()
-            .set_accessed(when)
-            .set_modified(when),
-    )
-    .unwrap();
-}
-
-/// Fractional Unix epoch seconds recorded in a worktree's epoch marker.
-fn read_epoch(repo: &Path, worktree_name: &str) -> f64 {
+/// The snapshot recorded for a worktree, for assertion messages. The verdict
+/// alone says nothing about *why* a session was or wasn't treated as the
+/// worktree's own; the recorded names do.
+fn snapshot_of(repo: &Path, worktree_name: &str) -> String {
     let marker = repo
         .join(".git/worktrees")
         .join(worktree_name)
-        .join("info/wsx-worktree-epoch");
-    std::fs::read_to_string(&marker)
-        .unwrap_or_else(|e| panic!("no marker at {}: {e}", marker.display()))
-        .trim()
-        .parse()
-        .unwrap()
-}
-
-/// What the filesystem thinks a session file's start instant is, by the same
-/// rule the detector uses (birth time, falling back to mtime).
-fn session_ts(home: &Path, worktree: &Path, id: &str) -> f64 {
-    let abs = std::fs::canonicalize(worktree).unwrap();
-    let file = home
-        .join(".claude/projects")
-        .join(wsx::activity::events::encode_cwd(&abs))
-        .join(format!("{id}.jsonl"));
-    let md = std::fs::metadata(&file).unwrap();
-    md.created()
-        .or_else(|_| md.modified())
-        .unwrap()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs_f64()
-}
-
-/// Assertion context for the "is this session mine?" comparison. Worth
-/// printing on every failure: the two timestamps come from different clocks
-/// (userspace `SystemTime::now` for the marker, the kernel's coarse clock via
-/// the filesystem for the session file), so a bare true/false says nothing
-/// about which way they actually landed.
-fn timing(repo: &Path, worktree_name: &str, home: &Path, worktree: &Path, id: &str) -> String {
-    let epoch = read_epoch(repo, worktree_name);
-    let session = session_ts(home, worktree, id);
-    format!(
-        "worktree epoch={epoch:.6}, session={session:.6}, session-epoch={:.6}s",
-        session - epoch
-    )
+        .join("info/wsx-worktree-sessions");
+    match std::fs::read_to_string(&marker) {
+        Ok(b) if b.trim().is_empty() => "snapshot: <empty>".to_string(),
+        Ok(b) => format!(
+            "snapshot: [{}]",
+            b.split_whitespace().collect::<Vec<_>>().join(", ")
+        ),
+        Err(e) => format!("snapshot: <unreadable: {e}>"),
+    }
 }
 
 fn delete_branch(repo: &Path, branch: &str) {
@@ -125,6 +87,9 @@ fn delete_branch(repo: &Path, branch: &str) {
 #[tokio::test]
 async fn recycled_slug_does_not_inherit_the_previous_occupants_session() {
     let home = TempDir::new().unwrap();
+    let mut env = wsx::test_support::EnvGuard::new();
+    env.set("HOME", home.path());
+
     let repo = init_repo();
     let base = TempDir::new().unwrap();
     let wt = base.path().join("phantom-fern");
@@ -134,61 +99,73 @@ async fn recycled_slug_does_not_inherit_the_previous_occupants_session() {
         .await
         .unwrap();
     let stale = seed_claude_session(home.path(), &wt, "656c166a-911b-4375-9db9-007b8456f3e3");
-
-    {
-        let mut env = wsx::test_support::EnvGuard::new();
-        env.set("HOME", home.path());
-        assert!(
-            has_prior_session_for(&wt, AgentKind::Claude),
-            "the workspace that owns this session must resume it — {}",
-            timing(
-                repo.path(),
-                "phantom-fern",
-                home.path(),
-                &wt,
-                "656c166a-911b-4375-9db9-007b8456f3e3"
-            )
-        );
-    }
+    assert!(
+        has_prior_session_for(&wt, AgentKind::Claude),
+        "the workspace that owns this session must resume it — {}",
+        snapshot_of(repo.path(), "phantom-fern")
+    );
 
     // --- Archive. The worktree goes; the session index under ~/.claude stays. ---
     wsx::git::remove_worktree(repo.path(), &wt).await.unwrap();
     delete_branch(repo.path(), "eben/phantom-fern");
-    // A week passes, as it did in the reported case. Ageing the file is what
-    // makes this a stale-session test rather than a same-instant one.
-    backdate(&stale, 7);
 
     // --- Second life: same slug, same repo, byte-identical path. ---
     wsx::git::create_worktree(repo.path(), "eben/phantom-fern", None, &wt)
         .await
         .unwrap();
-
     assert!(
         stale.exists(),
         "precondition: the old session index survives archival — that is the whole hazard"
     );
-
-    let mut env = wsx::test_support::EnvGuard::new();
-    env.set("HOME", home.path());
     assert!(
         !has_prior_session_for(&wt, AgentKind::Claude),
         "a workspace on a recycled slug must spawn fresh, not --continue into \
          the previous occupant's conversation — {}",
-        timing(
-            repo.path(),
-            "phantom-fern",
-            home.path(),
-            &wt,
-            "656c166a-911b-4375-9db9-007b8456f3e3"
-        )
+        snapshot_of(repo.path(), "phantom-fern")
     );
 }
 
 #[tokio::test]
-async fn a_workspaces_own_session_still_resumes_after_the_fix() {
+async fn a_rapidly_recycled_slug_is_still_not_inherited() {
+    // The verdict must not depend on how much time passed between the two
+    // lives. An earlier design compared the session's file timestamp against
+    // the worktree's creation instant, which needed slack to absorb clock
+    // skew — and any slack is a window in which a fast archive-and-recreate
+    // slips through. Naming the pre-existing sessions outright has no window:
+    // this test recycles the slug as fast as the filesystem allows.
+    let home = TempDir::new().unwrap();
+    let mut env = wsx::test_support::EnvGuard::new();
+    env.set("HOME", home.path());
+
+    let repo = init_repo();
+    let base = TempDir::new().unwrap();
+    let wt = base.path().join("rapid");
+
+    wsx::git::create_worktree(repo.path(), "eben/rapid", None, &wt)
+        .await
+        .unwrap();
+    seed_claude_session(home.path(), &wt, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    wsx::git::remove_worktree(repo.path(), &wt).await.unwrap();
+    delete_branch(repo.path(), "eben/rapid");
+    wsx::git::create_worktree(repo.path(), "eben/rapid", None, &wt)
+        .await
+        .unwrap();
+
+    assert!(
+        !has_prior_session_for(&wt, AgentKind::Claude),
+        "recycling a slug within milliseconds must still spawn fresh — {}",
+        snapshot_of(repo.path(), "rapid")
+    );
+}
+
+#[tokio::test]
+async fn a_workspaces_own_session_still_resumes() {
     // The gate must not cost normal resume: kill the TUI, reopen, get your
     // conversation back.
     let home = TempDir::new().unwrap();
+    let mut env = wsx::test_support::EnvGuard::new();
+    env.set("HOME", home.path());
+
     let repo = init_repo();
     let base = TempDir::new().unwrap();
     let wt = base.path().join("ancient-olive");
@@ -196,20 +173,12 @@ async fn a_workspaces_own_session_still_resumes_after_the_fix() {
     wsx::git::create_worktree(repo.path(), "eben/ancient-olive", None, &wt)
         .await
         .unwrap();
-    let _ = seed_claude_session(home.path(), &wt, "11111111-2222-3333-4444-555555555555");
+    seed_claude_session(home.path(), &wt, "11111111-2222-3333-4444-555555555555");
 
-    let mut env = wsx::test_support::EnvGuard::new();
-    env.set("HOME", home.path());
     assert!(
         has_prior_session_for(&wt, AgentKind::Claude),
         "a session started inside this worktree's lifetime must still resume — {}",
-        timing(
-            repo.path(),
-            "ancient-olive",
-            home.path(),
-            &wt,
-            "11111111-2222-3333-4444-555555555555"
-        )
+        snapshot_of(repo.path(), "ancient-olive")
     );
 }
 
@@ -217,9 +186,12 @@ async fn a_workspaces_own_session_still_resumes_after_the_fix() {
 async fn an_adopted_worktree_keeps_its_pre_existing_session() {
     // `data::workspace::import_existing` adopts a worktree that already lived
     // on disk, so its sessions legitimately predate the registry row. Such a
-    // worktree never goes through `create_worktree` and so carries no epoch
-    // marker — which must mean "no gate", not "reject everything".
+    // worktree never goes through `create_worktree` and so carries no
+    // snapshot — which must mean "no gate", not "reject everything".
     let home = TempDir::new().unwrap();
+    let mut env = wsx::test_support::EnvGuard::new();
+    env.set("HOME", home.path());
+
     let repo = init_repo();
     let base = TempDir::new().unwrap();
     let wt = base.path().join("hand-rolled");
@@ -234,20 +206,17 @@ async fn an_adopted_worktree_keeps_its_pre_existing_session() {
             .unwrap()
             .success()
     );
-    let _ = seed_claude_session(home.path(), &wt, "99999999-8888-7777-6666-555555555555");
+    seed_claude_session(home.path(), &wt, "99999999-8888-7777-6666-555555555555");
 
     let marker = repo
         .path()
-        .join(".git/worktrees/hand-rolled/info/wsx-worktree-epoch");
+        .join(".git/worktrees/hand-rolled/info/wsx-worktree-sessions");
     assert!(
         !marker.exists(),
-        "precondition: a worktree wsx did not create carries no epoch"
+        "precondition: a worktree wsx did not create carries no snapshot"
     );
-
-    let mut env = wsx::test_support::EnvGuard::new();
-    env.set("HOME", home.path());
     assert!(
         has_prior_session_for(&wt, AgentKind::Claude),
-        "an unmarked worktree must keep the original ungated behaviour"
+        "an unsnapshotted worktree must keep the original ungated behaviour"
     );
 }

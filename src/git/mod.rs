@@ -397,6 +397,20 @@ pub async fn create_worktree(
         args.push(b);
     }
     run(repo, &args).await?;
+    // Snapshot the agent sessions already sitting at this path while we are
+    // the only ones who know the worktree is brand new. Those indexes are
+    // keyed on path and outlive the worktree, so without the snapshot a
+    // recycled slug makes the next occupant resume the previous one's
+    // conversation. Every caller funnels through here, which is why the
+    // snapshot lives at this choke point rather than in `data::workspace`'s
+    // two create paths — and why `import_existing`, which never calls this,
+    // correctly stays unsnapshotted.
+    //
+    // A failure is fatal to creation rather than best-effort: the gitdir was
+    // just written by git, so a write that fails here means something is
+    // genuinely wrong with the filesystem, and a silently unsnapshotted
+    // worktree is one the session-bleed bug can still reach.
+    crate::pty::session::write_worktree_sessions(path)?;
     Ok(())
 }
 
@@ -610,6 +624,81 @@ mod worktree_tests {
                 .unwrap_or(false)
                 && w.branch.as_deref() == Some("feature")
         }));
+    }
+
+    #[tokio::test]
+    async fn create_worktree_snapshots_existing_sessions() {
+        // Prior-session detection reads this snapshot to tell "my session"
+        // from one left by a previous occupant of the same path. It has to
+        // exist from the moment the worktree does, since the agent may spawn
+        // immediately after creation.
+        let home = TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+
+        let repo = init_repo();
+        let wt_root = TempDir::new().unwrap();
+        let wt = wt_root.path().join("snapshotted");
+        create_worktree(repo.path(), "snapshotted", None, &wt)
+            .await
+            .unwrap();
+        let marker = repo
+            .path()
+            .join(".git/worktrees/snapshotted/info/wsx-worktree-sessions");
+        assert!(marker.exists(), "expected snapshot at {}", marker.display());
+    }
+
+    #[tokio::test]
+    async fn recreated_worktree_gets_a_fresh_snapshot() {
+        // The whole point: same repo, same branch name, same path, second
+        // life. `git worktree remove` takes the gitdir (and the snapshot) with
+        // it, so the new occupant must be snapshotted anew — this time naming
+        // the session the first occupant left behind.
+        let home = TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+
+        let repo = init_repo();
+        let wt_root = TempDir::new().unwrap();
+        let wt = wt_root.path().join("recycled");
+        create_worktree(repo.path(), "recycled", None, &wt)
+            .await
+            .unwrap();
+        let marker = repo
+            .path()
+            .join(".git/worktrees/recycled/info/wsx-worktree-sessions");
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().trim(),
+            "",
+            "a worktree on a clean path snapshots nothing"
+        );
+
+        // The first occupant holds a conversation.
+        let abs = std::fs::canonicalize(&wt).unwrap();
+        let sessions = home
+            .path()
+            .join(".claude/projects")
+            .join(crate::activity::events::encode_cwd(&abs));
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("first-life.jsonl"), "{}").unwrap();
+
+        remove_worktree(repo.path(), &wt).await.unwrap();
+        assert!(
+            !marker.exists(),
+            "worktree removal should take the snapshot with it"
+        );
+
+        run(repo.path(), &["branch", "-D", "recycled"])
+            .await
+            .unwrap();
+        create_worktree(repo.path(), "recycled", None, &wt)
+            .await
+            .unwrap();
+        let second = std::fs::read_to_string(&marker).unwrap();
+        assert!(
+            second.contains("claude:first-life.jsonl"),
+            "the recreated worktree must name its predecessor's session; got {second:?}"
+        );
     }
 
     #[tokio::test]

@@ -20,7 +20,7 @@ pub use crate::pty::agent_kind::AgentKind;
 // command builders keep resolving the names unqualified.
 pub use crate::pty::session_detect::{
     has_prior_codex_session, has_prior_hermes_session, has_prior_pi_session, has_prior_session,
-    has_prior_session_for, latest_hermes_session_id_default,
+    has_prior_session_for, latest_hermes_session_id_default, write_worktree_sessions,
 };
 
 // Per-agent command construction now lives in `command`; the builders are

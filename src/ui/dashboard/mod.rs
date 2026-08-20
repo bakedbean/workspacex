@@ -94,11 +94,15 @@ impl DashboardState {
     /// defaults when unset or unparseable — a hand-edited settings row should
     /// not stop the dashboard from drawing.
     pub fn load_ordering_prefs(&mut self, store: &crate::data::store::Store) {
+        // Trimmed before parsing, like `dashboard_branch_width`: `config set
+        // <key> @file` stores the file verbatim, and a trailing newline would
+        // otherwise send a perfectly good value down the fallback path while
+        // the CLI reported it saved.
         if let Ok(Some(v)) = store.get_setting(SORT_MODE_SETTING) {
-            self.sort_mode = SortMode::from_str_or_default(&v);
+            self.sort_mode = SortMode::from_str_or_default(v.trim());
         }
         if let Ok(Some(v)) = store.get_setting(BLOCKED_PIN_SETTING) {
-            if let Ok(secs) = v.parse::<u64>() {
+            if let Ok(secs) = v.trim().parse::<u64>() {
                 self.blocked_pin_max_age_secs = secs;
             }
         }

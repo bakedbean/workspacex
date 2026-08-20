@@ -246,37 +246,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             {
                 if let Some((rid, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
                     if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
-                        let session = app
-                            .primary_instance(ws.id)
-                            .and_then(|i| app.sessions.get(i));
-                        // Activity timestamp: prefer whichever signal is more
-                        // recent. `session.activity_ms` only exists for
-                        // workspaces wsx is currently attached to. The JSONL
-                        // event's own `timestamp_ms` (parsed from the line's
-                        // `timestamp` field) is the actual event time — this
-                        // is what we want, NOT `last_log_activity_ms`, which
-                        // is the wall-clock time when wsx observed the log
-                        // growing (gets stamped to "now" on the first tail
-                        // pass after startup, so all workspaces would
-                        // otherwise show the same age starting from zero).
                         let now_ms = crate::time::now_ms();
-                        let session_last_ms = session
-                            .as_ref()
-                            .map(|s| {
-                                s.activity_ms.load(std::sync::atomic::Ordering::Relaxed) as i64
-                            })
-                            .unwrap_or(0);
-                        let event_last_ms = app
-                            .workspace_events
-                            .get(&ws.id)
-                            .and_then(|e| e.latest.as_ref().map(|ev| ev.timestamp_ms))
-                            .unwrap_or(0);
-                        let last_ms = session_last_ms.max(event_last_ms);
-                        let ago_secs = if last_ms == 0 {
-                            None
-                        } else {
-                            Some(((now_ms - last_ms).max(0) / 1000) as u64)
-                        };
+                        let ago_secs = workspace_age_secs(app, ws.id, now_ms);
                         let status = app.classify_status(ws);
                         let procs: &[crate::activity::proc::ProcInfo] = app
                             .workspace_processes
@@ -861,6 +832,44 @@ pub(crate) fn lifecycle_badge_for(
 /// peer agents, activity age, and the assorted per-row cache lookups the
 /// renderer needs. Extracted from the per-workspace loop in `draw` so it's
 /// callable directly from tests without spinning up a `TestBackend` frame.
+/// Seconds since a workspace was last active, or `None` if nothing has ever
+/// recorded activity for it.
+///
+/// Prefers whichever signal is more recent. `session.activity_ms` only exists
+/// for workspaces wsx is currently attached to, so a detached workspace — and
+/// every workspace right after a wsx restart — has only the event log to go
+/// on. The JSONL event's own `timestamp_ms` (parsed from the line's
+/// `timestamp` field) is the actual event time; deliberately NOT
+/// `last_log_activity_ms`, which is the wall-clock time when wsx observed the
+/// log growing and gets stamped to "now" on the first tail pass after startup,
+/// which would make every workspace claim the same age from zero.
+///
+/// Shared by the dashboard rows and the detail bar so the two cannot report
+/// different ages for the same workspace — and because the dashboard's recency
+/// ordering keys off this, a row missing its age sorts as never-active.
+pub(crate) fn workspace_age_secs(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+    now_ms: i64,
+) -> Option<u64> {
+    let session_last_ms = app
+        .primary_instance(ws_id)
+        .and_then(|i| app.sessions.get(i))
+        .map(|s| s.activity_ms.load(std::sync::atomic::Ordering::Relaxed) as i64)
+        .unwrap_or(0);
+    let event_last_ms = app
+        .workspace_events
+        .get(&ws_id)
+        .and_then(|e| e.latest.as_ref().map(|ev| ev.timestamp_ms))
+        .unwrap_or(0);
+    let last_ms = session_last_ms.max(event_last_ms);
+    if last_ms == 0 {
+        None
+    } else {
+        Some(((now_ms - last_ms).max(0) / 1000) as u64)
+    }
+}
+
 fn build_row_inputs(
     app: &App,
     ws: &crate::data::store::Workspace,
@@ -871,14 +880,7 @@ fn build_row_inputs(
     let session = app
         .primary_instance(ws.id)
         .and_then(|i| app.sessions.get(i));
-    let secs = session.as_ref().map(|s| {
-        let last = s.activity_ms.load(std::sync::atomic::Ordering::Relaxed);
-        if last == 0 {
-            return 0;
-        }
-        let now = now_ms.max(0) as u64;
-        now.saturating_sub(last) / 1000
-    });
+    let secs = workspace_age_secs(app, ws.id, now_ms);
     let badge = lifecycle_badge_for(
         &ws.state,
         &ws.setup_status,
@@ -1293,6 +1295,79 @@ mod build_row_inputs_tests {
             .find(|(_, w)| w.id == ws)
             .expect("workspace present after refresh");
         build_row_inputs(app, workspace, crate::time::now_ms(), true)
+    }
+
+    /// A workspace with no live PTY — detached, or every workspace right
+    /// after a wsx restart — still has a real last-activity time recorded in
+    /// its event log. The row must report it: `ago_secs` is the dashboard's
+    /// recency sort key, so sourcing it from the session alone would drop
+    /// every cold workspace into the never-active bucket and leave a blocked
+    /// one unpinnable.
+    #[test]
+    fn row_age_comes_from_the_event_log_when_no_session_is_running() {
+        let mut app = test_app();
+        let ws = app.test_workspace("cold");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        app.refresh().unwrap();
+        let now = crate::time::now_ms();
+        app.workspace_events.insert(
+            ws,
+            crate::activity::events::WorkspaceEvents {
+                latest: Some(crate::activity::events::EventSnapshot {
+                    kind: crate::activity::events::EventKind::AssistantText,
+                    display: "asked you something".into(),
+                    timestamp_ms: now - 90_000,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let ago = row_inputs(&app, ws).ago_secs;
+        assert!(
+            matches!(ago, Some(secs) if (85..=95).contains(&secs)),
+            "expected ~90s from the event log, got {ago:?}"
+        );
+    }
+
+    /// The live session is the fresher signal whenever it has one — the event
+    /// log lags it.
+    #[test]
+    fn row_age_prefers_the_session_over_an_older_event() {
+        let mut app = test_app();
+        let ws = app.test_workspace("live");
+        let primary = app
+            .store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        app.refresh().unwrap();
+        app.test_spawn_session(primary.id, SessionStatus::Running { pid: 1 });
+        let now = crate::time::now_ms();
+        if let Some(inst) = app.primary_instance(ws)
+            && let Some(session) = app.sessions.get(inst)
+        {
+            session
+                .activity_ms
+                .store((now - 5_000) as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        app.workspace_events.insert(
+            ws,
+            crate::activity::events::WorkspaceEvents {
+                latest: Some(crate::activity::events::EventSnapshot {
+                    kind: crate::activity::events::EventKind::AssistantText,
+                    display: "older".into(),
+                    timestamp_ms: now - 600_000,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let ago = row_inputs(&app, ws).ago_secs;
+        assert!(
+            matches!(ago, Some(secs) if secs <= 10),
+            "expected the ~5s session time to win, got {ago:?}"
+        );
     }
 
     #[test]

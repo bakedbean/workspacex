@@ -9339,6 +9339,20 @@ mod sort_mode_tests {
         );
     }
 
+    /// `wsx config set <key> @file` stores the file's contents verbatim,
+    /// trailing newline included. Parsing untrimmed would silently discard
+    /// the value and report success, so both keys trim like the existing
+    /// `dashboard_branch_width` does.
+    #[test]
+    fn a_setting_written_from_a_file_keeps_its_trailing_newline_out_of_the_parse() {
+        let app = app_with_settings(&[
+            ("dashboard_sort_mode", "status\n"),
+            ("dashboard_blocked_pin_max_age_secs", "3600\n"),
+        ]);
+        assert_eq!(app.dashboard.sort_mode, SortMode::Status);
+        assert_eq!(app.dashboard.blocked_pin_max_age_secs, 3600);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn o_cycles_the_sort_mode() {
         let mut app = app_with_settings(&[]);

@@ -5,6 +5,7 @@ use crate::ui::dashboard::sort::StatusCounts;
 use crate::ui::dashboard::sparkline;
 use crate::ui::dashboard::status::Status;
 use crate::ui::footer::{FooterHintAction, FooterHintSpan, key_for_glyph};
+use crate::ui::text::{FILTER_ECHO_MAX, truncate};
 use crate::ui::theme::{BRAND_ACCENT, BRAND_WORDMARK, Theme};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -51,21 +52,28 @@ pub fn top_chrome(
         tab_span("attention", group == GroupMode::Attention, theme),
     ];
 
+    let right = format!("{repos} repos · {workspaces} workspaces");
+    let mut used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+
     // Echo the live needle: without it, `/` looks inert and rows vanishing
-    // from the list have no visible cause. Truncated so a long needle can't
-    // squeeze out the right-hand counts, which floor their gap at 1.
+    // from the list have no visible cause. The needle is budgeted against
+    // the room actually left on this line, not just capped at
+    // `FILTER_ECHO_MAX`: the gap before the right-hand counts floors at 1,
+    // so a fixed cap would push the counts off the right edge on a narrow
+    // terminal instead of shrinking the echo.
     if let Some(needle) = filter {
+        // Reserved alongside the needle itself: the 2-space separator, the
+        // `/`, and the 1-char minimum gap before the counts.
+        const ECHO_CHROME_W: usize = 4;
+        let room = width.saturating_sub(used + right.chars().count() + ECHO_CHROME_W);
+        let echo = format!("  /{}", truncate(needle, FILTER_ECHO_MAX.min(room)));
+        used += echo.chars().count();
         spans.push(Span::styled(
-            format!(
-                "  /{}",
-                crate::ui::text::truncate(needle, crate::ui::text::FILTER_ECHO_MAX)
-            ),
+            echo,
             Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
         ));
     }
 
-    let right = format!("{repos} repos · {workspaces} workspaces");
-    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let gap = width.saturating_sub(used + right.chars().count()).max(1);
     spans.push(Span::raw(" ".repeat(gap)));
     spans.push(Span::styled(right, Style::default().fg(theme.path)));
@@ -227,8 +235,11 @@ mod tests {
         let line = top_chrome(GroupMode::Repo, 9, 14, Some("auth"), 100, &theme);
         assert!(text(&line).contains("/auth"), "{:?}", text(&line));
 
+        // Look for the echo's own prefix rather than a bare `/`, so the
+        // assertion tracks the echo and not some unrelated span (wordmark,
+        // tab labels, counts) that happens to grow a slash later.
         let bare = top_chrome(GroupMode::Repo, 9, 14, None, 100, &theme);
-        assert!(!text(&bare).contains('/'), "{:?}", text(&bare));
+        assert!(!text(&bare).contains("  /"), "{:?}", text(&bare));
     }
 
     /// `/` with an empty buffer still echoes, so the keypress registers
@@ -241,15 +252,49 @@ mod tests {
     }
 
     /// A long needle is truncated so it cannot displace the right-hand
-    /// counts.
+    /// counts. Asserting on the concatenated text alone can't catch this —
+    /// the counts span is appended unconditionally, so it "ends with" the
+    /// counts at every width, however far the line overflows. The rendered
+    /// width is the property that actually matters: anything past `width`
+    /// is clipped off-screen by ratatui.
     #[test]
     fn top_chrome_truncates_a_long_filter_and_keeps_counts() {
         let theme = Theme::wsx();
         let needle = "x".repeat(80);
-        let line = top_chrome(GroupMode::Repo, 9, 14, Some(&needle), 100, &theme);
-        let t = text(&line);
-        assert!(t.contains('…'), "{t:?}");
-        assert!(t.trim_end().ends_with("9 repos · 14 workspaces"), "{t:?}");
+        // 100 has room to spare; 80 forces the echo to shrink well below
+        // FILTER_ECHO_MAX to keep the counts on screen.
+        for width in [100, 90, 80] {
+            let line = top_chrome(GroupMode::Repo, 9, 14, Some(&needle), width, &theme);
+            let t = text(&line);
+            assert!(
+                line.width() <= width,
+                "line is {} cols wide at width {width}: {t:?}",
+                line.width()
+            );
+            assert!(t.contains("  /"), "echo present at width {width}: {t:?}");
+            assert!(t.contains('…'), "needle truncates at width {width}: {t:?}");
+            assert!(
+                t.trim_end().ends_with("9 repos · 14 workspaces"),
+                "counts kept at width {width}: {t:?}"
+            );
+        }
+    }
+
+    /// A terminal too narrow for chrome + counts is already lost (the base
+    /// chrome alone needs 75 cols), but the echo must degrade to nothing
+    /// rather than underflow or panic on the way there.
+    #[test]
+    fn top_chrome_filter_echo_degrades_in_a_tiny_terminal() {
+        let theme = Theme::wsx();
+        let needle = "x".repeat(80);
+        for width in [0, 1, 40, 76] {
+            let line = top_chrome(GroupMode::Repo, 9, 14, Some(&needle), width, &theme);
+            let t = text(&line);
+            assert!(
+                !t.contains("/x"),
+                "no needle chars survive at width {width}: {t:?}"
+            );
+        }
     }
 
     #[test]

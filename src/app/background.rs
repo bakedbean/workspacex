@@ -336,6 +336,15 @@ where
                     g.workspace_diff.remove(&id);
                     g.workspace_diff_per_file.remove(&id);
                     g.diff_last_poll_ms.remove(&id);
+                    // Everything below works from `snapshot`, taken before
+                    // the rename — `db_branch` now names the branch we just
+                    // superseded. Polling PR status with it would re-file
+                    // the old branch's PR under the new branch's name and
+                    // undo the invalidation we just did, in the same pass.
+                    // Skip the rest of this workspace's iteration; the
+                    // throttle stamps were cleared above, so the next tick
+                    // (2s) re-snapshots and refreshes everything for real.
+                    continue;
                 }
             }
 

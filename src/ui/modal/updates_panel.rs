@@ -20,6 +20,21 @@ pub struct PanelInputs<'a> {
     pub lifecycles: &'a HashMap<crate::data::store::WorkspaceId, BranchLifecycle>,
 }
 
+impl PanelInputs<'_> {
+    /// The status text a row would display for `w`. Used by the renderer's
+    /// caller-side logic and, from Task 2, by the filter.
+    fn status_text(&self, w: &crate::data::store::Workspace) -> String {
+        row_status_text(
+            w,
+            self.events.get(&w.id),
+            self.activity.get(&w.id).copied(),
+            self.needs_attention.contains(&w.id),
+            self.awaiting.get(&w.id),
+        )
+        .0
+    }
+}
+
 /// Cap on the workspace-name column so one very long name can't starve the
 /// status column of the entire panel.
 const NAME_COL_MAX: usize = 28;
@@ -117,10 +132,30 @@ fn lifecycle_rank(lifecycle: Option<BranchLifecycle>) -> u8 {
 ///
 /// Used by both the renderer (to draw rows) and the key handler (to map
 /// the selected index back to a workspace id).
+/// Case-insensitive substring match against the workspace name, the owning
+/// repo's name, and the row's live status text. Mirrors the dashboard's
+/// `matches_filter`, whose three fields are the same idea: what the row is
+/// called, where it lives, and what it currently says.
+fn matches_filter(
+    w: &crate::data::store::Workspace,
+    repo_name: &str,
+    status_text: &str,
+    needle: &str,
+) -> bool {
+    let needle = needle.to_lowercase();
+    w.name.to_lowercase().contains(&needle)
+        || repo_name.to_lowercase().contains(&needle)
+        || status_text.to_lowercase().contains(&needle)
+}
+
 pub fn ordered_workspaces_for_panel(
     inputs: &PanelInputs<'_>,
     sort: UpdatesSort,
+    filter: Option<&str>,
 ) -> Vec<crate::data::store::WorkspaceId> {
+    // An empty buffer means "filter mode is on but nothing typed yet" —
+    // every row still shows. Only a non-empty needle narrows the list.
+    let needle = filter.filter(|f| !f.is_empty());
     let mut out = Vec::new();
     for repo in inputs.repos {
         let mut ws_for_repo: Vec<&crate::data::store::Workspace> = inputs
@@ -128,6 +163,11 @@ pub fn ordered_workspaces_for_panel(
             .iter()
             .filter(|(rid, _)| *rid == repo.id)
             .map(|(_, w)| w)
+            .filter(|w| {
+                needle
+                    .map(|n| matches_filter(w, &repo.name, &inputs.status_text(w), n))
+                    .unwrap_or(true)
+            })
             .collect();
         ws_for_repo.sort_by_key(|w| {
             let default_key = sort_key(w, inputs.events, inputs.activity, inputs.needs_attention);
@@ -192,6 +232,11 @@ fn footer_text(sort: UpdatesSort) -> String {
 
 /// Render the floating workspace-updates panel. Reads live App state via
 /// borrowed slices so the panel updates on every render tick.
+// The brief for this task expected 7→8 args to stay under clippy's default
+// too_many_arguments threshold (7); it does not — `filter` pushes this over.
+// Restoring the allow here (only) rather than reshaping the interface, since
+// the exact parameter list is a contract other tasks depend on.
+#[allow(clippy::too_many_arguments)]
 pub fn render_updates_panel(
     f: &mut Frame,
     area: Rect,
@@ -199,6 +244,7 @@ pub fn render_updates_panel(
     selected: usize,
     now_ms: i64,
     sort: UpdatesSort,
+    filter: Option<&str>,
     theme: &Theme,
 ) {
     // Sizing: ~80 cols wide, ~25 rows tall, but never larger than the area.
@@ -213,7 +259,7 @@ pub fn render_updates_panel(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let order = ordered_workspaces_for_panel(inputs, sort);
+    let order = ordered_workspaces_for_panel(inputs, sort, filter);
     // workspace_id -> position in `order` so we can match against `selected`.
     let pos_of: HashMap<crate::data::store::WorkspaceId, usize> =
         order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
@@ -277,12 +323,15 @@ pub fn render_updates_panel(
         }
         lines.push(Line::from(""));
     }
-    // Nothing to show when no repo has any workspace (or there are no repos).
+    // Nothing to show. Separate the two causes: an empty panel and a panel
+    // whose rows the needle hid are very different situations for the user.
     if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "(no workspaces)".to_string(),
-            theme.dim_style(),
-        )));
+        let msg = if filter.map(|f| !f.is_empty()).unwrap_or(false) {
+            "(no matching workspaces)"
+        } else {
+            "(no workspaces)"
+        };
+        lines.push(Line::from(Span::styled(msg.to_string(), theme.dim_style())));
     }
 
     // Stateless scroll: keep the selected workspace centered in the viewport
@@ -1125,11 +1174,12 @@ mod ordering_tests {
         lifecycles: HashMap<WorkspaceId, BranchLifecycle>,
     }
 
-    fn order(
+    fn order_filtered(
         repos: &[Repo],
         ws: &[(RepoId, Workspace)],
         maps: &Maps,
         sort: UpdatesSort,
+        filter: Option<&str>,
     ) -> Vec<WorkspaceId> {
         ordered_workspaces_for_panel(
             &PanelInputs {
@@ -1143,7 +1193,17 @@ mod ordering_tests {
                 lifecycles: &maps.lifecycles,
             },
             sort,
+            filter,
         )
+    }
+
+    fn order(
+        repos: &[Repo],
+        ws: &[(RepoId, Workspace)],
+        maps: &Maps,
+        sort: UpdatesSort,
+    ) -> Vec<WorkspaceId> {
+        order_filtered(repos, ws, maps, sort, None)
     }
 
     #[test]
@@ -1306,5 +1366,223 @@ mod ordering_tests {
                 "footer must fit the widest panel (80 - 2 border): {f:?}"
             );
         }
+    }
+
+    /// The needle matches the workspace name, case-insensitively.
+    #[test]
+    fn filter_matches_workspace_name() {
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![
+            fixture_ws(1, 1, "auth-refactor"),
+            fixture_ws(2, 1, "billing-fix"),
+        ];
+        let maps = Maps::default();
+        assert_eq!(
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("AUTH")),
+            vec![WorkspaceId(1)]
+        );
+    }
+
+    /// A repo-name needle keeps every workspace in that repo — the same
+    /// affordance the dashboard gives for "show me just this repo".
+    #[test]
+    fn filter_matches_repo_name_and_keeps_its_workspaces() {
+        let repos = vec![fixture_repo(1), fixture_repo(2)];
+        let ws = vec![
+            fixture_ws(1, 1, "alpha"),
+            fixture_ws(2, 1, "beta"),
+            fixture_ws(3, 2, "gamma"),
+        ];
+        let maps = Maps::default();
+        // fixture_repo(1) is named "repo1", fixture_repo(2) is "repo2".
+        assert_eq!(
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("repo1")),
+            vec![WorkspaceId(1), WorkspaceId(2)]
+        );
+    }
+
+    /// The needle also matches the live status text, so "permission" or
+    /// "stalled" narrows to the rows that actually say that.
+    #[test]
+    fn filter_matches_status_text() {
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![fixture_ws(1, 1, "alpha"), fixture_ws(2, 1, "beta")];
+        let mut maps = Maps::default();
+        maps.awaiting
+            .insert(WorkspaceId(1), ("Bash".to_string(), 1_000));
+        assert_eq!(
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("permission")),
+            vec![WorkspaceId(1)]
+        );
+        // beta has no session at all, so its status text is "no session".
+        assert_eq!(
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("no session")),
+            vec![WorkspaceId(2)]
+        );
+    }
+
+    /// `Some("")` is the "user pressed / but hasn't typed" state: every row
+    /// stays visible. Only a non-empty needle narrows anything.
+    #[test]
+    fn empty_needle_matches_everything() {
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![fixture_ws(1, 1, "alpha"), fixture_ws(2, 1, "beta")];
+        let maps = Maps::default();
+        let all = vec![WorkspaceId(1), WorkspaceId(2)];
+        assert_eq!(
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("")),
+            all
+        );
+        assert_eq!(
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, None),
+            all
+        );
+    }
+
+    /// A needle matching nothing yields an empty order — the renderer turns
+    /// that into "(no matching workspaces)".
+    #[test]
+    fn filter_matching_nothing_yields_empty_order() {
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![fixture_ws(1, 1, "alpha")];
+        let maps = Maps::default();
+        assert!(order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("zzz")).is_empty());
+    }
+
+    /// Filtering narrows the list without reshuffling it: survivors keep
+    /// their unfiltered relative order under every sort mode.
+    #[test]
+    fn filter_preserves_relative_order() {
+        let repos = vec![fixture_repo(1)];
+        let ws = vec![
+            fixture_ws(1, 1, "keep-one"),
+            fixture_ws(2, 1, "drop-me"),
+            fixture_ws(3, 1, "keep-two"),
+        ];
+        let mut maps = Maps::default();
+        maps.attention.insert(WorkspaceId(3));
+        // Unfiltered, attention pulls keep-two to the front.
+        let unfiltered = order(&repos, &ws, &maps, UpdatesSort::Default);
+        let expected: Vec<WorkspaceId> = unfiltered
+            .into_iter()
+            .filter(|id| *id != WorkspaceId(2))
+            .collect();
+        assert_eq!(
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("keep")),
+            expected
+        );
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use crate::data::store::{Repo, RepoId, Workspace, WorkspaceId, WorkspaceState};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::path::PathBuf;
+
+    fn fixture_repo(id: i64, name: &str) -> Repo {
+        Repo {
+            id: RepoId(id),
+            name: name.to_string(),
+            path: PathBuf::from("/tmp/r"),
+            branch_prefix: String::new(),
+            custom_instructions: None,
+            setup_script: None,
+            archive_script: None,
+            pinned_commands: None,
+            related_repos: None,
+            base_branch: None,
+            detail_bar_config: None,
+            created_at: 0,
+            sort_order: 0,
+        }
+    }
+
+    fn fixture_ws(id: i64, repo: i64, name: &str) -> (RepoId, Workspace) {
+        (
+            RepoId(repo),
+            Workspace {
+                id: WorkspaceId(id),
+                repo_id: RepoId(repo),
+                name: name.to_string(),
+                branch: "main".to_string(),
+                worktree_path: PathBuf::from("/tmp/ws"),
+                state: WorkspaceState::Ready,
+                setup_status: crate::data::store::SetupStatus::Ok,
+                created_at: 0,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            },
+        )
+    }
+
+    /// Draw the panel and flatten the buffer to one string per row.
+    fn draw(repos: &[Repo], ws: &[(RepoId, Workspace)], filter: Option<&str>) -> String {
+        let theme = Theme::ansi();
+        let (events, activity, attention, awaiting, statuses, lifecycles) = (
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+        let inputs = PanelInputs {
+            repos,
+            workspaces: ws,
+            events: &events,
+            activity: &activity,
+            needs_attention: &attention,
+            awaiting: &awaiting,
+            statuses: &statuses,
+            lifecycles: &lifecycles,
+        };
+        let mut term = Terminal::new(TestBackend::new(80, 25)).unwrap();
+        term.draw(|f| {
+            render_updates_panel(
+                f,
+                f.area(),
+                &inputs,
+                0,
+                10_000,
+                UpdatesSort::Default,
+                filter,
+                &theme,
+            )
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A repo whose workspaces all filter out loses its header too — an
+    /// empty section header is pure noise in a panel meant to be scanned.
+    #[test]
+    fn filtered_out_repo_draws_no_header() {
+        let repos = vec![fixture_repo(1, "alpha-repo"), fixture_repo(2, "beta-repo")];
+        let ws = vec![fixture_ws(1, 1, "one"), fixture_ws(2, 2, "two")];
+        let rendered = draw(&repos, &ws, Some("one"));
+        assert!(rendered.contains("alpha-repo"), "{rendered}");
+        assert!(!rendered.contains("beta-repo"), "{rendered}");
+    }
+
+    /// The two empty states are distinguishable: a filter that hit nothing
+    /// must not read as "you have no workspaces".
+    #[test]
+    fn empty_states_distinguish_filter_from_no_workspaces() {
+        let repos = vec![fixture_repo(1, "alpha-repo")];
+        let ws = vec![fixture_ws(1, 1, "one")];
+        assert!(draw(&repos, &ws, Some("zzz")).contains("(no matching workspaces)"));
+        assert!(draw(&repos, &[], None).contains("(no workspaces)"));
     }
 }

@@ -694,7 +694,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     lifecycles: &app.pr_lifecycle,
                 };
                 crate::ui::modal::render_updates_panel(
-                    f, area, &inputs, *selected, now_ms, *sort, &app.theme,
+                    f, area, &inputs, *selected, now_ms, *sort, None, &app.theme,
                 );
             }
             crate::ui::modal::Modal::ProcessList {

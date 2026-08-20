@@ -1295,6 +1295,7 @@ fn launch_workspace_command(
 fn panel_order(
     app: &App,
     sort: crate::ui::modal::UpdatesSort,
+    filter: Option<&str>,
 ) -> Vec<crate::data::store::WorkspaceId> {
     let activity_translated: std::collections::HashMap<
         crate::data::store::WorkspaceId,
@@ -1316,7 +1317,7 @@ fn panel_order(
         statuses: &statuses,
         lifecycles: &app.pr_lifecycle,
     };
-    crate::ui::modal::ordered_workspaces_for_panel(&inputs, sort)
+    crate::ui::modal::ordered_workspaces_for_panel(&inputs, sort, filter)
 }
 async fn handle_key_modal(
     app: &mut App,
@@ -1645,7 +1646,7 @@ async fn handle_key_modal(
             let selected_now = selected;
             // Build the same ordered workspace list the renderer uses, so
             // arrow keys and Enter operate on the same indices.
-            let order = panel_order(app, sort);
+            let order = panel_order(app, sort, None);
             match k.code {
                 KeyCode::Esc => {
                     app.modal = None;
@@ -1671,7 +1672,7 @@ async fn handle_key_modal(
                 KeyCode::Char('o') => {
                     let selected_id = order.get(selected_now).copied();
                     let new_sort = sort.cycle();
-                    let new_order = panel_order(app, new_sort);
+                    let new_order = panel_order(app, new_sort, None);
                     let new_sel = selected_id
                         .and_then(|id| new_order.iter().position(|w| *w == id))
                         .unwrap_or(0);

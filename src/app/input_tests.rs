@@ -836,6 +836,7 @@ mod pm_state_tests {
                 lifecycles: &std::collections::HashMap::new(),
             },
             crate::ui::modal::UpdatesSort::Default,
+            None,
         );
         let target_idx = order.iter().position(|id| *id == second_id).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
@@ -1832,6 +1833,7 @@ mod pm_state_tests {
                 lifecycles: &app.pr_lifecycle,
             },
             crate::ui::modal::UpdatesSort::Default,
+            None,
         );
         assert!(
             order.len() >= 40,

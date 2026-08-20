@@ -342,6 +342,19 @@ impl Theme {
         }
     }
 
+    /// Traffic-light color for a PR's review verdict: green approved, red
+    /// changes requested, yellow still waiting. Unlike `lifecycle_style`
+    /// this is total — every verdict is worth coloring, and the caller has
+    /// already decided a verdict is worth showing at all.
+    pub fn review_style(&self, d: crate::git::forge::ReviewDecision) -> Style {
+        use crate::git::forge::ReviewDecision::*;
+        match d {
+            Approved => self.ok_style(),
+            ChangesRequested => self.err_style(),
+            ReviewRequired => self.warn_style(),
+        }
+    }
+
     /// Fixed identity color for a workspace's coding agent. Ignores `self`
     /// by design — see the `AGENT_*` constants — but lives on `Theme` so
     /// every color decision stays in one module, alongside `status_style`
@@ -411,6 +424,95 @@ pub(crate) fn lifecycle_chip(
     }
 }
 
+/// The approval mark for a review verdict. Shape alone distinguishes the
+/// three, so the mark still reads in the walker menu — where a static Pango
+/// attribute range can only paint one fixed color — and for anyone who can't
+/// tell the traffic-light colors apart. Color comes from
+/// [`Theme::review_style`], not from here.
+pub(crate) fn review_glyph(d: crate::git::forge::ReviewDecision) -> &'static str {
+    use crate::git::forge::ReviewDecision::*;
+    match d {
+        Approved => "✓",
+        ChangesRequested => "✗",
+        ReviewRequired => "◌",
+    }
+}
+
+/// Whether a verdict is worth showing for this lifecycle.
+///
+/// GitHub leaves `reviewDecision` populated after a PR merges or closes, so
+/// without this gate every merged PR would wear a permanent green tick.
+/// Draft and conflicted PRs stay in: both are still open, and both can still
+/// be waiting on someone.
+pub(crate) fn lifecycle_shows_review(lc: crate::git::forge::BranchLifecycle) -> bool {
+    use crate::git::forge::BranchLifecycle::*;
+    matches!(lc, PrOpen | PrDraft | PrConflicted)
+}
+
+/// A PR chip laid out as its lifecycle half (`⏺ #123 open`) plus an optional
+/// trailing approval mark, so callers can paint the two in different colors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrChip {
+    pub lifecycle_text: String,
+    /// `None` when the PR has no verdict, or when its lifecycle doesn't
+    /// warrant showing one — see [`lifecycle_shows_review`].
+    pub review: Option<crate::git::forge::ReviewDecision>,
+}
+
+impl PrChip {
+    /// The chip as one string. Callers that need per-part color build spans
+    /// from the fields instead.
+    pub fn text(&self) -> String {
+        match self.review {
+            Some(d) => format!("{} {}", self.lifecycle_text, review_glyph(d)),
+            None => self.lifecycle_text.clone(),
+        }
+    }
+
+    /// Display columns the chip occupies. Every glyph involved is
+    /// single-width, so char count is the column count.
+    pub fn width(&self) -> usize {
+        self.lifecycle_text.chars().count() + if self.review.is_some() { 2 } else { 0 }
+    }
+}
+
+/// Compose a branch's PR chip, fitted to `max_width` columns. `None` when
+/// there's no PR to show (`NoPr`, or any lifecycle without a glyph).
+///
+/// When the full chip overflows `max_width` and there IS a verdict to show,
+/// the lifecycle *word* is dropped rather than letting the trailing mark be
+/// truncated away: the chip's color already encodes lifecycle, so the word is
+/// the redundant half, and a silently clipped verdict is worse than a terse
+/// chip. Without a verdict there's nothing to trade against and the caller's
+/// own truncation applies unchanged.
+pub(crate) fn pr_chip(
+    lifecycle: crate::git::forge::BranchLifecycle,
+    number: Option<u32>,
+    review: Option<crate::git::forge::ReviewDecision>,
+    max_width: usize,
+) -> Option<PrChip> {
+    let (glyph, label) = lifecycle_chip(lifecycle);
+    if glyph.is_empty() {
+        return None;
+    }
+    let review = review.filter(|_| lifecycle_shows_review(lifecycle));
+    let with_label = match number {
+        Some(n) => format!("{glyph} #{n} {label}"),
+        None => format!("{glyph} {label}"),
+    };
+    let mut chip = PrChip {
+        lifecycle_text: with_label,
+        review,
+    };
+    if review.is_some() && chip.width() > max_width {
+        chip.lifecycle_text = match number {
+            Some(n) => format!("{glyph} #{n}"),
+            None => glyph.to_string(),
+        };
+    }
+    Some(chip)
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self::wsx()
@@ -439,6 +541,103 @@ mod branch_glyph_tests {
         // NoPr and "unknown" both fall through to the neutral branch glyph.
         assert_eq!(branch_glyph(Some(NoPr), true), "\u{e0a0}");
         assert_eq!(branch_glyph(None, true), "\u{e0a0}");
+    }
+}
+
+#[cfg(test)]
+mod pr_chip_tests {
+    use super::*;
+    use crate::git::forge::BranchLifecycle::*;
+    use crate::git::forge::ReviewDecision::*;
+
+    /// Unbounded width: the callers that lay the chip out inline rather
+    /// than in a fixed column.
+    const WIDE: usize = usize::MAX;
+
+    #[test]
+    fn every_review_decision_has_a_distinct_glyph() {
+        let glyphs = [Approved, ChangesRequested, ReviewRequired].map(review_glyph);
+        assert_eq!(
+            glyphs
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "verdicts must be told apart by shape, not only by color: {glyphs:?}"
+        );
+    }
+
+    #[test]
+    fn approval_mark_trails_the_lifecycle_label() {
+        let chip = pr_chip(PrOpen, Some(262), Some(Approved), WIDE).expect("chip");
+        assert_eq!(chip.lifecycle_text, "⏺ #262 open");
+        assert_eq!(chip.review, Some(Approved));
+        assert_eq!(chip.text(), "⏺ #262 open ✓");
+    }
+
+    #[test]
+    fn chip_without_a_verdict_is_unchanged() {
+        // A repo with no approval gate reports no verdict; its chip must be
+        // byte-identical to what wsx rendered before this feature existed.
+        let chip = pr_chip(PrOpen, Some(262), None, WIDE).expect("chip");
+        assert_eq!(chip.text(), "⏺ #262 open");
+    }
+
+    #[test]
+    fn verdict_is_hidden_once_the_pr_leaves_the_open_states() {
+        // GitHub keeps reviewDecision populated after a merge, so a merged
+        // PR would otherwise carry a permanent green tick.
+        for lc in [PrMerged, PrClosed] {
+            let chip = pr_chip(lc, Some(7), Some(Approved), WIDE).expect("chip");
+            assert_eq!(chip.review, None, "{lc:?} must not show a verdict");
+            assert!(!chip.text().contains('✓'), "{lc:?}: {:?}", chip.text());
+        }
+        // Draft and conflicted are still open, and still awaiting review.
+        for lc in [PrOpen, PrDraft, PrConflicted] {
+            let chip = pr_chip(lc, Some(7), Some(Approved), WIDE).expect("chip");
+            assert_eq!(chip.review, Some(Approved), "{lc:?} must show a verdict");
+        }
+    }
+
+    #[test]
+    fn a_tight_column_drops_the_label_and_keeps_the_mark() {
+        // `⏺ #1234 conflict ✗` is 18 cols and doesn't fit the 16-col default
+        // PR column. The lifecycle word is the redundant half — the chip's
+        // color already encodes lifecycle — so the verdict survives.
+        let chip = pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), 16).expect("chip");
+        assert_eq!(chip.text(), "⏺ #1234 ✗");
+        assert!(chip.width() <= 16);
+        // Given the room for the full form, nothing is dropped.
+        let roomy = pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), 18).expect("chip");
+        assert_eq!(roomy.text(), "⏺ #1234 conflict ✗");
+    }
+
+    #[test]
+    fn the_label_is_kept_when_there_is_no_mark_to_protect() {
+        // Without a verdict there's nothing to trade the label against, so
+        // an overlong chip truncates exactly as it always did.
+        let chip = pr_chip(PrConflicted, Some(1234), None, 16).expect("chip");
+        assert_eq!(chip.text(), "⏺ #1234 conflict");
+    }
+
+    #[test]
+    fn no_pr_yields_no_chip() {
+        assert!(pr_chip(NoPr, None, Some(Approved), WIDE).is_none());
+    }
+
+    #[test]
+    fn width_counts_characters_not_bytes() {
+        let chip = pr_chip(PrOpen, Some(262), Some(Approved), WIDE).expect("chip");
+        assert_eq!(chip.width(), chip.text().chars().count());
+        assert_eq!(chip.width(), 13);
+    }
+
+    #[test]
+    fn verdict_colors_are_a_traffic_light() {
+        let t = Theme::wsx();
+        assert_eq!(t.review_style(Approved).fg, t.ok_style().fg);
+        assert_eq!(t.review_style(ChangesRequested).fg, t.err_style().fg);
+        assert_eq!(t.review_style(ReviewRequired).fg, t.warn_style().fg);
     }
 }
 

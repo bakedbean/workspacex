@@ -13,6 +13,34 @@ pub enum BranchLifecycle {
     PrClosed,
 }
 
+/// A PR's aggregate review verdict, as GitHub computes it from the repo's
+/// branch-protection rules and the reviews submitted so far.
+///
+/// Deliberately has no "not gated" variant: repos that require no approval
+/// report an empty `reviewDecision`, which maps to `None` rather than to a
+/// variant, so those repos show no indicator at all. `ReviewRequired` means
+/// GitHub is actively *waiting* on an approval — a meaningfully different
+/// state from "this repo doesn't work that way".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    ReviewRequired,
+}
+
+/// Map GitHub's `reviewDecision` enum to [`ReviewDecision`]. `None` for the
+/// empty string (no approval gate in play) and for any value GitHub might
+/// add later — an unrecognised verdict degrades to "no indicator" rather
+/// than failing the whole PR parse.
+fn parse_review_decision(raw: &str) -> Option<ReviewDecision> {
+    match raw {
+        "APPROVED" => Some(ReviewDecision::Approved),
+        "CHANGES_REQUESTED" => Some(ReviewDecision::ChangesRequested),
+        "REVIEW_REQUIRED" => Some(ReviewDecision::ReviewRequired),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct GhPrView {
     state: String,
@@ -24,6 +52,8 @@ struct GhPrView {
     number: Option<u32>,
     #[serde(default)]
     url: Option<String>,
+    #[serde(rename = "reviewDecision", default)]
+    review_decision: Option<String>,
 }
 
 /// A branch's PR status: its lifecycle plus the PR number and URL (when known).
@@ -32,6 +62,11 @@ pub struct PrStatus {
     pub lifecycle: BranchLifecycle,
     pub number: Option<u32>,
     pub url: Option<String>,
+    /// The PR's aggregate review verdict, or `None` when the repo has no
+    /// approval gate, when `gh` didn't report one, or when the value wasn't
+    /// recognised. Populated for every lifecycle; consumers decide which
+    /// lifecycles are worth showing it for (see `ui::theme::review_chip`).
+    pub review: Option<ReviewDecision>,
 }
 
 /// Parse the JSON returned by
@@ -56,6 +91,10 @@ pub(crate) fn parse_gh_pr_status(stdout: &str) -> Option<PrStatus> {
         lifecycle,
         number: parsed.number,
         url: parsed.url,
+        review: parsed
+            .review_decision
+            .as_deref()
+            .and_then(parse_review_decision),
     })
 }
 
@@ -66,16 +105,18 @@ pub(crate) fn stderr_means_no_pr(stderr: &str) -> bool {
     stderr.contains("no pull requests found")
 }
 
+/// The comma-separated `--json` field list `fetch_pr_status` asks `gh` for.
+/// Split out so a test can assert the list stays in sync with what
+/// [`parse_gh_pr_status`] reads — a field dropped here parses as absent
+/// rather than erroring, which would silently blank an indicator.
+pub(crate) fn pr_view_json_fields() -> &'static str {
+    "state,isDraft,mergeable,number,url,reviewDecision"
+}
+
 pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrStatus>> {
     let out = Command::new("gh")
         .current_dir(worktree)
-        .args([
-            "pr",
-            "view",
-            branch,
-            "--json",
-            "state,isDraft,mergeable,number,url",
-        ])
+        .args(["pr", "view", branch, "--json", pr_view_json_fields()])
         .output()
         .await;
 
@@ -96,6 +137,7 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
             lifecycle: BranchLifecycle::NoPr,
             number: None,
             url: None,
+            review: None,
         }));
     }
 
@@ -309,6 +351,68 @@ mod tests {
         // Absent url stays None.
         let s = parse_gh_pr_status(r#"{"state":"MERGED","number":9}"#).unwrap();
         assert_eq!(s.url, None);
+    }
+
+    #[test]
+    fn parses_each_review_decision() {
+        for (raw, want) in [
+            ("APPROVED", ReviewDecision::Approved),
+            ("CHANGES_REQUESTED", ReviewDecision::ChangesRequested),
+            ("REVIEW_REQUIRED", ReviewDecision::ReviewRequired),
+        ] {
+            let json = format!(
+                r#"{{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","number":5,"reviewDecision":"{raw}"}}"#
+            );
+            assert_eq!(
+                parse_gh_pr_status(&json).unwrap().review,
+                Some(want),
+                "reviewDecision {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_payloads_captured_from_real_gh() {
+        // Verbatim `gh pr view --json state,isDraft,mergeable,number,url,\
+        // reviewDecision` output, so a change in gh's field set or its
+        // rendering of an absent verdict is caught here rather than by a
+        // blank indicator on someone's dashboard.
+        let approved = r#"{"isDraft":false,"mergeable":"UNKNOWN","number":14203,"reviewDecision":"APPROVED","state":"MERGED","url":"https://github.com/cli/cli/pull/14203"}"#;
+        let s = parse_gh_pr_status(approved).unwrap();
+        assert_eq!(s.lifecycle, BranchLifecycle::PrMerged);
+        assert_eq!(s.number, Some(14203));
+        assert_eq!(s.review, Some(ReviewDecision::Approved));
+
+        // A repo with no approval gate: gh renders the null verdict as "".
+        let ungated = r#"{"isDraft":false,"mergeable":"UNKNOWN","number":286,"reviewDecision":"","state":"MERGED","url":"https://github.com/bakedbean/workspacex/pull/286"}"#;
+        assert_eq!(parse_gh_pr_status(ungated).unwrap().review, None);
+    }
+
+    #[test]
+    fn review_decision_is_none_when_no_review_gate() {
+        // gh renders GraphQL's null reviewDecision as "" — the repo requires
+        // no approval and none was submitted. Distinct from REVIEW_REQUIRED.
+        let json = r#"{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","number":5,"reviewDecision":""}"#;
+        assert_eq!(parse_gh_pr_status(json).unwrap().review, None);
+    }
+
+    #[test]
+    fn review_decision_is_none_when_field_absent_or_unknown() {
+        let absent = r#"{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","number":5}"#;
+        assert_eq!(parse_gh_pr_status(absent).unwrap().review, None);
+        // A value GitHub might add later must degrade, not fail the parse.
+        let unknown = r#"{"state":"OPEN","isDraft":false,"number":5,"reviewDecision":"WAT"}"#;
+        let s = parse_gh_pr_status(unknown).unwrap();
+        assert_eq!(s.lifecycle, BranchLifecycle::PrOpen);
+        assert_eq!(s.review, None);
+    }
+
+    #[test]
+    fn fetch_argv_requests_review_decision() {
+        assert!(
+            pr_view_json_fields().contains("reviewDecision"),
+            "gh --json field list must ask for reviewDecision"
+        );
     }
 
     #[test]

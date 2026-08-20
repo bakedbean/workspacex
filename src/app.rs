@@ -452,6 +452,15 @@ pub struct App {
     /// Cached PR number per workspace, populated alongside `pr_lifecycle`.
     /// Absent key = unknown. Used to render `#<n>` in the detail-bar chip.
     pub pr_number: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
+    /// Cached PR review verdict per workspace, populated alongside
+    /// `pr_lifecycle`. Absent key = no approval gate, never polled, or a
+    /// verdict `gh` didn't report — all three render as no approval mark.
+    /// Unlike `pr_lifecycle` this key is *removed* when a poll reports no
+    /// verdict, so a dismissed approval can't leave a stale tick behind.
+    pub pr_review: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::git::forge::ReviewDecision,
+    >,
     /// Screen rect of the clickable PR chip in the detail-bar header, with
     /// the workspace it belongs to. Set during draw, read by the mouse
     /// handler. Mirrors the `chip_rects` draw-populates / input-reads pattern.
@@ -698,6 +707,7 @@ impl App {
             quit: false,
             workspace_status: std::collections::HashMap::new(),
             pr_lifecycle: std::collections::HashMap::new(),
+            pr_review: std::collections::HashMap::new(),
             pr_number: std::collections::HashMap::new(),
             pr_link_rect: None,
             dashboard_pr_rects: Vec::new(),

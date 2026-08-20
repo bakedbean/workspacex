@@ -10,7 +10,7 @@ use crate::activity::proc::ProcInfo;
 use crate::config::detail_bar_config::DetailBarConfig;
 use crate::data::store::{Repo, Workspace, WorkspaceRecap};
 use crate::git::DiffStats;
-use crate::git::forge::BranchLifecycle;
+use crate::git::forge::{BranchLifecycle, ReviewDecision};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::Frame;
@@ -34,6 +34,9 @@ pub struct DetailInputs<'a> {
     pub lifecycle: Option<BranchLifecycle>,
     pub pr_title: Option<&'a str>,
     pub pr_number: Option<u32>,
+    /// The PR's review verdict, drawn as a trailing mark on the header chip.
+    /// `None` when the repo has no approval gate or the verdict is unknown.
+    pub review: Option<ReviewDecision>,
     pub status: Status,
     pub ago_secs: Option<u64>,
     pub reply_draft: &'a str,
@@ -135,6 +138,7 @@ pub fn render(
         &inputs.workspace.branch,
         inputs.lifecycle,
         inputs.pr_number,
+        inputs.review,
         inputs.diff,
         inputs.procs.len() as u32,
         inputs.status,
@@ -416,6 +420,7 @@ pub(crate) fn build_header_strip(
     branch: &str,
     lifecycle: Option<BranchLifecycle>,
     pr_number: Option<u32>,
+    review: Option<ReviewDecision>,
     diff: Option<DiffStats>,
     procs: u32,
     status: Status,
@@ -448,29 +453,34 @@ pub(crate) fn build_header_strip(
     spans.push(Span::styled(branch_text, theme.dim_style()));
 
     if let Some(lc) = lifecycle {
-        let (glyph, label) = crate::ui::theme::lifecycle_chip(lc);
-        if !glyph.is_empty() {
+        // The header lays the chip out inline, so it never has to trade the
+        // lifecycle word against the approval mark — hence the unbounded width.
+        if let Some(chip) = crate::ui::theme::pr_chip(lc, pr_number, review, usize::MAX) {
             col += 2;
             spans.push(Span::raw("  ".to_string()));
-            let chip_text = match pr_number {
-                Some(n) => format!("{glyph} #{n} {label}"),
-                None => format!("{glyph} {label}"),
-            };
-            let chip_width = chip_text.chars().count();
+            let chip_width = chip.width();
             pr_chip = Some(HeaderChip {
                 // `col` is the running char-offset at this point: the number
                 // of chars before the chip glyph. Any span added above must
-                // bump `col` or this offset drifts.
+                // bump `col` or this offset drifts. The width spans the whole
+                // chip, mark included, so a click on the mark still opens the PR.
                 start: col,
                 width: chip_width,
             });
             col += chip_width;
             spans.push(Span::styled(
-                chip_text,
+                chip.lifecycle_text.clone(),
                 theme
                     .lifecycle_style(Some(lc))
                     .unwrap_or_else(|| theme.dim_style()),
             ));
+            if let Some(d) = chip.review {
+                spans.push(Span::raw(" ".to_string()));
+                spans.push(Span::styled(
+                    crate::ui::theme::review_glyph(d).to_string(),
+                    theme.review_style(d),
+                ));
+            }
         }
     }
 
@@ -757,6 +767,7 @@ fn truncate_to_chars_left(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::forge::ReviewDecision;
     use crate::ui::dashboard::status::Status;
     use crate::ui::theme::Theme;
     use ratatui::Terminal;
@@ -853,6 +864,7 @@ mod tests {
                 lifecycle: None,
                 pr_title: None,
                 pr_number: None,
+                review: None,
                 status: Status::Idle,
                 ago_secs: None,
                 reply_draft: "",
@@ -875,6 +887,7 @@ mod tests {
             "repo-overview",
             "bakedbean/repo-overview",
             Some(BranchLifecycle::PrOpen),
+            None,
             None,
             Some(DiffStats {
                 added: 12,
@@ -913,6 +926,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             0,
             Status::Idle,
             None,
@@ -930,6 +944,7 @@ mod tests {
         let (line, chip) = build_header_strip(
             "ws",
             "br",
+            None,
             None,
             None,
             None,
@@ -958,6 +973,7 @@ mod tests {
             Some(BranchLifecycle::NoPr),
             Some(99),
             None,
+            None,
             0,
             Status::Idle,
             None,
@@ -970,6 +986,58 @@ mod tests {
     }
 
     #[test]
+    fn header_strip_marks_an_approved_pr_and_covers_it_with_the_chip_rect() {
+        let theme = Theme::wsx();
+        let (line, chip) = build_header_strip(
+            "ws",
+            "br",
+            Some(BranchLifecycle::PrOpen),
+            Some(152),
+            Some(ReviewDecision::Approved),
+            None,
+            0,
+            Status::Idle,
+            None,
+            &theme,
+            120,
+        );
+        let text = line_to_string(&line);
+        assert!(text.contains("⏺ #152 open ✓"), "marked chip: {text:?}");
+        // The mark is part of the chip, so the click rect must include it —
+        // otherwise clicking the tick lands on the diff cell.
+        let chip = chip.expect("chip rect should be present");
+        assert_eq!(chip.width, "⏺ #152 open ✓".chars().count());
+        assert!(
+            text.chars()
+                .skip(chip.start)
+                .collect::<String>()
+                .starts_with("⏺ #152 open ✓"),
+            "chip rect starts at the chip: {text:?}"
+        );
+    }
+
+    #[test]
+    fn header_strip_leaves_a_merged_pr_unmarked() {
+        let theme = Theme::wsx();
+        let (line, _) = build_header_strip(
+            "ws",
+            "br",
+            Some(BranchLifecycle::PrMerged),
+            Some(152),
+            Some(ReviewDecision::Approved),
+            None,
+            0,
+            Status::Idle,
+            None,
+            &theme,
+            120,
+        );
+        let text = line_to_string(&line);
+        assert!(text.contains("⏺ #152 merged"), "chip present: {text:?}");
+        assert!(!text.contains('✓'), "merged PRs carry no mark: {text:?}");
+    }
+
+    #[test]
     fn header_strip_shows_pr_number_and_reports_chip() {
         let theme = Theme::wsx();
         let (line, chip) = build_header_strip(
@@ -977,6 +1045,7 @@ mod tests {
             "br",
             Some(BranchLifecycle::PrOpen),
             Some(152),
+            None,
             None,
             0,
             Status::Idle,
@@ -1084,6 +1153,7 @@ mod tests {
             lifecycle: Some(BranchLifecycle::PrOpen),
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Question,
             ago_secs: Some(29),
             reply_draft: "",
@@ -1134,6 +1204,7 @@ mod tests {
             lifecycle: None,
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1181,6 +1252,7 @@ mod tests {
             lifecycle: None,
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1234,6 +1306,7 @@ mod tests {
             lifecycle: None,
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1275,6 +1348,7 @@ mod tests {
             lifecycle: None,
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1323,6 +1397,7 @@ mod tests {
             lifecycle: None,
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1375,6 +1450,7 @@ mod tests {
             lifecycle: None,
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1430,6 +1506,7 @@ mod tests {
             lifecycle: None,
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1631,6 +1708,7 @@ mod tests {
             lifecycle: None,
             pr_title: None,
             pr_number: None,
+            review: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",

@@ -37,7 +37,9 @@ const BLANK_GLYPH: &str = "\u{2007}"; // figure space: 3 bytes, digit width
 /// ranges in assets/walker-theme/item_menus-wsx.xml.
 pub(crate) const PR_START: usize = NAME_W + 2; // glyph + " " + "#N"
 pub(crate) const PR_END: usize = PR_START + 3 + 1 + PR_W;
-pub(crate) const DIRTY_START: usize = PR_END + 2 + SUFFIX_W + 2;
+pub(crate) const REVIEW_START: usize = PR_END + 2 + SUFFIX_W + 2;
+pub(crate) const REVIEW_END: usize = REVIEW_START + 3;
+pub(crate) const DIRTY_START: usize = REVIEW_END + 2;
 pub(crate) const DIRTY_END: usize = DIRTY_START + 3;
 pub(crate) const ADDS_START: usize = DIRTY_END + 2;
 pub(crate) const ADDS_END: usize = ADDS_START + COUNT_W;
@@ -83,6 +85,18 @@ pub(crate) fn compose_text(repo: &str, slug: &str, row: &ScmCacheRow) -> String 
         Some(BranchLifecycle::PrClosed) => (GLYPH_PR, pr_num(row), "closed"),
         Some(BranchLifecycle::NoPr) | None => (BLANK_GLYPH, String::new(), ""),
     };
+    // The approval mark gets its own fixed slot. A Pango attribute range is
+    // a single static color, so unlike the TUI chip this mark can't be
+    // colored per verdict — the glyph shapes carry the whole distinction and
+    // the theme paints the slot one neutral hue.
+    let review = row
+        .pr_review
+        .filter(|_| {
+            row.pr_lifecycle
+                .is_some_and(crate::ui::theme::lifecycle_shows_review)
+        })
+        .map(crate::ui::theme::review_glyph)
+        .unwrap_or(BLANK_GLYPH);
     let dirty = if row.dirty == Some(true) {
         GLYPH_DIRTY
     } else {
@@ -95,7 +109,8 @@ pub(crate) fn compose_text(repo: &str, slug: &str, row: &ScmCacheRow) -> String 
         _ => (String::new(), String::new()),
     };
     let text = format!(
-        "{name:<NAME_W$}  {glyph} {num:<PR_W$}  {suffix:<SUFFIX_W$}  {dirty}  {adds:<COUNT_W$} {dels:<COUNT_W$}",
+        "{name:<NAME_W$}  {glyph} {num:<PR_W$}  {suffix:<SUFFIX_W$}  {review}  {dirty}  \
+         {adds:<COUNT_W$} {dels:<COUNT_W$}",
         name = name_column(repo, slug),
     );
     debug_assert_eq!(text.len(), DELS_END, "column layout drifted: {text:?}");
@@ -103,6 +118,8 @@ pub(crate) fn compose_text(repo: &str, slug: &str, row: &ScmCacheRow) -> String 
         [
             PR_START,
             PR_END,
+            REVIEW_START,
+            REVIEW_END,
             DIRTY_START,
             DIRTY_END,
             ADDS_START,
@@ -137,6 +154,19 @@ pub(crate) fn state_classes(row: &ScmCacheRow, status: Option<&ReportedStatus>) 
     });
     if let Some(pr) = pr {
         classes.push(pr.to_string());
+    }
+    if let Some(d) = row.pr_review.filter(|_| {
+        row.pr_lifecycle
+            .is_some_and(crate::ui::theme::lifecycle_shows_review)
+    }) {
+        classes.push(
+            match d {
+                crate::git::forge::ReviewDecision::Approved => "review-approved",
+                crate::git::forge::ReviewDecision::ChangesRequested => "review-changes-requested",
+                crate::git::forge::ReviewDecision::ReviewRequired => "review-required",
+            }
+            .to_string(),
+        );
     }
     if row.dirty == Some(true) {
         classes.push("dirty".to_string());
@@ -231,6 +261,7 @@ pub use crate::workspace_rows::run_refresh_prs;
 mod entry_tests {
     use super::*;
     use crate::data::store::{ReportedState, ReportedStatus};
+    use crate::git::forge::ReviewDecision;
 
     fn status(state: ReportedState, msg: Option<&str>) -> ReportedStatus {
         ReportedStatus {
@@ -344,12 +375,97 @@ mod entry_tests {
     }
 
     #[test]
+    fn approval_mark_sits_in_its_own_fixed_byte_column() {
+        for (verdict, glyph) in [
+            (ReviewDecision::Approved, "✓"),
+            (ReviewDecision::ChangesRequested, "✗"),
+            (ReviewDecision::ReviewRequired, "◌"),
+        ] {
+            let row = ScmCacheRow {
+                pr_lifecycle: Some(BranchLifecycle::PrOpen),
+                pr_number: Some(123),
+                pr_review: Some(verdict),
+                dirty: Some(true),
+                additions: Some(45),
+                deletions: Some(12),
+                fetched_at: Some(0),
+                ..Default::default()
+            };
+            let text = compose_text("workspacex", "fix-bug", &row);
+            assert_eq!(
+                &text[REVIEW_START..REVIEW_END],
+                glyph,
+                "{verdict:?}: {text}"
+            );
+            // The fields after it must not have shifted.
+            assert_eq!(&text[DIRTY_START..DIRTY_END], "\u{25cf}", "{text}");
+            assert_eq!(&text[ADDS_START..ADDS_END], "+45   ", "{text}");
+        }
+    }
+
+    #[test]
+    fn an_unmarked_row_blanks_the_column_without_moving_it() {
+        // No verdict, and a lifecycle that earns no mark, must both leave a
+        // figure space — same 3 bytes, same digit width — so every later
+        // colored range stays put.
+        let base = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrOpen),
+            pr_number: Some(123),
+            dirty: Some(true),
+            additions: Some(45),
+            deletions: Some(12),
+            fetched_at: Some(0),
+            ..Default::default()
+        };
+        let merged = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrMerged),
+            pr_review: Some(ReviewDecision::Approved),
+            ..base.clone()
+        };
+        for row in [base.clone(), merged] {
+            let text = compose_text("workspacex", "fix-bug", &row);
+            assert_eq!(&text[REVIEW_START..REVIEW_END], BLANK_GLYPH, "{text}");
+            assert_eq!(&text[DIRTY_START..DIRTY_END], "\u{25cf}", "{text}");
+        }
+    }
+
+    #[test]
+    fn a_marked_row_earns_a_review_state_class() {
+        // The walker theme can tint the row edge by verdict; the class is
+        // how it learns which one.
+        let row = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrOpen),
+            pr_number: Some(7),
+            pr_review: Some(ReviewDecision::ChangesRequested),
+            ..Default::default()
+        };
+        assert!(
+            state_classes(&row, None).contains(&"review-changes-requested".to_string()),
+            "{:?}",
+            state_classes(&row, None)
+        );
+        // An unmarked row earns none of them.
+        let plain = ScmCacheRow {
+            pr_review: None,
+            ..row.clone()
+        };
+        assert!(
+            !state_classes(&plain, None)
+                .iter()
+                .any(|c| c.starts_with("review-")),
+            "{:?}",
+            state_classes(&plain, None)
+        );
+    }
+
+    #[test]
     fn xml_attribute_ranges_match_layout() {
         // The walker theme colors byte ranges of the composed text; if the
         // column constants move, the theme XML must move with them.
         let xml = include_str!("assets/walker-theme/item_menus-wsx.xml");
         for (start, end) in [
             (PR_START, PR_END),
+            (REVIEW_START, REVIEW_END),
             (DIRTY_START, DIRTY_END),
             (ADDS_START, ADDS_END),
             (DELS_START, DELS_END),
@@ -556,9 +672,12 @@ mod entry_tests {
         store
             .upsert_scm_pr(
                 ids[0],
-                crate::git::forge::BranchLifecycle::PrOpen,
-                Some(5),
-                None,
+                &crate::git::forge::PrStatus {
+                    lifecycle: crate::git::forge::BranchLifecycle::PrOpen,
+                    number: Some(5),
+                    url: None,
+                    review: None,
+                },
                 0,
             )
             .unwrap();

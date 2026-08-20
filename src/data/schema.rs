@@ -145,6 +145,10 @@ impl Store {
             self.add_column_if_missing("workspace_recap", "next_short", "next_short TEXT")?;
             self.conn().execute("PRAGMA user_version = 20", [])?;
         }
+        if v < 21 {
+            self.add_column_if_missing("scm_cache", "pr_review", "pr_review TEXT")?;
+            self.conn().execute("PRAGMA user_version = 21", [])?;
+        }
         Ok(())
     }
 

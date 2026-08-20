@@ -304,6 +304,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                             lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                             pr_title: None,
                             pr_number: app.pr_number.get(&ws.id).copied(),
+                            review: app.pr_review.get(&ws.id).copied(),
                             status,
                             ago_secs,
                             reply_draft: &app.dashboard.reply_draft,
@@ -424,11 +425,16 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // PR chip for the focused pane's workspace, drawn right-justified on
             // the chip row. Same `(lifecycle, number)` source the dashboard
             // detail header uses, so the chip text and click behaviour match.
-            let pr = app
-                .pr_number
-                .get(&focused_id)
-                .copied()
-                .and_then(|n| app.pr_lifecycle.get(&focused_id).copied().map(|lc| (lc, n)));
+            let pr = app.pr_number.get(&focused_id).copied().and_then(|n| {
+                app.pr_lifecycle
+                    .get(&focused_id)
+                    .copied()
+                    .map(|lc| crate::ui::attached::ChipPr {
+                        lifecycle: lc,
+                        number: n,
+                        review: app.pr_review.get(&focused_id).copied(),
+                    })
+            });
 
             // Diff stats for the focused pane, drawn just left of the PR chip.
             // Same `app.workspace_diff` cache the dashboard `+N −N` cell reads,
@@ -620,7 +626,18 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                                 .iter()
                                 .any(|a| a.tmux_session.as_deref() == Some(tmux))
                         })
-                        .and_then(|rec| rec.pr_number.and_then(|n| rec.lifecycle.map(|lc| (lc, n))))
+                        .and_then(|rec| {
+                            // The shared-workspace wire contract carries no
+                            // review verdict, so a remote pane's chip stays
+                            // unmarked rather than claiming "not gated".
+                            rec.pr_number.and_then(|n| {
+                                rec.lifecycle.map(|lc| crate::ui::attached::ChipPr {
+                                    lifecycle: lc,
+                                    number: n,
+                                    review: None,
+                                })
+                            })
+                        })
                 });
                 let (info_area, separator_area, pane_area, chip_area, agents_area) =
                     attached::layout_chrome(area, false);
@@ -919,6 +936,7 @@ fn build_row_inputs(
         shared: ws.shared,
         shared_active,
         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
+        review: app.pr_review.get(&ws.id).copied(),
         nerd_fonts,
         workspace_id: ws.id,
         has_multi_pane_layout: app.workspaces_with_multi_pane_layouts.contains(&ws.id),

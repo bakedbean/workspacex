@@ -240,6 +240,25 @@ pub fn unix_now() -> i64 {
 /// Sequentially refresh PR state for every workspace outside the throttle
 /// window. Silent by contract: improves the cache or does nothing.
 pub async fn run_refresh_prs(store: &Store) -> Result<()> {
+    run_refresh_prs_with(store, |path, branch| async move {
+        crate::git::forge::fetch_pr_status(&path, &branch).await
+    })
+    .await
+}
+
+/// `run_refresh_prs` with the `gh` call injected, mirroring how
+/// `shared_list_records` injects its liveness probe. Tests drive the
+/// failure modes — no gh, no auth, no network — that are impossible to
+/// provoke reliably from a real subprocess.
+///
+/// The write-on-success-only rule lives here rather than in the store: a
+/// failed fetch knows nothing, and blanking a good verdict on a network
+/// blip would drop the ✓ off a PR that is still approved.
+pub async fn run_refresh_prs_with<F, Fut>(store: &Store, fetch: F) -> Result<()>
+where
+    F: Fn(std::path::PathBuf, String) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<crate::git::forge::PrStatus>>>,
+{
     let caches = store.all_scm_cache()?;
     for repo in crate::data::repo::list(store)? {
         for ws in store.workspaces(repo.id)? {
@@ -247,19 +266,11 @@ pub async fn run_refresh_prs(store: &Store) -> Result<()> {
             if !is_stale(fetched, unix_now(), PR_REFRESH_THROTTLE_SECS) {
                 continue;
             }
-            if let Ok(Some(status)) =
-                crate::git::forge::fetch_pr_status(&ws.worktree_path, &ws.branch).await
-            {
-                let _ = store.upsert_scm_pr(
-                    ws.id,
-                    status.lifecycle,
-                    status.number,
-                    status.url.as_deref(),
-                    unix_now(),
-                );
+            if let Ok(Some(status)) = fetch(ws.worktree_path.clone(), ws.branch.clone()).await {
+                let _ = store.upsert_scm_pr(ws.id, &status, unix_now());
             }
             // Err / Ok(None): leave cached state alone (transient failure
-            // must not clobber a known lifecycle).
+            // must not clobber a known lifecycle or verdict).
         }
     }
     Ok(())
@@ -287,6 +298,103 @@ mod tests {
         assert!(is_stale(Some(880), 1000, 120));
         assert!(!is_stale(Some(881), 1000, 120));
         assert!(!is_stale(Some(2000), 1000, 120)); // clock skew: don't refetch
+    }
+
+    /// A store with one workspace whose PR cache already holds an approved,
+    /// open PR — the state a transient `gh` failure must not damage.
+    fn store_with_cached_verdict() -> (crate::data::store::Store, crate::data::store::WorkspaceId) {
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "w",
+                branch: "x/w",
+                worktree_path: &std::path::PathBuf::from("/tmp/r/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .upsert_scm_pr(
+                id,
+                &crate::git::forge::PrStatus {
+                    lifecycle: crate::git::forge::BranchLifecycle::PrOpen,
+                    number: Some(42),
+                    url: Some("https://github.com/o/r/pull/42".into()),
+                    review: Some(crate::git::forge::ReviewDecision::Approved),
+                },
+                // Stale enough that the refresh will actually try to refetch.
+                0,
+            )
+            .unwrap();
+        (store, id)
+    }
+
+    #[tokio::test]
+    async fn a_failed_pr_fetch_leaves_the_cached_verdict_intact() {
+        // `fetch_pr_status` folds every failure it can survive — gh missing,
+        // not authenticated, no network, non-GitHub remote, unparseable
+        // output — into `Ok(None)`, and a hard error into `Err`. Neither may
+        // reach the store: blanking a good verdict on a network blip would
+        // drop the ✓ off a PR that is still approved.
+        for outcome in ["ok_none", "err"] {
+            let (store, id) = store_with_cached_verdict();
+            run_refresh_prs_with(&store, |_path, _branch| async move {
+                match outcome {
+                    "ok_none" => Ok(None),
+                    _ => Err(crate::error::Error::Git("gh exploded".into())),
+                }
+            })
+            .await
+            .unwrap();
+
+            let row = store.all_scm_cache().unwrap()[&id].clone();
+            assert_eq!(
+                row.pr_review,
+                Some(crate::git::forge::ReviewDecision::Approved),
+                "{outcome}: verdict must survive a transient fetch failure"
+            );
+            assert_eq!(
+                row.pr_lifecycle,
+                Some(crate::git::forge::BranchLifecycle::PrOpen)
+            );
+            assert_eq!(row.pr_number, Some(42));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_successful_pr_fetch_still_updates_the_cached_verdict() {
+        // The other half of the contract, and what stops the test above from
+        // passing vacuously: a refresh that DOES get an answer must write it,
+        // including clearing a verdict that GitHub no longer reports (a new
+        // commit dismisses an approval).
+        let (store, id) = store_with_cached_verdict();
+        run_refresh_prs_with(&store, |_path, _branch| async move {
+            Ok(Some(crate::git::forge::PrStatus {
+                lifecycle: crate::git::forge::BranchLifecycle::PrOpen,
+                number: Some(42),
+                url: None,
+                review: None,
+            }))
+        })
+        .await
+        .unwrap();
+
+        let row = store.all_scm_cache().unwrap()[&id].clone();
+        assert_eq!(row.pr_review, None, "a dismissed approval must clear");
+        // The url is preserved by upsert_scm_pr's own rule; unrelated but
+        // worth pinning here so the two merge rules stay visibly different.
+        assert_eq!(
+            row.pr_url.as_deref(),
+            Some("https://github.com/o/r/pull/42")
+        );
     }
 
     #[tokio::test]

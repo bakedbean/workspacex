@@ -301,7 +301,16 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     // makes the next tick poll immediately.
                     g.pr_lifecycle.remove(&id);
                     g.pr_number.remove(&id);
+                    g.pr_review.remove(&id);
                     g.pr_last_poll_ms.remove(&id);
+                    // The persisted row too, not just these in-memory maps:
+                    // `wsx waybar menu-entries` and `wsx menubar plugin` are
+                    // separate short-lived processes that render from
+                    // scm_cache alone, so a verdict left behind there keeps
+                    // claiming the OLD branch's PR is approved — under the
+                    // new branch's name — until a later poll happens to
+                    // overwrite it.
+                    let _ = g.store.clear_scm_pr(id);
                     // New branch → different ancestry from `base_branch`,
                     // so the cached diff and its throttle stamp are
                     // stale. Drop them to force a fresh poll.
@@ -377,15 +386,21 @@ pub async fn branch_drift_poll(app: SharedApp) {
                             g.pr_number.remove(&id);
                         }
                     }
+                    // Removed, not left alone, when the verdict is gone: a
+                    // new commit on a protected branch dismisses an
+                    // approval, and a stale tick would claim the PR is
+                    // still ready to merge.
+                    match status.review {
+                        Some(d) => {
+                            g.pr_review.insert(id, d);
+                        }
+                        None => {
+                            g.pr_review.remove(&id);
+                        }
+                    }
                     // Write-through so `wsx waybar menu-entries` (a separate
                     // short-lived process) sees PR state without calling gh.
-                    let _ = g.store.upsert_scm_pr(
-                        id,
-                        status.lifecycle,
-                        status.number,
-                        status.url.as_deref(),
-                        now_ms / 1000,
-                    );
+                    let _ = g.store.upsert_scm_pr(id, &status, now_ms / 1000);
                 }
                 // Ok(None) → leave any existing cached value alone; better
                 // than clobbering a previously-known state on a transient

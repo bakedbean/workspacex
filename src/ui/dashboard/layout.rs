@@ -20,6 +20,7 @@ pub fn top_chrome(
     group: GroupMode,
     repos: usize,
     workspaces: usize,
+    filter: Option<&str>,
     width: usize,
     theme: &Theme,
 ) -> Line<'static> {
@@ -49,6 +50,19 @@ pub fn top_chrome(
         Span::raw(" ".to_string()),
         tab_span("attention", group == GroupMode::Attention, theme),
     ];
+
+    // Echo the live needle: without it, `/` looks inert and rows vanishing
+    // from the list have no visible cause. Truncated so a long needle can't
+    // squeeze out the right-hand counts, which floor their gap at 1.
+    if let Some(needle) = filter {
+        spans.push(Span::styled(
+            format!(
+                "  /{}",
+                crate::ui::text::truncate(needle, crate::ui::text::FILTER_ECHO_MAX)
+            ),
+            Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
+        ));
+    }
 
     let right = format!("{repos} repos · {workspaces} workspaces");
     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
@@ -196,12 +210,45 @@ mod tests {
     #[test]
     fn top_chrome_shows_app_name_and_counts() {
         let theme = Theme::wsx();
-        let line = top_chrome(GroupMode::Repo, 9, 14, 100, &theme);
+        let line = top_chrome(GroupMode::Repo, 9, 14, None, 100, &theme);
         let t = text(&line);
         assert!(t.starts_with("▌ workspace x · dashboard"), "{t:?}");
         assert!(t.contains("group: "));
         assert!(t.contains("repo"));
         assert!(t.contains("attention"));
+        assert!(t.trim_end().ends_with("9 repos · 14 workspaces"), "{t:?}");
+    }
+
+    /// Without the echo, `/` gives no feedback and rows disappearing from
+    /// the list have no visible cause.
+    #[test]
+    fn top_chrome_echoes_the_active_filter() {
+        let theme = Theme::wsx();
+        let line = top_chrome(GroupMode::Repo, 9, 14, Some("auth"), 100, &theme);
+        assert!(text(&line).contains("/auth"), "{:?}", text(&line));
+
+        let bare = top_chrome(GroupMode::Repo, 9, 14, None, 100, &theme);
+        assert!(!text(&bare).contains('/'), "{:?}", text(&bare));
+    }
+
+    /// `/` with an empty buffer still echoes, so the keypress registers
+    /// before the first character is typed.
+    #[test]
+    fn top_chrome_echoes_an_empty_filter() {
+        let theme = Theme::wsx();
+        let line = top_chrome(GroupMode::Repo, 9, 14, Some(""), 100, &theme);
+        assert!(text(&line).contains('/'), "{:?}", text(&line));
+    }
+
+    /// A long needle is truncated so it cannot displace the right-hand
+    /// counts.
+    #[test]
+    fn top_chrome_truncates_a_long_filter_and_keeps_counts() {
+        let theme = Theme::wsx();
+        let needle = "x".repeat(80);
+        let line = top_chrome(GroupMode::Repo, 9, 14, Some(&needle), 100, &theme);
+        let t = text(&line);
+        assert!(t.contains('…'), "{t:?}");
         assert!(t.trim_end().ends_with("9 repos · 14 workspaces"), "{t:?}");
     }
 

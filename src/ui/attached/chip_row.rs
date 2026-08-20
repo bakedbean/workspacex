@@ -4,19 +4,49 @@ use super::*;
 use crate::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::dashboard::status::Status;
 
-/// Build the right-justified PR chip's display text and style for the chip
-/// row, mirroring the dashboard detail header (`{glyph} #{n} {label}`).
-/// `None` when there's no PR or the lifecycle has no glyph (e.g. `NoPr`).
-fn pr_chip_parts(pr: Option<(BranchLifecycle, u32)>, theme: &Theme) -> Option<(String, Style)> {
-    let (lc, number) = pr?;
-    let (glyph, label) = crate::ui::theme::lifecycle_chip(lc);
-    if glyph.is_empty() {
-        return None;
+/// The focused pane's PR, as the chip row needs it. A struct rather than a
+/// tuple because the review verdict is a third, differently-shaped field and
+/// the call sites read better named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChipPr {
+    pub lifecycle: BranchLifecycle,
+    pub number: u32,
+    pub review: Option<crate::git::forge::ReviewDecision>,
+}
+
+impl ChipPr {
+    /// A PR with no review verdict — the shape most tests want.
+    #[cfg(test)]
+    fn new(lifecycle: BranchLifecycle, number: u32) -> Self {
+        Self {
+            lifecycle,
+            number,
+            review: None,
+        }
     }
+}
+
+/// Build the right-justified PR chip's spans and column width for the chip
+/// row, mirroring the dashboard detail header (`{glyph} #{n} {label} {mark}`).
+/// The verdict mark is a separate span so it can carry its own traffic-light
+/// color. `None` when there's no PR or the lifecycle has no glyph (e.g. `NoPr`).
+fn pr_chip_parts(pr: Option<ChipPr>, theme: &Theme) -> Option<(Vec<Span<'static>>, usize)> {
+    let pr = pr?;
+    // Laid out inline against the whole row, so the lifecycle word never has
+    // to yield to the mark here.
+    let chip = crate::ui::theme::pr_chip(pr.lifecycle, Some(pr.number), pr.review, usize::MAX)?;
     let style = theme
-        .lifecycle_style(Some(lc))
+        .lifecycle_style(Some(pr.lifecycle))
         .unwrap_or_else(|| theme.dim_style());
-    Some((format!("{glyph} #{number} {label}"), style))
+    let mut spans = vec![Span::styled(chip.lifecycle_text.clone(), style)];
+    if let Some(d) = chip.review {
+        spans.push(Span::raw(" ".to_string()));
+        spans.push(Span::styled(
+            crate::ui::theme::review_glyph(d).to_string(),
+            theme.review_style(d),
+        ));
+    }
+    Some((spans, chip.width()))
 }
 
 /// Build the `+A −R` diff-count spans (dashboard colours: green adds, red
@@ -158,7 +188,7 @@ pub(crate) fn render_chip_row(
     pinned: &[PinnedCommand],
     procs: u32,
     diff: Option<crate::git::DiffStats>,
-    pr: Option<(BranchLifecycle, u32)>,
+    pr: Option<ChipPr>,
     model_tokens: Option<ChipModelTokens>,
     theme: &Theme,
 ) -> (Vec<Rect>, Option<Rect>, Option<Rect>) {
@@ -190,10 +220,7 @@ pub(crate) fn render_chip_row(
     // when the pinned chips leave less than the 2-cell gap, so it never overlaps.
     let width = area.width as usize;
     let pr_parts = pr_chip_parts(pr, theme);
-    let pr_width = pr_parts
-        .as_ref()
-        .map(|(text, _)| text.chars().count())
-        .unwrap_or(0);
+    let pr_width = pr_parts.as_ref().map(|(_, w)| *w).unwrap_or(0);
 
     // The optional elements in left-to-right order. Each is `(spans, width)`.
     // `procs_idx` records where the procs count landed so its click rect can be
@@ -210,8 +237,8 @@ pub(crate) fn render_chip_row(
     if let Some(parts) = diff_chip_parts(diff, theme) {
         elements.push(parts);
     }
-    if let Some((text, style)) = pr_parts {
-        elements.push((vec![Span::styled(text, style)], pr_width));
+    if let Some((spans, _)) = pr_parts {
+        elements.push((spans, pr_width));
     }
 
     // Width of the elements from `start` onward, joined by single-space gaps.
@@ -298,6 +325,7 @@ pub(crate) fn render_chip_row(
 mod tests {
     use super::*;
     use crate::commands::pinned::PinnedCommand;
+    use crate::git::forge::ReviewDecision;
 
     fn cmds(specs: &[(&str, &str)]) -> Vec<PinnedCommand> {
         specs
@@ -405,7 +433,7 @@ mod tests {
                     &pinned,
                     0,
                     None,
-                    Some((BranchLifecycle::PrOpen, 152)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
                     &theme,
                 );
@@ -420,6 +448,47 @@ mod tests {
         }
         assert_eq!(painted, "⏺ #152 open");
         assert_eq!(rect.x + rect.width, 80, "chip is flush to the right edge");
+    }
+
+    #[test]
+    fn attached_pr_chip_carries_the_approval_mark() {
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut pr_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                let (_chips, r, _procs) = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    0,
+                    None,
+                    Some(ChipPr {
+                        lifecycle: BranchLifecycle::PrOpen,
+                        number: 152,
+                        review: Some(ReviewDecision::ChangesRequested),
+                    }),
+                    None,
+                    &theme,
+                );
+                pr_rect = r;
+            })
+            .unwrap();
+        let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
+        let buf = terminal.backend().buffer();
+        let mut painted = String::new();
+        for x in rect.x..rect.x + rect.width {
+            painted.push_str(buf[(x, rect.y)].symbol());
+        }
+        assert_eq!(painted, "⏺ #152 open ✗");
+        assert_eq!(
+            rect.x + rect.width,
+            80,
+            "chip stays flush to the right edge"
+        );
     }
 
     #[test]
@@ -440,7 +509,7 @@ mod tests {
                     &pinned,
                     0,
                     None,
-                    Some((BranchLifecycle::PrOpen, 152)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
                     &theme,
                 );
@@ -471,7 +540,7 @@ mod tests {
                         added: 12,
                         removed: 3,
                     }),
-                    Some((BranchLifecycle::PrOpen, 152)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
                     &theme,
                 );
@@ -589,7 +658,7 @@ mod tests {
                         added: 12,
                         removed: 3,
                     }),
-                    Some((BranchLifecycle::PrOpen, 152)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
                     &theme,
                 );
@@ -658,7 +727,7 @@ mod tests {
                         added: 12,
                         removed: 3,
                     }),
-                    Some((BranchLifecycle::PrOpen, 152)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
                     &theme,
                 );
@@ -692,7 +761,7 @@ mod tests {
                     &pinned,
                     9,
                     None,
-                    Some((BranchLifecycle::PrOpen, 9)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 9)),
                     None,
                     &theme,
                 );
@@ -742,7 +811,7 @@ mod tests {
                     &pinned,
                     9,
                     None,
-                    Some((BranchLifecycle::PrOpen, 9)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 9)),
                     None,
                     &theme,
                 );
@@ -782,7 +851,7 @@ mod tests {
                         added: 12,
                         removed: 3,
                     }),
-                    Some((BranchLifecycle::PrOpen, 152)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     Some(mt("opus 4.8", "45k/200k", false)),
                     &theme,
                 );
@@ -856,7 +925,7 @@ mod tests {
                     &pinned,
                     0,
                     None,
-                    Some((BranchLifecycle::PrOpen, 9)),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 9)),
                     Some(mt("opus 4.8", "45k/200k", false)),
                     &theme,
                 );

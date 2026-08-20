@@ -327,6 +327,7 @@ mod tests {
                 shared: false,
                 shared_active: false,
                 lifecycle: None,
+                review: None,
                 nerd_fonts: false,
                 workspace_id: crate::data::store::WorkspaceId(i as i64),
                 has_multi_pane_layout: false,

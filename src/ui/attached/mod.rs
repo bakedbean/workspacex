@@ -19,7 +19,7 @@ mod nav_menu;
 use agents_row::{agents_row_spans, layout_agents_row};
 // Re-exported for app::render / app::input via `crate::ui::attached::*`.
 pub use agents_row::agent_switch_keys;
-pub(crate) use chip_row::render_chip_row;
+pub(crate) use chip_row::{ChipPr, render_chip_row};
 pub use nav_menu::{NavItem, nav_item_key, nav_menu_items, render_nav_overlay};
 
 /// One pane in the attached view: a workspace's PTY plus its label,
@@ -93,7 +93,7 @@ pub(crate) fn render_panes(
     pinned: &[PinnedCommand],
     procs: u32,
     diff: Option<crate::git::DiffStats>,
-    pr: Option<(BranchLifecycle, u32)>,
+    pr: Option<ChipPr>,
     model_tokens: Option<crate::detail_modules::session_summary::ChipModelTokens>,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active_agent: Option<AgentInstanceId>,

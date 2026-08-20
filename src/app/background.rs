@@ -301,6 +301,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     // makes the next tick poll immediately.
                     g.pr_lifecycle.remove(&id);
                     g.pr_number.remove(&id);
+                    g.pr_review.remove(&id);
                     g.pr_last_poll_ms.remove(&id);
                     // New branch → different ancestry from `base_branch`,
                     // so the cached diff and its throttle stamp are
@@ -375,6 +376,18 @@ pub async fn branch_drift_poll(app: SharedApp) {
                         }
                         None => {
                             g.pr_number.remove(&id);
+                        }
+                    }
+                    // Removed, not left alone, when the verdict is gone: a
+                    // new commit on a protected branch dismisses an
+                    // approval, and a stale tick would claim the PR is
+                    // still ready to merge.
+                    match status.review {
+                        Some(d) => {
+                            g.pr_review.insert(id, d);
+                        }
+                        None => {
+                            g.pr_review.remove(&id);
                         }
                     }
                     // Write-through so `wsx waybar menu-entries` (a separate

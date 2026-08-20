@@ -16,7 +16,7 @@
 //!   10ch right-aligned Ns ago
 
 use crate::git::DiffStats;
-use crate::git::forge::BranchLifecycle;
+use crate::git::forge::{BranchLifecycle, ReviewDecision};
 use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RecapSegment, RowColumn};
 use crate::ui::dashboard::spinner;
@@ -164,6 +164,10 @@ pub struct RowInputs {
     pub shared_active: bool,
     pub has_multi_pane_layout: bool,
     pub lifecycle: Option<BranchLifecycle>,
+    /// The PR's review verdict, drawn as a trailing mark on the PR chip.
+    /// `None` when the repo has no approval gate, when the verdict hasn't
+    /// been fetched, or when `gh` couldn't answer — all render as no mark.
+    pub review: Option<ReviewDecision>,
     pub nerd_fonts: bool,
     pub workspace_id: crate::data::store::WorkspaceId,
 }
@@ -361,12 +365,35 @@ pub fn render(
     // 5: PR chip — the same glyph/label/color pairing as the detail-bar
     // chip (`⏺ #123 open`) so the row and the bar can't drift. Blank when
     // the branch has no PR or the lifecycle hasn't been fetched yet.
-    match pr_chip_text(inputs) {
-        Some(chip_text) => {
+    match pr_chip(inputs, pr_width) {
+        Some(chip) => {
             let chip_style = theme
                 .lifecycle_style(inputs.lifecycle)
                 .unwrap_or_else(|| theme.dim_style());
-            spans.push(Span::styled(truncate_pad(&chip_text, pr_width), chip_style));
+            // The verdict mark is its own span so it can carry the verdict's
+            // traffic-light color rather than the lifecycle's. It's painted
+            // first-come: the lifecycle half is truncated to whatever the
+            // column leaves after reserving the mark's two columns, so the
+            // mark can't be clipped off the end.
+            match chip.review {
+                Some(d) => {
+                    let mark = crate::ui::theme::review_glyph(d);
+                    let head_width = pr_width.saturating_sub(mark.chars().count() + 1);
+                    spans.push(Span::styled(
+                        truncate(&chip.lifecycle_text, head_width),
+                        chip_style,
+                    ));
+                    let painted = truncate(&chip.lifecycle_text, head_width).chars().count();
+                    spans.push(Span::raw(" ".to_string()));
+                    spans.push(Span::styled(mark.to_string(), theme.review_style(d)));
+                    let used = painted + 1 + mark.chars().count();
+                    spans.push(Span::raw(" ".repeat(pr_width.saturating_sub(used))));
+                }
+                None => spans.push(Span::styled(
+                    truncate_pad(&chip.lifecycle_text, pr_width),
+                    chip_style,
+                )),
+            }
         }
         None => spans.push(Span::raw(" ".repeat(pr_width))),
     }
@@ -475,18 +502,11 @@ pub fn render(
     Line::from(spans)
 }
 
-/// The PR chip's cell text (`⏺ #123 open`), unpadded, or `None` when the
-/// chip cell renders blank. Shared by `render` and `pr_chip_hit_span` so
-/// the painted chip and its click target can't drift.
-fn pr_chip_text(inputs: &RowInputs) -> Option<String> {
-    let (glyph, label) = inputs
-        .lifecycle
-        .map(crate::ui::theme::lifecycle_chip)
-        .filter(|(glyph, _)| !glyph.is_empty())?;
-    Some(match inputs.pr_number {
-        Some(n) => format!("{glyph} #{n} {label}"),
-        None => format!("{glyph} {label}"),
-    })
+/// The row's PR chip fitted to the chip column, or `None` when the cell
+/// renders blank. Shared by `render` and `pr_chip_hit_span` so the painted
+/// chip and its click target can't drift.
+fn pr_chip(inputs: &RowInputs, pr_width: usize) -> Option<crate::ui::theme::PrChip> {
+    crate::ui::theme::pr_chip(inputs.lifecycle?, inputs.pr_number, inputs.review, pr_width)
 }
 
 /// Char-offset and char-width of the clickable PR chip within a workspace
@@ -495,9 +515,9 @@ fn pr_chip_text(inputs: &RowInputs) -> Option<String> {
 /// to build a screen rect. Padding to the chip cell's right is excluded so
 /// clicks on blank space don't open a browser.
 pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16, u16)> {
-    let text = pr_chip_text(inputs)?;
+    let chip = pr_chip(inputs, widths.pr)?;
     let x = widths.agent + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
-    let width = truncate(&text, widths.pr).chars().count();
+    let width = truncate(&chip.text(), widths.pr).chars().count();
     Some((x as u16, width as u16))
 }
 
@@ -645,6 +665,7 @@ fn format_ago(secs: Option<u64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::forge::ReviewDecision;
     use crate::ui::dashboard::status::Status;
 
     fn base() -> RowInputs {
@@ -676,6 +697,7 @@ mod tests {
             shared_active: false,
             has_multi_pane_layout: false,
             lifecycle: None,
+            review: None,
             nerd_fonts: false,
             workspace_id: crate::data::store::WorkspaceId(0),
         }
@@ -1403,6 +1425,107 @@ mod tests {
                 "procs column must not shift with chip presence:\n  {blank:?}\n  {chipped:?}"
             );
         }
+    }
+
+    #[test]
+    fn approval_mark_follows_the_chip_in_its_own_color() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        inputs.pr_number = Some(262);
+        inputs.review = Some(ReviewDecision::Approved);
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("⏺ #262 open ✓"), "marked chip: {text:?}");
+        let mark = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref().starts_with('✓'))
+            .expect("approval mark is its own span");
+        assert_eq!(
+            mark.style.fg,
+            theme.review_style(ReviewDecision::Approved).fg,
+            "the mark takes the verdict color, not the lifecycle color"
+        );
+    }
+
+    #[test]
+    fn each_verdict_paints_its_own_mark() {
+        let theme = Theme::wsx();
+        for (verdict, glyph) in [
+            (ReviewDecision::Approved, '✓'),
+            (ReviewDecision::ChangesRequested, '✗'),
+            (ReviewDecision::ReviewRequired, '◌'),
+        ] {
+            let mut inputs = base();
+            inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+            inputs.pr_number = Some(9);
+            inputs.review = Some(verdict);
+            let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+            assert!(
+                text.contains(glyph),
+                "{verdict:?} renders {glyph}: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repo_without_an_approval_gate_renders_exactly_as_before() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        inputs.pr_number = Some(262);
+        inputs.review = None;
+        let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        assert!(text.contains("⏺ #262 open"), "chip present: {text:?}");
+        for glyph in ['✓', '✗', '◌'] {
+            assert!(!text.contains(glyph), "no mark without a verdict: {text:?}");
+        }
+    }
+
+    #[test]
+    fn the_approval_mark_does_not_shift_later_columns() {
+        // The chip cell is fixed-width, so adding a mark must not push the
+        // procs column right — a whole dashboard of rows would go ragged.
+        let theme = Theme::wsx();
+        let procs_col = |s: &str| s.chars().position(|c| c == '●');
+        let mut plain = base();
+        plain.lifecycle = Some(BranchLifecycle::PrOpen);
+        plain.pr_number = Some(262);
+        plain.procs = 2;
+        let mut marked = plain.clone();
+        marked.review = Some(ReviewDecision::Approved);
+        let a = line_text(&render(&plain, ColumnWidths::default(), 0, &theme, 120));
+        let b = line_text(&render(&marked, ColumnWidths::default(), 0, &theme, 120));
+        assert_eq!(procs_col(&a), procs_col(&b), "\n  {a:?}\n  {b:?}");
+    }
+
+    #[test]
+    fn a_tight_pr_column_keeps_the_mark_and_drops_the_word() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrConflicted);
+        inputs.pr_number = Some(1234);
+        inputs.review = Some(ReviewDecision::ChangesRequested);
+        let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
+        assert!(text.contains("⏺ #1234 ✗"), "terse marked chip: {text:?}");
+        assert!(
+            !text.contains("conflict"),
+            "the word yields to the mark: {text:?}"
+        );
+    }
+
+    #[test]
+    fn hit_span_covers_the_approval_mark() {
+        // The mark is part of the chip, so clicking it must still open the
+        // PR rather than land on dead space.
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        inputs.pr_number = Some(262);
+        inputs.review = Some(ReviewDecision::Approved);
+        let widths = ColumnWidths::default();
+        let (_, w) = pr_chip_hit_span(&inputs, widths).expect("chip present");
+        assert_eq!(w as usize, "⏺ #262 open ✓".chars().count());
     }
 
     #[test]

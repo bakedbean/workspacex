@@ -95,6 +95,22 @@ child:selected {
   background: alpha(#f9e2af, 0.07);
 }
 
+/* Approval accents on the right edge, so a row can show its PR lifecycle
+   (left edge) and its review verdict at once. The ✓/✗/◌ mark in the row
+   text is painted one static color — a Pango attribute range can't vary —
+   so this edge is where the verdict earns its traffic light. */
+.item-box.review-approved {
+  border-right: 3px solid #a6e3a1;
+}
+
+.item-box.review-changes-requested {
+  border-right: 3px solid #f38ba8;
+}
+
+.item-box.review-required {
+  border-right: 3px solid #f9e2af;
+}
+
 .item-text-box {
   all: unset;
   padding: 8px 0;

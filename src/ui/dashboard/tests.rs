@@ -8,6 +8,7 @@ use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn
 use crate::ui::dashboard::fixture;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::row::MAX_AGENT_WIDTH;
+use crate::ui::dashboard::sort::SortMode;
 use crate::ui::theme::Theme;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -522,6 +523,9 @@ fn visible_targets_by_repo_matches_render_order() {
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
+        // Pinned explicitly: the intra-repo assertions below are about
+        // status-priority ordering, which is no longer the default.
+        sort_mode: SortMode::Status,
         ..Default::default()
     };
     let targets = visible_targets(&inputs, &state);
@@ -605,6 +609,109 @@ fn visible_targets_by_repo_matches_render_order() {
         targets[wsx_header_pos + 2],
         SelectionTarget::Workspace(id_for["bakedbean/repo-overview"]),
         "question second"
+    );
+}
+
+/// The renderer and the nav-index builder walk a shared flat index, so a row
+/// the renderer draws third must be the nav builder's third target. Under
+/// recency ordering the sort key is richer (pin, then age bucket, then name),
+/// giving the two paths more room to disagree — so check the real rendered
+/// row order against the real nav order rather than a hand-written sequence.
+#[test]
+fn visible_targets_matches_rendered_row_order_under_recency() {
+    use crate::app::SelectionTarget;
+    let fixtures = fixture::repos();
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
+    let branch_for: std::collections::HashMap<crate::data::store::WorkspaceId, String> = workspaces
+        .iter()
+        .map(|w| (w.workspace_id, w.row.branch.clone()))
+        .collect();
+    let activity: Vec<u32> = vec![1; 24];
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
+    };
+    let mut state = DashboardState {
+        group_mode: GroupMode::Repo,
+        sort_mode: SortMode::Recency,
+        // Every repo expanded, so every row is both drawn and navigable.
+        folded: inputs
+            .repos
+            .iter()
+            .map(|r| (r.id.0 as u64, false))
+            .collect(),
+        ..Default::default()
+    };
+
+    let nav_branches: Vec<String> = visible_targets(&inputs, &state)
+        .iter()
+        .filter_map(|t| match t {
+            SelectionTarget::Workspace(id) => Some(branch_for[id].clone()),
+            _ => None,
+        })
+        .collect();
+
+    let theme = Theme::wsx();
+    let mut term = Terminal::new(TestBackend::new(160, 60)).unwrap();
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+        .unwrap();
+    let buf = term.backend().buffer().clone();
+    let lines: Vec<String> = (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+        })
+        .collect();
+    // The branch column truncates long names with an ellipsis, so match on a
+    // prefix short enough to survive it. Every fixture branch is unique at
+    // this length, which the uniqueness assertion below pins down.
+    const PREFIX: usize = 20;
+    let mut all_branches: Vec<String> = branch_for.values().cloned().collect();
+    all_branches.sort();
+    let rendered_branches: Vec<String> = lines
+        .iter()
+        .filter_map(|line| {
+            let hits: Vec<&String> = all_branches
+                .iter()
+                .filter(|b| line.contains(&b[..b.len().min(PREFIX)]))
+                .collect();
+            assert!(hits.len() < 2, "ambiguous branch prefixes in {line:?}");
+            hits.first().map(|b| (*b).clone())
+        })
+        .collect();
+
+    assert!(
+        !rendered_branches.is_empty(),
+        "fixture must render at least one workspace row"
+    );
+    assert_eq!(
+        nav_branches, rendered_branches,
+        "nav order must match the order rows are painted in"
+    );
+    // Guard the ordering itself, not just the agreement: within wsx, the
+    // freshly blocked rows pin above the newer-but-unblocked ones.
+    let wsx_rows: Vec<&String> = nav_branches
+        .iter()
+        .filter(|b| b.starts_with("bakedbean/"))
+        .collect();
+    assert_eq!(
+        wsx_rows,
+        vec![
+            "bakedbean/repo-overview",       // Question, 29s  — pinned
+            "bakedbean/theme-tokens",        // Stalled, 17m   — pinned
+            "bakedbean/tech-stack-question", // Complete, 34s
+            "bakedbean/list-virt",           // Waiting, 2m
+        ]
     );
 }
 

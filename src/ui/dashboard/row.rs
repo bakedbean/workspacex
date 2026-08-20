@@ -176,6 +176,12 @@ impl crate::ui::dashboard::sort::SortRow for RowInputs {
     fn sort_status(&self) -> Status {
         self.status
     }
+    fn sort_ago_secs(&self) -> Option<u64> {
+        self.ago_secs
+    }
+    fn sort_name(&self) -> &str {
+        &self.branch
+    }
 }
 
 /// The leftmost column: one bar per live agent, right-aligned so the

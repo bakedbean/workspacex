@@ -20,7 +20,9 @@ use crate::ui::dashboard::by_attention::{FlatRow, QuietRepo};
 use crate::ui::dashboard::by_repo::RepoView;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::row::RowInputs;
-use crate::ui::dashboard::sort::{StatusCounts, default_fold, order_workspaces};
+use crate::ui::dashboard::sort::{
+    BLOCKED_PIN_MAX_AGE_DEFAULT_SECS, SortMode, StatusCounts, default_fold, order_workspaces,
+};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -51,10 +53,16 @@ pub struct DashboardInputs<'a> {
     pub nerd_fonts: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DashboardState {
     pub list_state: ListState,
     pub group_mode: GroupMode,
+    /// How workspaces are ordered within a repo. Loaded from the
+    /// `dashboard_sort_mode` setting at startup and persisted on toggle.
+    pub sort_mode: SortMode,
+    /// How long a blocked workspace keeps its top-of-list pin, from the
+    /// `dashboard_blocked_pin_max_age_secs` setting.
+    pub blocked_pin_max_age_secs: u64,
     /// Explicit user fold overrides; absent = use `default_fold(counts)`.
     pub folded: HashMap<u64, bool>,
     pub filter: Option<String>,
@@ -74,6 +82,25 @@ pub struct DashboardState {
     /// interaction with the draft (typing, Backspace) clears the
     /// deadline so it doesn't wipe their fresh input mid-edit.
     pub reply_draft_clear_at_ms: Option<u64>,
+}
+
+// Hand-written rather than derived: `blocked_pin_max_age_secs` must default to
+// the pin window, not to `u64`'s zero, which would silently disable the pin.
+impl Default for DashboardState {
+    fn default() -> Self {
+        Self {
+            list_state: ListState::default(),
+            group_mode: GroupMode::default(),
+            sort_mode: SortMode::default(),
+            blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+            folded: HashMap::new(),
+            filter: None,
+            selection: None,
+            selected: 0,
+            reply_draft: String::new(),
+            reply_draft_clear_at_ms: None,
+        }
+    }
 }
 
 pub fn render(
@@ -306,6 +333,8 @@ pub fn render_footer(
 /// a hand-copied sort that could drift from it.
 struct NavRow {
     status: Status,
+    ago_secs: Option<u64>,
+    name: String,
     workspace_id: crate::data::store::WorkspaceId,
 }
 
@@ -313,6 +342,8 @@ impl From<&WorkspaceItem<'_>> for NavRow {
     fn from(w: &WorkspaceItem<'_>) -> Self {
         NavRow {
             status: w.status,
+            ago_secs: w.row.ago_secs,
+            name: w.row.branch.clone(),
             workspace_id: w.workspace_id,
         }
     }
@@ -321,6 +352,12 @@ impl From<&WorkspaceItem<'_>> for NavRow {
 impl sort::SortRow for NavRow {
     fn sort_status(&self) -> Status {
         self.status
+    }
+    fn sort_ago_secs(&self) -> Option<u64> {
+        self.ago_secs
+    }
+    fn sort_name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -352,7 +389,7 @@ pub fn visible_targets(
                         .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
                         .map(NavRow::from)
                         .collect();
-                    order_workspaces(&mut rows);
+                    order_workspaces(&mut rows, state.sort_mode, state.blocked_pin_max_age_secs);
                     let counts = StatusCounts::from_iter(rows.iter().map(|r| r.status));
                     Pending {
                         repo_id: r.id,
@@ -537,7 +574,11 @@ fn render_by_repo<'a>(
                 .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
                 .map(|w| w.row.clone())
                 .collect();
-            order_workspaces(&mut workspaces);
+            order_workspaces(
+                &mut workspaces,
+                state.sort_mode,
+                state.blocked_pin_max_age_secs,
+            );
             let counts = StatusCounts::from_iter(workspaces.iter().map(|w| w.status));
             let repo_id_u64 = r.id.0 as u64;
             let expanded = match state.folded.get(&repo_id_u64).copied() {

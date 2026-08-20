@@ -1664,8 +1664,104 @@ mod pm_state_tests {
         }
     }
 
+    /// A char carrying CONTROL or ALT is not filter text — the intercept's
+    /// guard excludes it, so it falls through to the outer handler, which
+    /// doesn't inspect modifiers. `Ctrl-j` therefore still moves the
+    /// selection, exactly like a bare `j` would outside filter mode.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_control_modified_char_falls_through_while_filtering() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        seed_two_workspaces(&store);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 0,
+            sort: UpdatesSort::Default,
+            filter: Some(String::new()),
+        });
+        let shared = shared_app();
+
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel {
+                selected,
+                ref filter,
+                ..
+            }) => {
+                assert_eq!(selected, 1, "Ctrl-j falls through to the Down/'j' arm");
+                assert_eq!(filter.as_deref(), Some(""), "and does not edit the buffer");
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+    }
+
+    /// Enter is the other escape hatch (besides arrows) from j/k being
+    /// filter text — it still attaches to the selected, filtered-to
+    /// workspace while a filter is active.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_enter_attaches_while_filtering() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        let mut env = EnvGuard::new();
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "blocked",
+                branch: "repo/blocked",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+            filter: Some("block".to_string()),
+        });
+        let shared = shared_app();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "Enter should close the modal");
+        assert!(
+            matches!(&app.view, crate::ui::View::Attached(s) if s.focused_target().map(|t| t.workspace_id) == Some(ws_id)),
+            "Enter should attach to the filtered-to workspace; got {:?}",
+            app.view
+        );
+    }
+
     /// The cursor tracks its workspace across a filter edit rather than its
-    /// index, and clamps into range when the needle hides it.
+    /// index. Typing "a" matches both alpha and beta, so the order is
+    /// unchanged (`[alpha, beta]`) — a real position lookup must still find
+    /// beta at index 1. This is deliberately NOT a narrowing edit: reading
+    /// the pre-edit selection from the post-edit order, or a bare
+    /// `.unwrap_or(0)`, would also land on 0 for a narrowing edit that hides
+    /// the selected row, so only a needle that keeps the row in place can
+    /// tell a genuine lookup apart from every 0-shaped fallback.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn updates_panel_selection_follows_workspace_across_filter_edits() {
         use crate::ui::modal::{Modal, UpdatesSort};
@@ -1681,18 +1777,39 @@ mod pm_state_tests {
         });
         let shared = shared_app();
 
-        // Typing "b" hides alpha; beta is now the only row, at index 0.
-        handle_key_modal(&mut app, &shared, key(KeyCode::Char('b')))
+        handle_key_modal(&mut app, &shared, key(KeyCode::Char('a')))
             .await
             .unwrap();
         match app.modal {
             Some(Modal::UpdatesPanel { selected, .. }) => {
-                assert_eq!(selected, 0, "cursor follows beta to its new row");
+                assert_eq!(
+                    selected, 1,
+                    "cursor stays on beta, still at index 1 in the unchanged order"
+                );
             }
             ref other => panic!("expected UpdatesPanel; got {other:?}"),
         }
+    }
 
-        // Typing on until nothing matches: the index clamps rather than
+    /// When a filter edit hides the selected workspace entirely, the
+    /// cursor clamps into range rather than pointing past the end of the
+    /// (possibly empty) new order.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_selection_clamps_when_filter_hides_everything() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        seed_two_workspaces(&store);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Start on beta (index 1), filter mode armed.
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 1,
+            sort: UpdatesSort::Default,
+            filter: Some(String::new()),
+        });
+        let shared = shared_app();
+
+        // Typing until nothing matches: the index clamps rather than
         // pointing past the end of an empty list.
         for c in ['z', 'z'] {
             handle_key_modal(&mut app, &shared, key(KeyCode::Char(c)))

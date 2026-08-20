@@ -35,6 +35,26 @@ impl PanelInputs<'_> {
     }
 }
 
+/// The per-frame view state for the panel: which row is selected, the active
+/// sort mode, and the filter needle (if any). Bundled separately from
+/// `PanelInputs` — this is state the modal owns and cycles every render,
+/// where `PanelInputs` is borrowed caches — and keeps `render_updates_panel`
+/// under clippy's argument-count threshold.
+pub struct PanelView<'a> {
+    pub selected: usize,
+    pub sort: UpdatesSort,
+    pub filter: Option<&'a str>,
+}
+
+impl PanelView<'_> {
+    /// The filter needle, if the user has typed anything past `/`. `Some("")`
+    /// (filter mode on, nothing typed yet) collapses to `None` here — both
+    /// mean "show every row".
+    fn active_needle(&self) -> Option<&str> {
+        self.filter.filter(|f| !f.is_empty())
+    }
+}
+
 /// Cap on the workspace-name column so one very long name can't starve the
 /// status column of the entire panel.
 const NAME_COL_MAX: usize = 28;
@@ -124,14 +144,6 @@ fn lifecycle_rank(lifecycle: Option<BranchLifecycle>) -> u8 {
     }
 }
 
-/// Compute the order in which workspaces appear in the updates panel.
-/// Returns workspace IDs in the same order the renderer walks them —
-/// grouped by repo (in App's repo order), sorted within each repo by
-/// the active `UpdatesSort` mode, tie-broken by (attention, failed,
-/// activity_rank, recency).
-///
-/// Used by both the renderer (to draw rows) and the key handler (to map
-/// the selected index back to a workspace id).
 /// Case-insensitive substring match against the workspace name, the owning
 /// repo's name, and the row's live status text. Mirrors the dashboard's
 /// `matches_filter`, whose three fields are the same idea: what the row is
@@ -148,6 +160,14 @@ fn matches_filter(
         || status_text.to_lowercase().contains(&needle)
 }
 
+/// Compute the order in which workspaces appear in the updates panel.
+/// Returns workspace IDs in the same order the renderer walks them —
+/// grouped by repo (in App's repo order), sorted within each repo by
+/// the active `UpdatesSort` mode, tie-broken by (attention, failed,
+/// activity_rank, recency).
+///
+/// Used by both the renderer (to draw rows) and the key handler (to map
+/// the selected index back to a workspace id).
 pub fn ordered_workspaces_for_panel(
     inputs: &PanelInputs<'_>,
     sort: UpdatesSort,
@@ -232,19 +252,12 @@ fn footer_text(sort: UpdatesSort) -> String {
 
 /// Render the floating workspace-updates panel. Reads live App state via
 /// borrowed slices so the panel updates on every render tick.
-// The brief for this task expected 7→8 args to stay under clippy's default
-// too_many_arguments threshold (7); it does not — `filter` pushes this over.
-// Restoring the allow here (only) rather than reshaping the interface, since
-// the exact parameter list is a contract other tasks depend on.
-#[allow(clippy::too_many_arguments)]
 pub fn render_updates_panel(
     f: &mut Frame,
     area: Rect,
     inputs: &PanelInputs<'_>,
-    selected: usize,
+    view: &PanelView<'_>,
     now_ms: i64,
-    sort: UpdatesSort,
-    filter: Option<&str>,
     theme: &Theme,
 ) {
     // Sizing: ~80 cols wide, ~25 rows tall, but never larger than the area.
@@ -259,7 +272,7 @@ pub fn render_updates_panel(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let order = ordered_workspaces_for_panel(inputs, sort, filter);
+    let order = ordered_workspaces_for_panel(inputs, view.sort, view.filter);
     // workspace_id -> position in `order` so we can match against `selected`.
     let pos_of: HashMap<crate::data::store::WorkspaceId, usize> =
         order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
@@ -300,7 +313,7 @@ pub fn render_updates_panel(
         let mut ws_sorted = ws_for_repo;
         ws_sorted.sort_by_key(|w| pos_of.get(&w.id).copied().unwrap_or(usize::MAX));
         for w in ws_sorted {
-            let is_selected = pos_of.get(&w.id).copied() == Some(selected);
+            let is_selected = pos_of.get(&w.id).copied() == Some(view.selected);
             if is_selected {
                 selected_visual_line = Some(lines.len());
             }
@@ -326,7 +339,7 @@ pub fn render_updates_panel(
     // Nothing to show. Separate the two causes: an empty panel and a panel
     // whose rows the needle hid are very different situations for the user.
     if lines.is_empty() {
-        let msg = if filter.map(|f| !f.is_empty()).unwrap_or(false) {
+        let msg = if view.active_needle().is_some() {
             "(no matching workspaces)"
         } else {
             "(no workspaces)"
@@ -346,7 +359,7 @@ pub fn render_updates_panel(
     // when lifecycle is unknown.
     f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
-        Paragraph::new(footer_text(sort)).style(theme.dim_style()),
+        Paragraph::new(footer_text(view.sort)).style(theme.dim_style()),
         footer_area,
     );
 }
@@ -1540,20 +1553,14 @@ mod render_tests {
             statuses: &statuses,
             lifecycles: &lifecycles,
         };
+        let view = PanelView {
+            selected: 0,
+            sort: UpdatesSort::Default,
+            filter,
+        };
         let mut term = Terminal::new(TestBackend::new(80, 25)).unwrap();
-        term.draw(|f| {
-            render_updates_panel(
-                f,
-                f.area(),
-                &inputs,
-                0,
-                10_000,
-                UpdatesSort::Default,
-                filter,
-                &theme,
-            )
-        })
-        .unwrap();
+        term.draw(|f| render_updates_panel(f, f.area(), &inputs, &view, 10_000, &theme))
+            .unwrap();
         let buf = term.backend().buffer();
         (0..buf.area.height)
             .map(|y| {

@@ -693,9 +693,12 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     statuses: &statuses,
                     lifecycles: &app.pr_lifecycle,
                 };
-                crate::ui::modal::render_updates_panel(
-                    f, area, &inputs, *selected, now_ms, *sort, None, &app.theme,
-                );
+                let view = crate::ui::modal::PanelView {
+                    selected: *selected,
+                    sort: *sort,
+                    filter: None,
+                };
+                crate::ui::modal::render_updates_panel(f, area, &inputs, &view, now_ms, &app.theme);
             }
             crate::ui::modal::Modal::ProcessList {
                 workspace_id,

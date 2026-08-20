@@ -20,7 +20,9 @@ use crate::ui::dashboard::by_attention::{FlatRow, QuietRepo};
 use crate::ui::dashboard::by_repo::RepoView;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::row::RowInputs;
-use crate::ui::dashboard::sort::{StatusCounts, default_fold};
+use crate::ui::dashboard::sort::{
+    BLOCKED_PIN_MAX_AGE_DEFAULT_SECS, SortMode, StatusCounts, default_fold, order_workspaces,
+};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -51,10 +53,16 @@ pub struct DashboardInputs<'a> {
     pub nerd_fonts: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DashboardState {
     pub list_state: ListState,
     pub group_mode: GroupMode,
+    /// How workspaces are ordered within a repo. Loaded from the
+    /// `dashboard_sort_mode` setting at startup and persisted on toggle.
+    pub sort_mode: SortMode,
+    /// How long a blocked workspace keeps its top-of-list pin, from the
+    /// `dashboard_blocked_pin_max_age_secs` setting.
+    pub blocked_pin_max_age_secs: u64,
     /// Explicit user fold overrides; absent = use `default_fold(counts)`.
     pub folded: HashMap<u64, bool>,
     pub filter: Option<String>,
@@ -74,6 +82,57 @@ pub struct DashboardState {
     /// interaction with the draft (typing, Backspace) clears the
     /// deadline so it doesn't wipe their fresh input mid-edit.
     pub reply_draft_clear_at_ms: Option<u64>,
+}
+
+/// Settings key holding the by-repo sort mode.
+pub const SORT_MODE_SETTING: &str = "dashboard_sort_mode";
+/// Settings key holding how long a blocked row keeps its pin, in seconds.
+pub const BLOCKED_PIN_SETTING: &str = "dashboard_blocked_pin_max_age_secs";
+
+impl DashboardState {
+    /// Load the persisted ordering preferences. Both fall back to their
+    /// defaults when unset or unparseable — a hand-edited settings row should
+    /// not stop the dashboard from drawing.
+    pub fn load_ordering_prefs(&mut self, store: &crate::data::store::Store) {
+        // Trimmed before parsing, like `dashboard_branch_width`: `config set
+        // <key> @file` stores the file verbatim, and a trailing newline would
+        // otherwise send a perfectly good value down the fallback path while
+        // the CLI reported it saved.
+        if let Ok(Some(v)) = store.get_setting(SORT_MODE_SETTING) {
+            self.sort_mode = SortMode::from_str_or_default(v.trim());
+        }
+        if let Ok(Some(v)) = store.get_setting(BLOCKED_PIN_SETTING) {
+            if let Ok(secs) = v.trim().parse::<u64>() {
+                self.blocked_pin_max_age_secs = secs;
+            }
+        }
+    }
+
+    /// Move to the next sort mode and remember it, so the choice survives a
+    /// restart the way the theme does.
+    pub fn cycle_sort_mode(&mut self, store: &crate::data::store::Store) {
+        self.sort_mode = self.sort_mode.cycle();
+        let _ = store.set_setting(SORT_MODE_SETTING, self.sort_mode.as_str());
+    }
+}
+
+// Hand-written rather than derived: `blocked_pin_max_age_secs` must default to
+// the pin window, not to `u64`'s zero, which would silently disable the pin.
+impl Default for DashboardState {
+    fn default() -> Self {
+        Self {
+            list_state: ListState::default(),
+            group_mode: GroupMode::default(),
+            sort_mode: SortMode::default(),
+            blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+            folded: HashMap::new(),
+            filter: None,
+            selection: None,
+            selected: 0,
+            reply_draft: String::new(),
+            reply_draft_clear_at_ms: None,
+        }
+    }
 }
 
 pub fn render(
@@ -212,6 +271,7 @@ pub fn render_without_footer(
     f.render_widget(
         Paragraph::new(layout::top_chrome(
             state.group_mode,
+            state.sort_mode,
             inputs.repos.len(),
             inputs.workspaces.len(),
             state.filter.as_deref(),
@@ -300,6 +360,40 @@ pub fn render_footer(
 /// active sections (NEEDS ATTENTION / WORKING / RECENT / IDLE) in the
 /// order `partition` produces. QUIET REPOS entries are skipped — they
 /// have no per-repo selection model in v1.
+/// One workspace as the nav-index builder sees it: the fields the shared
+/// comparator reads, plus the id the row resolves to. Exists so nav ordering
+/// runs through the same `order_workspaces` call the renderer uses instead of
+/// a hand-copied sort that could drift from it.
+struct NavRow {
+    status: Status,
+    ago_secs: Option<u64>,
+    name: String,
+    workspace_id: crate::data::store::WorkspaceId,
+}
+
+impl From<&WorkspaceItem<'_>> for NavRow {
+    fn from(w: &WorkspaceItem<'_>) -> Self {
+        NavRow {
+            status: w.status,
+            ago_secs: w.row.ago_secs,
+            name: w.row.branch.clone(),
+            workspace_id: w.workspace_id,
+        }
+    }
+}
+
+impl sort::SortRow for NavRow {
+    fn sort_status(&self) -> Status {
+        self.status
+    }
+    fn sort_ago_secs(&self) -> Option<u64> {
+        self.ago_secs
+    }
+    fn sort_name(&self) -> &str {
+        &self.name
+    }
+}
+
 pub fn visible_targets(
     inputs: &DashboardInputs<'_>,
     state: &DashboardState,
@@ -321,20 +415,20 @@ pub fn visible_targets(
                 .repos
                 .iter()
                 .map(|r| {
-                    let mut rows: Vec<(Status, crate::data::store::WorkspaceId)> = inputs
+                    let mut rows: Vec<NavRow> = inputs
                         .workspaces
                         .iter()
                         .filter(|w| w.repo.id == r.id)
                         .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
-                        .map(|w| (w.status, w.workspace_id))
+                        .map(NavRow::from)
                         .collect();
-                    rows.sort_by_key(|r| std::cmp::Reverse(r.0.priority()));
-                    let counts = StatusCounts::from_iter(rows.iter().map(|(s, _)| *s));
+                    order_workspaces(&mut rows, state.sort_mode, state.blocked_pin_max_age_secs);
+                    let counts = StatusCounts::from_iter(rows.iter().map(|r| r.status));
                     Pending {
                         repo_id: r.id,
                         counts,
                         sort_order: r.sort_order,
-                        workspace_ids: rows.into_iter().map(|(_, id)| id).collect(),
+                        workspace_ids: rows.into_iter().map(|r| r.workspace_id).collect(),
                     }
                 })
                 .collect();
@@ -513,7 +607,11 @@ fn render_by_repo<'a>(
                 .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
                 .map(|w| w.row.clone())
                 .collect();
-            workspaces.sort_by_key(|w| std::cmp::Reverse(w.status.priority()));
+            order_workspaces(
+                &mut workspaces,
+                state.sort_mode,
+                state.blocked_pin_max_age_secs,
+            );
             let counts = StatusCounts::from_iter(workspaces.iter().map(|w| w.status));
             let repo_id_u64 = r.id.0 as u64;
             let expanded = match state.folded.get(&repo_id_u64).copied() {

@@ -15,6 +15,7 @@
 | `Shift + J`                       | On a repo header: move the repo down one slot (persisted). No-op on a workspace                              |
 | `s`                               | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected)             |
 | `d`                               | Archive the selected workspace (no-op on repo header)                                                        |
+| `o`                               | Cycle how workspaces are ordered inside a repo: by recency (default) or by status. Persisted.                |
 | `q`                               | Quit (kills all running sessions)                                                                            |
 | `p`                               | Toggle the project-manager digest pane (opens focused, instant, no agent session)                            |
 | `Tab`                             | Swap focus between dashboard and the digest pane (when visible)                                              |

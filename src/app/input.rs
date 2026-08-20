@@ -873,6 +873,9 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 GroupMode::Attention => GroupMode::Repo,
             };
         }
+        (KeyCode::Char('o'), _) => {
+            app.dashboard.cycle_sort_mode(&app.store);
+        }
         (KeyCode::Char('z'), _) => {
             app.z_leader_pending = true;
         }

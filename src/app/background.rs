@@ -303,6 +303,14 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     g.pr_number.remove(&id);
                     g.pr_review.remove(&id);
                     g.pr_last_poll_ms.remove(&id);
+                    // The persisted row too, not just these in-memory maps:
+                    // `wsx waybar menu-entries` and `wsx menubar plugin` are
+                    // separate short-lived processes that render from
+                    // scm_cache alone, so a verdict left behind there keeps
+                    // claiming the OLD branch's PR is approved — under the
+                    // new branch's name — until a later poll happens to
+                    // overwrite it.
+                    let _ = g.store.clear_scm_pr(id);
                     // New branch → different ancestry from `base_branch`,
                     // so the cached diff and its throttle stamp are
                     // stale. Drop them to force a fresh poll.

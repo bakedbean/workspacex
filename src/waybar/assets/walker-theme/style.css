@@ -61,6 +61,11 @@ child:selected {
 .item-box {
   padding-left: 14px;
   border-left: 3px solid transparent;
+  /* Reserved like the left accent so a review verdict recolors an edge
+     that is already there. A border added only on reviewed rows would
+     narrow their content box by 3px and ellipsize the fixed-width tail
+     sooner than on unreviewed rows. */
+  border-right: 3px solid transparent;
 }
 
 /* Row state accents — classes come from the entry's State list (see
@@ -100,15 +105,15 @@ child:selected {
    text is painted one static color — a Pango attribute range can't vary —
    so this edge is where the verdict earns its traffic light. */
 .item-box.review-approved {
-  border-right: 3px solid #a6e3a1;
+  border-right-color: #a6e3a1;
 }
 
 .item-box.review-changes-requested {
-  border-right: 3px solid #f38ba8;
+  border-right-color: #f38ba8;
 }
 
 .item-box.review-required {
-  border-right: 3px solid #f9e2af;
+  border-right-color: #f9e2af;
 }
 
 .item-text-box {

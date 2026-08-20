@@ -126,6 +126,35 @@ impl Store {
         Ok(())
     }
 
+    /// NULLs every PR-derived field, including `fetched_at`, and leaves the
+    /// git fields alone. The mirror image of [`Store::clear_scm_git`].
+    ///
+    /// Used on branch drift, where the workspace now points at a different
+    /// branch with a different (or no) PR, so the cached row describes
+    /// something that is no longer this workspace's PR. Unlike a failed
+    /// fetch — which leaves the cache alone, because not knowing is not the
+    /// same as knowing there is nothing — drift is positive knowledge that
+    /// the old row is wrong.
+    ///
+    /// `fetched_at` is nulled rather than restamped so the next sweep sees
+    /// an unfetched row and refills it immediately, and so the cache-only
+    /// surfaces render "unknown" rather than a confidently stale verdict in
+    /// the gap. Inserts a row when none exists, which costs nothing and
+    /// keeps the statement single-shot.
+    pub fn clear_scm_pr(&self, id: WorkspaceId) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO scm_cache (workspace_id) VALUES (?1)
+             ON CONFLICT(workspace_id) DO UPDATE SET
+               pr_lifecycle = NULL,
+               pr_number    = NULL,
+               pr_url       = NULL,
+               pr_review    = NULL,
+               fetched_at   = NULL",
+            rusqlite::params![id.0],
+        )?;
+        Ok(())
+    }
+
     /// NULLs the git-derived fields (dirty/additions/deletions) while
     /// stamping `git_fetched_at` and leaving PR fields untouched. Used when
     /// a fresh git read fails so stale indicators don't linger under a
@@ -185,6 +214,21 @@ mod scm_cache_tests {
     use crate::git::forge::{PrStatus, ReviewDecision};
     use crate::pty::session::AgentKind;
     use std::path::Path;
+
+    /// A fully-populated `PrStatus`.
+    fn pr_full(
+        lifecycle: BranchLifecycle,
+        number: Option<u32>,
+        url: Option<&str>,
+        review: Option<ReviewDecision>,
+    ) -> PrStatus {
+        PrStatus {
+            lifecycle,
+            number,
+            url: url.map(str::to_string),
+            review,
+        }
+    }
 
     /// A `PrStatus` carrying a url, for the tests that exercise url merging.
     fn pr_url(lifecycle: BranchLifecycle, number: Option<u32>, url: Option<&str>) -> PrStatus {
@@ -440,6 +484,56 @@ mod scm_cache_tests {
         assert_eq!(
             store.all_scm_cache().unwrap()[&id].pr_review,
             Some(ReviewDecision::ChangesRequested)
+        );
+    }
+
+    #[test]
+    fn clear_scm_pr_nulls_every_pr_field_and_leaves_git_alone() {
+        // Branch drift points the workspace at a different branch with a
+        // different (or no) PR. Every PR field must go, the verdict most of
+        // all: a stale ✓ on the cache-only Walker/SwiftBar surfaces claims
+        // the new branch is cleared to merge.
+        let (store, id) = store_with_workspace();
+        store
+            .upsert_scm_pr(
+                id,
+                &pr_full(
+                    BranchLifecycle::PrOpen,
+                    Some(7),
+                    Some("https://github.com/o/r/pull/7"),
+                    Some(ReviewDecision::Approved),
+                ),
+                1000,
+            )
+            .unwrap();
+        store.upsert_scm_git(id, true, 4, 2, 2000).unwrap();
+
+        store.clear_scm_pr(id).unwrap();
+
+        let row = store.all_scm_cache().unwrap()[&id].clone();
+        assert_eq!(row.pr_review, None, "verdict cleared");
+        assert_eq!(row.pr_lifecycle, None, "lifecycle cleared");
+        assert_eq!(row.pr_number, None, "number cleared");
+        assert_eq!(row.pr_url, None, "url cleared");
+        assert_eq!(row.fetched_at, None, "a cleared row was never fetched");
+        // Git facts belong to the worktree, not the branch's PR, and the
+        // drift path has its own invalidation for them.
+        assert_eq!(row.dirty, Some(true));
+        assert_eq!(row.additions, Some(4));
+        assert_eq!(row.git_fetched_at, Some(2000));
+    }
+
+    #[test]
+    fn clear_scm_pr_is_harmless_when_there_is_no_row() {
+        // Drift can fire before any poll has cached anything.
+        let (store, id) = store_with_workspace();
+        store.clear_scm_pr(id).unwrap();
+        assert!(
+            store
+                .all_scm_cache()
+                .unwrap()
+                .get(&id)
+                .is_none_or(|r| { r.pr_lifecycle.is_none() && r.pr_review.is_none() })
         );
     }
 

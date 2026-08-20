@@ -342,10 +342,6 @@ impl Theme {
         }
     }
 
-    /// Fixed identity color for a workspace's coding agent. Ignores `self`
-    /// by design — see the `AGENT_*` constants — but lives on `Theme` so
-    /// every color decision stays in one module, alongside `status_style`
-    /// and `lifecycle_style`.
     /// Traffic-light color for a PR's review verdict: green approved, red
     /// changes requested, yellow still waiting. Unlike `lifecycle_style`
     /// this is total — every verdict is worth coloring, and the caller has
@@ -359,6 +355,10 @@ impl Theme {
         }
     }
 
+    /// Fixed identity color for a workspace's coding agent. Ignores `self`
+    /// by design — see the `AGENT_*` constants — but lives on `Theme` so
+    /// every color decision stays in one module, alongside `status_style`
+    /// and `lifecycle_style`.
     pub fn agent_style(&self, agent: AgentKind) -> Style {
         let fg = match agent {
             AgentKind::Claude => AGENT_CLAUDE,

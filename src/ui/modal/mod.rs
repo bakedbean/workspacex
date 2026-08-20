@@ -78,6 +78,11 @@ pub enum Modal {
         /// Active sort mode; `o` cycles it. Not persisted — reset to
         /// `Default` on every open.
         sort: UpdatesSort,
+        /// `None` = normal key handling. `Some(buf)` = filter-input mode,
+        /// where printable keys are filter text rather than shortcuts.
+        /// `Some("")` is a real state: `/` was pressed, nothing typed yet,
+        /// every row still visible. Not persisted, like `sort`.
+        filter: Option<String>,
     },
     ProcessList {
         workspace_id: crate::data::store::WorkspaceId,

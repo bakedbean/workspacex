@@ -671,7 +671,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     }
     if let Some(m) = &app.modal {
         match m {
-            crate::ui::modal::Modal::UpdatesPanel { selected, sort } => {
+            crate::ui::modal::Modal::UpdatesPanel {
+                selected,
+                sort,
+                filter,
+            } => {
                 let now_ms = crate::time::now_ms();
                 let awaiting = app.awaiting_permission_map();
                 let activity_translated: std::collections::HashMap<
@@ -696,7 +700,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 let view = crate::ui::modal::PanelView {
                     selected: *selected,
                     sort: *sort,
-                    filter: None,
+                    filter: filter.as_deref(),
                 };
                 crate::ui::modal::render_updates_panel(f, area, &inputs, &view, now_ms, &app.theme);
             }

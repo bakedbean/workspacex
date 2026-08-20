@@ -996,6 +996,7 @@ async fn dispatch_leader_action(
             app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
                 selected: 0,
                 sort: crate::ui::modal::UpdatesSort::default(),
+                filter: None,
             });
             Ok(())
         }
@@ -1318,6 +1319,20 @@ fn panel_order(
         lifecycles: &app.pr_lifecycle,
     };
     crate::ui::modal::ordered_workspaces_for_panel(&inputs, sort, filter)
+}
+/// Keep the cursor on its workspace across a re-order (a sort cycle or a
+/// filter edit) rather than on its index. Falls back to clamping the old
+/// index into range when the workspace is gone from the new order — which
+/// is what a filter that hid it does.
+fn reselect(
+    selected_id: Option<crate::data::store::WorkspaceId>,
+    new_order: &[crate::data::store::WorkspaceId],
+    old_index: usize,
+) -> usize {
+    if let Some(pos) = selected_id.and_then(|id| new_order.iter().position(|w| *w == id)) {
+        return pos;
+    }
+    old_index.min(new_order.len().saturating_sub(1))
 }
 async fn handle_key_modal(
     app: &mut App,
@@ -1642,11 +1657,50 @@ async fn handle_key_modal(
             // Everything else is inert while the card is open.
             _ => {}
         },
-        Modal::UpdatesPanel { selected, sort } => {
+        Modal::UpdatesPanel {
+            selected,
+            sort,
+            filter,
+        } => {
             let selected_now = selected;
             // Build the same ordered workspace list the renderer uses, so
             // arrow keys and Enter operate on the same indices.
-            let order = panel_order(app, sort, None);
+            let order = panel_order(app, sort, filter.as_deref());
+            // Filter-input mode: while the buffer is live, printable keys
+            // edit it rather than firing j/k/o/l/v/s, and Esc clears the
+            // filter instead of closing the panel. Arrows and Enter fall
+            // through so the panel stays navigable mid-search. Mirrors the
+            // dashboard's filter intercept (see `handle_key_dashboard`).
+            if let Some(buf) = filter.as_ref() {
+                let edited: Option<Option<String>> = match k.code {
+                    KeyCode::Esc => Some(None),
+                    KeyCode::Backspace => {
+                        let mut b = buf.clone();
+                        b.pop();
+                        Some(Some(b))
+                    }
+                    KeyCode::Char(c)
+                        if !c.is_control()
+                            && !k.modifiers.contains(KeyModifiers::CONTROL)
+                            && !k.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        let mut b = buf.clone();
+                        b.push(c);
+                        Some(Some(b))
+                    }
+                    _ => None,
+                };
+                if let Some(new_filter) = edited {
+                    let selected_id = order.get(selected_now).copied();
+                    let new_order = panel_order(app, sort, new_filter.as_deref());
+                    app.modal = Some(Modal::UpdatesPanel {
+                        selected: reselect(selected_id, &new_order, selected_now),
+                        sort,
+                        filter: new_filter,
+                    });
+                    return Ok(());
+                }
+            }
             match k.code {
                 KeyCode::Esc => {
                     app.modal = None;
@@ -1656,6 +1710,7 @@ async fn handle_key_modal(
                     app.modal = Some(Modal::UpdatesPanel {
                         selected: new_sel,
                         sort,
+                        filter: filter.clone(),
                     });
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -1664,6 +1719,7 @@ async fn handle_key_modal(
                     app.modal = Some(Modal::UpdatesPanel {
                         selected: new_sel,
                         sort,
+                        filter: filter.clone(),
                     });
                 }
                 // 'o' (order) cycles the sort mode. The cursor follows the
@@ -1672,13 +1728,21 @@ async fn handle_key_modal(
                 KeyCode::Char('o') => {
                     let selected_id = order.get(selected_now).copied();
                     let new_sort = sort.cycle();
-                    let new_order = panel_order(app, new_sort, None);
-                    let new_sel = selected_id
-                        .and_then(|id| new_order.iter().position(|w| *w == id))
-                        .unwrap_or(0);
+                    let new_order = panel_order(app, new_sort, filter.as_deref());
+                    let new_sel = reselect(selected_id, &new_order, selected_now);
                     app.modal = Some(Modal::UpdatesPanel {
                         selected: new_sel,
                         sort: new_sort,
+                        filter: filter.clone(),
+                    });
+                }
+                // `/` arms filter mode. Reached only when `filter` is None —
+                // an active buffer swallows printable keys above.
+                KeyCode::Char('/') => {
+                    app.modal = Some(Modal::UpdatesPanel {
+                        selected: selected_now,
+                        sort,
+                        filter: Some(String::new()),
                     });
                 }
                 // 'l' mirrors the dashboard's vim-style attach binding.

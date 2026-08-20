@@ -214,6 +214,7 @@ pub fn render_without_footer(
             state.group_mode,
             inputs.repos.len(),
             inputs.workspaces.len(),
+            state.filter.as_deref(),
             chunks[0].width as usize,
             theme,
         )),

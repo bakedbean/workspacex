@@ -996,6 +996,7 @@ async fn dispatch_leader_action(
             app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
                 selected: 0,
                 sort: crate::ui::modal::UpdatesSort::default(),
+                filter: None,
             });
             Ok(())
         }
@@ -1287,6 +1288,51 @@ fn launch_workspace_command(
         Ok(()) => format!("\u{25B6} started \u{2192} {}", log_path.display()),
         Err(e) => format!("error: {e}"),
     }
+}
+/// The updates panel's ordered workspace list. Returns an owned Vec so the
+/// borrow of `app` ends at the call — the caller mutates `app.modal` right
+/// after. Both the key handler and `app::render` must derive row order from
+/// identical inputs or the selection indices drift from the drawn rows.
+fn panel_order(
+    app: &App,
+    sort: crate::ui::modal::UpdatesSort,
+    filter: Option<&str>,
+) -> Vec<crate::data::store::WorkspaceId> {
+    let activity_translated: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::ui::updates_bar::ActivityState,
+    > = app
+        .workspace_activity
+        .iter()
+        .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
+        .collect();
+    let statuses = app.classified_statuses();
+    let awaiting = app.awaiting_permission_map();
+    let inputs = crate::ui::modal::PanelInputs {
+        repos: &app.repos,
+        workspaces: &app.workspaces,
+        events: &app.workspace_events,
+        activity: &activity_translated,
+        needs_attention: &app.workspace_needs_attention,
+        awaiting: &awaiting,
+        statuses: &statuses,
+        lifecycles: &app.pr_lifecycle,
+    };
+    crate::ui::modal::ordered_workspaces_for_panel(&inputs, sort, filter)
+}
+/// Keep the cursor on its workspace across a re-order (a sort cycle or a
+/// filter edit) rather than on its index. Falls back to clamping the old
+/// index into range when the workspace is gone from the new order — which
+/// is what a filter that hid it does.
+fn reselect(
+    selected_id: Option<crate::data::store::WorkspaceId>,
+    new_order: &[crate::data::store::WorkspaceId],
+    old_index: usize,
+) -> usize {
+    if let Some(pos) = selected_id.and_then(|id| new_order.iter().position(|w| *w == id)) {
+        return pos;
+    }
+    old_index.min(new_order.len().saturating_sub(1))
 }
 async fn handle_key_modal(
     app: &mut App,
@@ -1611,29 +1657,50 @@ async fn handle_key_modal(
             // Everything else is inert while the card is open.
             _ => {}
         },
-        Modal::UpdatesPanel { selected, sort } => {
+        Modal::UpdatesPanel {
+            selected,
+            sort,
+            filter,
+        } => {
             let selected_now = selected;
             // Build the same ordered workspace list the renderer uses, so
             // arrow keys and Enter operate on the same indices.
-            let activity_translated: std::collections::HashMap<
-                crate::data::store::WorkspaceId,
-                crate::ui::updates_bar::ActivityState,
-            > = app
-                .workspace_activity
-                .iter()
-                .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
-                .collect();
-            let statuses = app.classified_statuses();
-            let order = crate::ui::modal::ordered_workspaces_for_panel(
-                &app.repos,
-                &app.workspaces,
-                &app.workspace_events,
-                &activity_translated,
-                &app.workspace_needs_attention,
-                &statuses,
-                &app.pr_lifecycle,
-                sort,
-            );
+            let order = panel_order(app, sort, filter.as_deref());
+            // Filter-input mode: while the buffer is live, printable keys
+            // edit it rather than firing j/k/o/l/v/s, and Esc clears the
+            // filter instead of closing the panel. Arrows and Enter fall
+            // through so the panel stays navigable mid-search. Mirrors the
+            // dashboard's filter intercept (see `handle_key_dashboard`).
+            if let Some(buf) = filter.as_ref() {
+                let edited: Option<Option<String>> = match k.code {
+                    KeyCode::Esc => Some(None),
+                    KeyCode::Backspace => {
+                        let mut b = buf.clone();
+                        b.pop();
+                        Some(Some(b))
+                    }
+                    KeyCode::Char(c)
+                        if !c.is_control()
+                            && !k.modifiers.contains(KeyModifiers::CONTROL)
+                            && !k.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        let mut b = buf.clone();
+                        b.push(c);
+                        Some(Some(b))
+                    }
+                    _ => None,
+                };
+                if let Some(new_filter) = edited {
+                    let selected_id = order.get(selected_now).copied();
+                    let new_order = panel_order(app, sort, new_filter.as_deref());
+                    app.modal = Some(Modal::UpdatesPanel {
+                        selected: reselect(selected_id, &new_order, selected_now),
+                        sort,
+                        filter: new_filter,
+                    });
+                    return Ok(());
+                }
+            }
             match k.code {
                 KeyCode::Esc => {
                     app.modal = None;
@@ -1643,6 +1710,7 @@ async fn handle_key_modal(
                     app.modal = Some(Modal::UpdatesPanel {
                         selected: new_sel,
                         sort,
+                        filter: filter.clone(),
                     });
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -1651,6 +1719,7 @@ async fn handle_key_modal(
                     app.modal = Some(Modal::UpdatesPanel {
                         selected: new_sel,
                         sort,
+                        filter: filter.clone(),
                     });
                 }
                 // 'o' (order) cycles the sort mode. The cursor follows the
@@ -1659,24 +1728,21 @@ async fn handle_key_modal(
                 KeyCode::Char('o') => {
                     let selected_id = order.get(selected_now).copied();
                     let new_sort = sort.cycle();
-                    // The activity/status maps don't depend on the sort mode,
-                    // so the pre-cycle maps are safe to reuse for the re-sort.
-                    let new_order = crate::ui::modal::ordered_workspaces_for_panel(
-                        &app.repos,
-                        &app.workspaces,
-                        &app.workspace_events,
-                        &activity_translated,
-                        &app.workspace_needs_attention,
-                        &statuses,
-                        &app.pr_lifecycle,
-                        new_sort,
-                    );
-                    let new_sel = selected_id
-                        .and_then(|id| new_order.iter().position(|w| *w == id))
-                        .unwrap_or(0);
+                    let new_order = panel_order(app, new_sort, filter.as_deref());
+                    let new_sel = reselect(selected_id, &new_order, selected_now);
                     app.modal = Some(Modal::UpdatesPanel {
                         selected: new_sel,
                         sort: new_sort,
+                        filter: filter.clone(),
+                    });
+                }
+                // `/` arms filter mode. Reached only when `filter` is None —
+                // an active buffer swallows printable keys above.
+                KeyCode::Char('/') => {
+                    app.modal = Some(Modal::UpdatesPanel {
+                        selected: selected_now,
+                        sort,
+                        filter: Some(String::new()),
                     });
                 }
                 // 'l' mirrors the dashboard's vim-style attach binding.
@@ -2172,7 +2238,7 @@ async fn handle_key_modal(
                     }
                 }
                 KeyCode::Char('r') => {
-                    // Re-run Task 5's Enter-in-picker flow for the same host:
+                    // Re-run the host picker's Enter flow for the same host:
                     // same gen allocation / RemoteListLoading / reconcile
                     // path, just triggered from inside the list instead of
                     // the host picker.

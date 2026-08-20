@@ -386,6 +386,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -435,6 +436,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -516,6 +518,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -638,6 +641,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -699,6 +703,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -820,24 +825,30 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
         // The renderer's order is grouped/sorted; in this minimal setup both
         // workspaces are in `repo`. Find the index of `second_id` from the
         // module's ordering helper.
         let order = crate::ui::modal::ordered_workspaces_for_panel(
-            &app.repos,
-            &app.workspaces,
-            &app.workspace_events,
-            &std::collections::HashMap::new(),
-            &std::collections::HashSet::new(),
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
+            &crate::ui::modal::PanelInputs {
+                repos: &app.repos,
+                workspaces: &app.workspaces,
+                events: &app.workspace_events,
+                activity: &std::collections::HashMap::new(),
+                needs_attention: &std::collections::HashSet::new(),
+                awaiting: &std::collections::HashMap::new(),
+                statuses: &std::collections::HashMap::new(),
+                lifecycles: &std::collections::HashMap::new(),
+            },
             crate::ui::modal::UpdatesSort::Default,
+            None,
         );
         let target_idx = order.iter().position(|id| *id == second_id).unwrap();
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: target_idx,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -1409,6 +1420,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -1428,26 +1440,21 @@ mod pm_state_tests {
         assert!(!app.quit, "q should not propagate to App::quit");
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn updates_panel_o_cycles_sort_and_follows_selection() {
-        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
-        use crate::git::forge::BranchLifecycle;
-        use crate::ui::modal::UpdatesSort;
-        let store = Store::open_in_memory().unwrap();
+    /// `names` workspaces in one repo (named "repo"), all Ready. Returns
+    /// their ids in insertion order.
+    fn seed_workspaces(store: &Store, names: &[&str]) -> Vec<crate::data::store::WorkspaceId> {
+        use crate::data::store::{NewWorkspace, WorkspaceState};
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
             .unwrap();
         let mut ids = Vec::new();
-        for (name, branch, path) in [
-            ("alpha", "repo/alpha", "/tmp/wsx-test/alpha"),
-            ("beta", "repo/beta", "/tmp/wsx-test/beta"),
-        ] {
+        for &name in names {
             let id = store
                 .insert_workspace(&NewWorkspace {
                     repo_id,
                     name,
-                    branch,
-                    worktree_path: std::path::Path::new(path),
+                    branch: &format!("repo/{name}"),
+                    worktree_path: &std::path::PathBuf::from(format!("/tmp/wsx-test/{name}")),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
                     shared: false,
@@ -1458,6 +1465,35 @@ mod pm_state_tests {
                 .unwrap();
             ids.push(id);
         }
+        ids
+    }
+
+    /// Two workspaces in one repo, both Ready. Returns their ids in
+    /// insertion order (alpha, beta).
+    fn seed_two_workspaces(store: &Store) -> Vec<crate::data::store::WorkspaceId> {
+        seed_workspaces(store, &["alpha", "beta"])
+    }
+
+    fn shared_app() -> SharedApp {
+        Arc::new(Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ))
+    }
+
+    fn key(code: crossterm::event::KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_o_cycles_sort_and_follows_selection() {
+        use crate::git::forge::BranchLifecycle;
+        use crate::ui::modal::UpdatesSort;
+        let store = Store::open_in_memory().unwrap();
+        let ids = seed_two_workspaces(&store);
         let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
         // beta has an open PR, alpha none — under PrStatus beta sorts first,
         // flipping the two rows relative to Default/Status order.
@@ -1465,21 +1501,16 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0, // alpha
             sort: UpdatesSort::Default,
+            filter: None,
         });
-        let shared = Arc::new(Mutex::new(
-            App::new(
-                Store::open_in_memory().unwrap(),
-                PathBuf::from("/tmp/wsx-test"),
-            )
-            .unwrap(),
-        ));
-        let press_o = KeyEvent::new(crossterm::event::KeyCode::Char('o'), KeyModifiers::NONE);
+        let shared = shared_app();
+        let press_o = key(crossterm::event::KeyCode::Char('o'));
 
         // Default → Status: both workspaces are Idle, order unchanged,
         // selection stays on alpha at index 0.
         handle_key_modal(&mut app, &shared, press_o).await.unwrap();
         match app.modal {
-            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort }) => {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort, .. }) => {
                 assert_eq!(sort, UpdatesSort::Status);
                 assert_eq!(selected, 0, "selection stays on alpha");
             }
@@ -1490,7 +1521,7 @@ mod pm_state_tests {
         // must follow alpha to index 1 rather than staying on row 0.
         handle_key_modal(&mut app, &shared, press_o).await.unwrap();
         match app.modal {
-            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort }) => {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort, .. }) => {
                 assert_eq!(sort, UpdatesSort::PrStatus);
                 assert_eq!(selected, 1, "cursor follows alpha to its new row");
             }
@@ -1500,11 +1531,398 @@ mod pm_state_tests {
         // PrStatus → Default: back to the original order and back to row 0.
         handle_key_modal(&mut app, &shared, press_o).await.unwrap();
         match app.modal {
-            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort }) => {
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected, sort, .. }) => {
                 assert_eq!(sort, UpdatesSort::Default);
                 assert_eq!(selected, 0, "cursor follows alpha back to row 0");
             }
             ref other => panic!("unexpected modal state: {other:?}"),
+        }
+    }
+
+    /// `/` arms filter mode with an empty buffer — distinct from `None`, so
+    /// the footer can echo the bare `/` before any typing. Subsequent
+    /// printable keys are filter text, not the j/k/o/l/v/s shortcuts.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_slash_arms_filter_and_captures_typing() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        seed_two_workspaces(&store);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 0,
+            sort: UpdatesSort::Default,
+            filter: None,
+        });
+        let shared = shared_app();
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Char('/')))
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel { ref filter, .. }) => {
+                assert_eq!(filter.as_deref(), Some(""), "/ arms an empty buffer");
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+
+        // 'j' would move the selection outside filter mode; here it types.
+        for c in ['j', 'b'] {
+            handle_key_modal(&mut app, &shared, key(KeyCode::Char(c)))
+                .await
+                .unwrap();
+        }
+        match app.modal {
+            Some(Modal::UpdatesPanel { ref filter, .. }) => {
+                assert_eq!(filter.as_deref(), Some("jb"));
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Backspace))
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel { ref filter, .. }) => {
+                assert_eq!(filter.as_deref(), Some("j"));
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+
+        // Backspace past the start is inert, not a panel close.
+        for _ in 0..3 {
+            handle_key_modal(&mut app, &shared, key(KeyCode::Backspace))
+                .await
+                .unwrap();
+        }
+        match app.modal {
+            Some(Modal::UpdatesPanel { ref filter, .. }) => {
+                assert_eq!(filter.as_deref(), Some(""));
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+    }
+
+    /// Esc is two-stage: it clears an active filter first and only closes
+    /// the panel once there is no filter to clear.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_esc_clears_filter_before_closing() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        seed_two_workspaces(&store);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 0,
+            sort: UpdatesSort::Default,
+            filter: Some("alp".to_string()),
+        });
+        let shared = shared_app();
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Esc))
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel { ref filter, .. }) => {
+                assert_eq!(filter.as_deref(), None, "first Esc clears the filter");
+            }
+            ref other => panic!("panel should stay open; got {other:?}"),
+        }
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Esc))
+            .await
+            .unwrap();
+        assert!(app.modal.is_none(), "second Esc closes the panel");
+    }
+
+    /// Arrows keep navigating while filter mode is on — they are the escape
+    /// hatch for j/k being filter text.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_arrows_navigate_while_filtering() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        seed_two_workspaces(&store);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 0,
+            sort: UpdatesSort::Default,
+            filter: Some(String::new()),
+        });
+        let shared = shared_app();
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Down))
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel {
+                selected,
+                ref filter,
+                ..
+            }) => {
+                assert_eq!(selected, 1, "Down still moves while filtering");
+                assert_eq!(filter.as_deref(), Some(""), "and does not edit the buffer");
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+    }
+
+    /// A char carrying CONTROL or ALT is not filter text — the intercept's
+    /// guard excludes it, so it falls through to the outer handler, which
+    /// doesn't inspect modifiers. `Ctrl-j` therefore still moves the
+    /// selection, exactly like a bare `j` would outside filter mode.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_control_modified_char_falls_through_while_filtering() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        seed_two_workspaces(&store);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 0,
+            sort: UpdatesSort::Default,
+            filter: Some(String::new()),
+        });
+        let shared = shared_app();
+
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel {
+                selected,
+                ref filter,
+                ..
+            }) => {
+                assert_eq!(selected, 1, "Ctrl-j falls through to the Down/'j' arm");
+                assert_eq!(filter.as_deref(), Some(""), "and does not edit the buffer");
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+    }
+
+    /// Enter is the other escape hatch (besides arrows) from j/k being
+    /// filter text — it still attaches to the selected, filtered-to
+    /// workspace while a filter is active.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_enter_attaches_while_filtering() {
+        use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+        let mut env = EnvGuard::new();
+        env.set(
+            "WSX_CLAUDE_BIN",
+            crate::test_support::cat_ignore_args_path(),
+        );
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "blocked",
+                branch: "repo/blocked",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws_id, WorkspaceState::Ready)
+            .unwrap();
+
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+            selected: 0,
+            sort: crate::ui::modal::UpdatesSort::Default,
+            filter: Some("block".to_string()),
+        });
+        let shared = shared_app();
+        handle_key_modal(
+            &mut app,
+            &shared,
+            KeyEvent::new(crossterm::event::KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+        assert!(app.modal.is_none(), "Enter should close the modal");
+        assert!(
+            matches!(&app.view, crate::ui::View::Attached(s) if s.focused_target().map(|t| t.workspace_id) == Some(ws_id)),
+            "Enter should attach to the filtered-to workspace; got {:?}",
+            app.view
+        );
+    }
+
+    /// The cursor tracks its workspace across a filter edit rather than its
+    /// index. Typing "a" matches both alpha and beta, so the order is
+    /// unchanged (`[alpha, beta]`) — a real position lookup must still find
+    /// beta at index 1. This is deliberately NOT a narrowing edit: reading
+    /// the pre-edit selection from the post-edit order, or a bare
+    /// `.unwrap_or(0)`, would also land on 0 for a narrowing edit that hides
+    /// the selected row, so only a needle that keeps the row in place can
+    /// tell a genuine lookup apart from every 0-shaped fallback.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_selection_follows_workspace_across_filter_edits() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        seed_two_workspaces(&store);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Start on beta (index 1), filter mode armed.
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 1,
+            sort: UpdatesSort::Default,
+            filter: Some(String::new()),
+        });
+        let shared = shared_app();
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Char('a')))
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel { selected, .. }) => {
+                assert_eq!(
+                    selected, 1,
+                    "cursor stays on beta, still at index 1 in the unchanged order"
+                );
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+    }
+
+    /// The narrowing case, and the one that actually separates a workspace
+    /// lookup from index-clamping. Filtering only ever removes rows, so it
+    /// takes three: select the middle row, then type a needle that hides
+    /// the row *above* it. The selected workspace slides up to index 0,
+    /// while clamping the old index would leave the cursor at 1 — a
+    /// different workspace, still in range.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_selection_moves_up_when_a_filter_hides_the_row_above() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        // Only the last two carry an `x`; the repo ("repo") and the rows'
+        // status text ("no session") have none, so `x` hides alpha alone.
+        let ids = seed_workspaces(&store, &["alpha", "beta-x", "gamma-x"]);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Start on beta-x (index 1 of [alpha, beta-x, gamma-x]).
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 1,
+            sort: UpdatesSort::Default,
+            filter: Some(String::new()),
+        });
+        assert_eq!(
+            panel_order(&app, UpdatesSort::Default, Some("")),
+            ids,
+            "unfiltered order is insertion order"
+        );
+        let shared = shared_app();
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Char('x')))
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel {
+                selected,
+                sort,
+                ref filter,
+            }) => {
+                assert_eq!(filter.as_deref(), Some("x"));
+                let order = panel_order(&app, sort, filter.as_deref());
+                assert_eq!(order, vec![ids[1], ids[2]], "`x` hides alpha only");
+                assert_eq!(
+                    selected, 0,
+                    "cursor follows beta-x to index 0; clamping would leave it at 1"
+                );
+                assert_eq!(
+                    order.get(selected).copied(),
+                    Some(ids[1]),
+                    "the selected row is still beta-x"
+                );
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+    }
+
+    /// When a filter edit hides the selected workspace entirely, the
+    /// cursor clamps into range rather than pointing past the end of the
+    /// (possibly empty) new order.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_selection_clamps_when_filter_hides_everything() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        seed_two_workspaces(&store);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Start on beta (index 1), filter mode armed.
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 1,
+            sort: UpdatesSort::Default,
+            filter: Some(String::new()),
+        });
+        let shared = shared_app();
+
+        // Typing until nothing matches: the index clamps rather than
+        // pointing past the end of an empty list.
+        for c in ['z', 'z'] {
+            handle_key_modal(&mut app, &shared, key(KeyCode::Char(c)))
+                .await
+                .unwrap();
+        }
+        match app.modal {
+            Some(Modal::UpdatesPanel { selected, .. }) => {
+                assert_eq!(selected, 0, "empty result clamps to 0");
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+    }
+
+    /// Filter state lives in the modal variant, so reopening starts clean —
+    /// a stale needle would silently hide rows on the next open.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_reopens_without_a_filter() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::{KeyCode, KeyEvent};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws_id = spawn_attached_workspace(&mut app);
+        let target = test_target(&app, ws_id);
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 0,
+            sort: UpdatesSort::Default,
+            filter: Some("stale".to_string()),
+        });
+        let shared = shared_app();
+        // Esc is two-stage: the first clears the active filter, the second
+        // closes the panel (see `updates_panel_esc_clears_filter_before_closing`).
+        handle_key_modal(&mut app, &shared, key(KeyCode::Esc))
+            .await
+            .unwrap();
+        handle_key_modal(&mut app, &shared, key(KeyCode::Esc))
+            .await
+            .unwrap();
+        assert!(app.modal.is_none());
+
+        // Reopen via the real leader path: Ctrl-X then 'u'.
+        handle_key_attached(
+            &mut app,
+            target,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_key_attached(&mut app, target, key(KeyCode::Char('u')))
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel { ref filter, .. }) => {
+                assert_eq!(filter.as_deref(), None, "reopen starts unfiltered");
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
         }
     }
 
@@ -1525,6 +1943,7 @@ mod pm_state_tests {
         app.modal = Some(Modal::UpdatesPanel {
             selected: 0,
             sort: UpdatesSort::PrStatus,
+            filter: None,
         });
         let shared = Arc::new(Mutex::new(
             App::new(
@@ -1560,7 +1979,7 @@ mod pm_state_tests {
         .await
         .unwrap();
         match app.modal {
-            Some(Modal::UpdatesPanel { selected, sort }) => {
+            Some(Modal::UpdatesPanel { selected, sort, .. }) => {
                 assert_eq!(selected, 0);
                 assert_eq!(
                     sort,
@@ -1618,6 +2037,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
 
         let backend = TestBackend::new(100, 30);
@@ -1687,6 +2107,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
 
         let backend = TestBackend::new(100, 30);
@@ -1735,6 +2156,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: 0,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
 
         let backend = TestBackend::new(100, 30);
@@ -1818,14 +2240,18 @@ mod pm_state_tests {
             .map(|(_, w)| (w.id, app.classify_status(w)))
             .collect();
         let order = crate::ui::modal::ordered_workspaces_for_panel(
-            &app.repos,
-            &app.workspaces,
-            &app.workspace_events,
-            &activity_translated,
-            &app.workspace_needs_attention,
-            &statuses,
-            &app.pr_lifecycle,
+            &crate::ui::modal::PanelInputs {
+                repos: &app.repos,
+                workspaces: &app.workspaces,
+                events: &app.workspace_events,
+                activity: &activity_translated,
+                needs_attention: &app.workspace_needs_attention,
+                awaiting: &std::collections::HashMap::new(),
+                statuses: &statuses,
+                lifecycles: &app.pr_lifecycle,
+            },
             crate::ui::modal::UpdatesSort::Default,
+            None,
         );
         assert!(
             order.len() >= 40,
@@ -1846,6 +2272,7 @@ mod pm_state_tests {
         app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
             selected: last_selected,
             sort: crate::ui::modal::UpdatesSort::Default,
+            filter: None,
         });
 
         let backend = TestBackend::new(100, 30);
@@ -2244,7 +2671,7 @@ mod pm_state_tests {
         let ws_id = spawn_attached_workspace(&mut app);
         let target = test_target(&app, ws_id);
 
-        // Populate the cache directly (Task 7's resolution path is tested
+        // Populate the cache directly (the resolution path is tested
         // separately via the resolve() unit tests).
         app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
@@ -6090,7 +6517,7 @@ mod pm_state_tests {
         // This exercises the *unshare* direction (shared: true -> false):
         // the respawn after unsharing is a plain direct spawn (no tmux
         // binary required), unlike the share direction, whose tmux-backed
-        // respawn is covered by the tmux-gated e2e in Task 10.
+        // respawn is covered by the tmux-gated e2e test.
         use crate::data::store::NewWorkspace;
         use crate::ui::modal::Modal;
         use std::sync::Arc;

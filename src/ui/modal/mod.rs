@@ -21,7 +21,9 @@ pub use agents_panel::render_agents_panel;
 pub use process_list::render_process_list;
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
-pub use updates_panel::{UpdatesSort, ordered_workspaces_for_panel, render_updates_panel};
+pub use updates_panel::{
+    PanelInputs, PanelView, UpdatesSort, ordered_workspaces_for_panel, render_updates_panel,
+};
 pub use usage_picker::render_usage_window_picker;
 
 #[derive(Debug, Clone)]
@@ -76,6 +78,11 @@ pub enum Modal {
         /// Active sort mode; `o` cycles it. Not persisted — reset to
         /// `Default` on every open.
         sort: UpdatesSort,
+        /// `None` = normal key handling. `Some(buf)` = filter-input mode,
+        /// where printable keys are filter text rather than shortcuts.
+        /// `Some("")` is a real state: `/` was pressed, nothing typed yet,
+        /// every row still visible. Not persisted, like `sort`.
+        filter: Option<String>,
     },
     ProcessList {
         workspace_id: crate::data::store::WorkspaceId,

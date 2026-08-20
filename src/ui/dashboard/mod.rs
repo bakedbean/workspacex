@@ -20,7 +20,7 @@ use crate::ui::dashboard::by_attention::{FlatRow, QuietRepo};
 use crate::ui::dashboard::by_repo::RepoView;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::row::RowInputs;
-use crate::ui::dashboard::sort::{StatusCounts, default_fold};
+use crate::ui::dashboard::sort::{StatusCounts, default_fold, order_workspaces};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -300,6 +300,30 @@ pub fn render_footer(
 /// active sections (NEEDS ATTENTION / WORKING / RECENT / IDLE) in the
 /// order `partition` produces. QUIET REPOS entries are skipped — they
 /// have no per-repo selection model in v1.
+/// One workspace as the nav-index builder sees it: the fields the shared
+/// comparator reads, plus the id the row resolves to. Exists so nav ordering
+/// runs through the same `order_workspaces` call the renderer uses instead of
+/// a hand-copied sort that could drift from it.
+struct NavRow {
+    status: Status,
+    workspace_id: crate::data::store::WorkspaceId,
+}
+
+impl From<&WorkspaceItem<'_>> for NavRow {
+    fn from(w: &WorkspaceItem<'_>) -> Self {
+        NavRow {
+            status: w.status,
+            workspace_id: w.workspace_id,
+        }
+    }
+}
+
+impl sort::SortRow for NavRow {
+    fn sort_status(&self) -> Status {
+        self.status
+    }
+}
+
 pub fn visible_targets(
     inputs: &DashboardInputs<'_>,
     state: &DashboardState,
@@ -321,20 +345,20 @@ pub fn visible_targets(
                 .repos
                 .iter()
                 .map(|r| {
-                    let mut rows: Vec<(Status, crate::data::store::WorkspaceId)> = inputs
+                    let mut rows: Vec<NavRow> = inputs
                         .workspaces
                         .iter()
                         .filter(|w| w.repo.id == r.id)
                         .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
-                        .map(|w| (w.status, w.workspace_id))
+                        .map(NavRow::from)
                         .collect();
-                    rows.sort_by_key(|r| std::cmp::Reverse(r.0.priority()));
-                    let counts = StatusCounts::from_iter(rows.iter().map(|(s, _)| *s));
+                    order_workspaces(&mut rows);
+                    let counts = StatusCounts::from_iter(rows.iter().map(|r| r.status));
                     Pending {
                         repo_id: r.id,
                         counts,
                         sort_order: r.sort_order,
-                        workspace_ids: rows.into_iter().map(|(_, id)| id).collect(),
+                        workspace_ids: rows.into_iter().map(|r| r.workspace_id).collect(),
                     }
                 })
                 .collect();
@@ -513,7 +537,7 @@ fn render_by_repo<'a>(
                 .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
                 .map(|w| w.row.clone())
                 .collect();
-            workspaces.sort_by_key(|w| std::cmp::Reverse(w.status.priority()));
+            order_workspaces(&mut workspaces);
             let counts = StatusCounts::from_iter(workspaces.iter().map(|w| w.status));
             let repo_id_u64 = r.id.0 as u64;
             let expanded = match state.folded.get(&repo_id_u64).copied() {

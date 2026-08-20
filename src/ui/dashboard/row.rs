@@ -172,6 +172,12 @@ pub struct RowInputs {
     pub workspace_id: crate::data::store::WorkspaceId,
 }
 
+impl crate::ui::dashboard::sort::SortRow for RowInputs {
+    fn sort_status(&self) -> Status {
+        self.status
+    }
+}
+
 /// The leftmost column: one bar per live agent, right-aligned so the
 /// primary stays adjacent to the status gutter and a single-agent row
 /// looks exactly as it did before the strip existed. Always returns

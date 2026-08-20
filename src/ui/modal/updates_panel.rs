@@ -3,6 +3,23 @@
 use super::*;
 use crate::ui::text::{truncate, truncate_pad};
 
+/// The borrowed caches the panel reads. Bundled so the renderer and the key
+/// handler hand identical inputs to `ordered_workspaces_for_panel` without
+/// two long, drift-prone argument lists. Mirrors `DashboardInputs` on the
+/// dashboard side.
+pub struct PanelInputs<'a> {
+    pub repos: &'a [crate::data::store::Repo],
+    pub workspaces: &'a [(RepoId, crate::data::store::Workspace)],
+    pub events:
+        &'a HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
+    pub activity:
+        &'a HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
+    pub needs_attention: &'a HashSet<crate::data::store::WorkspaceId>,
+    pub awaiting: &'a HashMap<crate::data::store::WorkspaceId, (String, i64)>,
+    pub statuses: &'a HashMap<crate::data::store::WorkspaceId, Status>,
+    pub lifecycles: &'a HashMap<crate::data::store::WorkspaceId, BranchLifecycle>,
+}
+
 /// Cap on the workspace-name column so one very long name can't starve the
 /// status column of the entire panel.
 const NAME_COL_MAX: usize = 28;
@@ -100,31 +117,25 @@ fn lifecycle_rank(lifecycle: Option<BranchLifecycle>) -> u8 {
 ///
 /// Used by both the renderer (to draw rows) and the key handler (to map
 /// the selected index back to a workspace id).
-#[allow(clippy::too_many_arguments)]
 pub fn ordered_workspaces_for_panel(
-    repos: &[crate::data::store::Repo],
-    workspaces: &[(RepoId, crate::data::store::Workspace)],
-    events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
-    activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
-    needs_attention: &HashSet<crate::data::store::WorkspaceId>,
-    statuses: &HashMap<crate::data::store::WorkspaceId, Status>,
-    lifecycles: &HashMap<crate::data::store::WorkspaceId, BranchLifecycle>,
+    inputs: &PanelInputs<'_>,
     sort: UpdatesSort,
 ) -> Vec<crate::data::store::WorkspaceId> {
     let mut out = Vec::new();
-    for repo in repos {
-        let mut ws_for_repo: Vec<&crate::data::store::Workspace> = workspaces
+    for repo in inputs.repos {
+        let mut ws_for_repo: Vec<&crate::data::store::Workspace> = inputs
+            .workspaces
             .iter()
             .filter(|(rid, _)| *rid == repo.id)
             .map(|(_, w)| w)
             .collect();
         ws_for_repo.sort_by_key(|w| {
-            let default_key = sort_key(w, events, activity, needs_attention);
+            let default_key = sort_key(w, inputs.events, inputs.activity, inputs.needs_attention);
             let mode_rank = match sort {
                 UpdatesSort::Default => (0, std::cmp::Reverse(0)),
-                UpdatesSort::Status => status_rank(w, statuses),
+                UpdatesSort::Status => status_rank(w, inputs.statuses),
                 UpdatesSort::PrStatus => (
-                    lifecycle_rank(lifecycles.get(&w.id).copied()),
+                    lifecycle_rank(inputs.lifecycles.get(&w.id).copied()),
                     std::cmp::Reverse(0),
                 ),
             };
@@ -181,18 +192,10 @@ fn footer_text(sort: UpdatesSort) -> String {
 
 /// Render the floating workspace-updates panel. Reads live App state via
 /// borrowed slices so the panel updates on every render tick.
-#[allow(clippy::too_many_arguments)]
 pub fn render_updates_panel(
     f: &mut Frame,
     area: Rect,
-    repos: &[crate::data::store::Repo],
-    workspaces: &[(RepoId, crate::data::store::Workspace)],
-    events: &HashMap<crate::data::store::WorkspaceId, crate::activity::events::WorkspaceEvents>,
-    activity: &HashMap<crate::data::store::WorkspaceId, crate::ui::updates_bar::ActivityState>,
-    needs_attention: &HashSet<crate::data::store::WorkspaceId>,
-    awaiting: &HashMap<crate::data::store::WorkspaceId, (String, i64)>,
-    statuses: &HashMap<crate::data::store::WorkspaceId, Status>,
-    lifecycles: &HashMap<crate::data::store::WorkspaceId, BranchLifecycle>,
+    inputs: &PanelInputs<'_>,
     selected: usize,
     now_ms: i64,
     sort: UpdatesSort,
@@ -210,16 +213,7 @@ pub fn render_updates_panel(
     let body_area = chunks[0];
     let footer_area = chunks[1];
 
-    let order = ordered_workspaces_for_panel(
-        repos,
-        workspaces,
-        events,
-        activity,
-        needs_attention,
-        statuses,
-        lifecycles,
-        sort,
-    );
+    let order = ordered_workspaces_for_panel(inputs, sort);
     // workspace_id -> position in `order` so we can match against `selected`.
     let pos_of: HashMap<crate::data::store::WorkspaceId, usize> =
         order.iter().enumerate().map(|(i, id)| (*id, i)).collect();
@@ -228,7 +222,8 @@ pub fn render_updates_panel(
     // at the same column regardless of which repo section a row is in.
     let row_width = body_area.width as usize;
     let name_col = name_col_width(
-        workspaces
+        inputs
+            .workspaces
             .iter()
             .filter(|(_, w)| pos_of.contains_key(&w.id))
             .map(|(_, w)| w.name.as_str()),
@@ -237,8 +232,9 @@ pub fn render_updates_panel(
 
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
-    for repo in repos {
-        let ws_for_repo: Vec<&crate::data::store::Workspace> = workspaces
+    for repo in inputs.repos {
+        let ws_for_repo: Vec<&crate::data::store::Workspace> = inputs
+            .workspaces
             .iter()
             .filter(|(rid, _)| *rid == repo.id)
             .map(|(_, w)| w)
@@ -262,14 +258,14 @@ pub fn render_updates_panel(
             if is_selected {
                 selected_visual_line = Some(lines.len());
             }
-            let status = statuses.get(&w.id).copied().unwrap_or(Status::Idle);
-            let lifecycle = lifecycles.get(&w.id).copied();
+            let status = inputs.statuses.get(&w.id).copied().unwrap_or(Status::Idle);
+            let lifecycle = inputs.lifecycles.get(&w.id).copied();
             lines.push(workspace_row(
                 w,
-                events.get(&w.id),
-                activity.get(&w.id).copied(),
-                needs_attention.contains(&w.id),
-                awaiting.get(&w.id),
+                inputs.events.get(&w.id),
+                inputs.activity.get(&w.id).copied(),
+                inputs.needs_attention.contains(&w.id),
+                inputs.awaiting.get(&w.id),
                 is_selected,
                 status,
                 lifecycle,
@@ -327,6 +323,52 @@ fn scroll_offset_for_selected(
     centered.min(max_scroll).min(u16::MAX as usize) as u16
 }
 
+/// The status text a row displays, plus the timestamp its age column is
+/// anchored to. Split out of `workspace_row` so the filter can match on
+/// exactly the text the row shows — a row must never display text the
+/// filter fails to find.
+fn row_status_text(
+    w: &crate::data::store::Workspace,
+    events: Option<&crate::activity::events::WorkspaceEvents>,
+    activity: Option<crate::ui::updates_bar::ActivityState>,
+    needs_attention: bool,
+    awaiting: Option<&(String, i64)>,
+) -> (String, Option<i64>) {
+    use crate::ui::updates_bar::ActivityState;
+    if let Some((tool, ts)) = awaiting {
+        return (format!("awaiting permission: {tool}"), Some(*ts));
+    }
+    if needs_attention {
+        let label = match activity {
+            Some(ActivityState::AwaitingAnswer) => "question",
+            Some(ActivityState::Complete) => "complete",
+            Some(ActivityState::Stalled) => "stalled",
+            _ => "waiting",
+        };
+        return (
+            label.to_string(),
+            events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms)),
+        );
+    }
+    if matches!(
+        activity,
+        Some(ActivityState::Active) | Some(ActivityState::Idle)
+    ) {
+        let text = events
+            .and_then(|e| e.latest.as_ref().map(|s| s.display.clone()))
+            .unwrap_or_else(|| "active".to_string());
+        let ts = events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms));
+        return (text, ts);
+    }
+    if w.state == crate::data::store::WorkspaceState::Failed {
+        return ("failed".to_string(), None);
+    }
+    if events.and_then(|e| e.latest.as_ref()).is_some() {
+        return ("resumable".to_string(), None);
+    }
+    ("no session".to_string(), None)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn workspace_row<'a>(
     w: &'a crate::data::store::Workspace,
@@ -365,35 +407,8 @@ fn workspace_row<'a>(
             }
         }
     };
-    let (status_text, age_anchor_ms) = if let Some((tool, ts)) = awaiting {
-        (format!("awaiting permission: {tool}"), Some(*ts))
-    } else if needs_attention {
-        let label = match activity {
-            Some(ActivityState::AwaitingAnswer) => "question",
-            Some(ActivityState::Complete) => "complete",
-            Some(ActivityState::Stalled) => "stalled",
-            _ => "waiting",
-        };
-        (
-            label.to_string(),
-            events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms)),
-        )
-    } else if matches!(
-        activity,
-        Some(ActivityState::Active) | Some(ActivityState::Idle)
-    ) {
-        let text = events
-            .and_then(|e| e.latest.as_ref().map(|s| s.display.clone()))
-            .unwrap_or_else(|| "active".to_string());
-        let ts = events.and_then(|e| e.latest.as_ref().map(|s| s.timestamp_ms));
-        (text, ts)
-    } else if failed {
-        ("failed".to_string(), None)
-    } else if events.and_then(|e| e.latest.as_ref()).is_some() {
-        ("resumable".to_string(), None)
-    } else {
-        ("no session".to_string(), None)
-    };
+    let (status_text, age_anchor_ms) =
+        row_status_text(w, events, activity, needs_attention, awaiting);
     let age = age_anchor_ms.map(|t| format_age(now_ms.saturating_sub(t)));
 
     // Failed overrides the canonical status hue with `err` — a failed
@@ -616,6 +631,67 @@ mod workspace_row_tests {
             body.contains("awaiting permission: Bash"),
             "expected permission tool name in status text: {body}"
         );
+    }
+
+    /// `row_status_text` is the single source for the row's status text —
+    /// the renderer and (from Task 2) the filter both read it. If the
+    /// extraction ever drifts from what `workspace_row` draws, the filter
+    /// would fail to match text the user can plainly see.
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn row_status_text_matches_what_the_row_renders() {
+        let theme = Theme::ansi();
+        let mut failed = fixture_workspace("gamma");
+        failed.state = WorkspaceState::Failed;
+        let awaiting = ("Bash".to_string(), 5_000i64);
+        let (alpha, beta, delta) = (
+            fixture_workspace("alpha"),
+            fixture_workspace("beta"),
+            fixture_workspace("delta"),
+        );
+        // (workspace, activity, needs_attention, awaiting, expected text)
+        let cases: [(
+            &Workspace,
+            Option<ActivityState>,
+            bool,
+            Option<&(String, i64)>,
+            &str,
+        ); 4] = [
+            (
+                &alpha,
+                Some(ActivityState::Awaiting),
+                true,
+                Some(&awaiting),
+                "awaiting permission: Bash",
+            ),
+            (&beta, Some(ActivityState::Stalled), true, None, "stalled"),
+            (&failed, None, false, None, "failed"),
+            (&delta, None, false, None, "no session"),
+        ];
+        for (w, activity, attention, awaiting, expected) in cases {
+            let (text, _) = row_status_text(w, None, activity, attention, awaiting);
+            assert_eq!(text, expected, "row_status_text for {}", w.name);
+            let line = workspace_row(
+                w,
+                None,
+                activity,
+                attention,
+                awaiting,
+                false,
+                Status::Idle,
+                None,
+                10_000,
+                20,
+                78,
+                &theme,
+            );
+            assert!(
+                line_text(&line).contains(expected),
+                "row for {} should render {expected:?}: {}",
+                w.name,
+                line_text(&line)
+            );
+        }
     }
 
     /// For each of the six canonical Status variants, the glyph and status-
@@ -1044,6 +1120,7 @@ mod ordering_tests {
         events: HashMap<WorkspaceId, crate::activity::events::WorkspaceEvents>,
         activity: HashMap<WorkspaceId, crate::ui::updates_bar::ActivityState>,
         attention: HashSet<WorkspaceId>,
+        awaiting: HashMap<WorkspaceId, (String, i64)>,
         statuses: HashMap<WorkspaceId, Status>,
         lifecycles: HashMap<WorkspaceId, BranchLifecycle>,
     }
@@ -1055,13 +1132,16 @@ mod ordering_tests {
         sort: UpdatesSort,
     ) -> Vec<WorkspaceId> {
         ordered_workspaces_for_panel(
-            repos,
-            ws,
-            &maps.events,
-            &maps.activity,
-            &maps.attention,
-            &maps.statuses,
-            &maps.lifecycles,
+            &PanelInputs {
+                repos,
+                workspaces: ws,
+                events: &maps.events,
+                activity: &maps.activity,
+                needs_attention: &maps.attention,
+                awaiting: &maps.awaiting,
+                statuses: &maps.statuses,
+                lifecycles: &maps.lifecycles,
+            },
             sort,
         )
     }

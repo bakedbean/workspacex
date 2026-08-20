@@ -1288,6 +1288,36 @@ fn launch_workspace_command(
         Err(e) => format!("error: {e}"),
     }
 }
+/// The updates panel's ordered workspace list. Returns an owned Vec so the
+/// borrow of `app` ends at the call — the caller mutates `app.modal` right
+/// after. Both the key handler and `app::render` must derive row order from
+/// identical inputs or the selection indices drift from the drawn rows.
+fn panel_order(
+    app: &App,
+    sort: crate::ui::modal::UpdatesSort,
+) -> Vec<crate::data::store::WorkspaceId> {
+    let activity_translated: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        crate::ui::updates_bar::ActivityState,
+    > = app
+        .workspace_activity
+        .iter()
+        .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
+        .collect();
+    let statuses = app.classified_statuses();
+    let awaiting = app.awaiting_permission_map();
+    let inputs = crate::ui::modal::PanelInputs {
+        repos: &app.repos,
+        workspaces: &app.workspaces,
+        events: &app.workspace_events,
+        activity: &activity_translated,
+        needs_attention: &app.workspace_needs_attention,
+        awaiting: &awaiting,
+        statuses: &statuses,
+        lifecycles: &app.pr_lifecycle,
+    };
+    crate::ui::modal::ordered_workspaces_for_panel(&inputs, sort)
+}
 async fn handle_key_modal(
     app: &mut App,
     shared: &SharedApp,
@@ -1615,25 +1645,7 @@ async fn handle_key_modal(
             let selected_now = selected;
             // Build the same ordered workspace list the renderer uses, so
             // arrow keys and Enter operate on the same indices.
-            let activity_translated: std::collections::HashMap<
-                crate::data::store::WorkspaceId,
-                crate::ui::updates_bar::ActivityState,
-            > = app
-                .workspace_activity
-                .iter()
-                .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
-                .collect();
-            let statuses = app.classified_statuses();
-            let order = crate::ui::modal::ordered_workspaces_for_panel(
-                &app.repos,
-                &app.workspaces,
-                &app.workspace_events,
-                &activity_translated,
-                &app.workspace_needs_attention,
-                &statuses,
-                &app.pr_lifecycle,
-                sort,
-            );
+            let order = panel_order(app, sort);
             match k.code {
                 KeyCode::Esc => {
                     app.modal = None;
@@ -1659,18 +1671,7 @@ async fn handle_key_modal(
                 KeyCode::Char('o') => {
                     let selected_id = order.get(selected_now).copied();
                     let new_sort = sort.cycle();
-                    // The activity/status maps don't depend on the sort mode,
-                    // so the pre-cycle maps are safe to reuse for the re-sort.
-                    let new_order = crate::ui::modal::ordered_workspaces_for_panel(
-                        &app.repos,
-                        &app.workspaces,
-                        &app.workspace_events,
-                        &activity_translated,
-                        &app.workspace_needs_attention,
-                        &statuses,
-                        &app.pr_lifecycle,
-                        new_sort,
-                    );
+                    let new_order = panel_order(app, new_sort);
                     let new_sel = selected_id
                         .and_then(|id| new_order.iter().position(|w| *w == id))
                         .unwrap_or(0);

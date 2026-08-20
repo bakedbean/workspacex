@@ -825,13 +825,16 @@ mod pm_state_tests {
         // workspaces are in `repo`. Find the index of `second_id` from the
         // module's ordering helper.
         let order = crate::ui::modal::ordered_workspaces_for_panel(
-            &app.repos,
-            &app.workspaces,
-            &app.workspace_events,
-            &std::collections::HashMap::new(),
-            &std::collections::HashSet::new(),
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
+            &crate::ui::modal::PanelInputs {
+                repos: &app.repos,
+                workspaces: &app.workspaces,
+                events: &app.workspace_events,
+                activity: &std::collections::HashMap::new(),
+                needs_attention: &std::collections::HashSet::new(),
+                awaiting: &std::collections::HashMap::new(),
+                statuses: &std::collections::HashMap::new(),
+                lifecycles: &std::collections::HashMap::new(),
+            },
             crate::ui::modal::UpdatesSort::Default,
         );
         let target_idx = order.iter().position(|id| *id == second_id).unwrap();
@@ -1818,13 +1821,16 @@ mod pm_state_tests {
             .map(|(_, w)| (w.id, app.classify_status(w)))
             .collect();
         let order = crate::ui::modal::ordered_workspaces_for_panel(
-            &app.repos,
-            &app.workspaces,
-            &app.workspace_events,
-            &activity_translated,
-            &app.workspace_needs_attention,
-            &statuses,
-            &app.pr_lifecycle,
+            &crate::ui::modal::PanelInputs {
+                repos: &app.repos,
+                workspaces: &app.workspaces,
+                events: &app.workspace_events,
+                activity: &activity_translated,
+                needs_attention: &app.workspace_needs_attention,
+                awaiting: &std::collections::HashMap::new(),
+                statuses: &statuses,
+                lifecycles: &app.pr_lifecycle,
+            },
             crate::ui::modal::UpdatesSort::Default,
         );
         assert!(

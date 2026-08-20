@@ -1181,6 +1181,18 @@ impl App {
         })
     }
 
+    /// Permission prompts still awaiting an answer, keyed by workspace id.
+    /// Shared by the updates-panel renderer and key handler so both derive
+    /// row text — and the filter's match target — from identical inputs.
+    pub fn awaiting_permission_map(
+        &self,
+    ) -> std::collections::HashMap<crate::data::store::WorkspaceId, (String, i64)> {
+        self.workspaces
+            .iter()
+            .filter_map(|(_, w)| self.awaiting_permission(w.id).map(|a| (w.id, a)))
+            .collect()
+    }
+
     /// Classify every workspace into the canonical `Status` vocabulary,
     /// keyed by workspace id. Shared by the updates-panel renderer and key
     /// handler so both derive row order from identical inputs.

@@ -673,15 +673,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         match m {
             crate::ui::modal::Modal::UpdatesPanel { selected, sort } => {
                 let now_ms = crate::time::now_ms();
-                let mut awaiting: std::collections::HashMap<
-                    crate::data::store::WorkspaceId,
-                    (String, i64),
-                > = std::collections::HashMap::new();
-                for (_rid, w) in &app.workspaces {
-                    if let Some(a) = app.awaiting_permission(w.id) {
-                        awaiting.insert(w.id, a);
-                    }
-                }
+                let awaiting = app.awaiting_permission_map();
                 let activity_translated: std::collections::HashMap<
                     crate::data::store::WorkspaceId,
                     crate::ui::updates_bar::ActivityState,
@@ -691,21 +683,18 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .map(|(k, v)| (*k, translate_activity(*v)))
                     .collect();
                 let statuses = app.classified_statuses();
+                let inputs = crate::ui::modal::PanelInputs {
+                    repos: &app.repos,
+                    workspaces: &app.workspaces,
+                    events: &app.workspace_events,
+                    activity: &activity_translated,
+                    needs_attention: &app.workspace_needs_attention,
+                    awaiting: &awaiting,
+                    statuses: &statuses,
+                    lifecycles: &app.pr_lifecycle,
+                };
                 crate::ui::modal::render_updates_panel(
-                    f,
-                    area,
-                    &app.repos,
-                    &app.workspaces,
-                    &app.workspace_events,
-                    &activity_translated,
-                    &app.workspace_needs_attention,
-                    &awaiting,
-                    &statuses,
-                    &app.pr_lifecycle,
-                    *selected,
-                    now_ms,
-                    *sort,
-                    &app.theme,
+                    f, area, &inputs, *selected, now_ms, *sort, &app.theme,
                 );
             }
             crate::ui::modal::Modal::ProcessList {

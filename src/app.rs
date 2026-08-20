@@ -415,7 +415,7 @@ pub struct App {
     pub pending_archive_gen: Option<u64>,
     /// Most recently fetched remote (tmux-shared) workspace listing, if any
     /// fetch has completed. Consumed by `Modal::RemoteWorkspaceList`
-    /// rendering (Task 6).
+    /// rendering.
     pub remote_list: Option<RemoteList>,
     /// The live ssh-attach session while in `View::AttachedRemote`, else None.
     /// The child is a local `ssh -t … tmux attach` client; its `tmux_session`
@@ -612,7 +612,7 @@ pub struct App {
     pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
     /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
-    /// with ratatui's escape sequences. See Task 4 / Critical review.
+    /// with ratatui's escape sequences.
     pub pending_bells: Vec<ActivityState>,
     /// When the process started — used to distinguish cold-start
     /// first-observations (suppress bell) from mid-session ones (ring).
@@ -2113,7 +2113,7 @@ pub(crate) fn tmux_name_for(
 
 /// Build spawn parameters for an *added* (non-primary) instance. Added agents
 /// always spawn `Fresh` with an injected handoff note so they re-orient from
-/// the shared worktree + git diff (no session resume — see Task 8 scope).
+/// the shared worktree + git diff (added agents never resume a session).
 /// Returns `(worktree, SpawnMode, repo_path)`.
 fn build_added_spawn_info(
     app: &App,
@@ -2691,7 +2691,7 @@ pub(crate) async fn reconcile_archive_result(
     let _ = g.refresh();
 }
 
-/// Reconcile the outcome of a spawned `fetch_shared_list` task (Task 5).
+/// Reconcile the outcome of a spawned `fetch_shared_list` task.
 /// Locks the app briefly; if `pending_remote_gen` no longer matches
 /// `my_gen` — the user backed out or kicked off a newer fetch — the result
 /// is discarded entirely (including a successful one), so a slow stale

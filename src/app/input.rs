@@ -2238,7 +2238,7 @@ async fn handle_key_modal(
                     }
                 }
                 KeyCode::Char('r') => {
-                    // Re-run Task 5's Enter-in-picker flow for the same host:
+                    // Re-run the host picker's Enter flow for the same host:
                     // same gen allocation / RemoteListLoading / reconcile
                     // path, just triggered from inside the list instead of
                     // the host picker.

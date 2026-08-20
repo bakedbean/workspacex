@@ -2614,7 +2614,7 @@ mod pm_state_tests {
         let ws_id = spawn_attached_workspace(&mut app);
         let target = test_target(&app, ws_id);
 
-        // Populate the cache directly (Task 7's resolution path is tested
+        // Populate the cache directly (the resolution path is tested
         // separately via the resolve() unit tests).
         app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
@@ -6460,7 +6460,7 @@ mod pm_state_tests {
         // This exercises the *unshare* direction (shared: true -> false):
         // the respawn after unsharing is a plain direct spawn (no tmux
         // binary required), unlike the share direction, whose tmux-backed
-        // respawn is covered by the tmux-gated e2e in Task 10.
+        // respawn is covered by the tmux-gated e2e test.
         use crate::data::store::NewWorkspace;
         use crate::ui::modal::Modal;
         use std::sync::Arc;

@@ -1,7 +1,7 @@
 //! Extracted from ui/modal.rs.
 
 use super::*;
-use crate::ui::text::{truncate, truncate_pad};
+use crate::ui::text::{FILTER_ECHO_MAX, truncate, truncate_pad};
 
 /// The borrowed caches the panel reads. Bundled so the renderer and the key
 /// handler hand identical inputs to `ordered_workspaces_for_panel` without
@@ -21,8 +21,10 @@ pub struct PanelInputs<'a> {
 }
 
 impl PanelInputs<'_> {
-    /// The status text a row would display for `w`. Used by the renderer's
-    /// caller-side logic and, from Task 2, by the filter.
+    /// The status text a row would display for `w` — the same string
+    /// `workspace_row` draws in the status column. Its one caller is the
+    /// filter in [`ordered_workspaces_for_panel`], which matches needles
+    /// against it.
     fn status_text(&self, w: &crate::data::store::Workspace) -> String {
         row_status_text(
             w,
@@ -46,12 +48,22 @@ pub struct PanelView<'a> {
     pub filter: Option<&'a str>,
 }
 
+/// The filter needle, if the user has typed anything past `/`. `Some("")`
+/// (filter mode on, nothing typed yet) collapses to `None` — both mean
+/// "show every row".
+///
+/// The single source for that rule. The row list and the empty-state
+/// message both go through here: if they each encoded it and the two ever
+/// drifted, the panel would tell the user "no matching workspaces" over a
+/// list that is plainly not narrowed (or vice versa).
+fn active_needle(filter: Option<&str>) -> Option<&str> {
+    filter.filter(|f| !f.is_empty())
+}
+
 impl PanelView<'_> {
-    /// The filter needle, if the user has typed anything past `/`. `Some("")`
-    /// (filter mode on, nothing typed yet) collapses to `None` here — both
-    /// mean "show every row".
+    /// This view's [`active_needle`].
     fn active_needle(&self) -> Option<&str> {
-        self.filter.filter(|f| !f.is_empty())
+        active_needle(self.filter)
     }
 }
 
@@ -175,7 +187,7 @@ pub fn ordered_workspaces_for_panel(
 ) -> Vec<crate::data::store::WorkspaceId> {
     // An empty buffer means "filter mode is on but nothing typed yet" —
     // every row still shows. Only a non-empty needle narrows the list.
-    let needle = filter.filter(|f| !f.is_empty());
+    let needle = active_needle(filter);
     let mut out = Vec::new();
     for repo in inputs.repos {
         let mut ws_for_repo: Vec<&crate::data::store::Workspace> = inputs
@@ -248,7 +260,7 @@ fn footer_text(sort: UpdatesSort, filter: Option<&str>) -> String {
     match filter {
         Some(needle) => format!(
             "/{}    [esc] clear  [\u{2191}\u{2193}] move  [\u{21b5}] switch",
-            crate::ui::text::truncate(needle, crate::ui::text::FILTER_ECHO_MAX)
+            truncate(needle, FILTER_ECHO_MAX)
         ),
         None => format!(
             "[\u{2191}\u{2193}] move  [\u{21b5}] switch  [v/s] split  [o] sort:{}  [/] filter  [esc] close",
@@ -393,9 +405,13 @@ fn scroll_offset_for_selected(
 }
 
 /// The status text a row displays, plus the timestamp its age column is
-/// anchored to. Split out of `workspace_row` so the filter can match on
-/// exactly the text the row shows — a row must never display text the
-/// filter fails to find.
+/// anchored to. Split out of `workspace_row` so the filter matches the same
+/// string the row is built from: a row never displays status text the
+/// filter fails to match. (Not the converse — `workspace_row` truncates
+/// this text to the status column, so a needle that only matches the
+/// truncated-away tail still keeps the row. Matching the full text is the
+/// more useful direction: what the user typed was there, panel width just
+/// hid it.)
 fn row_status_text(
     w: &crate::data::store::Workspace,
     events: Option<&crate::activity::events::WorkspaceEvents>,

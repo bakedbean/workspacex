@@ -136,11 +136,13 @@ async fn branch_rename_propagates_to_store() {
 /// through to `scm_cache` — filed under the new branch's name.
 ///
 /// The PR fetch is injected so the assertion doesn't depend on a remote
-/// or on `gh`: the old branch answers "PR #111 open", the new branch
-/// answers "no PR". After the rename, nothing anywhere may still say #111.
+/// or on `gh`: the old branch answers "PR #111 open, approved", the new
+/// branch answers "no PR". After the rename, nothing anywhere may still
+/// say #111 — least of all the approval verdict, which is what makes the
+/// cache-only surfaces claim a workspace is cleared to merge.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
-    use wsx::git::forge::{BranchLifecycle, PrStatus};
+    use wsx::git::forge::{BranchLifecycle, PrStatus, ReviewDecision};
 
     let repo_dir = TempDir::new().unwrap();
     let r = |args: &[&str]| {
@@ -195,6 +197,7 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
                     lifecycle: BranchLifecycle::PrOpen,
                     number: Some(111),
                     url: Some("https://example.invalid/pull/111".into()),
+                    review: Some(ReviewDecision::Approved),
                 }),
                 // The new branch has no PR of its own — the case where a
                 // stale "#111 open" is most obviously wrong.
@@ -202,6 +205,7 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
                     lifecycle: BranchLifecycle::NoPr,
                     number: None,
                     url: None,
+                    review: None,
                 }),
             })
         },
@@ -257,11 +261,21 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
         None,
         "the superseded branch's PR number is still cached under the new branch"
     );
+    assert_eq!(
+        g.pr_review.get(&id),
+        None,
+        "the superseded branch's approval is still cached under the new branch"
+    );
     let row = g.store.all_scm_cache().unwrap().get(&id).cloned();
     assert_eq!(
         row.as_ref().and_then(|r| r.pr_number),
         None,
         "the superseded branch's PR number was written through to scm_cache"
+    );
+    assert_eq!(
+        row.as_ref().and_then(|r| r.pr_review),
+        None,
+        "scm_cache still claims the workspace is approved, on a branch with no PR"
     );
     assert_eq!(
         row.as_ref().and_then(|r| r.pr_lifecycle),

@@ -240,14 +240,21 @@ fn sort_key(
     (attention, failed, activity_rank, recency)
 }
 
-/// Footer hint line. `v`/`s` collapse into one `[v/s] split` chip so the
-/// line still fits the widest panel (80 cols − 2 border = 78) with the
-/// sort mode shown.
-fn footer_text(sort: UpdatesSort) -> String {
-    format!(
-        "[\u{2191}/\u{2193}] move  [enter/l] switch  [v/s] split  [o] sort:{}  [esc] close",
-        sort.footer_label()
-    )
+/// Footer hint line, sized to fit the widest panel (80 cols − 2 border = 78).
+/// The `↑↓` / `↵` glyphs match the dashboard footer's and buy the room the
+/// `[/] filter` chip needs. While filtering, printable keys are filter text
+/// rather than shortcuts, so only the hints that still work are listed.
+fn footer_text(sort: UpdatesSort, filter: Option<&str>) -> String {
+    match filter {
+        Some(needle) => format!(
+            "/{}    [esc] clear  [\u{2191}\u{2193}] move  [\u{21b5}] switch",
+            crate::ui::text::truncate(needle, crate::ui::text::FILTER_ECHO_MAX)
+        ),
+        None => format!(
+            "[\u{2191}\u{2193}] move  [\u{21b5}] switch  [v/s] split  [o] sort:{}  [/] filter  [esc] close",
+            sort.footer_label()
+        ),
+    }
 }
 
 /// Render the floating workspace-updates panel. Reads live App state via
@@ -359,7 +366,7 @@ pub fn render_updates_panel(
     // when lifecycle is unknown.
     f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
-        Paragraph::new(footer_text(view.sort)).style(theme.dim_style()),
+        Paragraph::new(footer_text(view.sort, view.filter)).style(theme.dim_style()),
         footer_area,
     );
 }
@@ -1233,6 +1240,64 @@ mod ordering_tests {
         assert_eq!(UpdatesSort::PrStatus.footer_label(), "pr");
     }
 
+    /// The panel is capped at 80 columns with a 1-col border each side, so
+    /// the footer has 78 chars to work with. Check every sort mode — the
+    /// mode name is inlined, and `default` is the longest.
+    #[test]
+    fn footer_fits_the_panel_in_every_mode() {
+        for sort in [
+            UpdatesSort::Default,
+            UpdatesSort::Status,
+            UpdatesSort::PrStatus,
+        ] {
+            let idle = footer_text(sort, None);
+            assert!(
+                idle.chars().count() <= 78,
+                "idle footer for {sort:?} is {} chars: {idle}",
+                idle.chars().count()
+            );
+            let filtering = footer_text(sort, Some(&"x".repeat(60)));
+            assert!(
+                filtering.chars().count() <= 78,
+                "filtering footer for {sort:?} is {} chars: {filtering}",
+                filtering.chars().count()
+            );
+        }
+    }
+
+    /// Idle footer advertises the filter key; filtering footer echoes the
+    /// needle and swaps `esc close` for `esc clear`, because that is what
+    /// Esc does while a filter is up.
+    #[test]
+    fn footer_swaps_hints_when_filtering() {
+        let idle = footer_text(UpdatesSort::Default, None);
+        assert!(idle.contains("[/] filter"), "{idle}");
+        assert!(idle.contains("[esc] close"), "{idle}");
+
+        let filtering = footer_text(UpdatesSort::Default, Some("auth"));
+        assert!(filtering.starts_with("/auth"), "{filtering}");
+        assert!(filtering.contains("[esc] clear"), "{filtering}");
+        assert!(!filtering.contains("[esc] close"), "{filtering}");
+    }
+
+    /// `/` with nothing typed still echoes, so the keypress has visible
+    /// feedback before the first character.
+    #[test]
+    fn footer_echoes_empty_needle() {
+        let filtering = footer_text(UpdatesSort::Default, Some(""));
+        assert!(filtering.starts_with('/'), "{filtering}");
+        assert!(filtering.contains("[esc] clear"), "{filtering}");
+    }
+
+    /// A long needle is truncated rather than pushing the key hints off
+    /// the line.
+    #[test]
+    fn footer_truncates_a_long_needle() {
+        let filtering = footer_text(UpdatesSort::Default, Some(&"x".repeat(60)));
+        assert!(filtering.contains('…'), "{filtering}");
+        assert!(filtering.contains("[↑↓] move"), "{filtering}");
+    }
+
     /// Status mode: failed workspaces outrank everything, then statuses by
     /// descending urgency (Status::priority), Idle last.
     #[test]
@@ -1371,7 +1436,7 @@ mod ordering_tests {
             (UpdatesSort::Status, "sort:status"),
             (UpdatesSort::PrStatus, "sort:pr"),
         ] {
-            let f = footer_text(sort);
+            let f = footer_text(sort, None);
             assert!(f.contains(label), "footer {f:?} must contain {label:?}");
             assert!(f.contains("[o]"), "footer must advertise the o key");
             assert!(

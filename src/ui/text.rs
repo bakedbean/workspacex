@@ -18,6 +18,11 @@ pub(crate) fn truncate(s: &str, target: usize) -> String {
     }
 }
 
+/// Cap on an echoed filter needle in chrome (the updates-panel footer, the
+/// dashboard top bar). Long enough to recognize what you typed, short
+/// enough that it can't push the surrounding hints off the line.
+pub(crate) const FILTER_ECHO_MAX: usize = 24;
+
 /// Truncate `s` to at most `target` chars, cutting at a word boundary: keep
 /// as many whole words as fit (with the `…` counted against the budget) and
 /// attach `…` directly to the last kept word. Degrades to plain [`truncate`]

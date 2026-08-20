@@ -68,7 +68,9 @@ impl SortMode {
         }
     }
 
-    pub fn next(self) -> Self {
+    /// Next mode in the `o`-key cycle, mirroring
+    /// [`crate::ui::modal::updates_panel::UpdatesSort::cycle`].
+    pub fn cycle(self) -> Self {
         match self {
             SortMode::Recency => SortMode::Status,
             SortMode::Status => SortMode::Recency,

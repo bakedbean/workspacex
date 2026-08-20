@@ -1,7 +1,7 @@
 //! Renders the three chrome bars around the V5 dashboard list:
 //! top chrome, status strip, footer (keybinds + sparkline).
 
-use crate::ui::dashboard::sort::StatusCounts;
+use crate::ui::dashboard::sort::{SortMode, StatusCounts};
 use crate::ui::dashboard::sparkline;
 use crate::ui::dashboard::status::Status;
 use crate::ui::footer::{FooterHintAction, FooterHintSpan, key_for_glyph};
@@ -17,8 +17,18 @@ pub enum GroupMode {
     Attention,
 }
 
+/// The dashboard's title row: brand, the `group:` and `sort:` mode tabs, the
+/// active filter echo, and the repo/workspace counts.
+///
+/// Everything after the brand and `group:` tabs is optional, and sheds as the
+/// terminal narrows so ratatui never clips the line mid-word. The order is
+/// fixed: the `sort:` tabs go first (the mode stays discoverable from `o` and
+/// the footer hint), then the counts. The filter echo never sheds — it only
+/// shrinks — because a needle with no visible cause is worse than a truncated
+/// one: rows are missing from the list and nothing on screen says why.
 pub fn top_chrome(
     group: GroupMode,
+    sort: SortMode,
     repos: usize,
     workspaces: usize,
     filter: Option<&str>,
@@ -51,32 +61,57 @@ pub fn top_chrome(
         Span::raw(" ".to_string()),
         tab_span("attention", group == GroupMode::Attention, theme),
     ];
+    let sort_tabs: Vec<Span<'static>> = vec![
+        Span::raw("   ".to_string()),
+        Span::styled("sort: ".to_string(), Style::default().fg(theme.path)),
+        tab_span("recency", sort == SortMode::Recency, theme),
+        Span::raw(" ".to_string()),
+        tab_span("status", sort == SortMode::Status, theme),
+    ];
+    let counts = format!("{repos} repos · {workspaces} workspaces");
 
-    let right = format!("{repos} repos · {workspaces} workspaces");
-    let mut used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let cols = |spans: &[Span<'static>]| -> usize {
+        spans.iter().map(|s| s.content.chars().count()).sum()
+    };
+    let fixed = cols(&spans);
+    let sort_cols = cols(&sort_tabs);
+    // One blank column minimum before the flush-right counts, so they never
+    // run into whatever precedes them.
+    let counts_cols = counts.chars().count() + 1;
 
     // Echo the live needle: without it, `/` looks inert and rows vanishing
     // from the list have no visible cause. The needle is budgeted against
     // the room actually left on this line, not just capped at
-    // `FILTER_ECHO_MAX`: the gap before the right-hand counts floors at 1,
-    // so a fixed cap would push the counts off the right edge on a narrow
-    // terminal instead of shrinking the echo.
-    if let Some(needle) = filter {
-        // Reserved alongside the needle itself: the 2-space separator, the
-        // `/`, and the 1-char minimum gap before the counts.
-        const ECHO_CHROME_W: usize = 4;
-        let room = width.saturating_sub(used + right.chars().count() + ECHO_CHROME_W);
-        let echo = format!("  /{}", truncate(needle, FILTER_ECHO_MAX.min(room)));
-        used += echo.chars().count();
+    // `FILTER_ECHO_MAX`, so a long needle shrinks instead of pushing the
+    // counts off the right edge.
+    let echo = filter.map(|needle| {
+        // Reserved alongside the needle itself: the 2-space separator and
+        // the `/`, plus the counts it must not displace.
+        const ECHO_CHROME_W: usize = 3;
+        let room = width.saturating_sub(fixed + counts_cols + ECHO_CHROME_W);
+        format!("  /{}", truncate(needle, FILTER_ECHO_MAX.min(room)))
+    });
+    let echo_cols = echo.as_ref().map(|e| e.chars().count()).unwrap_or(0);
+
+    // Decide what fits before emitting anything, since the counts are flush
+    // right but outrank the tabs that precede them.
+    let show_counts = fixed + echo_cols + counts_cols <= width;
+    let counts_reserve = if show_counts { counts_cols } else { 0 };
+    if fixed + echo_cols + counts_reserve + sort_cols <= width {
+        spans.extend(sort_tabs);
+    }
+    if let Some(echo) = echo {
         spans.push(Span::styled(
             echo,
             Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
         ));
     }
-
-    let gap = width.saturating_sub(used + right.chars().count()).max(1);
-    spans.push(Span::raw(" ".repeat(gap)));
-    spans.push(Span::styled(right, Style::default().fg(theme.path)));
+    if show_counts {
+        let used: usize = cols(&spans);
+        let gap = width.saturating_sub(used + counts.chars().count()).max(1);
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(counts, Style::default().fg(theme.path)));
+    }
     Line::from(spans)
 }
 
@@ -140,6 +175,7 @@ pub fn footer(
         ("↵", "open"),
         ("n", "new"),
         ("G", "group"),
+        ("o", "order"),
         ("/", "filter"),
     ];
     if workspace_selected {
@@ -218,7 +254,7 @@ mod tests {
     #[test]
     fn top_chrome_shows_app_name_and_counts() {
         let theme = Theme::wsx();
-        let line = top_chrome(GroupMode::Repo, 9, 14, None, 100, &theme);
+        let line = top_chrome(GroupMode::Repo, SortMode::Recency, 9, 14, None, 100, &theme);
         let t = text(&line);
         assert!(t.starts_with("▌ workspace x · dashboard"), "{t:?}");
         assert!(t.contains("group: "));
@@ -232,13 +268,21 @@ mod tests {
     #[test]
     fn top_chrome_echoes_the_active_filter() {
         let theme = Theme::wsx();
-        let line = top_chrome(GroupMode::Repo, 9, 14, Some("auth"), 100, &theme);
+        let line = top_chrome(
+            GroupMode::Repo,
+            SortMode::Recency,
+            9,
+            14,
+            Some("auth"),
+            100,
+            &theme,
+        );
         assert!(text(&line).contains("/auth"), "{:?}", text(&line));
 
         // Look for the echo's own prefix rather than a bare `/`, so the
         // assertion tracks the echo and not some unrelated span (wordmark,
         // tab labels, counts) that happens to grow a slash later.
-        let bare = top_chrome(GroupMode::Repo, 9, 14, None, 100, &theme);
+        let bare = top_chrome(GroupMode::Repo, SortMode::Recency, 9, 14, None, 100, &theme);
         assert!(!text(&bare).contains("  /"), "{:?}", text(&bare));
     }
 
@@ -247,7 +291,15 @@ mod tests {
     #[test]
     fn top_chrome_echoes_an_empty_filter() {
         let theme = Theme::wsx();
-        let line = top_chrome(GroupMode::Repo, 9, 14, Some(""), 100, &theme);
+        let line = top_chrome(
+            GroupMode::Repo,
+            SortMode::Recency,
+            9,
+            14,
+            Some(""),
+            100,
+            &theme,
+        );
         assert!(text(&line).contains('/'), "{:?}", text(&line));
     }
 
@@ -264,7 +316,15 @@ mod tests {
         // 100 has room to spare; 80 forces the echo to shrink well below
         // FILTER_ECHO_MAX to keep the counts on screen.
         for width in [100, 90, 80] {
-            let line = top_chrome(GroupMode::Repo, 9, 14, Some(&needle), width, &theme);
+            let line = top_chrome(
+                GroupMode::Repo,
+                SortMode::Recency,
+                9,
+                14,
+                Some(&needle),
+                width,
+                &theme,
+            );
             let t = text(&line);
             assert!(
                 line.width() <= width,
@@ -288,13 +348,125 @@ mod tests {
         let theme = Theme::wsx();
         let needle = "x".repeat(80);
         for width in [0, 1, 40, 76] {
-            let line = top_chrome(GroupMode::Repo, 9, 14, Some(&needle), width, &theme);
+            let line = top_chrome(
+                GroupMode::Repo,
+                SortMode::Recency,
+                9,
+                14,
+                Some(&needle),
+                width,
+                &theme,
+            );
             let t = text(&line);
             assert!(
                 !t.contains("/x"),
                 "no needle chars survive at width {width}: {t:?}"
             );
         }
+    }
+
+    #[test]
+    fn top_chrome_names_both_sort_modes() {
+        let theme = Theme::wsx();
+        let t = text(&top_chrome(
+            GroupMode::Repo,
+            SortMode::Recency,
+            9,
+            14,
+            None,
+            120,
+            &theme,
+        ));
+        assert!(t.contains("sort: "), "{t:?}");
+        assert!(t.contains("recency"), "{t:?}");
+        assert!(t.contains("status"), "{t:?}");
+    }
+
+    #[test]
+    fn top_chrome_never_overflows_a_narrow_terminal() {
+        let theme = Theme::wsx();
+        for w in [60usize, 80, 100, 120, 160] {
+            for filter in [None, Some("auth")] {
+                let t = text(&top_chrome(
+                    GroupMode::Repo,
+                    SortMode::Recency,
+                    9,
+                    14,
+                    filter,
+                    w,
+                    &theme,
+                ));
+                assert!(
+                    t.chars().count() <= w,
+                    "width {w} filter {filter:?} overflowed to {}: {t:?}",
+                    t.chars().count()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn top_chrome_sheds_the_sort_tabs_before_the_counts() {
+        let theme = Theme::wsx();
+        let at = |w| {
+            text(&top_chrome(
+                GroupMode::Repo,
+                SortMode::Recency,
+                9,
+                14,
+                None,
+                w,
+                &theme,
+            ))
+        };
+        // 120 holds everything; 80 holds the counts but not the tabs on top
+        // of them. The mode stays reachable via `o` and the footer hint,
+        // whereas the counts have no other home on this line.
+        assert!(at(120).contains("sort: "), "{:?}", at(120));
+        assert!(at(120).contains("9 repos · 14 workspaces"), "{:?}", at(120));
+        assert!(!at(80).contains("sort: "), "{:?}", at(80));
+        assert!(at(80).contains("9 repos · 14 workspaces"), "{:?}", at(80));
+        // The group tabs are load-bearing and survive both.
+        assert!(at(80).contains("group: "), "{:?}", at(80));
+    }
+
+    #[test]
+    fn top_chrome_highlights_the_active_sort_mode() {
+        let theme = Theme::wsx();
+        // The active tab is the one painted on the selection background;
+        // reading the styles is what distinguishes it from the inactive one,
+        // since both labels are always present.
+        let active_label = |mode: SortMode| -> String {
+            top_chrome(GroupMode::Repo, mode, 9, 14, None, 120, &theme)
+                .spans
+                .iter()
+                .filter(|s| s.style.bg == Some(theme.selected_bg))
+                .map(|s| s.content.to_string())
+                .collect()
+        };
+        assert!(active_label(SortMode::Recency).contains("recency"));
+        assert!(!active_label(SortMode::Recency).contains("status"));
+        assert!(active_label(SortMode::Status).contains("status"));
+        assert!(!active_label(SortMode::Status).contains("recency"));
+    }
+
+    #[test]
+    fn footer_offers_the_order_key() {
+        let theme = Theme::wsx();
+        let (line, _, hints) = footer(&[1, 2, 3], "0.1.0", 200, &theme, "24h", false);
+        let t = text(&line);
+        assert!(t.contains(" order"), "order label present: {t:?}");
+        let order = hints
+            .iter()
+            .find(|h| h.action == FooterHintAction::Key(key_for_glyph("o").unwrap()))
+            .expect("order hint present");
+        let cells: Vec<char> = t.chars().collect();
+        assert_eq!(
+            cells[order.start_col as usize..(order.start_col + order.width) as usize]
+                .iter()
+                .collect::<String>(),
+            " o  order"
+        );
     }
 
     #[test]
@@ -411,7 +583,7 @@ mod tests {
             .expect("quit hint present");
         assert_eq!(slice(quit), " q  quit", "quit hint covers pill + label");
         // Every printed keybind gets a hint (none drop out).
-        assert_eq!(hints.len(), 7);
+        assert_eq!(hints.len(), 8);
     }
 
     #[test]
@@ -425,6 +597,6 @@ mod tests {
         assert!(t.contains(" group"), "group still present: {t:?}");
         assert!(t.contains(" filter"), "filter still present: {t:?}");
         assert!(t.contains(" quit"), "quit still present: {t:?}");
-        assert_eq!(hints.len(), 6, "6 hints when actions omitted");
+        assert_eq!(hints.len(), 7, "7 hints when actions omitted");
     }
 }

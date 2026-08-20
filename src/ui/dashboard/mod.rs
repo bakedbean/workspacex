@@ -84,6 +84,34 @@ pub struct DashboardState {
     pub reply_draft_clear_at_ms: Option<u64>,
 }
 
+/// Settings key holding the by-repo sort mode.
+pub const SORT_MODE_SETTING: &str = "dashboard_sort_mode";
+/// Settings key holding how long a blocked row keeps its pin, in seconds.
+pub const BLOCKED_PIN_SETTING: &str = "dashboard_blocked_pin_max_age_secs";
+
+impl DashboardState {
+    /// Load the persisted ordering preferences. Both fall back to their
+    /// defaults when unset or unparseable — a hand-edited settings row should
+    /// not stop the dashboard from drawing.
+    pub fn load_ordering_prefs(&mut self, store: &crate::data::store::Store) {
+        if let Ok(Some(v)) = store.get_setting(SORT_MODE_SETTING) {
+            self.sort_mode = SortMode::from_str_or_default(&v);
+        }
+        if let Ok(Some(v)) = store.get_setting(BLOCKED_PIN_SETTING) {
+            if let Ok(secs) = v.parse::<u64>() {
+                self.blocked_pin_max_age_secs = secs;
+            }
+        }
+    }
+
+    /// Move to the next sort mode and remember it, so the choice survives a
+    /// restart the way the theme does.
+    pub fn cycle_sort_mode(&mut self, store: &crate::data::store::Store) {
+        self.sort_mode = self.sort_mode.cycle();
+        let _ = store.set_setting(SORT_MODE_SETTING, self.sort_mode.as_str());
+    }
+}
+
 // Hand-written rather than derived: `blocked_pin_max_age_secs` must default to
 // the pin window, not to `u64`'s zero, which would silently disable the pin.
 impl Default for DashboardState {
@@ -239,6 +267,7 @@ pub fn render_without_footer(
     f.render_widget(
         Paragraph::new(layout::top_chrome(
             state.group_mode,
+            state.sort_mode,
             inputs.repos.len(),
             inputs.workspaces.len(),
             state.filter.as_deref(),

@@ -692,13 +692,15 @@ impl App {
         let theme = crate::ui::theme::Theme::by_name(&theme_name);
         let mut registry = crate::detail_modules::Registry::new();
         crate::detail_modules::register_builtins(&mut registry);
+        let mut dashboard = DashboardState::default();
+        dashboard.load_ordering_prefs(&store);
         let mut app = Self {
             store,
             sessions: SessionManager::new(),
             resize_debounce: Default::default(),
             view: View::Dashboard,
             modal: None,
-            dashboard: DashboardState::default(),
+            dashboard,
             repos: Vec::new(),
             workspaces: Vec::new(),
             selectable: Vec::new(),

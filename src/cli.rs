@@ -573,6 +573,8 @@ fn known_setting_key(k: &str) -> bool {
             | "shared_hosts"
             | "dashboard_branch_width"
             | "dashboard_pr_width"
+            | "dashboard_sort_mode"
+            | "dashboard_blocked_pin_max_age_secs"
             | "coding_agent"
             | "detail_bar_config"
             | "usage_graph_window"
@@ -2745,6 +2747,18 @@ mod tests {
         // After a valid subcommand, a dashed flag still surfaces group help.
         assert!(want(parse(&["agent", "send", "--help"]).unwrap()));
         assert!(want(parse(&["agent", "send", "-h"]).unwrap()));
+    }
+
+    /// The ordering settings the dashboard reads must be reachable from
+    /// `wsx config set`, or "configurable" is only true for hand-edited SQL.
+    #[test]
+    fn dashboard_ordering_settings_are_settable_from_the_cli() {
+        for key in ["dashboard_sort_mode", "dashboard_blocked_pin_max_age_secs"] {
+            match parse(&["config", "set", key, "x"]).unwrap() {
+                CliAction::ConfigSet { key: k, .. } => assert_eq!(k, key),
+                other => panic!("expected ConfigSet for {key}, got {other:?}"),
+            }
+        }
     }
 
     #[test]

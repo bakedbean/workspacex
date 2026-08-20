@@ -248,6 +248,25 @@ pub async fn tail_workspace_events(
 /// the DB; if claude (or a user) renamed it, update name + branch in the
 /// store. Runs forever; cheap when nothing has drifted.
 pub async fn branch_drift_poll(app: SharedApp) {
+    branch_drift_poll_with(app, |path, branch| async move {
+        crate::git::forge::fetch_pr_status(&path, &branch).await
+    })
+    .await
+}
+
+/// [`branch_drift_poll`] with the PR fetch injected, so tests can drive the
+/// loop without a remote and without `gh`. Modelled on the liveness
+/// injection in `commands::shared::shared_list_records`: production passes
+/// `crate::git::forge::fetch_pr_status`, tests pass a closure that answers
+/// from a table keyed by branch.
+///
+/// The closure takes owned `(worktree, branch)` rather than references so
+/// the returned future doesn't have to borrow from the loop body.
+pub async fn branch_drift_poll_with<F, Fut>(app: SharedApp, fetch_pr: F)
+where
+    F: Fn(std::path::PathBuf, String) -> Fut,
+    Fut: std::future::Future<Output = crate::error::Result<Option<crate::git::forge::PrStatus>>>,
+{
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         interval.tick().await;
@@ -373,9 +392,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     let mut g = app.lock().await;
                     g.pr_last_poll_ms.insert(id, now_ms);
                 }
-                if let Ok(Some(status)) =
-                    crate::git::forge::fetch_pr_status(&path, &db_branch).await
-                {
+                if let Ok(Some(status)) = fetch_pr(path.clone(), db_branch.clone()).await {
                     let mut g = app.lock().await;
                     g.pr_lifecycle.insert(id, status.lifecycle);
                     match status.number {

@@ -42,32 +42,38 @@ Attach to any workspace, then press `Ctrl-x` followed by `u`.
    Backspace to clear again and type `permission`: with a workspace
    sitting on a permission prompt, this narrows to it.
 
-6. **Printable keys are text, arrows still navigate.** With the filter
-   from scenario 5 still active, press `j`. Expected: a `j` is appended
-   to the needle and the selection does NOT move. Press `↓`. Expected:
-   the selection moves and the needle is unchanged. Press Enter on a
-   row. Expected: it attaches, same as without a filter.
+6. **Printable keys are text, not shortcuts.** Backspace all the way
+   back to an empty needle — the footer shows a bare `/` again and every
+   row is visible. Press `j`. Expected: the footer echo becomes `/j` and
+   the selection does NOT move; outside filter mode `j` moves down. The
+   list narrowing to rows matching "j" is the filter working, not a bug.
 
-7. **Cursor tracks its workspace.** Reopen the panel (`Ctrl-x` then
+7. **Arrows and Enter still navigate while filtering.** Backspace once
+   more to get back to an empty needle and the full list, leaving the
+   filter armed. Press `↓`. Expected: the selection moves one row and
+   the needle is unchanged. Press Enter. Expected: it attaches to the
+   selected workspace, exactly as it would with no filter.
+
+8. **Cursor tracks its workspace.** Reopen the panel (`Ctrl-x` then
    `u`). Select a row partway down the list with `↑`/`↓` (no filter
    active yet), then press `/` and type a needle that keeps that row
    but hides rows above it. Expected: the highlight stays on the same
    workspace as it moves up the list, rather than staying on the same
    screen row.
 
-8. **No matches.** Backspace to clear, then type a needle matching
+9. **No matches.** Backspace to clear, then type a needle matching
    nothing. Expected: `(no matching workspaces)` — not `(no
    workspaces)`, which would read as "you have none at all".
 
-9. **Two-stage Esc.** With the no-match filter from scenario 8 still
-   active, press Esc. Expected: the filter is gone, the full list
-   returns, and the panel stays open. Press Esc again. Expected: the
-   panel closes. (A single Esc always fully exits filter mode, even if
-   the buffer has text — it does not just trim one character.)
+10. **Two-stage Esc.** With the no-match filter from scenario 9 still
+    active, press Esc. Expected: the filter is gone, the full list
+    returns, and the panel stays open. Press Esc again. Expected: the
+    panel closes. (A single Esc always fully exits filter mode, even if
+    the buffer has text — it does not just trim one character.)
 
-10. **Reopen starts clean.** Press `Ctrl-x` then `u` again. Expected: no
+11. **Reopen starts clean.** Press `Ctrl-x` then `u` again. Expected: no
     filter is active and every workspace is listed.
 
-11. **Dashboard echo.** Return to the dashboard and press `/`, then type.
+12. **Dashboard echo.** Return to the dashboard and press `/`, then type.
     Expected: the needle appears next to the `group:` tabs in the top
     bar, so the vanishing rows have a visible cause. Esc clears it.

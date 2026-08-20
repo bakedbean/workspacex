@@ -379,13 +379,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     }
                     // Write-through so `wsx waybar menu-entries` (a separate
                     // short-lived process) sees PR state without calling gh.
-                    let _ = g.store.upsert_scm_pr(
-                        id,
-                        status.lifecycle,
-                        status.number,
-                        status.url.as_deref(),
-                        now_ms / 1000,
-                    );
+                    let _ = g.store.upsert_scm_pr(id, &status, now_ms / 1000);
                 }
                 // Ok(None) → leave any existing cached value alone; better
                 // than clobbering a previously-known state on a transient

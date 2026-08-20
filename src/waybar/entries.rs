@@ -556,9 +556,12 @@ mod entry_tests {
         store
             .upsert_scm_pr(
                 ids[0],
-                crate::git::forge::BranchLifecycle::PrOpen,
-                Some(5),
-                None,
+                &crate::git::forge::PrStatus {
+                    lifecycle: crate::git::forge::BranchLifecycle::PrOpen,
+                    number: Some(5),
+                    url: None,
+                    review: None,
+                },
                 0,
             )
             .unwrap();

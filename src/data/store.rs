@@ -562,6 +562,22 @@ mod tests {
     }
 
     #[test]
+    fn migrate_v21_scm_pr_review_column_idempotent() {
+        let store = Store::open_in_memory().unwrap();
+        store.migrate_for_test().unwrap(); // re-run must not error
+        let n: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('scm_cache') \
+                 WHERE name = 'pr_review'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "pr_review column must exist exactly once");
+    }
+
+    #[test]
     fn settings_crud_round_trip() {
         let store = Store::open_in_memory().unwrap();
         assert!(store.get_setting("foo").unwrap().is_none());
@@ -1407,7 +1423,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 20);
+        assert_eq!(v, 21);
     }
 
     #[test]

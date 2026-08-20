@@ -250,13 +250,7 @@ pub async fn run_refresh_prs(store: &Store) -> Result<()> {
             if let Ok(Some(status)) =
                 crate::git::forge::fetch_pr_status(&ws.worktree_path, &ws.branch).await
             {
-                let _ = store.upsert_scm_pr(
-                    ws.id,
-                    status.lifecycle,
-                    status.number,
-                    status.url.as_deref(),
-                    unix_now(),
-                );
+                let _ = store.upsert_scm_pr(ws.id, &status, unix_now());
             }
             // Err / Ok(None): leave cached state alone (transient failure
             // must not clobber a known lifecycle).

@@ -248,6 +248,25 @@ pub async fn tail_workspace_events(
 /// the DB; if claude (or a user) renamed it, update name + branch in the
 /// store. Runs forever; cheap when nothing has drifted.
 pub async fn branch_drift_poll(app: SharedApp) {
+    branch_drift_poll_with(app, |path, branch| async move {
+        crate::git::forge::fetch_pr_status(&path, &branch).await
+    })
+    .await
+}
+
+/// [`branch_drift_poll`] with the PR fetch injected, so tests can drive the
+/// loop without a remote and without `gh`. Modelled on the liveness
+/// injection in `commands::shared::shared_list_records`: production passes
+/// `crate::git::forge::fetch_pr_status`, tests pass a closure that answers
+/// from a table keyed by branch.
+///
+/// The closure takes owned `(worktree, branch)` rather than references so
+/// the returned future doesn't have to borrow from the loop body.
+pub async fn branch_drift_poll_with<F, Fut>(app: SharedApp, fetch_pr: F)
+where
+    F: Fn(std::path::PathBuf, String) -> Fut,
+    Fut: std::future::Future<Output = crate::error::Result<Option<crate::git::forge::PrStatus>>>,
+{
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         interval.tick().await;
@@ -317,6 +336,15 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     g.workspace_diff.remove(&id);
                     g.workspace_diff_per_file.remove(&id);
                     g.diff_last_poll_ms.remove(&id);
+                    // Everything below works from `snapshot`, taken before
+                    // the rename — `db_branch` now names the branch we just
+                    // superseded. Polling PR status with it would re-file
+                    // the old branch's PR under the new branch's name and
+                    // undo the invalidation we just did, in the same pass.
+                    // Skip the rest of this workspace's iteration; the
+                    // throttle stamps were cleared above, so the next tick
+                    // (2s) re-snapshots and refreshes everything for real.
+                    continue;
                 }
             }
 
@@ -373,9 +401,7 @@ pub async fn branch_drift_poll(app: SharedApp) {
                     let mut g = app.lock().await;
                     g.pr_last_poll_ms.insert(id, now_ms);
                 }
-                if let Ok(Some(status)) =
-                    crate::git::forge::fetch_pr_status(&path, &db_branch).await
-                {
+                if let Ok(Some(status)) = fetch_pr(path.clone(), db_branch).await {
                     let mut g = app.lock().await;
                     g.pr_lifecycle.insert(id, status.lifecycle);
                     match status.number {

@@ -372,6 +372,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_payloads_captured_from_real_gh() {
+        // Verbatim `gh pr view --json state,isDraft,mergeable,number,url,\
+        // reviewDecision` output, so a change in gh's field set or its
+        // rendering of an absent verdict is caught here rather than by a
+        // blank indicator on someone's dashboard.
+        let approved = r#"{"isDraft":false,"mergeable":"UNKNOWN","number":14203,"reviewDecision":"APPROVED","state":"MERGED","url":"https://github.com/cli/cli/pull/14203"}"#;
+        let s = parse_gh_pr_status(approved).unwrap();
+        assert_eq!(s.lifecycle, BranchLifecycle::PrMerged);
+        assert_eq!(s.number, Some(14203));
+        assert_eq!(s.review, Some(ReviewDecision::Approved));
+
+        // A repo with no approval gate: gh renders the null verdict as "".
+        let ungated = r#"{"isDraft":false,"mergeable":"UNKNOWN","number":286,"reviewDecision":"","state":"MERGED","url":"https://github.com/bakedbean/workspacex/pull/286"}"#;
+        assert_eq!(parse_gh_pr_status(ungated).unwrap().review, None);
+    }
+
+    #[test]
     fn review_decision_is_none_when_no_review_gate() {
         // gh renders GraphQL's null reviewDecision as "" — the repo requires
         // no approval and none was submitted. Distinct from REVIEW_REQUIRED.

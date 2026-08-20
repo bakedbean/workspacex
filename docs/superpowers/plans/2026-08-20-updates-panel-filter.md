@@ -8,6 +8,27 @@
 
 **Tech Stack:** Rust, ratatui, crossterm, tokio (`#[tokio::test]` for key-handler tests).
 
+## Deviations from this plan
+
+Execution found two errors in the plan body below. The shipped code is
+correct; the plan text is left as written for the record.
+
+1. **`render_updates_panel` argument count.** Task 1 drops
+   `#[allow(clippy::too_many_arguments)]` from `render_updates_panel` and
+   expects none to be needed afterwards ("no `too_many_arguments` allows
+   remaining on either panel function"). Task 2 then adds a `filter`
+   parameter, taking the signature to 8 arguments — one past clippy's
+   threshold, so the lint fires again. Resolved by bundling the per-frame
+   state (`selected`, `sort`, `filter`) into a `PanelView` struct that sits
+   alongside the borrowed-cache `PanelInputs`.
+   `ordered_workspaces_for_panel` deliberately still takes three flat
+   arguments; it has no use for `selected`.
+2. **The panel-reopen test's Esc count.** The plan's sketch of that test
+   presses `Esc` once and expects the panel to close, which contradicts the
+   two-stage `Esc` rule the same plan specifies (with a filter active, the
+   first `Esc` clears it and only the second closes the panel). The shipped
+   test presses `Esc` twice.
+
 ## Global Constraints
 
 - Never commit directly to `main`. This work happens on the current branch; a PR opens at the end.

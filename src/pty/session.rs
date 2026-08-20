@@ -129,6 +129,17 @@ pub struct Session {
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
     pub prompt: Arc<Mutex<PromptCapture>>,
+    /// When this session's PTY was created.
+    ///
+    /// `send_text_when_settled` refuses to inject into a session younger than
+    /// `SPAWN_SETTLE_MS`, which is the belt to `ready_for_input`'s braces. A
+    /// screen predicate can only report what has been painted, and a cold agent
+    /// can paint a composer and then take it away again: a real codex capture
+    /// paints its composer at t=112ms and replaces it with the directory-trust
+    /// dialog at t=346ms, and text injected into that gap is eaten by the
+    /// dialog that arrives after it. The floor holds the whole draw-then-replace
+    /// window shut, and it is the only cover hermes has at all.
+    pub(crate) spawned_at: std::time::Instant,
     /// When set, this session's child is a tmux attach client and the agent
     /// lives in the tmux server under this session name. `kill()`/`Drop` kill
     /// only the client (agent survives — the shared-workspace persistence
@@ -297,12 +308,16 @@ impl Session {
             // A quiet window alone only means "no bytes moved recently", which
             // during a fresh agent boot is also true in the pauses *before* the
             // agent can accept input. `ready_for_input` adds the missing
-            // "the composer exists" half of the condition.
+            // "the composer exists" half of the condition, and the spawn floor
+            // covers the case where the composer is there and about to be
+            // replaced by a modal (see `Session::spawned_at`).
             let ready = {
                 let parser = self.parser.lock().unwrap();
                 ready_for_input(self.agent, parser.screen())
             };
-            if last > 0 && ready {
+            let settled_since_spawn =
+                self.spawned_at.elapsed() >= std::time::Duration::from_millis(SPAWN_SETTLE_MS);
+            if last > 0 && ready && settled_since_spawn {
                 let now_ms = now_ms();
                 let since_last = now_ms.saturating_sub(last);
                 if since_last >= quiet_ms {
@@ -359,6 +374,17 @@ impl Session {
         }
     }
 }
+
+/// How long a freshly spawned session is held ineligible for injection, no
+/// matter what its screen shows.
+///
+/// Sized off real cold-boot captures: codex hands its screen to the
+/// directory-trust dialog at t=346ms, so anything under that leaves the
+/// draw-then-replace window open, and pi has not started its TUI at all before
+/// ~2.2s (its screen predicate, not this floor, is what covers pi). 1500ms
+/// clears codex's window with room to spare while costing a cold delivery at
+/// most a second and a half out of the 120s `DELIVERY_TIMEOUT_MS` budget.
+const SPAWN_SETTLE_MS: u64 = 1_500;
 
 /// How long an injection waits for the writer task to push its queued bytes
 /// through `write_all`. Generous: the writer only stalls behind a blocked PTY,
@@ -498,6 +524,7 @@ impl Session {
             .expect("openpty for fake test session");
         let (tx, _rx) = mpsc::channel::<WriteReq>(1);
         Session {
+            spawned_at: std::time::Instant::now(),
             parser: Arc::new(Mutex::new(Parser::new(24, 80, 1000))),
             writer: tx,
             status: Arc::new(RwLock::new(status)),
@@ -705,6 +732,7 @@ pub fn spawn_command_session(
             Error::Pty(format!("spawn: {e}"))
         }
     })?;
+    let spawned_at = std::time::Instant::now();
     drop(pair.slave);
 
     let killer = child.clone_killer();
@@ -781,6 +809,7 @@ pub fn spawn_command_session(
     let prompt = Arc::new(Mutex::new(PromptCapture::default()));
 
     Ok(Session {
+        spawned_at,
         parser,
         writer: tx,
         status,
@@ -1509,14 +1538,71 @@ mod tests {
             .unwrap();
         // The helper waits for the quiet window, then writes the payload.
         // With cat, the payload echoes back into the screen buffer.
+        let start = std::time::Instant::now();
         assert!(
-            s.send_text_when_settled("AUTO_MSG", 200, 3_000).await,
+            s.send_text_when_settled("AUTO_MSG", 200, 6_000).await,
             "a settled PTY must report that the write happened"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_millis(SPAWN_SETTLE_MS),
+            "the write must not beat the spawn floor: {:?}",
+            start.elapsed()
         );
         // Allow cat to echo.
         tokio::time::sleep(Duration::from_millis(300)).await;
         let screen = s.parser.lock().unwrap().screen().contents();
         assert!(screen.contains("AUTO_MSG"), "screen contents: {screen:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn send_text_when_settled_refuses_a_session_younger_than_the_spawn_floor() {
+        // Ready and settled is not enough on its own. A cold agent can paint a
+        // composer and then replace it with a modal that eats what we typed
+        // (codex does exactly that, at t=112ms and t=346ms respectively), and a
+        // screen predicate cannot see a dialog that has not arrived yet. Inside
+        // SPAWN_SETTLE_MS the answer is "not written" regardless of the screen,
+        // so the message stays queued instead of being acked into the void.
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
+        let cwd = PathBuf::from(".");
+        let s = spawn_session(
+            &cwd,
+            80,
+            24,
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            },
+            crate::agent::remote_control::RemoteOpts::disabled(),
+            AgentKind::Codex,
+            None,
+            None,
+        )
+        .unwrap();
+        // Everything except the floor says "go": a composer row on screen and
+        // output that stopped long ago.
+        s.parser
+            .lock()
+            .unwrap()
+            .process("\u{203a} Ask Codex to do anything".as_bytes());
+        s.activity_ms
+            .store(now_ms().saturating_sub(10_000), Ordering::Relaxed);
+        assert!(
+            ready_for_input(s.agent, s.parser.lock().unwrap().screen()),
+            "the screen predicate should be satisfied, leaving the floor as \
+             the only thing holding the injection back"
+        );
+
+        let timeout_ms = SPAWN_SETTLE_MS / 2;
+        assert!(
+            !s.send_text_when_settled("TOO_SOON", 200, timeout_ms).await,
+            "an injection inside the spawn floor must report that nothing was \
+             written"
+        );
+        s.kill();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

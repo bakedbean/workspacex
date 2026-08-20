@@ -381,22 +381,90 @@ async fn await_ack(rx: tokio::sync::oneshot::Receiver<()>, timeout_ms: u64) -> b
 /// Whether `agent`'s TUI has drawn an input composer that will actually keep
 /// what we type into it.
 ///
-/// Claude sets terminal modes for ~400ms before switching to the alternate
-/// screen and clearing it (`ESC[?1049h ESC[2J`). Text injected in that window
-/// goes into a terminal with no composer and is wiped by the clear — measured
-/// as a real, load-dependent message loss (roughly 1 in 3 injections on a
-/// loaded machine). The alternate screen being up is the signal that the
-/// composer exists.
+/// Every signal below was read off a real cold boot captured through
+/// `vt100::Parser` (the `tests/fixtures/agent-boot` blobs are cuts of those
+/// captures), not guessed from the agents' source.
 ///
-/// Codex and hermes render inline and never emit `ESC[?1049h` (verified
-/// against both binaries), so for them the caller's quiet window is the whole
-/// readiness condition — gating them on an alternate screen would block every
-/// delivery until the timeout. Pi is grouped with the inline agents.
+/// - **Claude** sets terminal modes for ~400ms before switching to the
+///   alternate screen and clearing it (`ESC[?1049h ESC[2J`). Text injected in
+///   that window goes into a terminal with no composer and is wiped by the
+///   clear — measured as a real, load-dependent message loss (roughly 1 in 3
+///   injections on a loaded machine). The alternate screen being up is the
+///   signal that the composer exists.
+/// - **Codex** renders inline and never emits `ESC[?1049h`, so it needs its own
+///   signal: see `codex_ready`.
+/// - **Pi** also renders inline: see `pi_ready`.
+/// - **Hermes** has no signal here, and that is a gap, not a decision — the
+///   binary is not installed on the machine this was investigated on, so there
+///   was no cold boot to read a marker off, and inventing one from guesswork is
+///   worse than admitting the hole. Hermes therefore relies on the
+///   `SPAWN_SETTLE_MS` floor in `send_text_when_settled` alone. Anyone with a
+///   hermes install should capture a boot and give it a real predicate here.
 pub(crate) fn ready_for_input(agent: AgentKind, screen: &vt100::Screen) -> bool {
     match agent {
         AgentKind::Claude => screen.alternate_screen(),
-        AgentKind::Codex | AgentKind::Hermes | AgentKind::Pi => true,
+        AgentKind::Codex => codex_ready(screen),
+        AgentKind::Pi => pi_ready(screen),
+        AgentKind::Hermes => true,
     }
+}
+
+/// The glyph codex puts at the head of its composer row.
+const CODEX_PROMPT: char = '\u{203a}'; // ›
+
+/// Codex is ready when its composer row is drawn AND the cursor is visible.
+///
+/// Both halves are load-bearing, because codex draws the same `›` marker in
+/// two very different places. Its composer row is `› Ask Codex to do anything`
+/// (or `› <whatever is typed>`); its directory-trust dialog — the modal a cold
+/// codex shows in a directory it has not been trusted in before — marks the
+/// selected list row the same way, as `› 1. Yes, continue`. Keystrokes sent at
+/// that dialog are discarded by the list widget and the submitting CR answers
+/// the prompt, so the message is silently gone while every write and ack
+/// succeeds.
+///
+/// The cursor separates the two: a focused text field shows it, the trust
+/// dialog hides it (`ESC[?25l`). Measured on a real cold boot: the trust dialog
+/// holds the screen with the cursor hidden for as long as nobody answers it,
+/// and the quiet window that opens on top of it is 467ms — comfortably past
+/// `DELIVERY_QUIET_MS`. In the composer state, by contrast, the cursor stays
+/// visible throughout boot and through a whole streaming turn.
+fn codex_ready(screen: &vt100::Screen) -> bool {
+    if screen.hide_cursor() {
+        return false;
+    }
+    let (rows, cols) = screen.size();
+    (0..rows).any(|row| {
+        screen
+            .contents_between(row, 0, row, cols)
+            .trim_start()
+            .starts_with(CODEX_PROMPT)
+    })
+}
+
+/// Pi is ready when the chrome around its composer is on screen.
+///
+/// Pi brackets its input row between two full-width horizontal rules and puts
+/// its status line underneath, and it paints all of that in one burst when the
+/// TUI takes over. Before that it is a plain inline program printing startup
+/// lines (npm notices, the loaded-resources banner) into a terminal with no
+/// composer at all — and on a real capture there is a **1626ms** quiet window
+/// in that phase, over four times `DELIVERY_QUIET_MS`.
+///
+/// Matching the rules rather than any of pi's wording keeps this from turning
+/// into a race against pi's copy. The bottom-half restriction is what keeps a
+/// horizontal rule inside rendered markdown from counting.
+fn pi_ready(screen: &vt100::Screen) -> bool {
+    let (rows, cols) = screen.size();
+    let min_run = usize::from(cols / 2).max(1);
+    (rows / 2..rows)
+        .filter(|&row| {
+            let line = screen.contents_between(row, 0, row, cols);
+            let rule = line.trim();
+            rule.chars().count() >= min_run && rule.chars().all(|c| c == '\u{2500}')
+        })
+        .count()
+        >= 2
 }
 
 #[cfg(test)]
@@ -1252,19 +1320,28 @@ mod tests {
         }
     }
 
+    /// A cut of a real cold boot, captured off a PTY and replayed here through
+    /// the same parser the delivery path reads. See `tests/fixtures/agent-boot`.
+    macro_rules! boot_fixture {
+        ($name:literal) => {
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/agent-boot/",
+                $name
+            ))
+        };
+    }
+
     #[test]
-    fn claude_is_not_ready_for_input_until_it_enters_the_alternate_screen() {
-        // Claude sets terminal modes ~400ms before it switches to the
-        // alternate screen and clears it (`ESC[?1049h ESC[2J`). A quiet window
-        // that lands in that gap injects into a terminal with no composer, and
-        // the clear wipes it — the message is silently lost.
+    fn claude_is_not_ready_mid_boot_and_is_ready_once_its_composer_paints() {
+        // Real capture: 490ms of terminal setup, then the alternate screen.
         let mut p = Parser::new(24, 80, 1000);
-        p.process(b"\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?2004h\x1b[>4;2m");
+        p.process(boot_fixture!("claude-preboot.bin"));
         assert!(
             !ready_for_input(AgentKind::Claude, p.screen()),
             "pre-alt-screen claude must not be considered ready"
         );
-        p.process(b"\x1b[?1049h\x1b[2J\x1b[H");
+        p.process(boot_fixture!("claude-composer.bin"));
         assert!(
             ready_for_input(AgentKind::Claude, p.screen()),
             "claude is ready once the alternate screen is up"
@@ -1272,16 +1349,76 @@ mod tests {
     }
 
     #[test]
-    fn inline_agents_are_ready_without_an_alternate_screen() {
-        // Verified against the real binaries: codex and hermes render inline
-        // and never emit `ESC[?1049h`. Gating them on it would block every
-        // delivery until the timeout, so for them the quiet window is the
-        // whole gate. Pi is grouped with them (same inline rendering); if it
-        // ever adopts an alt screen this is no worse than today's behavior.
+    fn codex_is_not_ready_mid_boot_and_is_ready_once_its_composer_paints() {
+        // Real capture: codex emits terminal setup and nothing else until it
+        // paints its whole frame, composer row included, at t=112ms.
+        let mut p = Parser::new(24, 80, 1000);
+        p.process(boot_fixture!("codex-preboot.bin"));
+        assert!(
+            !ready_for_input(AgentKind::Codex, p.screen()),
+            "codex with nothing painted yet must not be considered ready"
+        );
+        p.process(boot_fixture!("codex-composer.bin"));
+        assert!(
+            ready_for_input(AgentKind::Codex, p.screen()),
+            "codex is ready once its composer row is drawn"
+        );
+    }
+
+    #[test]
+    fn codex_is_not_ready_while_its_directory_trust_dialog_holds_the_screen() {
+        // The regression. Real capture of a cold codex in a directory it has
+        // not been trusted in: it paints a composer, then replaces it with the
+        // trust dialog and sits there. The old unconditional `true` called that
+        // ready, so a message injected into the 467ms quiet window on top of it
+        // was eaten by the list widget while wsx marked the row delivered.
+        let mut p = Parser::new(24, 80, 1000);
+        p.process(boot_fixture!("codex-trust-dialog.bin"));
+        let screen = p.screen().contents();
+        assert!(
+            screen.contains("Do you trust the contents of this directory?"),
+            "fixture should end on the trust dialog: {screen:?}"
+        );
+        assert!(
+            screen.contains("\u{203a} 1. Yes, continue"),
+            "the dialog marks its selected row with the same glyph as the \
+             composer, which is why the cursor half of the check matters: \
+             {screen:?}"
+        );
+        assert!(
+            !ready_for_input(AgentKind::Codex, p.screen()),
+            "a modal that discards keystrokes is not a composer"
+        );
+    }
+
+    #[test]
+    fn pi_is_not_ready_mid_boot_and_is_ready_once_its_composer_paints() {
+        // Real capture: pi prints startup lines into a bare terminal — with a
+        // 1626ms quiet window in there, four times DELIVERY_QUIET_MS — before
+        // its TUI takes the screen at t=2188ms.
+        let mut p = Parser::new(24, 80, 1000);
+        p.process(boot_fixture!("pi-preboot.bin"));
+        assert!(
+            !ready_for_input(AgentKind::Pi, p.screen()),
+            "pi before its TUI exists must not be considered ready"
+        );
+        p.process(boot_fixture!("pi-composer.bin"));
+        assert!(
+            ready_for_input(AgentKind::Pi, p.screen()),
+            "pi is ready once the chrome around its composer is drawn"
+        );
+    }
+
+    #[test]
+    fn hermes_has_no_screen_signal_and_leans_on_the_spawn_floor() {
+        // Not an endorsement of `true` — an acknowledged hole. Hermes was not
+        // installed on the machine this was investigated on, so there was no
+        // cold boot to read a marker off. It is covered only by the
+        // SPAWN_SETTLE_MS floor until someone with a hermes install captures a
+        // boot and gives it a real predicate. This test exists so that change
+        // is a deliberate edit rather than a silent one.
         let p = Parser::new(24, 80, 1000);
-        for agent in [AgentKind::Codex, AgentKind::Hermes, AgentKind::Pi] {
-            assert!(ready_for_input(agent, p.screen()), "agent {agent:?}");
-        }
+        assert!(ready_for_input(AgentKind::Hermes, p.screen()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1362,9 +1499,12 @@ mod tests {
             None,
         )
         .unwrap();
-        // Prime cat with some output so activity_ms is populated, then let it settle.
+        // Prime cat with some output so activity_ms is populated, then let it
+        // settle. The primed line carries codex's composer glyph because cat
+        // has to stand in for a ready screen as well as a settled one:
+        // `ready_for_input` now looks for that row (see `codex_ready`).
         s.writer
-            .send(WriteReq::Bytes(b"prime\n".to_vec()))
+            .send(WriteReq::Bytes("\u{203a} prime\n".as_bytes().to_vec()))
             .await
             .unwrap();
         // The helper waits for the quiet window, then writes the payload.

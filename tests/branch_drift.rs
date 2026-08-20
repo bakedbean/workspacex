@@ -241,11 +241,11 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
             break;
         }
     }
-    let g = app.lock().await;
-    let persisted = g.store.all_scm_cache().unwrap();
-    let row = persisted.get(&id).cloned();
-    drop(g);
+    // Stop the poller and wait for it to actually be gone before reading
+    // anything: `abort()` only requests cancellation, so a tick still in
+    // flight could otherwise write between the read and the assert.
     poll.abort();
+    let _ = poll.await;
 
     assert!(
         settled,
@@ -257,6 +257,7 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
         None,
         "the superseded branch's PR number is still cached under the new branch"
     );
+    let row = g.store.all_scm_cache().unwrap().get(&id).cloned();
     assert_eq!(
         row.as_ref().and_then(|r| r.pr_number),
         None,

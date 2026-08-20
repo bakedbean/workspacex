@@ -401,7 +401,7 @@ where
                     let mut g = app.lock().await;
                     g.pr_last_poll_ms.insert(id, now_ms);
                 }
-                if let Ok(Some(status)) = fetch_pr(path.clone(), db_branch.clone()).await {
+                if let Ok(Some(status)) = fetch_pr(path.clone(), db_branch).await {
                     let mut g = app.lock().await;
                     g.pr_lifecycle.insert(id, status.lifecycle);
                     match status.number {

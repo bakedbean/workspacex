@@ -13,6 +13,18 @@ pub enum BranchLifecycle {
     PrClosed,
 }
 
+impl BranchLifecycle {
+    /// Whether a PR in this state can still be waiting on a reviewer.
+    ///
+    /// Draft and conflicted count: both are still open, and both can sit in
+    /// someone's review queue. Merged and closed don't — GitHub leaves
+    /// `reviewDecision` populated after the fact, so without this the ✓
+    /// would become permanent furniture on every merged PR.
+    pub fn awaits_review(self) -> bool {
+        matches!(self, Self::PrOpen | Self::PrDraft | Self::PrConflicted)
+    }
+}
+
 /// A PR's aggregate review verdict, as GitHub computes it from the repo's
 /// branch-protection rules and the reviews submitted so far.
 ///

@@ -66,7 +66,7 @@ fn main() {
     let sink = Arc::clone(&chunks);
     let mut reader = pair.master.try_clone_reader().expect("clone reader");
     let start = std::time::Instant::now();
-    std::thread::spawn(move || {
+    let reader_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
@@ -81,6 +81,15 @@ fn main() {
 
     std::thread::sleep(std::time::Duration::from_secs(secs));
     let _ = child.kill();
+    // Drain before snapshotting. `kill` only signals — the reader thread is
+    // still going, and anything it appends after a snapshot taken here would be
+    // missing from both output files. A silently truncated tail is exactly how
+    // a real quiet window goes missing from a capture, which would make this
+    // tool lie in the direction it exists to catch. The reader ends on its own
+    // once the child is gone and the slave side is closed.
+    let _ = child.wait();
+    let _ = reader_thread.join();
+    let capture_ms = start.elapsed().as_millis();
 
     let chunks = chunks.lock().unwrap().clone();
     let mut raw = Vec::new();
@@ -100,23 +109,33 @@ fn main() {
     let mut parser = vt100::Parser::new(24, 80, 0);
     for (i, (ms, bytes)) in chunks.iter().enumerate() {
         parser.process(bytes);
-        // The window between this read and the next is how long the stream is
-        // quiet; the last read is quiet forever.
+        // How long the stream stays quiet after this read. The last read is
+        // quiet only until the capture ended, NOT forever: a capture cut while
+        // the agent was still painting must not present its final frame as an
+        // injectable moment, because that is a readiness signal that does not
+        // exist.
+        let tail = i + 1 == chunks.len();
         let quiet = match chunks.get(i + 1) {
             Some((next, _)) => next - ms,
-            None => u128::MAX,
+            None => capture_ms.saturating_sub(*ms),
         };
         if quiet < QUIET_MS {
+            if tail {
+                println!(
+                    "\nnote: output was still flowing {quiet}ms before the capture \
+                     ended — re-run with more than {secs}s to see where it settles"
+                );
+            }
             continue;
         }
         let screen = parser.screen();
         println!(
-            "\n=== injectable at t={ms}ms (quiet for {}) read {i}/{} \
+            "\n=== injectable at t={ms}ms (quiet for {quiet}ms{}) read {i}/{} \
              alt={} cursor_hidden={} title={:?} ===",
-            if quiet == u128::MAX {
-                "the rest of the capture".to_string()
+            if tail {
+                ", to the end of the capture"
             } else {
-                format!("{quiet}ms")
+                ""
             },
             chunks.len(),
             screen.alternate_screen(),

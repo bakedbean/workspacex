@@ -1538,15 +1538,18 @@ mod tests {
             .unwrap();
         // The helper waits for the quiet window, then writes the payload.
         // With cat, the payload echoes back into the screen buffer.
-        let start = std::time::Instant::now();
         assert!(
             s.send_text_when_settled("AUTO_MSG", 200, 6_000).await,
             "a settled PTY must report that the write happened"
         );
+        // Read off the session's own clock rather than one started here. The
+        // gate is relative to `spawned_at`, and spawning plus priming has
+        // already burned some of the floor by this line, so timing from here
+        // would race how long that took rather than assert the invariant.
         assert!(
-            start.elapsed() >= Duration::from_millis(SPAWN_SETTLE_MS),
-            "the write must not beat the spawn floor: {:?}",
-            start.elapsed()
+            s.spawned_at.elapsed() >= Duration::from_millis(SPAWN_SETTLE_MS),
+            "the write must not beat the spawn floor: session age {:?}",
+            s.spawned_at.elapsed()
         );
         // Allow cat to echo.
         tokio::time::sleep(Duration::from_millis(300)).await;

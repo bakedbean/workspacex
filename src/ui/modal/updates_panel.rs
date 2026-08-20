@@ -624,6 +624,22 @@ mod workspace_row_tests {
         }
     }
 
+    /// A `WorkspaceEvents` carrying one latest event, the shape the
+    /// active-with-event and resumable branches of `row_status_text` read.
+    fn events_with_latest(
+        display: &str,
+        timestamp_ms: i64,
+    ) -> crate::activity::events::WorkspaceEvents {
+        crate::activity::events::WorkspaceEvents {
+            latest: Some(crate::activity::events::EventSnapshot {
+                kind: crate::activity::events::EventKind::AssistantToolUse,
+                display: display.to_string(),
+                timestamp_ms,
+            }),
+            ..Default::default()
+        }
+    }
+
     /// Concatenate every span's content into a single String so tests can
     /// match against the rendered text regardless of styling.
     fn line_text(line: &Line<'_>) -> String {
@@ -719,9 +735,14 @@ mod workspace_row_tests {
     }
 
     /// `row_status_text` is the single source for the row's status text —
-    /// the renderer and (from Task 2) the filter both read it. If the
-    /// extraction ever drifts from what `workspace_row` draws, the filter
+    /// `workspace_row` draws it and the panel filter matches against it. If
+    /// the extraction ever drifted from what the row renders, the filter
     /// would fail to match text the user can plainly see.
+    ///
+    /// Every branch of the chain is covered, including the two that read
+    /// `events`: the active-with-event branch (the only one returning
+    /// *dynamic* text — the latest event's `display`, and the text a user is
+    /// most likely to filter on) and the resumable branch.
     #[test]
     #[allow(clippy::type_complexity)]
     fn row_status_text_matches_what_the_row_renders() {
@@ -729,36 +750,59 @@ mod workspace_row_tests {
         let mut failed = fixture_workspace("gamma");
         failed.state = WorkspaceState::Failed;
         let awaiting = ("Bash".to_string(), 5_000i64);
-        let (alpha, beta, delta) = (
+        let (alpha, beta, delta, epsilon, zeta) = (
             fixture_workspace("alpha"),
             fixture_workspace("beta"),
             fixture_workspace("delta"),
+            fixture_workspace("epsilon"),
+            fixture_workspace("zeta"),
         );
-        // (workspace, activity, needs_attention, awaiting, expected text)
+        let live = events_with_latest("Edit src/main.rs", 9_000);
+        // (workspace, events, activity, needs_attention, awaiting, expected)
         let cases: [(
             &Workspace,
+            Option<&crate::activity::events::WorkspaceEvents>,
             Option<ActivityState>,
             bool,
             Option<&(String, i64)>,
             &str,
-        ); 4] = [
+        ); 6] = [
             (
                 &alpha,
+                None,
                 Some(ActivityState::Awaiting),
                 true,
                 Some(&awaiting),
                 "awaiting permission: Bash",
             ),
-            (&beta, Some(ActivityState::Stalled), true, None, "stalled"),
-            (&failed, None, false, None, "failed"),
-            (&delta, None, false, None, "no session"),
+            (
+                &beta,
+                None,
+                Some(ActivityState::Stalled),
+                true,
+                None,
+                "stalled",
+            ),
+            (&failed, None, None, false, None, "failed"),
+            (&delta, None, None, false, None, "no session"),
+            // Active with a live event: the row shows the event's display.
+            (
+                &epsilon,
+                Some(&live),
+                Some(ActivityState::Active),
+                false,
+                None,
+                "Edit src/main.rs",
+            ),
+            // An event but no live activity: the session can be resumed.
+            (&zeta, Some(&live), None, false, None, "resumable"),
         ];
-        for (w, activity, attention, awaiting, expected) in cases {
-            let (text, _) = row_status_text(w, None, activity, attention, awaiting);
+        for (w, events, activity, attention, awaiting, expected) in cases {
+            let (text, _) = row_status_text(w, events, activity, attention, awaiting);
             assert_eq!(text, expected, "row_status_text for {}", w.name);
             let line = workspace_row(
                 w,
-                None,
+                events,
                 activity,
                 attention,
                 awaiting,
@@ -1478,7 +1522,8 @@ mod ordering_tests {
     }
 
     /// A repo-name needle keeps every workspace in that repo — the same
-    /// affordance the dashboard gives for "show me just this repo".
+    /// affordance the dashboard gives for "show me just this repo" — and
+    /// matches case-insensitively, like the other two fields.
     #[test]
     fn filter_matches_repo_name_and_keeps_its_workspaces() {
         let repos = vec![fixture_repo(1), fixture_repo(2)];
@@ -1490,13 +1535,14 @@ mod ordering_tests {
         let maps = Maps::default();
         // fixture_repo(1) is named "repo1", fixture_repo(2) is "repo2".
         assert_eq!(
-            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("repo1")),
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("Repo1")),
             vec![WorkspaceId(1), WorkspaceId(2)]
         );
     }
 
     /// The needle also matches the live status text, so "permission" or
-    /// "stalled" narrows to the rows that actually say that.
+    /// "stalled" narrows to the rows that actually say that — again
+    /// case-insensitively.
     #[test]
     fn filter_matches_status_text() {
         let repos = vec![fixture_repo(1)];
@@ -1505,12 +1551,12 @@ mod ordering_tests {
         maps.awaiting
             .insert(WorkspaceId(1), ("Bash".to_string(), 1_000));
         assert_eq!(
-            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("permission")),
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("PERMISSION")),
             vec![WorkspaceId(1)]
         );
         // beta has no session at all, so its status text is "no session".
         assert_eq!(
-            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("no session")),
+            order_filtered(&repos, &ws, &maps, UpdatesSort::Default, Some("No Session")),
             vec![WorkspaceId(2)]
         );
     }

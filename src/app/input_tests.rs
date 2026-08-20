@@ -1440,24 +1440,21 @@ mod pm_state_tests {
         assert!(!app.quit, "q should not propagate to App::quit");
     }
 
-    /// Two workspaces in one repo, both Ready. Returns their ids in
-    /// insertion order (alpha, beta).
-    fn seed_two_workspaces(store: &Store) -> Vec<crate::data::store::WorkspaceId> {
+    /// `names` workspaces in one repo (named "repo"), all Ready. Returns
+    /// their ids in insertion order.
+    fn seed_workspaces(store: &Store, names: &[&str]) -> Vec<crate::data::store::WorkspaceId> {
         use crate::data::store::{NewWorkspace, WorkspaceState};
         let repo_id = store
             .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
             .unwrap();
         let mut ids = Vec::new();
-        for (name, branch, path) in [
-            ("alpha", "repo/alpha", "/tmp/wsx-test/alpha"),
-            ("beta", "repo/beta", "/tmp/wsx-test/beta"),
-        ] {
+        for &name in names {
             let id = store
                 .insert_workspace(&NewWorkspace {
                     repo_id,
                     name,
-                    branch,
-                    worktree_path: std::path::Path::new(path),
+                    branch: &format!("repo/{name}"),
+                    worktree_path: &std::path::PathBuf::from(format!("/tmp/wsx-test/{name}")),
                     yolo: false,
                     agent: crate::pty::session::AgentKind::Claude,
                     shared: false,
@@ -1469,6 +1466,12 @@ mod pm_state_tests {
             ids.push(id);
         }
         ids
+    }
+
+    /// Two workspaces in one repo, both Ready. Returns their ids in
+    /// insertion order (alpha, beta).
+    fn seed_two_workspaces(store: &Store) -> Vec<crate::data::store::WorkspaceId> {
+        seed_workspaces(store, &["alpha", "beta"])
     }
 
     fn shared_app() -> SharedApp {
@@ -1785,6 +1788,60 @@ mod pm_state_tests {
                 assert_eq!(
                     selected, 1,
                     "cursor stays on beta, still at index 1 in the unchanged order"
+                );
+            }
+            ref other => panic!("expected UpdatesPanel; got {other:?}"),
+        }
+    }
+
+    /// The narrowing case, and the one that actually separates a workspace
+    /// lookup from index-clamping. Filtering only ever removes rows, so it
+    /// takes three: select the middle row, then type a needle that hides
+    /// the row *above* it. The selected workspace slides up to index 0,
+    /// while clamping the old index would leave the cursor at 1 — a
+    /// different workspace, still in range.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn updates_panel_selection_moves_up_when_a_filter_hides_the_row_above() {
+        use crate::ui::modal::{Modal, UpdatesSort};
+        use crossterm::event::KeyCode;
+        let store = Store::open_in_memory().unwrap();
+        // Only the last two carry an `x`; the repo ("repo") and the rows'
+        // status text ("no session") have none, so `x` hides alpha alone.
+        let ids = seed_workspaces(&store, &["alpha", "beta-x", "gamma-x"]);
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Start on beta-x (index 1 of [alpha, beta-x, gamma-x]).
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 1,
+            sort: UpdatesSort::Default,
+            filter: Some(String::new()),
+        });
+        assert_eq!(
+            panel_order(&app, UpdatesSort::Default, Some("")),
+            ids,
+            "unfiltered order is insertion order"
+        );
+        let shared = shared_app();
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Char('x')))
+            .await
+            .unwrap();
+        match app.modal {
+            Some(Modal::UpdatesPanel {
+                selected,
+                sort,
+                ref filter,
+            }) => {
+                assert_eq!(filter.as_deref(), Some("x"));
+                let order = panel_order(&app, sort, filter.as_deref());
+                assert_eq!(order, vec![ids[1], ids[2]], "`x` hides alpha only");
+                assert_eq!(
+                    selected, 0,
+                    "cursor follows beta-x to index 0; clamping would leave it at 1"
+                );
+                assert_eq!(
+                    order.get(selected).copied(),
+                    Some(ids[1]),
+                    "the selected row is still beta-x"
                 );
             }
             ref other => panic!("expected UpdatesPanel; got {other:?}"),

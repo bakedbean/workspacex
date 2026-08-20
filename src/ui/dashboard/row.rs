@@ -1428,6 +1428,115 @@ mod tests {
     }
 
     #[test]
+    fn the_pr_cell_holds_its_width_across_every_input_combination() {
+        // The overflow rule and its padding arithmetic were derived by hand,
+        // so pin the whole input space rather than the few cases that
+        // motivated it: every legal column width, every lifecycle, every
+        // verdict (and none), and PR numbers from 1 to 7 digits.
+        let theme = Theme::wsx();
+        let lifecycles = [
+            BranchLifecycle::PrOpen,
+            BranchLifecycle::PrDraft,
+            BranchLifecycle::PrConflicted,
+            BranchLifecycle::PrMerged,
+            BranchLifecycle::PrClosed,
+            BranchLifecycle::NoPr,
+        ];
+        let verdicts = [
+            None,
+            Some(ReviewDecision::Approved),
+            Some(ReviewDecision::ChangesRequested),
+            Some(ReviewDecision::ReviewRequired),
+        ];
+        let numbers = [None, Some(1u32), Some(99), Some(1234), Some(9_999_999)];
+
+        for pr_width in MIN_PR_WIDTH..=MAX_PR_WIDTH {
+            let widths = ColumnWidths::clamped(DEFAULT_BRANCH_WIDTH, pr_width);
+            // `clamped` is the only way widths reach the renderer, so this
+            // also asserts the loop is exercising the real legal range.
+            assert_eq!(
+                widths.pr, pr_width,
+                "width {pr_width} must survive clamping"
+            );
+            for lc in lifecycles {
+                for review in verdicts {
+                    for number in numbers {
+                        let mut inputs = base();
+                        inputs.lifecycle = Some(lc);
+                        inputs.pr_number = number;
+                        inputs.review = review;
+
+                        // 1. The cell occupies exactly its column: find it by
+                        //    slicing the row at the chip cell's known offset.
+                        let line = render(&inputs, widths, 0, &theme, 200);
+                        let text = line_text(&line);
+                        let start =
+                            widths.agent + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
+                        let cell: String = text.chars().skip(start).take(pr_width).collect();
+                        assert_eq!(
+                            cell.chars().count(),
+                            pr_width,
+                            "cell width for {lc:?}/{review:?}/{number:?} at {pr_width}"
+                        );
+
+                        // 2. The procs column always starts right after it —
+                        //    proof the cell neither overflowed nor under-padded.
+                        let after: String = text.chars().skip(start + pr_width).collect();
+                        assert!(
+                            after.starts_with("● ") || after.starts_with("  ·"),
+                            "procs cell must follow the chip cell exactly \
+                             ({lc:?}/{review:?}/{number:?} at {pr_width}): {after:?}"
+                        );
+
+                        // 3. The click target never spills past the column.
+                        if let Some((x, w)) = pr_chip_hit_span(&inputs, widths) {
+                            assert_eq!(x as usize, start, "hit span starts at the cell");
+                            assert!(
+                                (w as usize) <= pr_width,
+                                "hit span {w} must fit {pr_width} \
+                                 ({lc:?}/{review:?}/{number:?})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_row_reserves_the_marks_columns_before_truncating() {
+        // Independent of the composer's drop-the-word rule: `render` sizes
+        // the lifecycle half to `pr_width - 2` and appends the mark after,
+        // so a verdict the composer chose to show reaches the painted cell
+        // at every legal width even when the head has to be clipped.
+        let theme = Theme::wsx();
+        for pr_width in MIN_PR_WIDTH..=MAX_PR_WIDTH {
+            let widths = ColumnWidths::clamped(DEFAULT_BRANCH_WIDTH, pr_width);
+            for lc in [
+                BranchLifecycle::PrOpen,
+                BranchLifecycle::PrDraft,
+                BranchLifecycle::PrConflicted,
+            ] {
+                for (review, glyph) in [
+                    (ReviewDecision::Approved, '✓'),
+                    (ReviewDecision::ChangesRequested, '✗'),
+                    (ReviewDecision::ReviewRequired, '◌'),
+                ] {
+                    let mut inputs = base();
+                    inputs.lifecycle = Some(lc);
+                    inputs.pr_number = Some(9_999_999);
+                    inputs.review = Some(review);
+                    let text = line_text(&render(&inputs, widths, 0, &theme, 200));
+                    assert!(
+                        text.contains(glyph),
+                        "{lc:?}/{review:?} lost its mark at width {pr_width}: {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn approval_mark_follows_the_chip_in_its_own_color() {
         let theme = Theme::wsx();
         let mut inputs = base();
@@ -1502,17 +1611,21 @@ mod tests {
 
     #[test]
     fn a_tight_pr_column_keeps_the_mark_and_drops_the_word() {
+        // Pinned as the exact painted cell, not just "contains the mark":
+        // without the drop-the-word rule the head is instead mid-word
+        // clipped to `⏺ #1234 confl… ✗`, which still contains the mark and
+        // still fits the column. Only the full cell text tells them apart.
         let theme = Theme::wsx();
+        let widths = ColumnWidths::default();
         let mut inputs = base();
         inputs.lifecycle = Some(BranchLifecycle::PrConflicted);
         inputs.pr_number = Some(1234);
         inputs.review = Some(ReviewDecision::ChangesRequested);
-        let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, 120));
-        assert!(text.contains("⏺ #1234 ✗"), "terse marked chip: {text:?}");
-        assert!(
-            !text.contains("conflict"),
-            "the word yields to the mark: {text:?}"
-        );
+        let text = line_text(&render(&inputs, widths, 0, &theme, 120));
+        let start = widths.agent + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
+        let cell: String = text.chars().skip(start).take(widths.pr).collect();
+        assert_eq!(cell, "⏺ #1234 ✗       ", "terse marked chip, then padding");
+        assert!(!cell.contains('…'), "the word yields whole, not clipped");
     }
 
     #[test]

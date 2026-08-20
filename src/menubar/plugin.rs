@@ -46,11 +46,30 @@ pub(crate) fn pr_field(c: &ScmCacheRow) -> String {
         Some(BranchLifecycle::PrOpen) => "",
         Some(BranchLifecycle::NoPr) | None => return String::new(),
     };
-    match (c.pr_number, word) {
+    let field = match (c.pr_number, word) {
         (Some(n), "") => format!("#{n}"),
         (Some(n), w) => format!("#{n} {w}"),
         (None, "") => String::new(),
         (None, w) => w.to_string(),
+    };
+    // Approval mark, gated by the same predicate the TUI chip uses so the
+    // menu and the dashboard can't disagree: open lifecycles only, so a
+    // merged PR's stale APPROVED verdict stays out of the menu.
+    // The mark rides an otherwise-empty field too — a PR whose number was
+    // never cached still earns its verdict.
+    match c.pr_review.filter(|_| {
+        c.pr_lifecycle
+            .is_some_and(crate::ui::theme::lifecycle_shows_review)
+    }) {
+        Some(d) => {
+            let mark = crate::ui::theme::review_glyph(d);
+            if field.is_empty() {
+                mark.to_string()
+            } else {
+                format!("{field} {mark}")
+            }
+        }
+        None => field,
     }
 }
 
@@ -218,6 +237,7 @@ mod plugin_tests {
     use crate::data::scm_cache::ScmCacheRow;
     use crate::data::store::{ReportedState, ReportedStatus};
     use crate::git::forge::BranchLifecycle;
+    use crate::git::forge::ReviewDecision;
     use crate::workspace_rows::RowInput;
 
     fn status(state: ReportedState, msg: Option<&str>) -> ReportedStatus {
@@ -301,6 +321,57 @@ mod plugin_tests {
             };
             assert_eq!(pr_field(&c), expect, "{l:?}");
         }
+    }
+
+    #[test]
+    fn pr_field_appends_the_approval_mark() {
+        for (verdict, mark) in [
+            (ReviewDecision::Approved, "✓"),
+            (ReviewDecision::ChangesRequested, "✗"),
+            (ReviewDecision::ReviewRequired, "◌"),
+        ] {
+            let c = ScmCacheRow {
+                pr_lifecycle: Some(BranchLifecycle::PrOpen),
+                pr_number: Some(7),
+                pr_review: Some(verdict),
+                ..Default::default()
+            };
+            assert_eq!(pr_field(&c), format!("#7 {mark}"), "{verdict:?}");
+        }
+        // Draft keeps its word and gains the mark.
+        let draft = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrDraft),
+            pr_number: Some(7),
+            pr_review: Some(ReviewDecision::ReviewRequired),
+            ..Default::default()
+        };
+        assert_eq!(pr_field(&draft), "#7 draft ◌");
+    }
+
+    #[test]
+    fn pr_field_leaves_settled_prs_unmarked() {
+        // Same gate as the TUI chip: a merged PR keeps its stale APPROVED
+        // verdict in GitHub's API, and a permanent tick would be noise.
+        for l in [BranchLifecycle::PrMerged, BranchLifecycle::PrClosed] {
+            let c = ScmCacheRow {
+                pr_lifecycle: Some(l),
+                pr_number: Some(7),
+                pr_review: Some(ReviewDecision::Approved),
+                ..Default::default()
+            };
+            assert!(!pr_field(&c).contains('✓'), "{l:?}: {}", pr_field(&c));
+        }
+    }
+
+    #[test]
+    fn pr_field_without_a_verdict_is_unchanged() {
+        let c = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrOpen),
+            pr_number: Some(7),
+            pr_review: None,
+            ..Default::default()
+        };
+        assert_eq!(pr_field(&c), "#7");
     }
 
     #[test]

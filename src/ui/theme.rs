@@ -444,7 +444,7 @@ pub(crate) fn review_glyph(d: crate::git::forge::ReviewDecision) -> &'static str
 /// without this gate every merged PR would wear a permanent green tick.
 /// Draft and conflicted PRs stay in: both are still open, and both can still
 /// be waiting on someone.
-fn lifecycle_shows_review(lc: crate::git::forge::BranchLifecycle) -> bool {
+pub(crate) fn lifecycle_shows_review(lc: crate::git::forge::BranchLifecycle) -> bool {
     use crate::git::forge::BranchLifecycle::*;
     matches!(lc, PrOpen | PrDraft | PrConflicted)
 }

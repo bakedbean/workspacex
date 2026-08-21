@@ -587,14 +587,15 @@ mod pr_chip_tests {
     #[test]
     fn verdict_is_hidden_once_the_pr_leaves_the_open_states() {
         // GitHub keeps reviewDecision populated after a merge, so a merged
-        // PR would otherwise carry a permanent green tick.
-        for lc in [PrMerged, PrClosed] {
+        // PR would otherwise carry a permanent green tick. Drafts hide it
+        // too: a PR isn't eligible for approval until it's marked ready.
+        for lc in [PrMerged, PrClosed, PrDraft] {
             let chip = pr_chip(lc, Some(7), Some(Approved), WIDE).expect("chip");
             assert_eq!(chip.review, None, "{lc:?} must not show a verdict");
             assert!(!chip.text().contains('✓'), "{lc:?}: {:?}", chip.text());
         }
-        // Draft and conflicted are still open, and still awaiting review.
-        for lc in [PrOpen, PrDraft, PrConflicted] {
+        // Open and conflicted are still open, and still awaiting review.
+        for lc in [PrOpen, PrConflicted] {
             let chip = pr_chip(lc, Some(7), Some(Approved), WIDE).expect("chip");
             assert_eq!(chip.review, Some(Approved), "{lc:?} must show a verdict");
         }

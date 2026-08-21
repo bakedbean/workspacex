@@ -16,12 +16,14 @@ pub enum BranchLifecycle {
 impl BranchLifecycle {
     /// Whether a PR in this state can still be waiting on a reviewer.
     ///
-    /// Draft and conflicted count: both are still open, and both can sit in
-    /// someone's review queue. Merged and closed don't — GitHub leaves
+    /// Conflicted counts: it's still open and can sit in someone's review
+    /// queue. Drafts don't — a PR isn't eligible for approval until it's
+    /// marked ready for review, so any verdict GitHub reports on one is
+    /// noise. Merged and closed don't either — GitHub leaves
     /// `reviewDecision` populated after the fact, so without this the ✓
     /// would become permanent furniture on every merged PR.
     pub(crate) fn awaits_review(self) -> bool {
-        matches!(self, Self::PrOpen | Self::PrDraft | Self::PrConflicted)
+        matches!(self, Self::PrOpen | Self::PrConflicted)
     }
 }
 
@@ -851,21 +853,27 @@ mod tests {
         assert_eq!(got.review, Some(ReviewDecision::ReviewRequired));
     }
 
-    /// Draft and conflicted PRs are still open and still reviewable, so they
-    /// get the mark too — matching what `awaits_review` renders.
+    /// Conflicted PRs are still open and still reviewable, so they get the
+    /// mark too — matching what `awaits_review` renders.
     #[test]
     fn gating_applies_to_every_still_open_lifecycle() {
-        for lc in [
-            BranchLifecycle::PrOpen,
-            BranchLifecycle::PrDraft,
-            BranchLifecycle::PrConflicted,
-        ] {
+        for lc in [BranchLifecycle::PrOpen, BranchLifecycle::PrConflicted] {
             assert_eq!(
                 apply_review_gate(pr(lc, None), Some(true)).review,
                 Some(ReviewDecision::ReviewRequired),
                 "lifecycle {lc:?}"
             );
         }
+    }
+
+    /// A draft isn't eligible for approval until it's marked ready for
+    /// review, so a gated repo's draft must not sprout a "needs review" mark.
+    #[test]
+    fn gating_skips_draft_prs() {
+        assert_eq!(
+            apply_review_gate(pr(BranchLifecycle::PrDraft, None), Some(true)).review,
+            None
+        );
     }
 
     /// A merged PR in a gated repo must not sprout a "needs review" mark —

@@ -161,12 +161,9 @@ pub fn order_workspaces<T: SortRow>(items: &mut [T], mode: SortMode, pin_max_age
 }
 
 /// Default fold state for a repo. `true` = folded by default.
-/// Empty repos and all-quiet repos (no live + no attention) start folded.
+/// Only empty repos start folded; any repo with workspaces starts expanded.
 pub fn default_fold(c: StatusCounts) -> bool {
-    if c.total() == 0 {
-        return true;
-    }
-    (c.question + c.stalled + c.waiting + c.thinking) == 0
+    c.total() == 0
 }
 
 #[cfg(test)]
@@ -356,13 +353,13 @@ mod tests {
     }
 
     #[test]
-    fn default_fold_all_idle_is_folded() {
-        assert!(default_fold(counts(0, 0, 0, 0, 0, 3)));
+    fn default_fold_idle_repo_is_expanded() {
+        assert!(!default_fold(counts(0, 0, 0, 0, 0, 3)));
     }
 
     #[test]
-    fn default_fold_complete_only_is_folded() {
-        assert!(default_fold(counts(0, 0, 0, 0, 5, 0)));
+    fn default_fold_complete_repo_is_expanded() {
+        assert!(!default_fold(counts(0, 0, 0, 0, 5, 0)));
     }
 
     #[test]

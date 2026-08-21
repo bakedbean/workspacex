@@ -14,6 +14,7 @@ use crate::app::{
 use crate::error::Result;
 use crate::ui::View;
 use crate::ui::modal::Modal;
+use crate::ui::modal::move_selection;
 use crate::ui::split::{Arrow, CloseOutcome, SplitDirection};
 use crossterm::event::{
     Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -887,6 +888,24 @@ async fn handle_key_dashboard(app: &mut App, k: crossterm::event::KeyEvent) -> R
                 app.modal = Some(Modal::WorkspaceActions);
             }
         }
+        // `C` (not `c`, which is chronox) opens the name-color picker for the
+        // selected workspace. `current` is snapshotted here so the grid can
+        // mark the applied color without re-reading the store each frame.
+        (KeyCode::Char('C'), _) => {
+            if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                let current = app
+                    .workspaces
+                    .iter()
+                    .find(|(_, w)| w.id == ws_id)
+                    .and_then(|(_, w)| w.name_color);
+                app.modal = Some(Modal::NameColorPicker {
+                    workspace_id: ws_id,
+                    current,
+                    selected: 0,
+                    filter: String::new(),
+                });
+            }
+        }
         (KeyCode::Char('p'), _) => {
             // Closing drops the filter; opening must never inherit a
             // stale one either.
@@ -1337,6 +1356,29 @@ fn reselect(
     }
     old_index.min(new_order.len().saturating_sub(1))
 }
+/// Write a workspace's name color (or clear it with `None`), refresh so the
+/// dashboard row repaints from the new value, and close the picker. Shared by
+/// the picker's Enter/Delete keys and by a swatch click.
+fn apply_name_color(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+    color: Option<u8>,
+) -> Result<()> {
+    app.modal = None;
+    // A failed write must not read as success: the picker has already closed,
+    // so swallowing the error would leave the user believing the color was
+    // saved. Surface it in the error modal instead.
+    if let Err(e) = app.store.set_workspace_name_color(ws_id, color) {
+        tracing::warn!(error = %e, "failed to persist workspace name color");
+        app.modal = Some(Modal::Error {
+            message: format!("could not save the name color: {e}"),
+        });
+        return Ok(());
+    }
+    app.refresh()?;
+    Ok(())
+}
+
 async fn handle_key_modal(
     app: &mut App,
     shared: &SharedApp,
@@ -1598,6 +1640,57 @@ async fn handle_key_modal(
                 app.modal = None;
             }
         }
+        Modal::NameColorPicker {
+            workspace_id,
+            current,
+            selected,
+            filter,
+        } => {
+            use crate::ui::modal::Dir;
+            let hits = crate::config::name_color::matching(&filter);
+            // Re-open the modal with the same identity but a new cursor/filter.
+            macro_rules! reopen {
+                ($selected:expr, $filter:expr) => {
+                    app.modal = Some(Modal::NameColorPicker {
+                        workspace_id,
+                        current,
+                        selected: $selected,
+                        filter: $filter,
+                    })
+                };
+            }
+            match k.code {
+                KeyCode::Esc => app.modal = None,
+                KeyCode::Enter => match hits.get(selected).copied() {
+                    Some(idx) => apply_name_color(app, workspace_id, Some(idx))?,
+                    // An empty result set (a filter matching nothing) has
+                    // nothing to apply: close, leaving the stored color alone.
+                    // Passing `None` through here would CLEAR it instead.
+                    None => app.modal = None,
+                },
+                KeyCode::Delete => apply_name_color(app, workspace_id, None)?,
+                KeyCode::Left => reopen!(move_selection(selected, hits.len(), Dir::Left), filter),
+                KeyCode::Right => reopen!(move_selection(selected, hits.len(), Dir::Right), filter),
+                KeyCode::Up => reopen!(move_selection(selected, hits.len(), Dir::Up), filter),
+                KeyCode::Down => reopen!(move_selection(selected, hits.len(), Dir::Down), filter),
+                // The cursor indexes the FILTERED list, so any edit re-seeds it
+                // to the first hit rather than pointing at an unrelated color.
+                KeyCode::Backspace => {
+                    let mut filter = filter;
+                    filter.pop();
+                    reopen!(0, filter);
+                }
+                KeyCode::Char(c)
+                    if !k.modifiers.contains(KeyModifiers::CONTROL)
+                        && !k.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    let mut filter = filter;
+                    filter.push(c);
+                    reopen!(0, filter);
+                }
+                _ => {}
+            }
+        }
         Modal::WorkspaceActions => match k.code {
             // Dismiss without side effects.
             KeyCode::Esc | KeyCode::Char('?') => {
@@ -1616,6 +1709,7 @@ async fn handle_key_modal(
             | KeyCode::Char('v')
             | KeyCode::Char('g')
             | KeyCode::Char('c')
+            | KeyCode::Char('C')
             | KeyCode::Enter => {
                 app.modal = None;
                 handle_key_dashboard(app, k).await?;
@@ -2719,6 +2813,28 @@ async fn handle_mouse(app: &mut App, m: MouseEvent) {
                     }
                 }
                 app.modal = None;
+                return;
+            }
+
+            // The name-color picker: a click either applies the swatch under
+            // the cursor or dismisses the picker (click-outside), mirroring
+            // the usage-window picker above.
+            if let Some(Modal::NameColorPicker { workspace_id, .. }) = app.modal {
+                let hit = app.name_color_swatch_rects.iter().find_map(|(idx, r)| {
+                    let inside = m.column >= r.x
+                        && m.column < r.x.saturating_add(r.width)
+                        && m.row >= r.y
+                        && m.row < r.y.saturating_add(r.height);
+                    inside.then_some(*idx)
+                });
+                match hit {
+                    Some(idx) => {
+                        if let Err(e) = apply_name_color(app, workspace_id, Some(idx)) {
+                            tracing::warn!(error = %e, "failed to apply clicked name color");
+                        }
+                    }
+                    None => app.modal = None,
+                }
                 return;
             }
 

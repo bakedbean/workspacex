@@ -621,6 +621,7 @@ mod workspace_row_tests {
             yolo: false,
             agent: crate::pty::session::AgentKind::Claude,
             shared: false,
+            name_color: None,
         }
     }
 
@@ -1238,6 +1239,7 @@ mod ordering_tests {
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
                 shared: false,
+                name_color: None,
             },
         )
     }
@@ -1655,6 +1657,7 @@ mod render_tests {
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
                 shared: false,
+                name_color: None,
             },
         )
     }

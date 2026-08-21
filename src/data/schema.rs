@@ -149,6 +149,13 @@ impl Store {
             self.add_column_if_missing("scm_cache", "pr_review", "pr_review TEXT")?;
             self.conn().execute("PRAGMA user_version = 21", [])?;
         }
+        if v < 22 {
+            // Per-workspace dashboard name color: an xterm-256 palette index,
+            // NULL for "use the theme default". Nullable with no DEFAULT so the
+            // absence of a choice stays distinguishable from picking color 0.
+            self.add_column_if_missing("workspaces", "name_color", "name_color INTEGER")?;
+            self.conn().execute("PRAGMA user_version = 22", [])?;
+        }
         Ok(())
     }
 

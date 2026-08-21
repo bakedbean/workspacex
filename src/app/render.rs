@@ -51,6 +51,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();
     app.usage_window_option_rects.clear();
+    app.name_color_swatch_rects.clear();
     sync_session_visibility(app);
 
     match &app.view {
@@ -773,6 +774,23 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         );
         app.usage_window_option_rects = rects;
     }
+    // Same reason as the usage picker: the name-color picker returns its swatch
+    // rects for click hit-testing, so it is drawn here rather than through the
+    // generic modal dispatch. State is copied out first to end the borrow.
+    let picker = match &app.modal {
+        Some(crate::ui::modal::Modal::NameColorPicker {
+            current,
+            selected,
+            filter,
+            ..
+        }) => Some((*current, *selected, filter.clone())),
+        _ => None,
+    };
+    if let Some((current, selected, filter)) = picker {
+        app.name_color_swatch_rects = crate::ui::modal::render_name_color_picker(
+            f, area, &filter, selected, current, &app.theme,
+        );
+    }
     draw_attached_nav_overlay(f, area, app);
 }
 
@@ -936,6 +954,7 @@ fn build_row_inputs(
         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
         review: app.pr_review.get(&ws.id).copied(),
         nerd_fonts,
+        name_color: ws.name_color.map(crate::config::name_color::color),
         workspace_id: ws.id,
         has_multi_pane_layout: app.workspaces_with_multi_pane_layouts.contains(&ws.id),
     }

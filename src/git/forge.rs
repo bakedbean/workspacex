@@ -196,11 +196,29 @@ pub(crate) fn parse_gh_pr_status(stdout: &str) -> Option<PrStatus> {
         lifecycle,
         number: parsed.number,
         url: parsed.url,
-        review: parsed
-            .review_decision
-            .as_deref()
-            .and_then(parse_review_decision),
+        // A draft isn't eligible for approval until it's marked ready, so
+        // any verdict GitHub reports on one is dropped here. Keyed on the
+        // raw `isDraft` bit rather than the lifecycle because a conflicted
+        // draft parses to `PrConflicted` — the lifecycle alone can't tell
+        // it from a reviewable PR.
+        review: if parsed.is_draft {
+            None
+        } else {
+            parsed
+                .review_decision
+                .as_deref()
+                .and_then(parse_review_decision)
+        },
     })
+}
+
+/// Whether the payload marks the PR a draft. Read separately from
+/// [`parse_gh_pr_status`] because the lifecycle loses the draft bit when a
+/// conflict takes priority, and the review-gate probe must still skip
+/// drafts in that state. `false` for unparseable input — the caller has
+/// already parsed the same payload successfully by the time this runs.
+pub(crate) fn parse_pr_is_draft(stdout: &str) -> bool {
+    serde_json::from_str::<GhPrView>(stdout.trim()).is_ok_and(|p| p.is_draft)
 }
 
 /// Heuristic: `gh pr view` exits 1 with a stderr line like
@@ -320,7 +338,13 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
         // Nothing to fill in unless GitHub left the verdict empty on a PR
         // that's still open. Checked before the probe so the common cases —
         // an already-answered verdict, a merged PR — cost no extra call.
-        if status.review.is_some() || !status.lifecycle.awaits_review() {
+        // The draft bit is checked on the raw payload: a conflicted draft's
+        // lifecycle is `PrConflicted`, which awaits review, but the draft
+        // itself is not eligible for approval and must not be gated.
+        if status.review.is_some()
+            || !status.lifecycle.awaits_review()
+            || parse_pr_is_draft(&stdout)
+        {
             return Ok(Some(status));
         }
         let gated = match (
@@ -589,6 +613,42 @@ mod tests {
         // A repo with no approval gate: gh renders the null verdict as "".
         let ungated = r#"{"isDraft":false,"mergeable":"UNKNOWN","number":286,"reviewDecision":"","state":"MERGED","url":"https://github.com/bakedbean/workspacex/pull/286"}"#;
         assert_eq!(parse_gh_pr_status(ungated).unwrap().review, None);
+    }
+
+    #[test]
+    fn a_draft_verdict_is_dropped_at_parse() {
+        // GitHub reports reviewDecision on drafts too, but a draft isn't
+        // eligible for approval until it's marked ready — the verdict must
+        // never reach the cache.
+        let json = r#"{"state":"OPEN","isDraft":true,"mergeable":"MERGEABLE","number":5,"reviewDecision":"REVIEW_REQUIRED"}"#;
+        let s = parse_gh_pr_status(json).unwrap();
+        assert_eq!(s.lifecycle, BranchLifecycle::PrDraft);
+        assert_eq!(s.review, None);
+    }
+
+    #[test]
+    fn a_conflicted_draft_parses_without_a_verdict() {
+        // Conflict wins the lifecycle (see `conflict_overrides_draft`), so
+        // the lifecycle alone can't suppress the mark — the raw draft bit
+        // has to. Without this, a conflicted draft renders as reviewable.
+        let json = r#"{"state":"OPEN","isDraft":true,"mergeable":"CONFLICTING","number":5,"reviewDecision":"APPROVED"}"#;
+        let s = parse_gh_pr_status(json).unwrap();
+        assert_eq!(s.lifecycle, BranchLifecycle::PrConflicted);
+        assert_eq!(s.review, None);
+    }
+
+    #[test]
+    fn draft_bit_is_read_independently_of_lifecycle() {
+        // The review-gate probe skips drafts via this helper because the
+        // conflicted-draft lifecycle claims to await review.
+        let conflicted_draft =
+            r#"{"state":"OPEN","isDraft":true,"mergeable":"CONFLICTING","number":5}"#;
+        assert!(parse_pr_is_draft(conflicted_draft));
+        let open = r#"{"state":"OPEN","isDraft":false,"number":5}"#;
+        assert!(!parse_pr_is_draft(open));
+        // Unparseable input degrades to "not a draft" — by the time the
+        // fetch consults this, the same payload already parsed successfully.
+        assert!(!parse_pr_is_draft("not json"));
     }
 
     #[test]

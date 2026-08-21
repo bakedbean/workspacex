@@ -338,14 +338,15 @@ mod plugin_tests {
             };
             assert_eq!(pr_field(&c), format!("#7 {mark}"), "{verdict:?}");
         }
-        // Draft keeps its word and gains the mark.
+        // Draft keeps its word but never a mark — a PR isn't eligible for
+        // approval until it's moved out of draft.
         let draft = ScmCacheRow {
             pr_lifecycle: Some(BranchLifecycle::PrDraft),
             pr_number: Some(7),
             pr_review: Some(ReviewDecision::ReviewRequired),
             ..Default::default()
         };
-        assert_eq!(pr_field(&draft), "#7 draft ◌");
+        assert_eq!(pr_field(&draft), "#7 draft");
     }
 
     #[test]

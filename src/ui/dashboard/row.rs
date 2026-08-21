@@ -1535,11 +1535,7 @@ mod tests {
         let theme = Theme::wsx();
         for pr_width in MIN_PR_WIDTH..=MAX_PR_WIDTH {
             let widths = ColumnWidths::clamped(DEFAULT_BRANCH_WIDTH, pr_width);
-            for lc in [
-                BranchLifecycle::PrOpen,
-                BranchLifecycle::PrDraft,
-                BranchLifecycle::PrConflicted,
-            ] {
+            for lc in [BranchLifecycle::PrOpen, BranchLifecycle::PrConflicted] {
                 for (review, glyph) in [
                     (ReviewDecision::Approved, '✓'),
                     (ReviewDecision::ChangesRequested, '✗'),

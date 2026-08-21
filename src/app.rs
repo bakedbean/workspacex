@@ -619,6 +619,10 @@ pub struct App {
     /// order, consumed by `handle_mouse` to apply a clicked option. Cleared each
     /// frame; only populated while the picker modal is open.
     pub usage_window_option_rects: Vec<ratatui::layout::Rect>,
+    /// `(palette index, rect)` per swatch drawn by the open name-color picker,
+    /// consumed by `handle_mouse` to apply a clicked color. Cleared each frame;
+    /// only populated while that modal is open.
+    pub name_color_swatch_rects: Vec<(u8, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
     /// Bells queued up by the most recent draw tick. Drained and fired
@@ -770,6 +774,7 @@ impl App {
             usage_graph_rect: None,
             footer_hint_rects: Vec::new(),
             usage_window_option_rects: Vec::new(),
+            name_color_swatch_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
             started_at: std::time::Instant::now(),

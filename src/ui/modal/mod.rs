@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::{HashMap, HashSet};
 
 mod agents_panel;
+mod name_color_picker;
 mod process_list;
 mod remote_workspace_list;
 mod repo_settings;
@@ -18,6 +19,7 @@ mod usage_picker;
 
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
+pub use name_color_picker::{Dir, move_selection, render_name_color_picker};
 pub use process_list::render_process_list;
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
@@ -144,6 +146,17 @@ pub enum Modal {
         hosts: Vec<(String, String)>,
         selected: usize,
     },
+    /// The `C` name-color picker for one workspace: an xterm-256 swatch grid
+    /// narrowed by a hex/name filter. `current` is a snapshot of the color the
+    /// workspace already has (marked in the grid), like `AgentPicker::current`;
+    /// `selected` indexes into the FILTERED list, so it is re-seeded to 0 on
+    /// every filter edit rather than being clamped.
+    NameColorPicker {
+        workspace_id: crate::data::store::WorkspaceId,
+        current: Option<u8>,
+        selected: usize,
+        filter: String,
+    },
     /// Shown while the background `fetch_shared_list` task for `host_name`
     /// is in flight. Esc closes it and clears `pending_remote_gen`, so the
     /// eventual (stale) reconcile no-ops via its gen guard instead of
@@ -216,6 +229,7 @@ pub fn render(
             | Modal::RepoSettings { .. }
             | Modal::AgentsPanel { .. }
             | Modal::UsageWindowPicker { .. }
+            | Modal::NameColorPicker { .. }
             | Modal::RemoteWorkspaceList { .. }
     ) {
         return;
@@ -394,7 +408,8 @@ pub fn render(
              e   edit        t   term\n  \
              v   diff        g   lazygit\n  \
              c   chronox     r   rename\n  \
-             o   setup log   x   cancel setup\n\n  \
+             C   name color  o   setup log\n  \
+             x   cancel setup\n\n  \
              ?/Esc  close"
                 .to_string(),
         ),
@@ -418,6 +433,11 @@ pub fn render(
         // is unreachable but required for exhaustiveness.
         Modal::RemoteWorkspaceList { .. } => {
             unreachable!("RemoteWorkspaceList must not reach render()")
+        }
+        // Likewise: the picker is drawn by `render_name_color_picker` so it can
+        // publish its swatch rects for click hit-testing.
+        Modal::NameColorPicker { .. } => {
+            unreachable!("NameColorPicker must not reach render()")
         }
         Modal::RemoteHostPicker { hosts, selected } => {
             let list = hosts

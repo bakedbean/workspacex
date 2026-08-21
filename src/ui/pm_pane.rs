@@ -637,6 +637,7 @@ mod digest_tests {
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
                 shared: false,
+                name_color: None,
             },
         )
     }

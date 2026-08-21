@@ -142,6 +142,9 @@ pub struct Workspace {
     pub yolo: bool,
     pub agent: AgentKind,
     pub shared: bool,
+    /// Custom xterm-256 palette index for this workspace's name on the
+    /// dashboard row. `None` = the theme's default styling.
+    pub name_color: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -280,6 +283,15 @@ impl Store {
         Ok(())
     }
 
+    /// Set (or clear, with `None`) the workspace's custom dashboard name color.
+    pub fn set_workspace_name_color(&self, id: WorkspaceId, color: Option<u8>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workspaces SET name_color = ?1 WHERE id = ?2",
+            rusqlite::params![color.map(i64::from), id.0],
+        )?;
+        Ok(())
+    }
+
     pub fn set_workspace_state(&self, id: WorkspaceId, state: WorkspaceState) -> Result<()> {
         self.conn.execute(
             "UPDATE workspaces SET state = ?1 WHERE id = ?2",
@@ -298,7 +310,7 @@ impl Store {
 
     pub fn workspaces(&self, repo_id: RepoId) -> Result<Vec<Workspace>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared, name_color
              FROM workspaces WHERE repo_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map([repo_id.0], row_to_workspace)?;
@@ -345,7 +357,7 @@ impl Store {
         let r = self
             .conn
             .query_row(
-                "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared
+                "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared, name_color
                  FROM workspaces WHERE id = ?1",
                 [id.0],
                 row_to_workspace,
@@ -357,7 +369,7 @@ impl Store {
     /// All workspaces across every repo (used by `resolve_current_workspace`).
     pub fn all_workspaces(&self) -> Result<Vec<Workspace>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared
+            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared, name_color
              FROM workspaces ORDER BY id",
         )?;
         let rows = stmt.query_map([], row_to_workspace)?;
@@ -391,6 +403,12 @@ fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {
         yolo: r.get::<_, i64>(8)? != 0,
         agent: AgentKind::from_str_or_default(Some(&r.get::<_, String>(9)?)),
         shared: r.get::<_, i64>(10)? != 0,
+        // Stored as INTEGER; anything outside 0..=255 (only reachable via a
+        // hand-edited DB) reads back as "no custom color" rather than failing
+        // the whole row.
+        name_color: r
+            .get::<_, Option<i64>>(11)?
+            .and_then(|v| u8::try_from(v).ok()),
     })
 }
 
@@ -1245,6 +1263,65 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 0, "corrupt row deleted by the listing call");
+    }
+
+    #[test]
+    fn workspace_name_color_defaults_to_none_and_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "ws",
+                branch: "wsx/ws",
+                worktree_path: Path::new("/wts/ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+
+        let fetch = |id| {
+            store
+                .workspace_by_id(id)
+                .unwrap()
+                .expect("workspace present")
+                .name_color
+        };
+        assert_eq!(fetch(id), None, "a fresh workspace has no custom color");
+
+        store.set_workspace_name_color(id, Some(180)).unwrap();
+        assert_eq!(fetch(id), Some(180));
+
+        store.set_workspace_name_color(id, None).unwrap();
+        assert_eq!(fetch(id), None, "None clears the column back to default");
+    }
+
+    #[test]
+    fn workspace_name_color_survives_a_migrate_rerun() {
+        // `migrate()` re-runs on every startup (SCHEMA_V1 resets user_version),
+        // so the column-add must not clobber a stored color.
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "ws",
+                branch: "wsx/ws",
+                worktree_path: Path::new("/wts/ws"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store.set_workspace_name_color(id, Some(42)).unwrap();
+
+        store.migrate().unwrap();
+
+        assert_eq!(
+            store.workspace_by_id(id).unwrap().unwrap().name_color,
+            Some(42),
+        );
     }
 
     #[test]

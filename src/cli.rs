@@ -3501,6 +3501,7 @@ mod tests {
             yolo,
             agent,
             shared: false,
+            name_color: None,
         }
     }
 

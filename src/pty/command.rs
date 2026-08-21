@@ -610,11 +610,36 @@ pub fn build_codex_command(
 /// Build a `CommandBuilder` for `omp` (or whatever `WSX_OMP_BIN` points to)
 /// inside `cwd`. Inherits the current process env.
 ///
-/// Stub: Task 2 of the oh-my-pi plan replaces this with the real spawn-mode
-/// mapping. Spawning a bare `omp` is a correct, if featureless, session.
+/// Maps wsx spawn modes to oh-my-pi CLI flags:
+/// - `Fresh`    → bare `omp`, plus `--model` when `WSX_OMP_MODEL` is set.
+/// - `Continue` → `-c`. omp's `SessionManager.continueRecent` falls back to the
+///   newest session in the **cwd-encoded** session directory when no terminal
+///   breadcrumb matches, and every wsx spawn is a fresh PTY with a fresh
+///   terminal id — so a bare `-c` already resumes this worktree's own session.
+///   No marker file or db query is needed (unlike Hermes).
+///
+/// Yolo maps to `--approval-mode yolo` rather than the equivalent
+/// `--auto-approve` because it is the same knob as omp's persistent
+/// `tools.approvalMode` setting, so a wsx yolo workspace and a user-configured
+/// yolo session are visibly the same state. Non-yolo sessions pass **no**
+/// approval flag at all, inheriting whatever the user configured — wsx should
+/// not silently downgrade a harness's interactive defaults.
+///
+/// omp is the only harness besides Claude that supports both
+/// `--append-system-prompt` and `--add-dir`, so instruction injection and
+/// related-repo context both go through real flags — no AGENTS.md rewriting
+/// (Hermes) and no `-c` config overrides (Codex).
+///
+/// Skills and slash commands need no wiring: omp's Claude discovery provider
+/// loads `~/.claude/skills/*/SKILL.md` and `~/.claude/commands/*.md` natively,
+/// so wsx's installed skills and the user's pinned commands already reach it.
+///
+/// There is deliberately no `WSX_OMP_PROVIDER`: omp documents `--provider` as
+/// legacy and accepts `provider/id` in `--model`, so `WSX_OMP_MODEL` covers
+/// both.
 pub fn build_omp_command(
     cwd: &Path,
-    _mode: &SpawnMode,
+    mode: &SpawnMode,
     _remote: crate::agent::remote_control::RemoteOpts,
 ) -> CommandBuilder {
     let bin = std::env::var("WSX_OMP_BIN").unwrap_or_else(|_| "omp".to_string());
@@ -623,6 +648,84 @@ pub fn build_omp_command(
     for (k, v) in std::env::vars() {
         cmd.env(k, v);
     }
+
+    let (doctrine, rename_prompt, custom, add_dirs, add_continue, yolo) = match mode {
+        SpawnMode::Continue {
+            custom_instructions,
+            doctrine,
+            additional_dirs,
+            yolo,
+        } => (
+            doctrine.clone(),
+            None,
+            custom_instructions.clone(),
+            additional_dirs.clone(),
+            true,
+            *yolo,
+        ),
+        SpawnMode::Fresh {
+            rename_ctx,
+            custom_instructions,
+            doctrine,
+            additional_dirs,
+            yolo,
+        } => {
+            let rename_mode =
+                std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
+            let rp = match rename_ctx {
+                Some(ctx) if rename_mode == "claude" => Some(render_rename_system_prompt_pi(
+                    &ctx.current_branch,
+                    &ctx.branch_prefix,
+                    &ctx.repo_name,
+                    &ctx.current_slug,
+                )),
+                _ => None,
+            };
+            (
+                doctrine.clone(),
+                rp,
+                custom_instructions.clone(),
+                additional_dirs.clone(),
+                false,
+                *yolo,
+            )
+        }
+    };
+
+    for dir in &add_dirs {
+        cmd.arg("--add-dir");
+        cmd.arg(dir);
+    }
+
+    if add_continue {
+        // Resume restores the session's stored model and approval config, so
+        // re-asserting `--model` here would fight the session's own choice.
+        cmd.arg("-c");
+    } else if let Some(model) = std::env::var("WSX_OMP_MODEL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        // Empty/whitespace reads as unset: a shell expands `export FOO=$UNSET`
+        // to "", and `--model ""` leaves omp with no resolvable model.
+        cmd.arg("--model");
+        cmd.arg(&model);
+    }
+
+    if yolo {
+        cmd.arg("--approval-mode");
+        cmd.arg("yolo");
+    }
+
+    let parts: Vec<String> = [doctrine, rename_prompt, custom]
+        .into_iter()
+        .flatten()
+        .collect();
+    if !parts.is_empty() {
+        cmd.arg("--append-system-prompt");
+        cmd.arg(parts.join("\n\n"));
+    }
+
     cmd
 }
 
@@ -1329,6 +1432,232 @@ mod tests {
             assert!(
                 result.starts_with("DOCTRINE_MARK"),
                 "doctrine must lead: {result}"
+            );
+        }
+    }
+
+    mod omp_build_command {
+        /// Build an omp command for `mode` and return its argv as lossy Strings.
+        fn omp_argv(mode: &super::SpawnMode) -> Vec<String> {
+            let cmd = super::build_omp_command(
+                std::path::Path::new("/tmp/wt"),
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+            );
+            cmd.get_argv()
+                .iter()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect()
+        }
+
+        fn fresh(yolo: bool) -> super::SpawnMode {
+            super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo,
+            }
+        }
+
+        fn cont(yolo: bool) -> super::SpawnMode {
+            super::SpawnMode::Continue {
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo,
+            }
+        }
+
+        #[test]
+        fn fresh_is_bare_omp_with_no_approval_flags() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.remove("WSX_OMP_MODEL");
+            let argv = omp_argv(&fresh(false));
+            assert!(
+                !argv.iter().any(|a| a == "-c" || a == "--continue"),
+                "fresh must not continue: {argv:?}"
+            );
+            assert!(
+                !argv.iter().any(|a| a == "--approval-mode"),
+                "a non-yolo session inherits the user's configured \
+                 tools.approvalMode: {argv:?}"
+            );
+            assert!(
+                !argv.iter().any(|a| a == "--model"),
+                "no model env set: {argv:?}"
+            );
+            assert!(
+                !argv.iter().any(|a| a == "--append-system-prompt"),
+                "nothing to inject: {argv:?}"
+            );
+        }
+
+        #[test]
+        fn fresh_yolo_uses_approval_mode_yolo() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.remove("WSX_OMP_MODEL");
+            let argv = omp_argv(&fresh(true));
+            let i = argv
+                .iter()
+                .position(|a| a == "--approval-mode")
+                .unwrap_or_else(|| panic!("expected --approval-mode: {argv:?}"));
+            assert_eq!(argv[i + 1], "yolo", "{argv:?}");
+        }
+
+        #[test]
+        fn continue_uses_dash_c() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.remove("WSX_OMP_MODEL");
+            let argv = omp_argv(&cont(false));
+            assert!(argv.iter().any(|a| a == "-c"), "{argv:?}");
+        }
+
+        #[test]
+        fn continue_yolo_still_bypasses_approvals() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.remove("WSX_OMP_MODEL");
+            let argv = omp_argv(&cont(true));
+            assert!(argv.iter().any(|a| a == "-c"), "{argv:?}");
+            let i = argv
+                .iter()
+                .position(|a| a == "--approval-mode")
+                .unwrap_or_else(|| panic!("expected --approval-mode: {argv:?}"));
+            assert_eq!(argv[i + 1], "yolo", "{argv:?}");
+        }
+
+        #[test]
+        fn model_env_adds_model_flag() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.set("WSX_OMP_MODEL", "anthropic/claude-opus-5");
+            let argv = omp_argv(&fresh(false));
+            let i = argv
+                .iter()
+                .position(|a| a == "--model")
+                .unwrap_or_else(|| panic!("expected --model: {argv:?}"));
+            assert_eq!(argv[i + 1], "anthropic/claude-opus-5", "{argv:?}");
+        }
+
+        /// `export WSX_OMP_MODEL=$UNSET` expands to "" in every POSIX shell.
+        /// Emitting `--model ""` makes omp fail to resolve a model at all, so
+        /// blank must read as unset.
+        #[test]
+        fn blank_model_env_is_treated_as_unset() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.set("WSX_OMP_MODEL", "   ");
+            let argv = omp_argv(&fresh(false));
+            assert!(
+                !argv.iter().any(|a| a == "--model"),
+                "blank model env must emit no flag: {argv:?}"
+            );
+        }
+
+        /// Continue restores omp's stored session config, so a model override
+        /// on resume would silently fight the session's own model.
+        #[test]
+        fn continue_omits_the_model_flag() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.set("WSX_OMP_MODEL", "anthropic/claude-opus-5");
+            let argv = omp_argv(&cont(false));
+            assert!(
+                !argv.iter().any(|a| a == "--model"),
+                "resume keeps the session's own model: {argv:?}"
+            );
+        }
+
+        #[test]
+        fn additional_dirs_each_get_an_add_dir_flag() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.remove("WSX_OMP_MODEL");
+            let argv = omp_argv(&super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![
+                    std::path::PathBuf::from("/srv/a"),
+                    std::path::PathBuf::from("/srv/b"),
+                ],
+                yolo: false,
+            });
+            let dirs: Vec<&String> = argv
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i > 0 && argv[i - 1] == "--add-dir")
+                .map(|(_, a)| a)
+                .collect();
+            assert_eq!(dirs, vec!["/srv/a", "/srv/b"], "{argv:?}");
+        }
+
+        #[test]
+        fn doctrine_rename_and_custom_compose_into_one_system_prompt() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.set("WSX_RENAME_MODE", "claude");
+            env.remove("WSX_OMP_MODEL");
+            let argv = omp_argv(&super::SpawnMode::Fresh {
+                rename_ctx: Some(super::RenameContext {
+                    current_branch: "wsx/bold-fern".into(),
+                    branch_prefix: "wsx".into(),
+                    repo_name: "myrepo".into(),
+                    current_slug: "bold-fern".into(),
+                }),
+                custom_instructions: Some("CUSTOM_MARK".into()),
+                doctrine: Some("DOCTRINE_MARK".into()),
+                additional_dirs: vec![],
+                yolo: false,
+            });
+            let i = argv
+                .iter()
+                .position(|a| a == "--append-system-prompt")
+                .unwrap_or_else(|| panic!("expected the flag: {argv:?}"));
+            let prompt = &argv[i + 1];
+            assert!(
+                prompt.starts_with("DOCTRINE_MARK"),
+                "doctrine must lead: {prompt}"
+            );
+            assert!(prompt.contains("wsx workspace rename"), "{prompt}");
+            assert!(prompt.contains("bold-fern"), "{prompt}");
+            assert!(prompt.contains("CUSTOM_MARK"), "{prompt}");
+            assert_eq!(
+                argv.iter()
+                    .filter(|a| *a == "--append-system-prompt")
+                    .count(),
+                1,
+                "exactly one system-prompt flag: {argv:?}"
+            );
+        }
+
+        /// `WSX_RENAME_MODE` off means wsx renames the workspace itself, so the
+        /// agent must not also be told to.
+        #[test]
+        fn rename_prompt_is_omitted_when_rename_mode_is_not_claude() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.set("WSX_RENAME_MODE", "wsx");
+            env.remove("WSX_OMP_MODEL");
+            let argv = omp_argv(&super::SpawnMode::Fresh {
+                rename_ctx: Some(super::RenameContext {
+                    current_branch: "wsx/bold-fern".into(),
+                    branch_prefix: "wsx".into(),
+                    repo_name: "myrepo".into(),
+                    current_slug: "bold-fern".into(),
+                }),
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+            });
+            assert!(
+                !argv.iter().any(|a| a == "--append-system-prompt"),
+                "nothing left to inject: {argv:?}"
             );
         }
     }

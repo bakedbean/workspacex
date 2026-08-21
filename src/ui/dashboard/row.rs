@@ -23,7 +23,7 @@ use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
 use crate::ui::text::{truncate, truncate_pad, truncate_words};
 use crate::ui::theme::Theme;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 pub const DEFAULT_BRANCH_WIDTH: usize = 28;
@@ -169,6 +169,9 @@ pub struct RowInputs {
     /// been fetched, or when `gh` couldn't answer — all render as no mark.
     pub review: Option<ReviewDecision>,
     pub nerd_fonts: bool,
+    /// The workspace's custom name color, chosen from the xterm-256 palette
+    /// via the `C` picker. `None` = the theme's default styling for the span.
+    pub name_color: Option<Color>,
     pub workspace_id: crate::data::store::WorkspaceId,
 }
 
@@ -334,6 +337,13 @@ pub fn render(
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
     if inputs.yolo {
         name_style = name_style.fg(theme.warn);
+    }
+    // An explicitly chosen color overrides the implicit YOLO tint: the tint is
+    // a default the user is entitled to replace. The cost is that a colored
+    // YOLO workspace loses its warn coloring, which is the only YOLO marker on
+    // the row — accepted, because ignoring the user's pick would be worse.
+    if let Some(c) = inputs.name_color {
+        name_style = name_style.fg(c);
     }
     let glyph_style = theme
         .lifecycle_style(inputs.lifecycle)
@@ -711,6 +721,7 @@ mod tests {
             lifecycle: None,
             review: None,
             nerd_fonts: false,
+            name_color: None,
             workspace_id: crate::data::store::WorkspaceId(0),
         }
     }
@@ -1718,6 +1729,53 @@ mod tests {
             .expect("branch span present");
         assert_eq!(branch_span.style.fg, Some(theme.warn));
         assert!(branch_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn name_color_recolors_the_branch_name_and_keeps_it_bold() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.name_color = Some(crate::config::name_color::color(180));
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let branch_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref().contains("bakedbean/repo-overview"))
+            .expect("branch span present");
+        assert_eq!(branch_span.style.fg, Some(Color::Indexed(180)));
+        assert!(branch_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn name_color_wins_over_the_yolo_warn_tint() {
+        // A custom color is an explicit user choice, so it overrides the
+        // implicit YOLO tint on the same span.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.yolo = true;
+        inputs.name_color = Some(crate::config::name_color::color(196));
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let branch_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref().contains("bakedbean/repo-overview"))
+            .expect("branch span present");
+        assert_eq!(branch_span.style.fg, Some(Color::Indexed(196)));
+    }
+
+    #[test]
+    fn name_color_leaves_the_lifecycle_glyph_alone() {
+        // Same rule as YOLO: the leading branch glyph is owned by PR
+        // lifecycle, not by the name's color.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.name_color = Some(crate::config::name_color::color(196));
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        assert_eq!(
+            branch_glyph_style(&inputs, &theme).fg,
+            theme.ok_style().fg,
+            "a custom name color recolors the name, not the status glyph"
+        );
     }
 
     #[test]

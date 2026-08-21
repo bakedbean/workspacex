@@ -73,6 +73,7 @@ fn build_inputs<'a>(
                     lifecycle: None,
                     review: None,
                     nerd_fonts: false,
+                    name_color: None,
                     workspace_id: id,
                     has_multi_pane_layout: false,
                 },
@@ -805,6 +806,7 @@ fn base_row() -> row::RowInputs {
         lifecycle: None,
         review: None,
         nerd_fonts: false,
+        name_color: None,
         workspace_id: WorkspaceId(1),
         has_multi_pane_layout: false,
     }

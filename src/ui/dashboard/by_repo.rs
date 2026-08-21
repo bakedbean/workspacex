@@ -329,6 +329,7 @@ mod tests {
                 lifecycle: None,
                 review: None,
                 nerd_fonts: false,
+                name_color: None,
                 workspace_id: crate::data::store::WorkspaceId(i as i64),
                 has_multi_pane_layout: false,
             })

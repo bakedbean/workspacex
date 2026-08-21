@@ -936,6 +936,7 @@ fn build_row_inputs(
         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
         review: app.pr_review.get(&ws.id).copied(),
         nerd_fonts,
+        name_color: ws.name_color.map(crate::config::name_color::color),
         workspace_id: ws.id,
         has_multi_pane_layout: app.workspaces_with_multi_pane_layouts.contains(&ws.id),
     }

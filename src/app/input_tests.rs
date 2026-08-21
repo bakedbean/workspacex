@@ -7740,6 +7740,72 @@ mod rename_modal_tests {
         assert_eq!(stored_color(&app, ws_id), None);
     }
 
+    #[test]
+    fn a_chosen_color_still_paints_the_row_after_a_restart() {
+        // The literal requirement: pick a color, quit, come back. Uses a real
+        // on-disk DB and a second `App` so nothing survives in memory.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("wsx.db");
+
+        let ws_id = {
+            let store = Store::open(&db).unwrap();
+            let repo_id = store
+                .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+                .unwrap();
+            let ws_id = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id,
+                    name: "alpha",
+                    branch: "repo/alpha",
+                    worktree_path: std::path::Path::new("."),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            store.set_workspace_name_color(ws_id, Some(180)).unwrap();
+            ws_id
+        };
+
+        let store = Store::open(&db).unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert_eq!(
+            app.workspaces
+                .iter()
+                .find(|(_, w)| w.id == ws_id)
+                .expect("workspace reloaded")
+                .1
+                .name_color,
+            Some(180),
+        );
+
+        // Repos render folded by default; expand so the row is actually drawn.
+        for (rid, _) in app.workspaces.clone() {
+            app.dashboard.folded.insert(rid.0 as u64, false);
+        }
+        let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+        let buf = term.backend().buffer();
+        let painted = (0..buf.area.height).any(|y| {
+            (0..buf.area.width).any(|x| {
+                let cell = &buf[(x, y)];
+                cell.fg == ratatui::style::Color::Indexed(180) && cell.symbol() != " "
+            })
+        });
+        let text = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            painted,
+            "the branch name is painted in the restored color:\n{text}"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn rename_modal_esc_cancels_without_changes() {
         let (mut app, ws_id) = app_with_workspace();

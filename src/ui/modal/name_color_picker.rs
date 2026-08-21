@@ -21,6 +21,21 @@ pub enum Dir {
     Down,
 }
 
+/// Black or white ink, whichever reads against palette entry `index`.
+///
+/// The cursor and the in-use marker are drawn ON the swatch, so they cannot
+/// use the swatch's own color — a `[]` painted in #000000 on the black swatch
+/// is invisible. Uses the standard sRGB luma weights with a mid threshold.
+fn contrast_ink(index: u8) -> Color {
+    let (r, g, b) = name_color::rgb(index);
+    let luma = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    if luma > 140.0 {
+        Color::Black
+    } else {
+        Color::White
+    }
+}
+
 /// Move the grid cursor within a filtered list of `len` swatches. Horizontal
 /// steps move one swatch, vertical steps a whole row; every direction clamps
 /// rather than wrapping, so holding a key parks at an edge instead of jumping
@@ -84,20 +99,31 @@ pub fn render_name_color_picker(
             let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
             for (col, &idx) in chunk.iter().enumerate() {
                 let flat = row * GRID_COLS + col;
-                // The cursor and the applied color are drawn as different
-                // glyphs rather than different colors: the swatch IS its
-                // color, so any recoloring would misrepresent it.
-                let glyph = if flat == selected {
-                    "[]"
+                // A plain swatch is a solid block in its own color. The cursor
+                // and the in-use marker instead carry the color as BACKGROUND
+                // and draw their glyph in contrasting ink, so the cell still
+                // shows the color AND the marker stays readable on it.
+                let (glyph, style) = if flat == selected {
+                    (
+                        "[]",
+                        Style::default()
+                            .fg(contrast_ink(idx))
+                            .bg(name_color::color(idx)),
+                    )
                 } else if Some(idx) == current {
-                    "\u{2593}\u{2593}"
+                    (
+                        "\u{2713} ",
+                        Style::default()
+                            .fg(contrast_ink(idx))
+                            .bg(name_color::color(idx)),
+                    )
                 } else {
-                    "\u{2588}\u{2588}"
+                    (
+                        "\u{2588}\u{2588}",
+                        Style::default().fg(name_color::color(idx)),
+                    )
                 };
-                spans.push(Span::styled(
-                    glyph.to_string(),
-                    Style::default().fg(name_color::color(idx)),
-                ));
+                spans.push(Span::styled(glyph.to_string(), style));
                 spans.push(Span::raw(" "));
                 rects.push((
                     idx,
@@ -127,6 +153,14 @@ pub fn render_name_color_picker(
                 match name_color::name(idx) {
                     "" => String::new(),
                     n => format!("  {n}"),
+                },
+                theme.dim_style(),
+            ),
+            Span::styled(
+                if current == Some(idx) {
+                    "  (current)".to_string()
+                } else {
+                    String::new()
                 },
                 theme.dim_style(),
             ),
@@ -242,6 +276,112 @@ mod tests {
     fn the_filter_text_is_echoed_so_typing_is_visible() {
         let (_, text) = render("d7af", 0);
         assert!(text.contains("d7af"), "filter echoed:\n{text}");
+    }
+
+    #[test]
+    fn contrast_ink_flips_with_the_swatch_luminance() {
+        assert_eq!(
+            contrast_ink(0),
+            Color::White,
+            "black swatch needs light ink"
+        );
+        assert_eq!(
+            contrast_ink(15),
+            Color::Black,
+            "white swatch needs dark ink"
+        );
+        assert_eq!(contrast_ink(226), Color::Black, "bright yellow is light");
+        assert_eq!(contrast_ink(17), Color::White, "navy is dark");
+    }
+
+    /// The single buffer cell at `rect`'s origin, as (symbol, fg, bg).
+    fn cell_at(
+        filter: &str,
+        selected: usize,
+        current: Option<u8>,
+        want: u8,
+    ) -> (String, Color, Color) {
+        let theme = Theme::ansi();
+        let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        let mut rects = Vec::new();
+        term.draw(|f| {
+            rects = render_name_color_picker(f, f.area(), filter, selected, current, &theme);
+        })
+        .unwrap();
+        let (_, rect) = rects
+            .iter()
+            .find(|(i, _)| *i == want)
+            .unwrap_or_else(|| panic!("swatch {want} drawn"));
+        let cell = &term.backend().buffer()[(rect.x, rect.y)];
+        (cell.symbol().to_string(), cell.fg, cell.bg)
+    }
+
+    #[test]
+    fn the_cursor_swatch_keeps_its_color_and_stays_legible_on_black() {
+        // Index 0 is #000000: drawing the cursor glyph in the swatch's own
+        // color made it invisible. It carries the color as BACKGROUND with
+        // contrasting ink instead.
+        let (symbol, fg, bg) = cell_at("", 0, None, 0);
+        assert_eq!(
+            bg,
+            Color::Indexed(0),
+            "the cursor cell still shows its color"
+        );
+        assert_eq!(fg, Color::White, "marked with ink that reads against it");
+        assert_eq!(symbol, "[");
+    }
+
+    #[test]
+    fn the_applied_color_is_marked_in_the_grid() {
+        let (symbol, fg, bg) = cell_at("", 200, Some(21), 21);
+        assert_eq!(bg, Color::Indexed(21));
+        assert_eq!(fg, contrast_ink(21));
+        assert_eq!(symbol, "\u{2713}", "a check marks the color in use");
+    }
+
+    #[test]
+    fn a_plain_swatch_is_a_solid_block_in_its_own_color() {
+        let (symbol, fg, _) = cell_at("", 0, None, 180);
+        assert_eq!(symbol, "\u{2588}");
+        assert_eq!(fg, Color::Indexed(180));
+    }
+
+    #[test]
+    fn the_info_line_says_when_the_cursor_sits_on_the_applied_color() {
+        let (_, on) = {
+            let idx = name_color::matching("")
+                .iter()
+                .position(|&i| i == 21)
+                .unwrap();
+            render_with_current("", idx, Some(21))
+        };
+        assert!(on.contains("(current)"), "expected the marker:\n{on}");
+        let (_, off) = render_with_current("", 0, Some(21));
+        assert!(!off.contains("(current)"), "only when focused:\n{off}");
+    }
+
+    fn render_with_current(
+        filter: &str,
+        selected: usize,
+        current: Option<u8>,
+    ) -> (Vec<(u8, Rect)>, String) {
+        let theme = Theme::ansi();
+        let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        let mut rects = Vec::new();
+        term.draw(|f| {
+            rects = render_name_color_picker(f, f.area(), filter, selected, current, &theme);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let text = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (rects, text)
     }
 
     #[test]

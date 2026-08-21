@@ -26,7 +26,8 @@ pub use crate::pty::session_detect::{
 // Per-agent command construction now lives in `command`; the builders are
 // called by `spawn_session` below.
 pub use crate::pty::command::{
-    build_claude_command, build_codex_command, build_hermes_command, build_pi_command,
+    build_claude_command, build_codex_command, build_hermes_command, build_omp_command,
+    build_pi_command,
 };
 
 // AGENTS.md / git-exclude / spawn-prep plumbing now lives in `workspace_prep`;
@@ -70,6 +71,7 @@ fn resolved_binary(agent: AgentKind) -> String {
         AgentKind::Pi => "WSX_PI_BIN",
         AgentKind::Hermes => "WSX_HERMES_BIN",
         AgentKind::Codex => "WSX_CODEX_BIN",
+        AgentKind::Omp => "WSX_OMP_BIN",
     };
     std::env::var(env_var).unwrap_or_else(|_| agent.default_binary().to_string())
 }
@@ -420,6 +422,8 @@ async fn await_ack(rx: tokio::sync::oneshot::Receiver<()>, timeout_ms: u64) -> b
 /// - **Codex** renders inline and never emits `ESC[?1049h`, so it needs its own
 ///   signal: see `codex_ready`.
 /// - **Pi** also renders inline: see `pi_ready`.
+/// - **omp** renders inline too, and spends its first ~557ms painting a
+///   welcome splash into a screen with no composer at all. See `omp_ready`.
 /// - **Hermes** has no signal here, and that is a gap, not a decision — the
 ///   binary is not installed on the machine this was investigated on, so there
 ///   was no cold boot to read a marker off, and inventing one from guesswork is
@@ -432,6 +436,7 @@ pub(crate) fn ready_for_input(agent: AgentKind, screen: &vt100::Screen) -> bool 
         AgentKind::Codex => codex_ready(screen),
         AgentKind::Pi => pi_ready(screen),
         AgentKind::Hermes => true,
+        AgentKind::Omp => omp_ready(screen),
     }
 }
 
@@ -466,6 +471,47 @@ fn codex_ready(screen: &vt100::Screen) -> bool {
             .trim_start()
             .starts_with(CODEX_PROMPT)
     })
+}
+
+/// omp is ready when its composer frame is drawn and the cursor is visible.
+///
+/// Read off a real cold boot (`tests/fixtures/agent-boot/omp-*.bin`). omp
+/// renders inline — it never emits `ESC[?1049h`, so Claude's alternate-screen
+/// signal does not apply. Its boot goes: terminal setup into an empty screen,
+/// then at t=557ms a welcome splash (logo, tips, recent sessions) painted with
+/// the cursor *hidden* and nothing at all in the bottom half of the screen, and
+/// only in the next read the composer — a two-row box pinned to the bottom,
+/// `╭── <model · dir · branch · context> ──╮` over `╰─ <input> ─╯`, with the
+/// cursor visible.
+///
+/// The signal is that adjacent frame pair in the bottom half, matched on
+/// box-drawing corners rather than on any of omp's wording, so a copy change
+/// cannot silently turn this into a race. The bottom-half restriction keeps a
+/// box inside rendered markdown from counting, and requiring the pair to be
+/// adjacent keeps the splash's own bottom border (`╰───┴───╯`, which is in the
+/// bottom half once the splash scrolls up) from matching on its own.
+///
+/// The visible-cursor half is **defensive, not measured**: no omp modal was
+/// captured, so unlike codex — whose trust dialog was caught red-handed marking
+/// its selected row with the composer's own glyph — there is no observed dialog
+/// this excludes. It is here because a focused text field shows the cursor and
+/// a list widget generally does not, and the failure mode it guards against
+/// (text acked into a modal that discards it) is silent. If someone captures an
+/// omp dialog that draws a bottom-pinned frame with the cursor up, this
+/// predicate needs revisiting.
+fn omp_ready(screen: &vt100::Screen) -> bool {
+    if screen.hide_cursor() {
+        return false;
+    }
+    let (rows, cols) = screen.size();
+    let min_width = usize::from(cols / 2).max(1);
+    let framed = |row: u16, open: char, close: char| {
+        let line = screen.contents_between(row, 0, row, cols);
+        let t = line.trim();
+        t.chars().count() >= min_width && t.starts_with(open) && t.ends_with(close)
+    };
+    (rows / 2..rows.saturating_sub(1))
+        .any(|row| framed(row, '\u{256d}', '\u{256e}') && framed(row + 1, '\u{2570}', '\u{256f}'))
 }
 
 /// Pi is ready when the chrome around its composer is on screen.
@@ -552,8 +598,16 @@ impl Session {
 /// Enter myself" symptom. Wrapping the body in a bracketed paste
 /// (`ESC[200~ … ESC[201~`) makes the paste boundary explicit in the byte
 /// stream, so the following CR is an unambiguous Enter even when the two writes
-/// arrive in a single read. Other agents (Claude/Pi/Hermes) submit fine on a
-/// plain `text` + CR, so they keep the simpler form and are untouched.
+/// arrive in a single read. Other agents (Claude/Pi/Hermes/omp) submit fine on
+/// a plain `text` + CR, so they keep the simpler form and are untouched.
+///
+/// omp is the one where the wrapper would actively hurt, and it was checked
+/// rather than assumed. Its editor runs its own `BracketedPasteHandler` and
+/// turns a payload it accepts as a paste into a `[Paste #N]` marker, so
+/// wrapping a wsx message would replace the body with a placeholder. Measured
+/// against a live omp v17.4.0 over a real PTY: a three-line body written plain,
+/// then CR as a separate write, arrived intact and submitted — the agent
+/// answered it.
 pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) {
     let enter = b"\r".to_vec();
     match agent {
@@ -564,7 +618,9 @@ pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) 
             body.extend_from_slice(b"\x1b[201~");
             (body, enter)
         }
-        AgentKind::Claude | AgentKind::Pi | AgentKind::Hermes => (text.as_bytes().to_vec(), enter),
+        AgentKind::Claude | AgentKind::Pi | AgentKind::Hermes | AgentKind::Omp => {
+            (text.as_bytes().to_vec(), enter)
+        }
     }
 }
 
@@ -671,6 +727,7 @@ pub fn spawn_session(
             prepare_codex_workspace(cwd, &mode);
             build_codex_command(cwd, &mode, remote)
         }
+        AgentKind::Omp => build_omp_command(cwd, &mode, remote),
     };
     if let Some(id) = identity {
         child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
@@ -1340,9 +1397,15 @@ mod tests {
 
     #[test]
     fn submit_writes_keeps_other_agents_plain() {
-        // Claude/Pi/Hermes submit on a plain text + CR; no bracketed paste so
-        // their proven-working behavior is untouched.
-        for agent in [AgentKind::Claude, AgentKind::Pi, AgentKind::Hermes] {
+        // Claude/Pi/Hermes/omp submit on a plain text + CR; no bracketed paste
+        // so their proven-working behavior is untouched. omp additionally must
+        // NOT be wrapped: its editor would render the payload as `[Paste #N]`.
+        for agent in [
+            AgentKind::Claude,
+            AgentKind::Pi,
+            AgentKind::Hermes,
+            AgentKind::Omp,
+        ] {
             let (body, enter) = submit_writes(agent, "hello\nworld");
             assert_eq!(body, b"hello\nworld".to_vec(), "agent {agent:?}");
             assert_eq!(enter, b"\r".to_vec(), "agent {agent:?}");
@@ -1435,6 +1498,30 @@ mod tests {
         assert!(
             ready_for_input(AgentKind::Pi, p.screen()),
             "pi is ready once the chrome around its composer is drawn"
+        );
+    }
+
+    #[test]
+    fn omp_is_not_ready_mid_boot_and_is_ready_once_its_composer_paints() {
+        // Real capture: omp paints its welcome splash at t=557ms with the
+        // cursor hidden and an entirely empty bottom half, and only in the
+        // very next read draws the composer frame. Text injected at the splash
+        // has no composer to land in.
+        let mut p = Parser::new(24, 80, 1000);
+        p.process(boot_fixture!("omp-preboot.bin"));
+        let screen = p.screen().contents();
+        assert!(
+            screen.contains("Welcome back!"),
+            "fixture should end on the splash: {screen:?}"
+        );
+        assert!(
+            !ready_for_input(AgentKind::Omp, p.screen()),
+            "a splash with no composer is not a composer"
+        );
+        p.process(boot_fixture!("omp-composer.bin"));
+        assert!(
+            ready_for_input(AgentKind::Omp, p.screen()),
+            "omp is ready once its composer frame is drawn"
         );
     }
 
@@ -1810,21 +1897,24 @@ mod tests {
     #[test]
     fn agent_kind_helpers_match_existing_strings() {
         use super::AgentKind;
-        assert_eq!(AgentKind::ALL.len(), 4);
+        assert_eq!(AgentKind::ALL.len(), 5);
         assert!(AgentKind::ALL.contains(&AgentKind::Claude));
         assert!(AgentKind::ALL.contains(&AgentKind::Pi));
         assert!(AgentKind::ALL.contains(&AgentKind::Hermes));
         assert!(AgentKind::ALL.contains(&AgentKind::Codex));
+        assert!(AgentKind::ALL.contains(&AgentKind::Omp));
 
         assert_eq!(AgentKind::Claude.display_name(), "claude");
         assert_eq!(AgentKind::Pi.display_name(), "pi");
         assert_eq!(AgentKind::Hermes.display_name(), "hermes");
         assert_eq!(AgentKind::Codex.display_name(), "codex");
+        assert_eq!(AgentKind::Omp.display_name(), "omp");
 
         assert_eq!(AgentKind::Claude.default_binary(), "claude");
         assert_eq!(AgentKind::Pi.default_binary(), "pi");
         assert_eq!(AgentKind::Hermes.default_binary(), "hermes");
         assert_eq!(AgentKind::Codex.default_binary(), "codex");
+        assert_eq!(AgentKind::Omp.default_binary(), "omp");
 
         for k in AgentKind::ALL {
             assert_eq!(AgentKind::from_str_or_default(Some(k.store_value())), k);
@@ -1835,6 +1925,19 @@ mod tests {
             AgentKind::Claude,
             "None input must default to Claude — store.rs relies on this"
         );
+    }
+
+    /// oh-my-pi (`omp`, @oh-my-pi/pi-coding-agent) and pi (`pi`,
+    /// @earendil-works/pi-coding-agent) are separate harnesses that are both
+    /// installed on real machines. A store value of "pi" must never resolve to
+    /// Omp, and vice versa — a swap here silently spawns the wrong binary.
+    #[test]
+    fn omp_and_pi_are_distinct_kinds() {
+        use super::AgentKind;
+        assert_eq!(AgentKind::from_str_or_default(Some("omp")), AgentKind::Omp);
+        assert_eq!(AgentKind::from_str_or_default(Some("pi")), AgentKind::Pi);
+        assert_ne!(AgentKind::Omp, AgentKind::Pi);
+        assert_eq!(AgentKind::Omp.store_value(), "omp");
     }
 
     #[test]

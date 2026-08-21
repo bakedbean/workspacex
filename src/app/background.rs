@@ -48,6 +48,9 @@ pub async fn tail_workspace_events(
         crate::pty::session::AgentKind::Codex => {
             crate::activity::codex_events::locate_session_file(&worktree_path)
         }
+        crate::pty::session::AgentKind::Omp => {
+            crate::activity::omp_events::locate_session_file(&worktree_path)
+        }
     };
     // Snapshot the FULL (file_path, byte_offset) pair so the commit can
     // detect a concurrent tail that landed between our snapshot and now.
@@ -80,6 +83,9 @@ pub async fn tail_workspace_events(
         }
         crate::pty::session::AgentKind::Codex => {
             crate::activity::codex_events::tail_session(&file, tail_from).map_err(Into::into)
+        }
+        crate::pty::session::AgentKind::Omp => {
+            crate::activity::omp_events::tail_session(&file, tail_from).map_err(Into::into)
         }
     };
     let Ok(update) = tail_result else {

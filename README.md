@@ -1,6 +1,6 @@
 # wsx (WorkspaceX)
 
-Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git worktrees.
+Terminal UI for managing Claude Code, Pi, Hermes, Codex, or oh-my-pi sessions in git worktrees.
 
 ## Parallel Agent Sessions
 ### Deploy multiple workspaces at once all working in parallel with real time feedback 
@@ -21,7 +21,7 @@ integrations, and more.
 
 - **Parallel agent sessions in git worktrees** — every workspace is its own
   branch + worktree; switch with one key.
-- **Multiple coding agents** — run Claude, Pi, Hermes, or Codex per workspace.
+- **Multiple coding agents** — run Claude, Pi, Hermes, Codex, or oh-my-pi (`omp`) per workspace.
 - **Multi-agent workspaces** — attach several agents to one worktree, switch
   focus with a keypress, and have them message each other via the `wsx` CLI.
 - **Cross-session attention alerts** and a per-workspace activity sub-line so you

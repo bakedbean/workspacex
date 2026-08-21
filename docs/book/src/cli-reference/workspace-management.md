@@ -1,5 +1,5 @@
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex] [--prompt <text>]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
 ```
 
 Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned agent session. `--agent` overrides the `coding_agent` setting (see [Coding agents](../configuration/coding-agents.md)) for this workspace; when omitted, the setting applies (claude unless configured otherwise).

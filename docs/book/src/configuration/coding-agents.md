@@ -10,9 +10,10 @@ Supported agents:
 | Agent              | CLI option       | Source                                                                    | Config                                    |
 | ------------------ | ---------------- | ------------------------------------------------------------------------- | ----------------------------------------- |
 | `claude` (default) | `--agent claude` | `claude` binary (override via `WSX_CLAUDE_BIN`)                           | Environment + `~/.claude.json` MCP        |
-| `pi`               | `--agent pi`     | `pi` binary (override via `WSX_PI_BIN`)                                   | `~/.pi/`                                  |
+| `pi`               | `--agent pi`     | `pi` binary, [`@earendil-works/pi-coding-agent`](https://github.com/badlogic/pi-mono) (override via `WSX_PI_BIN`) | `~/.pi/`                 |
 | `hermes`           | `--agent hermes` | [nousresearch/hermes-agent](https://github.com/nousresearch/hermes-agent) | `~/.hermes/config.yaml` (provider, model) |
 | `codex`            | `--agent codex`  | `codex` binary (override via `WSX_CODEX_BIN`)                             | `~/.codex/config.toml`                    |
+| `omp`              | `--agent omp`    | `omp` binary, [oh-my-pi](https://github.com/can1357/oh-my-pi) (override via `WSX_OMP_BIN`) | `~/.omp/agent/config.yml` |
 
 ### Hermes integration
 
@@ -69,3 +70,60 @@ If a worktree was used with an older wsx, it may contain a wsx-created `AGENTS.m
 **Activity**: the dashboard detail bar tails the worktree's rollout file under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. RECENT FILES is not yet populated for Codex (file edits are inferred-via-shell and not tracked).
 
 **Model**: set `WSX_CODEX_MODEL` to pass `-m <model>` to Codex (e.g. `gpt-5.4`). Unset = Codex default.
+
+### Oh My Pi integration
+
+`omp` is [oh-my-pi](https://github.com/can1357/oh-my-pi)
+(`@oh-my-pi/pi-coding-agent`). It is **not** the same harness as `pi`, which is
+`@earendil-works/pi-coding-agent`. The two share ancestry — which is why they
+write the same session-file format — but they are separately maintained, have
+different CLIs, and can both be installed at once. `--agent pi` and `--agent
+omp` mean different binaries.
+
+**Spawn**: fresh workspaces launch bare `omp`. Non-yolo sessions inherit
+whatever `tools.approvalMode` you configured; `--yolo` workspaces add
+`--approval-mode yolo`.
+
+**Continue**: `omp -c`. omp resolves `--continue` against the session directory
+for the current cwd, so this resumes the worktree's own most-recent session
+without wsx needing a marker file or a database query.
+
+**Instructions**: doctrine, the auto-rename directive, and a workspace's custom
+instructions compose into a single `--append-system-prompt`. Related-repo paths
+ride on `--add-dir`. omp is the only harness besides Claude that supports both
+flags, so nothing is written into the worktree — no `AGENTS.md` block (unlike
+Hermes) and no config overrides (unlike Codex).
+
+**Skills and slash commands work with no setup.** omp's Claude discovery
+provider loads `~/.claude/skills/*/SKILL.md` and `~/.claude/commands/*.md`
+natively, so the skills installed by `wsx setup install-skill` and your pinned
+command chips both reach omp unchanged. There is deliberately no separate omp
+skills target — the Claude one already covers it, for the same reason it covers
+Pi.
+
+**Session detection and activity**: omp stores sessions at
+`~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl`, where the directory
+name is the cwd with `$HOME` (or the temp root) stripped and `/` collapsed to
+`-`. Because omp writes the same JSONL schema pi does, wsx reuses the pi parser,
+so RECENT CHAT, SESSION SUMMARY, tool-use counts and the last-message column are
+populated exactly as they are for Pi. Like Claude, Pi and Codex, omp indexes
+sessions by worktree path, so it participates in the worktree-sessions snapshot
+that stops a recycled workspace slug from resuming its predecessor's
+conversation.
+
+**Status reporting**: omp exposes pre/post *tool* hooks only — there is no
+turn-lifecycle event (nothing equivalent to Claude's stop / prompt-submitted /
+permission-prompt hooks, or Codex's `notify`) — so there is no deterministic
+status wiring, the same position Pi and Hermes are in. Status still updates from
+the agent itself calling `wsx status set`, and from the session-JSONL heuristic.
+Claude and Codex remain the only harnesses with automatic harness-level status.
+
+**Environment overrides**: configure omp via `~/.omp/agent/config.yml`, or set
+`WSX_OMP_MODEL` to override the model per-workspace:
+
+```bash
+WSX_OMP_MODEL=anthropic/claude-opus-5 wsx workspace create backend --agent omp
+```
+
+There is no `WSX_OMP_PROVIDER`: omp documents `--provider` as legacy and accepts
+`provider/id` in `--model`, so `WSX_OMP_MODEL` covers both.

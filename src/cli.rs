@@ -58,7 +58,7 @@ pub static GROUPS: &[GroupInfo] = &[
             },
             CmdInfo {
                 usage: "add <kind>",
-                blurb: "Attach an agent (claude|pi|hermes|codex)",
+                blurb: "Attach an agent (claude|pi|hermes|codex|omp)",
             },
             CmdInfo {
                 usage: "send [--workspace <repo>/<slug>] <label> <message...>",
@@ -955,7 +955,7 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             let repo = it.next().ok_or_else(|| Error::Usage {
                 group: None,
                 msg:
-                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex] [--prompt <text>]"
+                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]"
                         .into(),
             })?;
             let mut name: Option<String> = None;
@@ -980,10 +980,14 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                     "--yolo" => yolo = true,
                     "--shared" => shared = true,
                     "--agent" => {
-                        agent = Some(it.next().ok_or_else(|| Error::Usage {
-                            group: None,
-                            msg: "--agent needs value (claude, pi, hermes, or codex)".into(),
-                        })?);
+                        agent =
+                            Some(
+                                it.next().ok_or_else(|| Error::Usage {
+                                    group: None,
+                                    msg: "--agent needs value (claude, pi, hermes, codex, or omp)"
+                                        .into(),
+                                })?,
+                            );
                     }
                     other => {
                         return Err(Error::Usage {
@@ -993,15 +997,23 @@ fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                     }
                 }
             }
+            // Validate against the canonical agent set so this can't drift from
+            // `AgentKind` as kinds are added or renamed — the same reason
+            // `agent add` validates this way. The hand-maintained chain this
+            // replaces would have rejected `omp` on the day it was added.
             if let Some(ref a) = agent
-                && a != "pi"
-                && a != "claude"
-                && a != "hermes"
-                && a != "codex"
+                && !crate::pty::session::AgentKind::ALL
+                    .iter()
+                    .any(|k| k.display_name() == a)
             {
+                let valid = crate::pty::session::AgentKind::ALL
+                    .iter()
+                    .map(|k| k.display_name())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 return Err(Error::Usage {
                     group: None,
-                    msg: format!("--agent must be 'claude', 'pi', 'hermes', or 'codex', got '{a}'"),
+                    msg: format!("--agent must be one of [{valid}], got '{a}'"),
                 });
             }
             Ok(CliAction::WorkspaceCreate {
@@ -3780,6 +3792,19 @@ mod tests {
             }
             other => panic!("expected AgentSend, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn workspace_create_accepts_every_agent_kind() {
+        use crate::pty::session::AgentKind;
+        for k in AgentKind::ALL {
+            let name = k.display_name();
+            assert!(
+                parse(&["workspace", "create", "myrepo", "--agent", name]).is_ok(),
+                "--agent {name} must be accepted"
+            );
+        }
+        assert!(parse(&["workspace", "create", "myrepo", "--agent", "bogus"]).is_err());
     }
 
     #[test]

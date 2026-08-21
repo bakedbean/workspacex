@@ -365,6 +365,8 @@ impl Theme {
             AgentKind::Pi => AGENT_PI,
             AgentKind::Hermes => AGENT_HERMES,
             AgentKind::Codex => AGENT_CODEX,
+            // Task 6 of the oh-my-pi plan gives omp its own color.
+            AgentKind::Omp => AGENT_PI,
         };
         Style::default().fg(fg)
     }

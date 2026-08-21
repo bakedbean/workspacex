@@ -11,17 +11,23 @@ pub enum AgentKind {
     Pi,
     Hermes,
     Codex,
+    /// oh-my-pi (`omp`). A separate harness from [`AgentKind::Pi`] despite the
+    /// shared ancestry: `@oh-my-pi/pi-coding-agent` vs
+    /// `@earendil-works/pi-coding-agent`, different binaries, both installable
+    /// at once.
+    Omp,
 }
 
 impl AgentKind {
     /// All agent kinds, in stable display order. Add new variants here when
     /// extending the enum — `const` arrays do not get exhaustiveness checking,
     /// so this is the one place the compiler can't catch a drift.
-    pub const ALL: [AgentKind; 4] = [
+    pub const ALL: [AgentKind; 5] = [
         AgentKind::Claude,
         AgentKind::Pi,
         AgentKind::Hermes,
         AgentKind::Codex,
+        AgentKind::Omp,
     ];
 
     pub fn from_str_or_default(s: Option<&str>) -> Self {
@@ -29,6 +35,7 @@ impl AgentKind {
             Some("pi") => AgentKind::Pi,
             Some("hermes") => AgentKind::Hermes,
             Some("codex") => AgentKind::Codex,
+            Some("omp") => AgentKind::Omp,
             _ => AgentKind::Claude,
         }
     }
@@ -39,6 +46,7 @@ impl AgentKind {
             AgentKind::Pi => "pi",
             AgentKind::Hermes => "hermes",
             AgentKind::Codex => "codex",
+            AgentKind::Omp => "omp",
         }
     }
 

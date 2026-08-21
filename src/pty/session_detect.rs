@@ -377,6 +377,8 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
         AgentKind::Pi => has_prior_pi_session(worktree),
         AgentKind::Hermes => has_prior_hermes_session(worktree),
         AgentKind::Codex => has_prior_codex_session(worktree),
+        // Task 4 of the oh-my-pi plan replaces this with a real lookup.
+        AgentKind::Omp => false,
     }
 }
 

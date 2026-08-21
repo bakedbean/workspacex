@@ -26,7 +26,8 @@ pub use crate::pty::session_detect::{
 // Per-agent command construction now lives in `command`; the builders are
 // called by `spawn_session` below.
 pub use crate::pty::command::{
-    build_claude_command, build_codex_command, build_hermes_command, build_pi_command,
+    build_claude_command, build_codex_command, build_hermes_command, build_omp_command,
+    build_pi_command,
 };
 
 // AGENTS.md / git-exclude / spawn-prep plumbing now lives in `workspace_prep`;
@@ -70,6 +71,7 @@ fn resolved_binary(agent: AgentKind) -> String {
         AgentKind::Pi => "WSX_PI_BIN",
         AgentKind::Hermes => "WSX_HERMES_BIN",
         AgentKind::Codex => "WSX_CODEX_BIN",
+        AgentKind::Omp => "WSX_OMP_BIN",
     };
     std::env::var(env_var).unwrap_or_else(|_| agent.default_binary().to_string())
 }
@@ -432,6 +434,9 @@ pub(crate) fn ready_for_input(agent: AgentKind, screen: &vt100::Screen) -> bool 
         AgentKind::Codex => codex_ready(screen),
         AgentKind::Pi => pi_ready(screen),
         AgentKind::Hermes => true,
+        // Placeholder until Task 5 of the oh-my-pi plan lands a predicate read
+        // off a real cold boot. Do not ship a guessed signal here.
+        AgentKind::Omp => true,
     }
 }
 
@@ -564,7 +569,9 @@ pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) 
             body.extend_from_slice(b"\x1b[201~");
             (body, enter)
         }
-        AgentKind::Claude | AgentKind::Pi | AgentKind::Hermes => (text.as_bytes().to_vec(), enter),
+        AgentKind::Claude | AgentKind::Pi | AgentKind::Hermes | AgentKind::Omp => {
+            (text.as_bytes().to_vec(), enter)
+        }
     }
 }
 
@@ -671,6 +678,7 @@ pub fn spawn_session(
             prepare_codex_workspace(cwd, &mode);
             build_codex_command(cwd, &mode, remote)
         }
+        AgentKind::Omp => build_omp_command(cwd, &mode, remote),
     };
     if let Some(id) = identity {
         child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());
@@ -1810,21 +1818,24 @@ mod tests {
     #[test]
     fn agent_kind_helpers_match_existing_strings() {
         use super::AgentKind;
-        assert_eq!(AgentKind::ALL.len(), 4);
+        assert_eq!(AgentKind::ALL.len(), 5);
         assert!(AgentKind::ALL.contains(&AgentKind::Claude));
         assert!(AgentKind::ALL.contains(&AgentKind::Pi));
         assert!(AgentKind::ALL.contains(&AgentKind::Hermes));
         assert!(AgentKind::ALL.contains(&AgentKind::Codex));
+        assert!(AgentKind::ALL.contains(&AgentKind::Omp));
 
         assert_eq!(AgentKind::Claude.display_name(), "claude");
         assert_eq!(AgentKind::Pi.display_name(), "pi");
         assert_eq!(AgentKind::Hermes.display_name(), "hermes");
         assert_eq!(AgentKind::Codex.display_name(), "codex");
+        assert_eq!(AgentKind::Omp.display_name(), "omp");
 
         assert_eq!(AgentKind::Claude.default_binary(), "claude");
         assert_eq!(AgentKind::Pi.default_binary(), "pi");
         assert_eq!(AgentKind::Hermes.default_binary(), "hermes");
         assert_eq!(AgentKind::Codex.default_binary(), "codex");
+        assert_eq!(AgentKind::Omp.default_binary(), "omp");
 
         for k in AgentKind::ALL {
             assert_eq!(AgentKind::from_str_or_default(Some(k.store_value())), k);
@@ -1835,6 +1846,19 @@ mod tests {
             AgentKind::Claude,
             "None input must default to Claude — store.rs relies on this"
         );
+    }
+
+    /// oh-my-pi (`omp`, @oh-my-pi/pi-coding-agent) and pi (`pi`,
+    /// @earendil-works/pi-coding-agent) are separate harnesses that are both
+    /// installed on real machines. A store value of "pi" must never resolve to
+    /// Omp, and vice versa — a swap here silently spawns the wrong binary.
+    #[test]
+    fn omp_and_pi_are_distinct_kinds() {
+        use super::AgentKind;
+        assert_eq!(AgentKind::from_str_or_default(Some("omp")), AgentKind::Omp);
+        assert_eq!(AgentKind::from_str_or_default(Some("pi")), AgentKind::Pi);
+        assert_ne!(AgentKind::Omp, AgentKind::Pi);
+        assert_eq!(AgentKind::Omp.store_value(), "omp");
     }
 
     #[test]

@@ -7095,7 +7095,12 @@ mod pm_state_tests {
             .unwrap(),
         ));
 
-        for expected in [1usize, 2, 3, 3 /* clamps at last index */] {
+        // Derived from `AgentKind::ALL` rather than hardcoded: step down
+        // through every index, then press once more to prove the clamp. A
+        // literal list here silently broke when a fifth agent kind was added.
+        let last = AgentKind::ALL.len() - 1;
+        let steps: Vec<usize> = (1..=last).chain(std::iter::once(last)).collect();
+        for expected in steps {
             handle_key_modal(
                 &mut app,
                 &shared,

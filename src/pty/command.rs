@@ -1,6 +1,7 @@
 //! Per-agent command construction.
 //!
-//! Builds the `CommandBuilder` for each [`AgentKind`] (claude/pi/hermes/codex)
+//! Builds the `CommandBuilder` for each [`AgentKind`]
+//! (claude/pi/hermes/codex/omp)
 //! from a worktree path + [`SpawnMode`], including rename system-prompt
 //! rendering and the injected-prompt composition shared by the AGENTS.md and
 //! Codex `-c` delivery paths. Pure functions over paths/modes — no `Session`
@@ -603,6 +604,25 @@ pub fn build_codex_command(
         cmd.arg(&m);
     }
 
+    cmd
+}
+
+/// Build a `CommandBuilder` for `omp` (or whatever `WSX_OMP_BIN` points to)
+/// inside `cwd`. Inherits the current process env.
+///
+/// Stub: Task 2 of the oh-my-pi plan replaces this with the real spawn-mode
+/// mapping. Spawning a bare `omp` is a correct, if featureless, session.
+pub fn build_omp_command(
+    cwd: &Path,
+    _mode: &SpawnMode,
+    _remote: crate::agent::remote_control::RemoteOpts,
+) -> CommandBuilder {
+    let bin = std::env::var("WSX_OMP_BIN").unwrap_or_else(|_| "omp".to_string());
+    let mut cmd = CommandBuilder::new(bin);
+    cmd.cwd(cwd);
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
     cmd
 }
 

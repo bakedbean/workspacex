@@ -13,14 +13,29 @@ pub enum BranchLifecycle {
     PrClosed,
 }
 
+impl BranchLifecycle {
+    /// Whether a PR in this state can still be waiting on a reviewer.
+    ///
+    /// Draft and conflicted count: both are still open, and both can sit in
+    /// someone's review queue. Merged and closed don't — GitHub leaves
+    /// `reviewDecision` populated after the fact, so without this the ✓
+    /// would become permanent furniture on every merged PR.
+    pub(crate) fn awaits_review(self) -> bool {
+        matches!(self, Self::PrOpen | Self::PrDraft | Self::PrConflicted)
+    }
+}
+
 /// A PR's aggregate review verdict, as GitHub computes it from the repo's
 /// branch-protection rules and the reviews submitted so far.
 ///
 /// Deliberately has no "not gated" variant: repos that require no approval
-/// report an empty `reviewDecision`, which maps to `None` rather than to a
-/// variant, so those repos show no indicator at all. `ReviewRequired` means
-/// GitHub is actively *waiting* on an approval — a meaningfully different
-/// state from "this repo doesn't work that way".
+/// map to `None` rather than to a variant, so they show no indicator at all.
+/// `ReviewRequired` means GitHub is actively *waiting* on an approval — a
+/// meaningfully different state from "this repo doesn't work that way".
+///
+/// Which of the two an empty `reviewDecision` means is not something GitHub
+/// tells us directly — see [`parse_review_decision`] and
+/// [`fetch_requires_approval`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewDecision {
     Approved,
@@ -29,9 +44,14 @@ pub enum ReviewDecision {
 }
 
 /// Map GitHub's `reviewDecision` enum to [`ReviewDecision`]. `None` for the
-/// empty string (no approval gate in play) and for any value GitHub might
-/// add later — an unrecognised verdict degrades to "no indicator" rather
-/// than failing the whole PR parse.
+/// empty string and for any value GitHub might add later — an unrecognised
+/// verdict degrades to "no indicator" rather than failing the whole PR parse.
+///
+/// An empty string is *not* proof the repo has no approval gate. GitHub only
+/// computes `REVIEW_REQUIRED` from classic branch protection; when the
+/// requirement comes from a repository **ruleset** the field stays empty
+/// until an approval actually lands, then flips straight to `APPROVED`.
+/// [`fetch_requires_approval`] is what tells the two apart.
 fn parse_review_decision(raw: &str) -> Option<ReviewDecision> {
     match raw {
         "APPROVED" => Some(ReviewDecision::Approved),
@@ -39,6 +59,87 @@ fn parse_review_decision(raw: &str) -> Option<ReviewDecision> {
         "REVIEW_REQUIRED" => Some(ReviewDecision::ReviewRequired),
         _ => None,
     }
+}
+
+/// A rule the REST rules endpoint reports as applying to a branch. Only the
+/// discriminant and the `pull_request` parameters are modelled; every other
+/// rule type carries parameters we don't read, and serde drops them.
+#[derive(Debug, Deserialize)]
+struct GhBranchRule {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    parameters: Option<GhPullRequestRuleParams>,
+}
+
+/// The two independent ways a ruleset's `pull_request` rule can demand an
+/// approval: a repo-wide count, and per-file-pattern reviewer teams that
+/// each carry their own minimum. A ruleset can set either without the other,
+/// so both are read.
+#[derive(Debug, Deserialize)]
+struct GhPullRequestRuleParams {
+    #[serde(default)]
+    required_approving_review_count: u32,
+    #[serde(default)]
+    required_reviewers: Vec<GhRequiredReviewer>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhRequiredReviewer {
+    #[serde(default)]
+    minimum_approvals: u32,
+}
+
+/// Whether the branch rules in `stdout` gate merging on an approving review.
+///
+/// `None` — not `Some(false)` — when the body doesn't parse as a rule array:
+/// the endpoint answers auth and rate-limit failures with a JSON *object*
+/// (`{"message": ...}`), and reading one of those as "no gate" would silently
+/// turn a transient error into a missing indicator.
+pub(crate) fn parse_requires_approval(stdout: &str) -> Option<bool> {
+    let rules: Vec<GhBranchRule> = serde_json::from_str(stdout.trim()).ok()?;
+    Some(rules.iter().any(|r| {
+        r.kind == "pull_request"
+            && r.parameters.as_ref().is_some_and(|p| {
+                p.required_approving_review_count >= 1
+                    || p.required_reviewers
+                        .iter()
+                        .any(|rr| rr.minimum_approvals >= 1)
+            })
+    }))
+}
+
+/// The `owner/repo` slug from a PR's HTML URL, so the rules probe can name
+/// the repo outright instead of relying on `gh`'s cwd-based `{owner}/{repo}`
+/// placeholder. `gh pr view` already returns `url`, so this costs no extra
+/// call. `None` for anything not shaped like `<host>/<owner>/<repo>/pull/N`.
+pub(crate) fn repo_slug_from_pr_url(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let mut segs = rest.split('/').skip(1); // skip the host
+    let owner = segs.next().filter(|s| !s.is_empty())?;
+    let repo = segs.next().filter(|s| !s.is_empty())?;
+    // Guard against matching some other `/owner/thing/...` path shape.
+    if segs.next() != Some("pull") {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+/// The PR's base branch, read from the same `gh pr view` payload the status
+/// comes from. Kept off [`PrStatus`] deliberately: that type is what gets
+/// persisted into `scm_cache`, and the base ref is needed only in-flight, to
+/// address the rules probe.
+pub(crate) fn parse_pr_base_ref(stdout: &str) -> Option<String> {
+    let parsed: GhPrView = serde_json::from_str(stdout.trim()).ok()?;
+    parsed.base_ref_name.filter(|b| !b.is_empty())
+}
+
+/// The argv (after `gh`) that lists the rules active on `base` in `slug`.
+/// Split out to be unit-testable for the same reason as
+/// [`pr_view_json_fields`]: a malformed path would answer 404, which the
+/// caller can't tell from "this branch has no rules".
+pub(crate) fn branch_rules_argv(slug: &str, base: &str) -> Vec<String> {
+    vec!["api".into(), format!("repos/{slug}/rules/branches/{base}")]
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +155,8 @@ struct GhPrView {
     url: Option<String>,
     #[serde(rename = "reviewDecision", default)]
     review_decision: Option<String>,
+    #[serde(rename = "baseRefName", default)]
+    base_ref_name: Option<String>,
 }
 
 /// A branch's PR status: its lifecycle plus the PR number and URL (when known).
@@ -110,7 +213,88 @@ pub(crate) fn stderr_means_no_pr(stderr: &str) -> bool {
 /// [`parse_gh_pr_status`] reads — a field dropped here parses as absent
 /// rather than erroring, which would silently blank an indicator.
 pub(crate) fn pr_view_json_fields() -> &'static str {
-    "state,isDraft,mergeable,number,url,reviewDecision"
+    "state,isDraft,mergeable,number,url,reviewDecision,baseRefName"
+}
+
+/// Fill in the verdict `gh` couldn't compute. `gated` is what
+/// [`fetch_requires_approval`] learned about the base branch: `None` when the
+/// probe failed and we know nothing.
+///
+/// Only ever *adds* `ReviewRequired`, and only to a PR that has no verdict
+/// and is still open — a verdict GitHub did report always wins, since it
+/// reflects reviews actually submitted.
+pub(crate) fn apply_review_gate(status: PrStatus, gated: Option<bool>) -> PrStatus {
+    if status.review.is_some() || !status.lifecycle.awaits_review() || gated != Some(true) {
+        return status;
+    }
+    PrStatus {
+        review: Some(ReviewDecision::ReviewRequired),
+        ..status
+    }
+}
+
+/// How long a branch's approval gate is trusted before being re-probed.
+///
+/// Long, because the answer changes when someone edits a ruleset — a
+/// once-a-quarter event — not when a PR moves. Doubles as the retention
+/// bound: [`fetch_requires_approval`] drops entries this old when it writes. It matters most for the
+/// short-lived refreshers (`wsx waybar refresh-prs`, `wsx menubar refresh`),
+/// where the cache is only ever warm within a single sweep: there it
+/// collapses one probe per workspace into one per repo.
+const REVIEW_GATE_TTL_SECS: i64 = 900;
+
+type ReviewGateEntries = std::collections::HashMap<(String, String), (bool, i64)>;
+type ReviewGateCache = std::sync::Mutex<ReviewGateEntries>;
+
+/// Record `gated` for `key`, dropping anything already past the TTL.
+///
+/// The sweep is here rather than inline so it can be tested: an inverted
+/// predicate would evict every *live* entry instead of every stale one,
+/// which no behavioural test would catch — the probe would simply stop
+/// memoising and go back to one call per workspace, silently.
+fn store_review_gate(cache: &mut ReviewGateEntries, key: (String, String), gated: bool, now: i64) {
+    cache.retain(|_, (_, at)| now.saturating_sub(*at) < REVIEW_GATE_TTL_SECS);
+    cache.insert(key, (gated, now));
+}
+
+fn review_gate_cache() -> &'static ReviewGateCache {
+    static CACHE: std::sync::OnceLock<ReviewGateCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Whether merging into `base` on `slug` requires an approving review, per
+/// the repo's rulesets. `None` when we couldn't find out — no `gh`, no auth,
+/// rate-limited, network down — so callers leave the verdict untouched
+/// rather than inventing one.
+///
+/// Memoised per `(slug, base)` for [`REVIEW_GATE_TTL_SECS`]. Only failures
+/// are re-probed immediately; a known answer is reused.
+async fn fetch_requires_approval(worktree: &Path, slug: &str, base: &str) -> Option<bool> {
+    let key = (slug.to_string(), base.to_string());
+    let now = crate::workspace_rows::unix_now();
+    if let Ok(cache) = review_gate_cache().lock() {
+        if let Some((gated, at)) = cache.get(&key) {
+            if now.saturating_sub(*at) < REVIEW_GATE_TTL_SECS {
+                return Some(*gated);
+            }
+        }
+    }
+
+    let out = Command::new("gh")
+        .current_dir(worktree)
+        .args(branch_rules_argv(slug, base))
+        .output()
+        .await
+        .ok()?;
+    // A non-zero exit is an error body, which `parse_requires_approval`
+    // reads as `None` anyway; parse regardless so a 200 that somehow exits
+    // non-zero still counts.
+    let gated = parse_requires_approval(&String::from_utf8_lossy(&out.stdout))?;
+
+    if let Ok(mut cache) = review_gate_cache().lock() {
+        store_review_gate(&mut cache, key, gated, now);
+    }
+    Some(gated)
 }
 
 pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrStatus>> {
@@ -128,7 +312,24 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
 
     if out.status.success() {
         let stdout = String::from_utf8_lossy(&out.stdout);
-        return Ok(parse_gh_pr_status(&stdout));
+        let Some(status) = parse_gh_pr_status(&stdout) else {
+            return Ok(None);
+        };
+        // Nothing to fill in unless GitHub left the verdict empty on a PR
+        // that's still open. Checked before the probe so the common cases —
+        // an already-answered verdict, a merged PR — cost no extra call.
+        if status.review.is_some() || !status.lifecycle.awaits_review() {
+            return Ok(Some(status));
+        }
+        let gated = match (
+            status.url.as_deref().and_then(repo_slug_from_pr_url),
+            parse_pr_base_ref(&stdout),
+        ) {
+            (Some(slug), Some(base)) => fetch_requires_approval(worktree, &slug, &base).await,
+            // No URL or no base ref means no way to address the probe.
+            _ => None,
+        };
+        return Ok(Some(apply_review_gate(status, gated)));
     }
 
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -413,6 +614,11 @@ mod tests {
             pr_view_json_fields().contains("reviewDecision"),
             "gh --json field list must ask for reviewDecision"
         );
+        assert!(
+            pr_view_json_fields().contains("baseRefName"),
+            "gh --json field list must ask for baseRefName — the rules probe \
+             addresses the gate by base branch"
+        );
     }
 
     #[test]
@@ -543,6 +749,277 @@ mod tests {
     fn repo_without_origin_is_not_a_github_remote() {
         let repo = repo_with_origin(None);
         assert!(!repo_has_github_remote(repo.path()));
+    }
+
+    /// Verbatim from `gh api repos/{owner}/{repo}/rules/branches/main` on a
+    /// repo whose approval gate lives in a ruleset — the exact case that
+    /// leaves `reviewDecision` empty. Trimmed to the rules that matter plus
+    /// one that doesn't, to prove the others are skipped rather than
+    /// mistaken for a gate.
+    const RULESET_WITH_APPROVAL: &str = r#"[
+        {"type":"deletion","ruleset_id":1,"parameters":null},
+        {"type":"pull_request","ruleset_id":1,"parameters":{
+            "allowed_merge_methods":["squash"],
+            "dismiss_stale_reviews_on_push":false,
+            "require_code_owner_review":false,
+            "require_last_push_approval":false,
+            "required_approving_review_count":1,
+            "required_review_thread_resolution":false,
+            "required_reviewers":[{"file_patterns":["*"],"minimum_approvals":1,
+                "reviewer":{"id":11453206,"type":"Team"}}]}},
+        {"type":"non_fast_forward","ruleset_id":1,"parameters":null}
+    ]"#;
+
+    #[test]
+    fn ruleset_requiring_an_approval_is_a_gate() {
+        assert_eq!(parse_requires_approval(RULESET_WITH_APPROVAL), Some(true));
+    }
+
+    /// The control case: a repo with no rules on the branch at all answers
+    /// with an empty array, and must read as ungated so nothing renders.
+    #[test]
+    fn no_rules_is_no_gate() {
+        assert_eq!(parse_requires_approval("[]"), Some(false));
+    }
+
+    /// A ruleset can require a PR without requiring anyone to approve it.
+    /// That's a gate on merging directly, not on review, so it must not
+    /// light up the indicator.
+    #[test]
+    fn pull_request_rule_without_approvals_is_no_gate() {
+        let json = r#"[{"type":"pull_request","parameters":{
+            "required_approving_review_count":0,
+            "required_reviewers":[]}}]"#;
+        assert_eq!(parse_requires_approval(json), Some(false));
+    }
+
+    /// The count gates independently of `required_reviewers`, which is the
+    /// commoner ruleset shape: "1 approval from anyone" names no team. The
+    /// two arms are tested apart because the real-world fixture above sets
+    /// both, so it can't tell which one is doing the work.
+    #[test]
+    fn approval_count_alone_is_a_gate() {
+        let json = r#"[{"type":"pull_request","parameters":{
+            "required_approving_review_count":1,
+            "required_reviewers":[]}}]"#;
+        assert_eq!(parse_requires_approval(json), Some(true));
+    }
+
+    /// `required_reviewers` gates independently of the repo-wide count: a
+    /// ruleset naming a team with `minimum_approvals: 1` still waits on an
+    /// approval even when the count field is 0.
+    #[test]
+    fn required_reviewers_alone_is_a_gate() {
+        let json = r#"[{"type":"pull_request","parameters":{
+            "required_approving_review_count":0,
+            "required_reviewers":[{"file_patterns":["*"],"minimum_approvals":1}]}}]"#;
+        assert_eq!(parse_requires_approval(json), Some(true));
+    }
+
+    /// Rules whose parameters we don't model must not derail the parse — a
+    /// new rule type shipping in a ruleset can't be allowed to blank the
+    /// verdict for every PR in the repo.
+    #[test]
+    fn unmodelled_rule_types_are_ignored_not_fatal() {
+        let json = r#"[{"type":"some_future_rule","parameters":{"wat":[1,2,3]}}]"#;
+        assert_eq!(parse_requires_approval(json), Some(false));
+    }
+
+    /// An error body is an object, not an array. It must read as "unknown"
+    /// so the caller leaves the verdict alone rather than claiming the repo
+    /// has no gate.
+    #[test]
+    fn an_error_body_is_unknown_not_ungated() {
+        assert_eq!(parse_requires_approval(r#"{"message":"Not Found"}"#), None);
+        assert_eq!(parse_requires_approval(""), None);
+    }
+
+    fn pr(lifecycle: BranchLifecycle, review: Option<ReviewDecision>) -> PrStatus {
+        PrStatus {
+            lifecycle,
+            number: Some(1),
+            url: Some("https://github.com/o/r/pull/1".into()),
+            review,
+        }
+    }
+
+    /// The bug this whole path exists for: an open PR in a ruleset-gated
+    /// repo, where GitHub reports no verdict at all.
+    #[test]
+    fn a_gated_open_pr_with_no_verdict_becomes_review_required() {
+        let got = apply_review_gate(pr(BranchLifecycle::PrOpen, None), Some(true));
+        assert_eq!(got.review, Some(ReviewDecision::ReviewRequired));
+    }
+
+    /// Draft and conflicted PRs are still open and still reviewable, so they
+    /// get the mark too — matching what `awaits_review` renders.
+    #[test]
+    fn gating_applies_to_every_still_open_lifecycle() {
+        for lc in [
+            BranchLifecycle::PrOpen,
+            BranchLifecycle::PrDraft,
+            BranchLifecycle::PrConflicted,
+        ] {
+            assert_eq!(
+                apply_review_gate(pr(lc, None), Some(true)).review,
+                Some(ReviewDecision::ReviewRequired),
+                "lifecycle {lc:?}"
+            );
+        }
+    }
+
+    /// A merged PR in a gated repo must not sprout a "needs review" mark —
+    /// it's done, and the gate says nothing about it.
+    #[test]
+    fn gating_never_marks_a_finished_pr() {
+        for lc in [
+            BranchLifecycle::PrMerged,
+            BranchLifecycle::PrClosed,
+            BranchLifecycle::NoPr,
+        ] {
+            assert_eq!(
+                apply_review_gate(pr(lc, None), Some(true)).review,
+                None,
+                "lifecycle {lc:?}"
+            );
+        }
+    }
+
+    /// A verdict GitHub did report reflects reviews actually submitted, so
+    /// it always beats the gate — an approved PR stays approved even though
+    /// its repo requires approval.
+    #[test]
+    fn a_reported_verdict_beats_the_gate() {
+        for d in [
+            ReviewDecision::Approved,
+            ReviewDecision::ChangesRequested,
+            ReviewDecision::ReviewRequired,
+        ] {
+            assert_eq!(
+                apply_review_gate(pr(BranchLifecycle::PrOpen, Some(d)), Some(true)).review,
+                Some(d),
+                "verdict {d:?}"
+            );
+        }
+    }
+
+    /// An ungated repo keeps showing nothing, and a failed probe is treated
+    /// the same way: never invent a mark we aren't sure of.
+    #[test]
+    fn no_gate_and_unknown_gate_both_leave_the_verdict_empty() {
+        for gated in [Some(false), None] {
+            assert_eq!(
+                apply_review_gate(pr(BranchLifecycle::PrOpen, None), gated).review,
+                None,
+                "gated {gated:?}"
+            );
+        }
+    }
+
+    /// `apply_review_gate` and `lifecycle_shows_review` must agree: a mark
+    /// added for a lifecycle the renderer hides is a wasted API call, and a
+    /// lifecycle the renderer shows but the fetcher skips is the original bug
+    /// coming back for that state.
+    #[test]
+    fn fetch_and_render_agree_on_which_lifecycles_await_review() {
+        for lc in [
+            BranchLifecycle::NoPr,
+            BranchLifecycle::PrDraft,
+            BranchLifecycle::PrOpen,
+            BranchLifecycle::PrConflicted,
+            BranchLifecycle::PrMerged,
+            BranchLifecycle::PrClosed,
+        ] {
+            assert_eq!(
+                lc.awaits_review(),
+                crate::ui::theme::lifecycle_shows_review(lc),
+                "lifecycle {lc:?}"
+            );
+        }
+    }
+
+    fn key(base: &str) -> (String, String) {
+        ("o/r".into(), base.into())
+    }
+
+    /// Nothing else ever removes an entry, so a base branch that stops
+    /// existing — a stacked PR's parent, an archived repo — would otherwise
+    /// outlive the process that cached it.
+    #[test]
+    fn writing_the_cache_drops_entries_past_the_ttl() {
+        let now = 1_000_000;
+        let mut cache = ReviewGateEntries::new();
+        cache.insert(key("gone"), (true, now - REVIEW_GATE_TTL_SECS - 1));
+        store_review_gate(&mut cache, key("main"), true, now);
+        assert_eq!(
+            cache.keys().collect::<Vec<_>>(),
+            vec![&key("main")],
+            "the stale entry should be gone and the fresh one kept"
+        );
+    }
+
+    /// The half that a naive sweep gets backwards. Evicting live entries
+    /// wouldn't fail anything visible — the probe would just stop memoising
+    /// and go back to one `gh` call per workspace.
+    #[test]
+    fn writing_the_cache_keeps_entries_inside_the_ttl() {
+        let now = 1_000_000;
+        let mut cache = ReviewGateEntries::new();
+        cache.insert(key("still-fresh"), (true, now - REVIEW_GATE_TTL_SECS + 1));
+        store_review_gate(&mut cache, key("main"), false, now);
+        assert_eq!(cache.len(), 2, "a live entry must survive the sweep");
+        assert_eq!(cache.get(&key("main")), Some(&(false, now)));
+    }
+
+    #[test]
+    fn base_ref_comes_from_the_same_payload() {
+        let json = r#"{"state":"OPEN","number":5,"baseRefName":"main"}"#;
+        assert_eq!(parse_pr_base_ref(json).as_deref(), Some("main"));
+        // Absent or blank is "unknown", which suppresses the probe rather
+        // than addressing it at a branch named "".
+        assert_eq!(parse_pr_base_ref(r#"{"state":"OPEN"}"#), None);
+        assert_eq!(
+            parse_pr_base_ref(r#"{"state":"OPEN","baseRefName":""}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn slug_comes_from_a_pr_url() {
+        assert_eq!(
+            repo_slug_from_pr_url("https://github.com/bakedbean/workspacex/pull/288").as_deref(),
+            Some("bakedbean/workspacex")
+        );
+    }
+
+    /// GitHub Enterprise PR URLs carry the same path shape under a different
+    /// host, and `gh api` resolves the host from the repo it's run in.
+    #[test]
+    fn slug_comes_from_an_enterprise_pr_url() {
+        assert_eq!(
+            repo_slug_from_pr_url("https://git.example.com/o/r/pull/1").as_deref(),
+            Some("o/r")
+        );
+    }
+
+    #[test]
+    fn non_pr_urls_have_no_slug() {
+        assert_eq!(repo_slug_from_pr_url("https://github.com/o/r"), None);
+        assert_eq!(
+            repo_slug_from_pr_url("https://github.com/o/r/issues/1"),
+            None
+        );
+        assert_eq!(repo_slug_from_pr_url(""), None);
+    }
+
+    /// A base branch with a slash lands in the path as-is; the endpoint
+    /// takes the full ref path after `branches/`.
+    #[test]
+    fn rules_argv_names_the_repo_and_branch() {
+        assert_eq!(
+            branch_rules_argv("o/r", "release/1.x"),
+            vec!["api", "repos/o/r/rules/branches/release/1.x"]
+        );
     }
 
     /// A path that isn't a git repo at all must degrade quietly, not panic —

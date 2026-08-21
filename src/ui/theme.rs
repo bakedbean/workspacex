@@ -440,13 +440,12 @@ pub(crate) fn review_glyph(d: crate::git::forge::ReviewDecision) -> &'static str
 
 /// Whether a verdict is worth showing for this lifecycle.
 ///
-/// GitHub leaves `reviewDecision` populated after a PR merges or closes, so
-/// without this gate every merged PR would wear a permanent green tick.
-/// Draft and conflicted PRs stay in: both are still open, and both can still
-/// be waiting on someone.
+/// Delegates to [`crate::git::forge::BranchLifecycle::awaits_review`] rather
+/// than restating the set: the fetch side uses the same predicate to decide
+/// whether a missing verdict is worth probing for, and the two drifting apart
+/// would mean probing for a mark that never renders (or worse, the reverse).
 pub(crate) fn lifecycle_shows_review(lc: crate::git::forge::BranchLifecycle) -> bool {
-    use crate::git::forge::BranchLifecycle::*;
-    matches!(lc, PrOpen | PrDraft | PrConflicted)
+    lc.awaits_review()
 }
 
 /// A PR chip laid out as its lifecycle half (`⏺ #123 open`) plus an optional

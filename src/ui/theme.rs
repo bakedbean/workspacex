@@ -9,6 +9,7 @@ const AGENT_CLAUDE: Color = Color::Rgb(0xe8, 0x8b, 0x3c); // orange
 const AGENT_PI: Color = Color::Rgb(0xa9, 0x7b, 0xd6); // purple
 const AGENT_HERMES: Color = Color::Rgb(0xf0, 0xd0, 0x66); // yellow
 const AGENT_CODEX: Color = Color::Rgb(0x5b, 0x9d, 0xe0); // blue
+const AGENT_OMP: Color = Color::Rgb(0x5f, 0xc9, 0x8e); // green
 
 /// Brand accent — the electric blue of the "x" and cursor block in the
 /// "workspace x" wordmark. Matches the site's `--accent` token (#5ab0ff).
@@ -365,8 +366,7 @@ impl Theme {
             AgentKind::Pi => AGENT_PI,
             AgentKind::Hermes => AGENT_HERMES,
             AgentKind::Codex => AGENT_CODEX,
-            // Task 6 of the oh-my-pi plan gives omp its own color.
-            AgentKind::Omp => AGENT_PI,
+            AgentKind::Omp => AGENT_OMP,
         };
         Style::default().fg(fg)
     }
@@ -714,6 +714,21 @@ mod tests {
         assert_eq!(Theme::by_name("wsx").question, Color::Rgb(0xe4, 0xba, 0x6c));
     }
 
+    /// Agent colors are identity, so two kinds sharing one would make peer bars
+    /// and chips ambiguous on the dashboard.
+    #[test]
+    fn every_agent_kind_has_a_distinct_color() {
+        use crate::pty::session::AgentKind;
+        let t = Theme::wsx();
+        let mut seen = std::collections::HashSet::new();
+        for k in AgentKind::ALL {
+            assert!(
+                seen.insert(format!("{:?}", t.agent_style(k).fg)),
+                "duplicate color for {k:?}"
+            );
+        }
+    }
+
     #[test]
     fn agent_style_maps_each_kind_to_fixed_rgb() {
         use crate::pty::session::AgentKind;
@@ -725,6 +740,10 @@ mod tests {
         assert_eq!(
             t.agent_style(AgentKind::Pi).fg,
             Some(Color::Rgb(0xa9, 0x7b, 0xd6))
+        );
+        assert_eq!(
+            t.agent_style(AgentKind::Omp).fg,
+            Some(Color::Rgb(0x5f, 0xc9, 0x8e))
         );
         assert_eq!(
             t.agent_style(AgentKind::Hermes).fg,

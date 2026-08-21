@@ -53,7 +53,14 @@ static CODEX: codex::CodexStatus = codex::CodexStatus;
 static NOOP: NoopStatus = NoopStatus;
 
 /// The status integration for an agent kind. Claude (hooks) and Codex (notify)
-/// have implementations; Pi and Hermes remain no-ops for now.
+/// have implementations; Pi, Hermes and omp are no-ops.
+///
+/// omp is a no-op by necessity rather than by deferral: its hook capability is
+/// pre/post *tool* hooks only (`{type: "pre"|"post", tool}`), with no
+/// turn-lifecycle event — nothing equivalent to Claude's Stop /
+/// UserPromptSubmit / Notification or Codex's notify — so there is no
+/// deterministic signal to wire. It relies on tier 1 (the model calling
+/// `wsx status set`, via the doctrine) and tier 3 (the JSONL heuristic).
 pub fn for_agent(agent: AgentKind) -> &'static dyn StatusIntegration {
     match agent {
         AgentKind::Claude => &CLAUDE,
@@ -78,7 +85,7 @@ mod tests {
     #[test]
     fn other_agents_resolve_to_noop() {
         let ev = serde_json::json!({"hook_event_name": "UserPromptSubmit"});
-        for agent in [AgentKind::Pi, AgentKind::Hermes] {
+        for agent in [AgentKind::Pi, AgentKind::Hermes, AgentKind::Omp] {
             assert_eq!(for_agent(agent).parse_event(&ev), None);
             assert!(
                 for_agent(agent)

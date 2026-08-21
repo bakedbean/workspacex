@@ -98,7 +98,12 @@ pub fn resolve_effective_doctrine(
 }
 
 pub fn process_doctrine(agent: AgentKind) -> String {
-    let include_superpowers = matches!(agent, AgentKind::Claude | AgentKind::Pi);
+    // omp, like Claude and Pi, loads skills from ~/.claude/skills — its Claude
+    // discovery provider reads `<user .claude>/skills/*/SKILL.md` — so the
+    // superpowers clause points at something that is actually there. Observed
+    // live: a cold omp resolves skill://using-superpowers on startup. Codex and
+    // Hermes do not, which is why they stay excluded.
+    let include_superpowers = matches!(agent, AgentKind::Claude | AgentKind::Pi | AgentKind::Omp);
     let mut clauses = vec![CLAUSE_PLAN];
     if include_superpowers {
         clauses.push(CLAUSE_SUPERPOWERS);
@@ -116,6 +121,16 @@ pub fn process_doctrine(agent: AgentKind) -> String {
 mod tests {
     use super::*;
     use crate::pty::session::AgentKind;
+
+    /// omp reads ~/.claude/skills natively, so it belongs with Claude and Pi,
+    /// not with Codex.
+    #[test]
+    fn omp_gets_the_superpowers_clause() {
+        let d = process_doctrine(AgentKind::Omp).to_lowercase();
+        assert!(d.contains("superpowers"), "omp must get superpowers: {d}");
+        assert!(d.contains("wsx skill"), "{d}");
+        assert!(d.contains("commit"), "{d}");
+    }
 
     #[test]
     fn doctrine_covers_all_practices_for_claude() {

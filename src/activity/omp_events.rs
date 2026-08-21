@@ -272,6 +272,51 @@ mod tests {
         assert!(locate_session_file(work.path()).is_none());
     }
 
+    /// The load-bearing bet of this module: omp's JSONL is pi's schema, so
+    /// sessionx's pi parser reads it. This replays a REAL omp session capture
+    /// (tests/fixtures/omp-session.jsonl, produced by omp v17.4.0) rather than
+    /// a hand-written approximation, so a schema divergence fails here instead
+    /// of silently blanking the dashboard.
+    #[test]
+    fn omp_jsonl_parses_through_the_pi_parser() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/omp-session.jsonl");
+        let update = tail_session(&fixture, 0).expect("omp jsonl must parse");
+        assert!(update.new_offset > 0, "parser consumed nothing");
+        assert!(
+            !update.events.is_empty(),
+            "expected parsed events from a real session"
+        );
+        // NOT `first_user_text`: the shared pi parser never populates that
+        // field (only the claude and codex parsers do), so pi workspaces have
+        // the same gap. What proves the user line parsed is the event it emits.
+        assert!(
+            update
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, crate::activity::events::EventKind::UserMessage)),
+            "the user prompt must parse into a UserMessage event: {:?}",
+            update.events
+        );
+        assert!(
+            update.last_assistant_text.is_some(),
+            "assistant text must be recovered"
+        );
+        assert!(
+            !update.tool_use_starts.is_empty(),
+            "omp's toolCall parts must be recognised as tool starts"
+        );
+        let names: Vec<&str> = update
+            .tool_use_starts
+            .iter()
+            .map(|(_, name, _)| name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"bash"),
+            "omp uses pi's lowercase tool names: {names:?}"
+        );
+    }
+
     /// The pre-17.x absolute name omp migrates only on its own first access. A
     /// worktree whose history predates that migration must still be findable.
     #[test]

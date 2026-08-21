@@ -48,8 +48,9 @@ pub async fn tail_workspace_events(
         crate::pty::session::AgentKind::Codex => {
             crate::activity::codex_events::locate_session_file(&worktree_path)
         }
-        // Task 4 of the oh-my-pi plan wires omp_events here.
-        crate::pty::session::AgentKind::Omp => None,
+        crate::pty::session::AgentKind::Omp => {
+            crate::activity::omp_events::locate_session_file(&worktree_path)
+        }
     };
     // Snapshot the FULL (file_path, byte_offset) pair so the commit can
     // detect a concurrent tail that landed between our snapshot and now.
@@ -83,10 +84,9 @@ pub async fn tail_workspace_events(
         crate::pty::session::AgentKind::Codex => {
             crate::activity::codex_events::tail_session(&file, tail_from).map_err(Into::into)
         }
-        // Task 4 of the oh-my-pi plan wires omp_events here. Unreachable until
-        // then anyway: the locate match above yields None for Omp, and the
-        // `let Some(file) = current_file else { return }` above short-circuits.
-        crate::pty::session::AgentKind::Omp => return,
+        crate::pty::session::AgentKind::Omp => {
+            crate::activity::omp_events::tail_session(&file, tail_from).map_err(Into::into)
+        }
     };
     let Ok(update) = tail_result else {
         return;

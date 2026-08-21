@@ -30,6 +30,8 @@ pub(crate) struct SessionSnapshot {
     pi: std::collections::HashSet<String>,
     /// Newest Codex rollout matching this cwd, as an absolute path.
     codex: Option<String>,
+    /// omp session JSONL file names.
+    omp: std::collections::HashSet<String>,
 }
 
 impl SessionSnapshot {
@@ -41,6 +43,11 @@ impl SessionSnapshot {
     /// True if `name` is one of the Pi sessions that predate this worktree.
     fn has_pi(&self, name: &str) -> bool {
         self.pi.contains(name)
+    }
+
+    /// True if `name` is one of the omp sessions that predate this worktree.
+    fn has_omp(&self, name: &str) -> bool {
+        self.omp.contains(name)
     }
 
     /// True if `rollout` is the Codex rollout that predates this worktree.
@@ -74,6 +81,14 @@ fn pi_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
     )
 }
 
+/// omp's session directory for `worktree`, or None if the path can't be
+/// canonicalized. Delegates the three-scope cwd encoding to
+/// [`crate::activity::omp_events`] so the snapshot gate and the activity tail
+/// can never disagree about which directory a worktree's sessions live in.
+fn omp_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
+    crate::activity::omp_events::session_dir(worktree)
+}
+
 /// JSONL file names directly inside `dir`. Empty when `dir` is absent.
 fn jsonl_names(dir: &Path) -> std::collections::HashSet<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -90,7 +105,7 @@ fn jsonl_names(dir: &Path) -> std::collections::HashSet<String> {
 /// later "does this worktree have a prior session?" question can tell the
 /// current occupant's conversations from its predecessor's.
 ///
-/// Claude, Pi and Codex all index sessions by worktree PATH, and those indexes
+/// Claude, Pi, Codex and omp all index sessions by worktree PATH, and those indexes
 /// outlive the workspace: archiving removes the worktree but leaves
 /// `~/.claude/projects/<encoded-path>/` (and the pi/codex equivalents) on disk.
 /// wsx also recycles paths — archiving frees a slug, and the next workspace
@@ -142,6 +157,11 @@ pub fn write_worktree_sessions(worktree: &Path) -> crate::error::Result<()> {
             out.push_str(&format!("pi:{name}\n"));
         }
     }
+    if let Some(dir) = omp_session_dir(worktree) {
+        for name in jsonl_names(&dir) {
+            out.push_str(&format!("omp:{name}\n"));
+        }
+    }
     if let Some(rollout) = crate::activity::codex_events::locate_session_file(worktree) {
         out.push_str(&format!("codex:{}\n", rollout.display()));
     }
@@ -167,6 +187,8 @@ fn read_worktree_sessions(worktree: &Path) -> Option<SessionSnapshot> {
             snap.claude.insert(name.to_string());
         } else if let Some(name) = line.strip_prefix("pi:") {
             snap.pi.insert(name.to_string());
+        } else if let Some(name) = line.strip_prefix("omp:") {
+            snap.omp.insert(name.to_string());
         } else if let Some(path) = line.strip_prefix("codex:") {
             snap.codex = Some(path.to_string());
         }
@@ -281,6 +303,21 @@ pub fn has_prior_pi_session(worktree: &Path) -> bool {
         .any(|name| snapshot.as_ref().is_none_or(|s| !s.has_pi(name)))
 }
 
+/// True if omp has a persisted session JSONL for this worktree that belongs to
+/// the *current* occupant of the path.
+///
+/// omp indexes by path, so it inherits the same recycled-slug hazard as Claude
+/// and Pi — see [`write_worktree_sessions`].
+pub fn has_prior_omp_session(worktree: &Path) -> bool {
+    let Some(dir) = omp_session_dir(worktree) else {
+        return false;
+    };
+    let snapshot = read_worktree_sessions(worktree);
+    jsonl_names(&dir)
+        .iter()
+        .any(|name| snapshot.as_ref().is_none_or(|s| !s.has_omp(name)))
+}
+
 /// Return the most recent Hermes session ID started at or after `spawn_ts`.
 /// Path-parameterized for testing; production callers use
 /// `latest_hermes_session_id_default`.
@@ -377,8 +414,7 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
         AgentKind::Pi => has_prior_pi_session(worktree),
         AgentKind::Hermes => has_prior_hermes_session(worktree),
         AgentKind::Codex => has_prior_codex_session(worktree),
-        // Task 4 of the oh-my-pi plan replaces this with a real lookup.
-        AgentKind::Omp => false,
+        AgentKind::Omp => has_prior_omp_session(worktree),
     }
 }
 
@@ -569,6 +605,86 @@ mod tests {
         assert!(
             !has_prior_pi_session(work.path()),
             "pi inherits the same path-reuse hazard as claude"
+        );
+    }
+
+    /// Write an omp session JSONL under `$HOME/.omp/agent/sessions` for
+    /// `worktree`, using the same encoding `omp_session_dir` resolves. Returns
+    /// the session directory.
+    ///
+    /// Computes the name through `encode_cwd` rather than hardcoding one: a
+    /// `TempDir` worktree lives under the system temp root while the fake
+    /// `$HOME` is a sibling temp dir, so this takes the tmp branch — but the
+    /// helper stays correct if that ever changes.
+    fn seed_omp_session(
+        home: &std::path::Path,
+        worktree: &std::path::Path,
+        name: &str,
+    ) -> std::path::PathBuf {
+        let abs = std::fs::canonicalize(worktree).unwrap();
+        let canon_home = std::fs::canonicalize(home).unwrap();
+        let tmp = std::env::temp_dir();
+        let tmp = std::fs::canonicalize(&tmp).unwrap_or(tmp);
+        let encoded = crate::activity::omp_events::encode_cwd(&abs, &canon_home, &tmp);
+        let dir = home.join(".omp/agent/sessions").join(encoded);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), "{}\n").unwrap();
+        dir
+    }
+
+    /// omp indexes sessions by path, so it inherits the recycled-slug hazard
+    /// that `write_worktree_sessions` exists to close: archiving frees a slug,
+    /// the next workspace for the same repo lands on a byte-identical path, and
+    /// a `-c` spawn would resume a stranger's conversation.
+    #[test]
+    fn has_prior_omp_session_ignores_a_session_named_in_the_snapshot() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let dir = seed_omp_session(home.path(), work.path(), "1770000000_abc.jsonl");
+        assert!(dir.is_dir());
+        snapshot(work.path(), &["omp:1770000000_abc.jsonl"]);
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(
+            !has_prior_omp_session(work.path()),
+            "omp inherits the same path-reuse hazard as claude and pi"
+        );
+    }
+
+    #[test]
+    fn has_prior_omp_session_finds_a_session_created_after_the_snapshot() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        seed_omp_session(home.path(), work.path(), "1770000000_old.jsonl");
+        snapshot(work.path(), &["omp:1770000000_old.jsonl"]);
+        seed_omp_session(home.path(), work.path(), "1770000001_new.jsonl");
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(
+            has_prior_omp_session(work.path()),
+            "a session outside the snapshot is this occupant's own"
+        );
+    }
+
+    /// `write_worktree_sessions` must record omp's files, or the two tests
+    /// above are testing a gate that production never closes.
+    #[test]
+    fn write_worktree_sessions_records_omp_files() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(work.path().join(".git/info")).unwrap();
+        seed_omp_session(home.path(), work.path(), "1770000000_abc.jsonl");
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        write_worktree_sessions(work.path()).unwrap();
+        let body =
+            std::fs::read_to_string(work.path().join(".git/info/wsx-worktree-sessions")).unwrap();
+        assert!(
+            body.contains("omp:1770000000_abc.jsonl"),
+            "snapshot must name omp sessions: {body:?}"
         );
     }
 

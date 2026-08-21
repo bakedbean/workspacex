@@ -22,7 +22,7 @@ wsx workspace list <repo>      # filter to one repo
 ## CLI surface
 
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex|omp]
 wsx workspace path <repo> <slug>            # prints just the worktree path (script-friendly)
 wsx workspace rename <repo> <old> <new>     # renames slug AND git branch in sync
 wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
@@ -35,7 +35,7 @@ wsx repo set-related-repos <repo> <comma-separated-names>
 # args. The workspace is resolved from $WSX_WORKSPACE_ID, else the cwd's
 # worktree. `send` can target another workspace via --workspace.
 wsx agent list                              # peers here; (primary) marks the original agent
-wsx agent add <kind>                        # attach another agent: kind = claude|pi|hermes|codex
+wsx agent add <kind>                        # attach another agent: kind = claude|pi|hermes|codex|omp
 wsx agent send [--workspace <repo>/<slug>] <label> <message…>
                                             # async message to an agent; omit
                                             # --workspace for a peer here.
@@ -211,7 +211,7 @@ and branch.
   asynchronous — the message is injected into the peer's session shortly after,
   tagged `[message from <you>]` so they know it came from you.
 - **Add a peer:** `wsx agent send` only reaches agents already attached. To
-  attach one, use `wsx agent add <kind>` (kind = claude | pi | hermes | codex),
+  attach one, use `wsx agent add <kind>` (kind = claude | pi | hermes | codex | omp),
   or the `^x a` panel in the TUI. You can use this proactively — e.g. spin up a
   second `claude` to review your diff or work a parallel sub-task, then hand it
   the task with `wsx agent send <its-label> "<instructions>"`. The new agent

@@ -19,7 +19,7 @@ Newly added agents spawn immediately with the workspace's context injected. The 
 From the CLI, the equivalent of the panel's "add" is:
 
 ```bash
-wsx agent add <kind>     # kind = claude | pi | hermes | codex
+wsx agent add <kind>     # kind = claude | pi | hermes | codex | omp
 ```
 
 This runs against the **current** workspace — the one whose worktree you're in, or the one named by `$WSX_WORKSPACE_ID` (see [identity](#agent-identity-and-labels) below). It prints the new agent's label, e.g. `added claude#2`.

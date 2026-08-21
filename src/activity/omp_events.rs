@@ -116,21 +116,47 @@ pub fn locate_session_file(worktree: &Path) -> Option<PathBuf> {
     if !session_dir.is_dir() {
         return None;
     }
-    let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
-    for entry in std::fs::read_dir(&session_dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mtime) = meta.modified() else { continue };
-        match &newest {
-            None => newest = Some((path, mtime)),
-            Some((_, prev)) if mtime > *prev => newest = Some((path, mtime)),
-            _ => {}
-        }
-    }
-    newest.map(|(p, _)| p)
+    let candidates = std::fs::read_dir(&session_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                return None;
+            }
+            let mtime = entry.metadata().ok()?.modified().ok()?;
+            Some((mtime, entry.file_name(), path))
+        });
+    newest_by_mtime_then_name(candidates)
+}
+
+/// Pick the newest session from `(mtime, file_name, path)` candidates, breaking
+/// equal mtimes by file name.
+///
+/// Split out from [`locate_session_file`] so the choice can be tested
+/// independently of `read_dir` order — which is the whole point of the
+/// tie-break, and which a filesystem-backed test cannot demonstrate because it
+/// only ever sees whatever order the OS happens to yield.
+///
+/// Equal mtimes are reachable in practice: coarse filesystem timestamp
+/// granularity, or two sessions written inside the same tick. Since `read_dir`
+/// order is unspecified, taking whichever arrived first would make the choice
+/// vary between runs and let the dashboard tail an older session.
+///
+/// The file name is the right tie-break rather than merely a stable one: omp
+/// names sessions `<ISO-8601-ish timestamp>_<uuid>.jsonl`, zero-padded and
+/// most-significant field first, so a lexicographic max over names is also
+/// chronological order.
+fn newest_by_mtime_then_name<I>(candidates: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = (std::time::SystemTime, std::ffi::OsString, PathBuf)>,
+{
+    candidates
+        .into_iter()
+        .max_by(|(a_time, a_name, _), (b_time, b_name, _)| {
+            a_time.cmp(b_time).then_with(|| a_name.cmp(b_name))
+        })
+        .map(|(_, _, path)| path)
 }
 
 #[cfg(test)]
@@ -245,12 +271,11 @@ mod tests {
         let dir = home.path().join(".omp/agent/sessions").join(&encoded);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("notes.txt"), "ignore me").unwrap();
-        // mtime ordering by write order, with a gap wide enough to survive a
-        // coarse filesystem timestamp granularity. `filetime` is not a
-        // dependency of this crate, so this avoids adding one for two lines.
-        std::fs::write(dir.join("1770000000_old.jsonl"), "{}").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(dir.join("1770000001_new.jsonl"), "{}").unwrap();
+        // Explicit mtimes rather than write order plus a sleep: a sleep short
+        // enough to keep the suite fast can land inside a coarse filesystem's
+        // timestamp granularity, which would make this assert nothing.
+        seed_jsonl(&dir, "1770000000_old.jsonl", 1_770_000_000);
+        seed_jsonl(&dir, "1770000001_new.jsonl", 1_770_000_100);
 
         let mut env = crate::test_support::EnvGuard::new();
         env.set("HOME", home.path());
@@ -260,6 +285,75 @@ mod tests {
                 .file_name()
                 .unwrap(),
             "1770000001_new.jsonl"
+        );
+    }
+
+    /// Write a session file with an explicit mtime, so ordering assertions do
+    /// not depend on the filesystem's timestamp granularity.
+    fn seed_jsonl(dir: &std::path::Path, name: &str, unix_secs: u64) {
+        let path = dir.join(name);
+        std::fs::write(&path, "{}").unwrap();
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(unix_secs);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    }
+
+    /// Two sessions can share an mtime — coarse filesystem timestamp
+    /// granularity, or two writes in one tick — and `read_dir` order is
+    /// unspecified, so without a tie-break which one we tail would vary between
+    /// runs.
+    ///
+    /// Driven directly rather than through the filesystem on purpose: a
+    /// directory-backed test only ever observes the one order the OS happens to
+    /// yield, so it passes with or without the tie-break and proves nothing.
+    /// Feeding both permutations is what actually demonstrates
+    /// order-independence.
+    #[test]
+    fn newest_breaks_equal_mtimes_by_filename_in_either_input_order() {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_770_000_000);
+        let earlier = (
+            t,
+            std::ffi::OsString::from("2026-08-21T13-40-02-005Z_aaaa.jsonl"),
+            PathBuf::from("/s/2026-08-21T13-40-02-005Z_aaaa.jsonl"),
+        );
+        let later = (
+            t,
+            std::ffi::OsString::from("2026-08-21T13-55-11-900Z_bbbb.jsonl"),
+            PathBuf::from("/s/2026-08-21T13-55-11-900Z_bbbb.jsonl"),
+        );
+        for order in [
+            vec![earlier.clone(), later.clone()],
+            vec![later.clone(), earlier.clone()],
+        ] {
+            assert_eq!(
+                newest_by_mtime_then_name(order).unwrap(),
+                later.2,
+                "equal mtimes must resolve by filename regardless of input order"
+            );
+        }
+    }
+
+    /// A newer mtime still wins outright, even when its name sorts lower — the
+    /// tie-break must not become the primary key.
+    #[test]
+    fn newest_prefers_mtime_over_filename() {
+        let older = (
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_770_000_000),
+            std::ffi::OsString::from("zzzz.jsonl"),
+            PathBuf::from("/s/zzzz.jsonl"),
+        );
+        let newer = (
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_770_000_100),
+            std::ffi::OsString::from("aaaa.jsonl"),
+            PathBuf::from("/s/aaaa.jsonl"),
+        );
+        assert_eq!(
+            newest_by_mtime_then_name(vec![older, newer.clone()]).unwrap(),
+            newer.2
         );
     }
 

@@ -1,5 +1,5 @@
 - **Parallel agent sessions in git worktrees**: every workspace is its own branch + worktree; switch with one key.
-- **Multiple coding agents**: run Claude, Pi, Hermes, or Codex per workspace. Set a global default with `coding_agent` or override per workspace with `--agent`. See [Coding agents](../configuration/coding-agents.md).
+- **Multiple coding agents**: run Claude, Pi, Hermes, Codex, or oh-my-pi (`omp`) per workspace. Set a global default with `coding_agent` or override per workspace with `--agent`. See [Coding agents](../configuration/coding-agents.md).
 - **Multi-agent workspaces**: attach several agents to one worktree, switch focus with a keypress, and have them message each other. See [Multi-agent workspaces](../configuration/multi-agent-workspaces.md).
 - **Cross-session attention alerts**: terminal bell + `!` or `?` marker when a session is awaiting permission, has gone idle or has a question.
 - **Activity sub-line per workspace**: see the latest tool call or message from each session at a glance.

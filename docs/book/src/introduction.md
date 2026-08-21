@@ -1,6 +1,6 @@
 # wsx (WorkspaceX)
 
-Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git worktrees.
+Terminal UI for managing Claude Code, Pi, Hermes, Codex, or oh-my-pi sessions in git worktrees.
 
 wsx gives each piece of work its own isolated git worktree and coding-agent
 session, and a dashboard to launch, monitor, and orchestrate many of them in

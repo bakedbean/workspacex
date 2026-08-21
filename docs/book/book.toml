@@ -1,7 +1,7 @@
 [book]
 title = "wsx (WorkspaceX)"
 authors = ["Eben Goodman"]
-description = "Terminal UI for managing Claude Code, Pi, Hermes, or Codex sessions in git worktrees."
+description = "Terminal UI for managing Claude Code, Pi, Hermes, Codex, or oh-my-pi sessions in git worktrees."
 language = "en"
 src = "src"
 

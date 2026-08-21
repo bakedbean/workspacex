@@ -7688,6 +7688,38 @@ mod rename_modal_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_write_surfaces_an_error_instead_of_closing_silently() {
+        // A read-only/busy DB used to close the picker and report nothing, so
+        // the user could believe a color had been saved when it had not.
+        let (mut app, ws_id) = app_with_workspace();
+        app.store
+            .conn()
+            .execute_batch("PRAGMA query_only = ON")
+            .unwrap();
+        app.modal = Some(crate::ui::modal::Modal::NameColorPicker {
+            workspace_id: ws_id,
+            current: None,
+            selected: 0,
+            filter: "d7af87".to_string(),
+        });
+        let shared = dummy_shared();
+
+        handle_key_modal(&mut app, &shared, key(KeyCode::Enter))
+            .await
+            .unwrap();
+
+        match &app.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert!(
+                    message.contains("color"),
+                    "the error must name what failed; got {message:?}"
+                );
+            }
+            other => panic!("expected an Error modal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn clicking_a_swatch_applies_that_color() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let (mut app, ws_id) = app_with_workspace();

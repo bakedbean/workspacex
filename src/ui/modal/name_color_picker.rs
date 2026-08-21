@@ -74,6 +74,45 @@ pub fn render_name_color_picker(
     let grid_w = GRID_COLS as u16 * SWATCH_STRIDE - 1;
     let w = grid_w + 4; // 1 cell of padding each side + 2 border columns
     let h = rows as u16 + 7;
+
+    // `panel_frame` centers by clamping to `area`, which would silently CLIP
+    // the grid: the swatches past the edge stop being drawn, but their hit
+    // rects would still be published — and `handle_mouse` consults those
+    // before the click-outside dismissal, so a click on empty screen would
+    // apply an invisible color. Refuse to draw a grid that does not fit, and
+    // return no hit rects. Narrowing the filter shrinks `h`, so the picker
+    // becomes usable again on a short screen as soon as the user types.
+    if area.width < w || area.height < h {
+        let inner = panel_frame(f, area, w.min(area.width), 5.min(area.height), "", theme);
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    " terminal too small to pick a color".to_string(),
+                    theme.err_style(),
+                )),
+                Line::from(Span::styled(
+                    format!(" needs {w}x{h}, have {}x{}", area.width, area.height),
+                    theme.dim_style(),
+                )),
+                Line::from(Span::styled(
+                    // The grid is a fixed 16 columns wide, so a filter can
+                    // only ever buy back HEIGHT. Telling a user on a narrow
+                    // screen to type would send them at a notice that never
+                    // moves.
+                    if area.width < w {
+                        " needs a wider terminal — Esc".to_string()
+                    } else {
+                        " type to narrow the grid, or Esc".to_string()
+                    },
+                    theme.dim_style(),
+                )),
+            ])
+            .wrap(ratatui::widgets::Wrap { trim: false }),
+            inner,
+        );
+        return Vec::new();
+    }
+
     let inner = panel_frame(f, area, w, h, "workspace name color", theme);
     if inner.width == 0 || inner.height == 0 {
         return Vec::new();
@@ -392,6 +431,109 @@ mod tests {
             text.contains("no color matches"),
             "expected a no-match notice:\n{text}"
         );
+    }
+
+    #[test]
+    fn a_screen_too_small_for_the_panel_shows_a_notice_and_no_hit_rects() {
+        let theme = Theme::ansi();
+        let mut term = Terminal::new(TestBackend::new(40, 18)).unwrap();
+        let mut rects = Vec::new();
+        term.draw(|f| {
+            rects = render_name_color_picker(f, f.area(), "", 0, None, &theme);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let text = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rects.is_empty(),
+            "a clipped grid must publish no clickable swatches"
+        );
+        assert!(text.contains("too small"), "expected a notice:\n{text}");
+    }
+
+    /// The picker's rendered text on a `w`x`h` screen.
+    fn text_at(w: u16, h: u16, filter: &str) -> String {
+        let theme = Theme::ansi();
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| {
+            render_name_color_picker(f, f.area(), filter, 0, None, &theme);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_short_screen_is_told_that_narrowing_the_filter_helps() {
+        // Wide enough, just not tall enough: filtering shrinks the grid, so
+        // the picker really does become reachable by typing.
+        let text = text_at(60, 12, "");
+        assert!(text.contains("too small"), "{text}");
+        assert!(text.contains("type to narrow"), "{text}");
+    }
+
+    #[test]
+    fn a_narrow_screen_is_not_told_to_narrow_the_filter() {
+        // The grid is a fixed 16 columns wide, so no filter can ever make it
+        // fit a screen this narrow. Promising otherwise sends the user typing
+        // at a notice that will not move.
+        let text = text_at(40, 40, "");
+        assert!(text.contains("too small"), "{text}");
+        assert!(
+            !text.contains("type to narrow"),
+            "narrowing cannot help when width is the blocker:\n{text}"
+        );
+        assert!(text.contains("wider"), "say what would help:\n{text}");
+    }
+
+    #[test]
+    fn a_filter_that_shrinks_the_panel_makes_it_usable_again_on_a_short_screen() {
+        // Height is what a narrow terminal runs out of first, and narrowing the
+        // filter shrinks the grid — so the feature comes back rather than
+        // staying dead once the notice has been shown.
+        let theme = Theme::ansi();
+        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        let mut rects = Vec::new();
+        term.draw(|f| {
+            rects = render_name_color_picker(f, f.area(), "d7af87", 0, None, &theme);
+        })
+        .unwrap();
+        assert_eq!(rects.len(), 1, "the single match is drawn and clickable");
+    }
+
+    #[test]
+    fn every_published_hit_rect_lies_inside_the_screen() {
+        // The hit rects are consulted BEFORE the click-outside dismissal, so a
+        // rect outside the drawn panel would apply a color the user cannot see.
+        for (w, h) in [(80u16, 30u16), (52, 23), (51, 24), (120, 40)] {
+            let theme = Theme::ansi();
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            let mut rects = Vec::new();
+            term.draw(|f| {
+                rects = render_name_color_picker(f, f.area(), "", 0, None, &theme);
+            })
+            .unwrap();
+            for (idx, r) in &rects {
+                assert!(
+                    r.x + r.width <= w && r.y + r.height <= h,
+                    "swatch {idx} at {r:?} escapes the {w}x{h} screen",
+                );
+            }
+        }
     }
 
     #[test]

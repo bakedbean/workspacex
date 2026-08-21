@@ -1365,8 +1365,14 @@ fn apply_name_color(
     color: Option<u8>,
 ) -> Result<()> {
     app.modal = None;
+    // A failed write must not read as success: the picker has already closed,
+    // so swallowing the error would leave the user believing the color was
+    // saved. Surface it in the error modal instead.
     if let Err(e) = app.store.set_workspace_name_color(ws_id, color) {
         tracing::warn!(error = %e, "failed to persist workspace name color");
+        app.modal = Some(Modal::Error {
+            message: format!("could not save the name color: {e}"),
+        });
         return Ok(());
     }
     app.refresh()?;

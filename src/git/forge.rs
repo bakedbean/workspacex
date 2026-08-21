@@ -20,7 +20,7 @@ impl BranchLifecycle {
     /// someone's review queue. Merged and closed don't — GitHub leaves
     /// `reviewDecision` populated after the fact, so without this the ✓
     /// would become permanent furniture on every merged PR.
-    pub fn awaits_review(self) -> bool {
+    pub(crate) fn awaits_review(self) -> bool {
         matches!(self, Self::PrOpen | Self::PrDraft | Self::PrConflicted)
     }
 }
@@ -236,13 +236,26 @@ pub(crate) fn apply_review_gate(status: PrStatus, gated: Option<bool>) -> PrStat
 /// How long a branch's approval gate is trusted before being re-probed.
 ///
 /// Long, because the answer changes when someone edits a ruleset — a
-/// once-a-quarter event — not when a PR moves. It matters most for the
+/// once-a-quarter event — not when a PR moves. Doubles as the retention
+/// bound: [`fetch_requires_approval`] drops entries this old when it writes. It matters most for the
 /// short-lived refreshers (`wsx waybar refresh-prs`, `wsx menubar refresh`),
 /// where the cache is only ever warm within a single sweep: there it
 /// collapses one probe per workspace into one per repo.
 const REVIEW_GATE_TTL_SECS: i64 = 900;
 
-type ReviewGateCache = std::sync::Mutex<std::collections::HashMap<(String, String), (bool, i64)>>;
+type ReviewGateEntries = std::collections::HashMap<(String, String), (bool, i64)>;
+type ReviewGateCache = std::sync::Mutex<ReviewGateEntries>;
+
+/// Record `gated` for `key`, dropping anything already past the TTL.
+///
+/// The sweep is here rather than inline so it can be tested: an inverted
+/// predicate would evict every *live* entry instead of every stale one,
+/// which no behavioural test would catch — the probe would simply stop
+/// memoising and go back to one call per workspace, silently.
+fn store_review_gate(cache: &mut ReviewGateEntries, key: (String, String), gated: bool, now: i64) {
+    cache.retain(|_, (_, at)| now.saturating_sub(*at) < REVIEW_GATE_TTL_SECS);
+    cache.insert(key, (gated, now));
+}
 
 fn review_gate_cache() -> &'static ReviewGateCache {
     static CACHE: std::sync::OnceLock<ReviewGateCache> = std::sync::OnceLock::new();
@@ -279,7 +292,7 @@ async fn fetch_requires_approval(worktree: &Path, slug: &str, base: &str) -> Opt
     let gated = parse_requires_approval(&String::from_utf8_lossy(&out.stdout))?;
 
     if let Ok(mut cache) = review_gate_cache().lock() {
-        cache.insert(key, (gated, now));
+        store_review_gate(&mut cache, key, gated, now);
     }
     Some(gated)
 }
@@ -923,6 +936,39 @@ mod tests {
                 "lifecycle {lc:?}"
             );
         }
+    }
+
+    fn key(base: &str) -> (String, String) {
+        ("o/r".into(), base.into())
+    }
+
+    /// Nothing else ever removes an entry, so a base branch that stops
+    /// existing — a stacked PR's parent, an archived repo — would otherwise
+    /// outlive the process that cached it.
+    #[test]
+    fn writing_the_cache_drops_entries_past_the_ttl() {
+        let now = 1_000_000;
+        let mut cache = ReviewGateEntries::new();
+        cache.insert(key("gone"), (true, now - REVIEW_GATE_TTL_SECS - 1));
+        store_review_gate(&mut cache, key("main"), true, now);
+        assert_eq!(
+            cache.keys().collect::<Vec<_>>(),
+            vec![&key("main")],
+            "the stale entry should be gone and the fresh one kept"
+        );
+    }
+
+    /// The half that a naive sweep gets backwards. Evicting live entries
+    /// wouldn't fail anything visible — the probe would just stop memoising
+    /// and go back to one `gh` call per workspace.
+    #[test]
+    fn writing_the_cache_keeps_entries_inside_the_ttl() {
+        let now = 1_000_000;
+        let mut cache = ReviewGateEntries::new();
+        cache.insert(key("still-fresh"), (true, now - REVIEW_GATE_TTL_SECS + 1));
+        store_review_gate(&mut cache, key("main"), false, now);
+        assert_eq!(cache.len(), 2, "a live entry must survive the sweep");
+        assert_eq!(cache.get(&key("main")), Some(&(false, now)));
     }
 
     #[test]

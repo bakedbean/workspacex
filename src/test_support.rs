@@ -47,22 +47,56 @@ pub fn false_path() -> &'static str {
 
 /// Path to an executable wrapper that ignores all CLI arguments and cats
 /// stdin. Use in place of `cat_path()` for agent spawns that now inject flags
-/// the bare `cat` would reject (e.g. Codex `-c notify=...`). The script is
-/// (re)written on each call to a stable temp path; callers hold `ENV_LOCK` via
-/// `EnvGuard`, so concurrent writers don't race on the identical content.
+/// the bare `cat` would reject (e.g. Codex `-c notify=...`).
 ///
 /// The wrapper `exec`s the absolute path resolved by `cat_path()` rather than a
 /// bare `cat`, so it doesn't depend on `PATH` (the same macOS/Linux-layout and
 /// PATH-mutation concerns `cat_path()` was built to avoid).
+///
+/// # Why this is written exactly once, to a pid-scoped path
+///
+/// This used to rewrite a fixed path on every call, on the reasoning that
+/// `ENV_LOCK` serialized the writers. That reasoning was wrong, and it made CI
+/// fail intermittently on Linux with
+/// `Os { code: 26, kind: ExecutableFileBusy }`.
+///
+/// The race is not writer-versus-writer, which the lock does cover. It is
+/// writer-versus-**`execve`**: a test that has already called this spawns a PTY
+/// child that executes the script, and that child outlives the `EnvGuard` its
+/// spawner dropped. Linux refuses to open a file for writing while it is being
+/// executed, so the next test to acquire the lock and rewrite the path can hit
+/// `ETXTBSY`. The lock has nothing to say about it — the racing party is a
+/// process, not a lock holder. macOS does not enforce this, which is why the
+/// failure only ever appeared on the Linux runner.
+///
+/// Writing once via `OnceLock` removes the rewrite entirely: the single write
+/// happens before this process can have exec'd the path. The pid in the file
+/// name covers the other half, `cargo test --all-targets` running several test
+/// binaries at once — without it, one binary could rewrite the script another
+/// was mid-`execve` on.
+///
+/// The cost is one small file per test-binary run left in the temp dir instead
+/// of one file overall. Deleting it would need to outlive the last spawned
+/// child, which is exactly the thing that cannot be known here, so it is left
+/// for normal temp reaping.
 #[cfg(unix)]
 pub fn cat_ignore_args_path() -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
-    let p = std::env::temp_dir().join("wsx_test_cat_ignore_args.sh");
-    let script = format!("#!/bin/sh\nexec {}\n", cat_path());
-    std::fs::write(&p, script).expect("write wrapper script");
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))
-        .expect("chmod wrapper script");
-    p
+    use std::sync::OnceLock;
+    static WRAPPER: OnceLock<std::path::PathBuf> = OnceLock::new();
+    WRAPPER
+        .get_or_init(|| {
+            let p = std::env::temp_dir().join(format!(
+                "wsx_test_cat_ignore_args_{}.sh",
+                std::process::id()
+            ));
+            let script = format!("#!/bin/sh\nexec {}\n", cat_path());
+            std::fs::write(&p, script).expect("write wrapper script");
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod wrapper script");
+            p
+        })
+        .clone()
 }
 
 /// RAII guard for env-mutating tests: acquires `ENV_LOCK`, stashes the

@@ -8,7 +8,7 @@ captions under GitHub's 10MB asset cap.
 
 > Provisioning is shared with the e2e test harness — see
 > [`../sandbox/README.md`](../sandbox/README.md) (env contract) and
-> [`../test/README.md`](../test/README.md) (running the app for tests). This `demo/`
+> [`../harness/README.md`](../harness/README.md) (running the app for tests). This `demo/`
 > dir is now just the screencast/video-production layer on top of `sandbox/`.
 
 See [`SPIKE-NOTES.md`](SPIKE-NOTES.md) for the hard-won mechanics (config

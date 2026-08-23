@@ -23,7 +23,7 @@ case "$cmd" in
     WSX_BIN="$WSX_BIN" WSX_SANDBOX_ROOT="$WSX_SANDBOX_ROOT" bash "$ROOT/sandbox/bootstrap.sh"
     _enter
     echo "sandbox up at $WSX_SANDBOX_ROOT (WSX_BIN=$WSX_BIN)"
-    echo "  next: test/harness.sh wsx workspace list"
+    echo "  next: harness/harness.sh wsx workspace list"
     ;;
   wsx)
     _enter
@@ -71,11 +71,11 @@ case "$cmd" in
     _need vhs shot
     tape="${1:?usage: harness.sh shot <tape>}"
     test -f "$tape" || { echo "harness: no tape at $tape" >&2; exit 1; }
-    mkdir -p "$ROOT/test/out"
+    mkdir -p "$ROOT/harness/out"
     # render.sh clears agent markers and execs vhs; run from repo root so the tape's
-    # CWD-relative Output/Screenshot paths resolve under test/out/.
+    # CWD-relative Output/Screenshot paths resolve under harness/out/.
     ( cd "$ROOT" && bash "$ROOT/sandbox/render.sh" "$tape" )
-    echo "shot rendered (see Screenshot path in $tape, under test/out/)"
+    echo "shot rendered (see Screenshot path in $tape, under harness/out/)"
     ;;
   down)
     # Destructive. Normalize away `..` FIRST so a value like /tmp/wsx-test/.. can't

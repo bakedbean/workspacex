@@ -5,8 +5,8 @@ use crate::data::store::{
 };
 use crate::error::{Error, Result};
 use crate::git;
-use crate::names;
 use crate::pty::session::AgentKind;
+use crate::util::names;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -178,7 +178,7 @@ async fn run_setup_logged(
             repo_name,
             ws_name,
             worktree,
-            crate::time::now_secs(),
+            crate::util::time::now_secs(),
         ),
         _ => None,
     };
@@ -231,7 +231,7 @@ pub async fn create_with_app(
         let g = app.lock().await;
         let resolved_name = match name.as_deref() {
             Some(s) if !s.trim().is_empty() => s.trim().to_string(),
-            _ => crate::names::generate(),
+            _ => crate::util::names::generate(),
         };
         let prefix = crate::data::repo::resolve_branch_prefix(&repo, &g.store)?;
         let branch = compose_branch(&prefix, &resolved_name);

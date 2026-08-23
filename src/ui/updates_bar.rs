@@ -301,10 +301,10 @@ pub fn format_attention_line(
     Some(out)
 }
 
-// Moved to `crate::time` so non-TUI callers (the macOS menubar) can use it
+// Moved to `crate::util::time` so non-TUI callers (the macOS menubar) can use it
 // without depending on ratatui widget code. Re-exported here because the
 // updates bar, the updates panel, and the PM digest all reach it by this path.
-pub use crate::time::format_age;
+pub use crate::util::time::format_age;
 
 #[cfg(test)]
 mod tests {

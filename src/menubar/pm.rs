@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::data::store::{ReportedStatus, WorkspaceId, WorkspaceRecap};
 use crate::menubar::escape::{esc_text, esc_text_uncapped, quote_param};
 use crate::menubar::plugin::{ROW_FONT, pr_field};
-use crate::time::format_age;
+use crate::util::time::format_age;
 use crate::workspace_rows::{RowInput, state_glyph};
 
 /// One workspace's PM entry: its menu row plus the recap narrative, if any.

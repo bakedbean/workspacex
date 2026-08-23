@@ -90,7 +90,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let nerd_fonts = nerd_fonts_enabled(&app.store);
 
             // Build per-workspace inputs in V5 shape.
-            let now_ms = crate::time::now_ms();
+            let now_ms = crate::util::time::now_ms();
             let mut workspaces: Vec<dashboard::WorkspaceItem<'_>> = Vec::new();
             for repo in &app.repos {
                 for (rid, ws) in &app.workspaces {
@@ -142,7 +142,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 });
                 let secs = session.as_ref().map(|s| s.idle_secs().unwrap_or(0));
                 let awaiting = app.awaiting_permission(ws.id).is_some();
-                let now_ms = crate::time::now_ms();
+                let now_ms = crate::util::time::now_ms();
                 let stopped_kind = app
                     .workspace_events
                     .get(&ws.id)
@@ -171,7 +171,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             // Aggregate the retained hourly buckets into a fixed 24-bar,
             // time-aligned sparkline for the configured window.
             let window = crate::config::usage_window::resolve(&app.store);
-            let now_secs = crate::time::now_secs();
+            let now_secs = crate::util::time::now_secs();
             let now_hour = now_secs - (now_secs % 3600);
             // VecDeque is non-contiguous; collect into a slice-able Vec so
             // aggregate_buckets can take it as `&[(u64, u32)]`.
@@ -238,7 +238,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     selected,
                     app.focus,
                     app.pm_filter.as_deref(),
-                    crate::time::now_ms(),
+                    crate::util::time::now_ms(),
                     &app.theme,
                 );
             }
@@ -247,7 +247,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             {
                 if let Some((rid, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) {
                     if let Some(repo) = app.repos.iter().find(|r| r.id == *rid) {
-                        let now_ms = crate::time::now_ms();
+                        let now_ms = crate::util::time::now_ms();
                         let ago_secs = workspace_age_secs(app, ws.id, now_ms);
                         let status = app.classify_status(ws);
                         let procs: &[crate::activity::proc::ProcInfo] = app
@@ -665,7 +665,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 sort,
                 filter,
             } => {
-                let now_ms = crate::time::now_ms();
+                let now_ms = crate::util::time::now_ms();
                 let awaiting = app.awaiting_permission_map();
                 let activity_translated: std::collections::HashMap<
                     crate::data::store::WorkspaceId,
@@ -1062,7 +1062,7 @@ fn compute_attention_line(
     attached_id: Option<crate::data::store::WorkspaceId>,
     max_width: usize,
 ) -> Option<crate::ui::updates_bar::AttentionLine> {
-    let now_ms = crate::time::now_ms();
+    let now_ms = crate::util::time::now_ms();
     let candidates: Vec<crate::ui::updates_bar::WorkspaceUpdateInfo> = app
         .workspaces
         .iter()
@@ -1313,7 +1313,7 @@ mod build_row_inputs_tests {
             .iter()
             .find(|(_, w)| w.id == ws)
             .expect("workspace present after refresh");
-        build_row_inputs(app, workspace, crate::time::now_ms(), true)
+        build_row_inputs(app, workspace, crate::util::time::now_ms(), true)
     }
 
     /// A workspace with no live PTY — detached, or every workspace right
@@ -1330,7 +1330,7 @@ mod build_row_inputs_tests {
             .add_primary_agent(ws, AgentKind::Claude, 1)
             .unwrap();
         app.refresh().unwrap();
-        let now = crate::time::now_ms();
+        let now = crate::util::time::now_ms();
         app.workspace_events.insert(
             ws,
             crate::activity::events::WorkspaceEvents {
@@ -1362,7 +1362,7 @@ mod build_row_inputs_tests {
             .unwrap();
         app.refresh().unwrap();
         app.test_spawn_session(primary.id, SessionStatus::Running { pid: 1 });
-        let now = crate::time::now_ms();
+        let now = crate::util::time::now_ms();
         if let Some(inst) = app.primary_instance(ws)
             && let Some(session) = app.sessions.get(inst)
         {

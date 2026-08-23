@@ -204,7 +204,7 @@ fn plugin_document(store: &Store, wsx_bin: &str) -> Result<String> {
         &rows,
         &recaps,
         wsx_bin,
-        crate::time::now_ms(),
+        crate::util::time::now_ms(),
     ))
 }
 

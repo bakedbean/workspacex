@@ -938,7 +938,7 @@ impl App {
     /// Throttled to one sweep per 10s — `tmux has-session` is a subprocess,
     /// so this must not run on every tick.
     fn refresh_shared_detached(&mut self) {
-        let now = crate::time::now_ms_u64();
+        let now = crate::util::time::now_ms_u64();
         if now.saturating_sub(self.shared_detached_polled_ms) < 10_000 {
             return;
         }
@@ -1171,7 +1171,7 @@ impl App {
         ws_id: crate::data::store::WorkspaceId,
     ) -> Option<(String, i64)> {
         let evt = self.workspace_events.get(&ws_id)?;
-        let now = crate::time::now_ms();
+        let now = crate::util::time::now_ms();
         evt.pending_permission_tool(now, 3_000)
     }
 
@@ -1256,7 +1256,7 @@ impl App {
         // render tick and every updates-panel keypress. Spawn-mode
         // detection (`build_spawn_info`) still probes the filesystem itself.
         let has_prior = false;
-        let now_ms = crate::time::now_ms();
+        let now_ms = crate::util::time::now_ms();
         let stopped_kind = self
             .workspace_events
             .get(&ws.id)
@@ -1774,7 +1774,7 @@ pub async fn run<B: Backend + std::io::Write>(
                 // input. Set by `fire_chip` so the user briefly sees
                 // which command was sent; wiped here once the deadline
                 // is reached.
-                let now_ms = crate::time::now_ms_u64();
+                let now_ms = crate::util::time::now_ms_u64();
                 if matches!(g.dashboard.reply_draft_clear_at_ms, Some(t) if now_ms >= t) {
                     g.dashboard.reply_draft.clear();
                     g.dashboard.reply_draft_clear_at_ms = None;
@@ -1806,7 +1806,7 @@ pub async fn run<B: Backend + std::io::Write>(
                 if g.poll_external_changes() || redeliver || mail_due {
                     g.drain_agent_messages();
                 }
-                let now_secs = crate::time::now_secs();
+                let now_secs = crate::util::time::now_secs();
                 let now_hour = now_secs - (now_secs % 3600);
                 let live = g
                     .workspaces
@@ -1892,7 +1892,7 @@ pub(crate) async fn rescan_processes(app: &mut App) {
         .map(|(id, path)| (*id, path.as_path()))
         .collect();
     app.workspace_processes = crate::activity::proc::bucket_by_worktree(&procs, &worktree_refs);
-    app.last_proc_scan_ms = crate::time::now_ms();
+    app.last_proc_scan_ms = crate::util::time::now_ms();
     // Clamp the modal's `selected` index after the list size changes.
     // Read workspace_id out first (Copy) to avoid a simultaneous
     // borrow of `app.workspace_processes` and `app.modal`.
@@ -2064,7 +2064,7 @@ pub(crate) fn build_spawn_info(
             yolo,
         }
     } else {
-        let rename_ctx = if crate::names::is_generated_slug(&ws.name) {
+        let rename_ctx = if crate::util::names::is_generated_slug(&ws.name) {
             let resolved_prefix =
                 crate::data::repo::resolve_branch_prefix(repo, &app.store).unwrap_or_default();
             Some(crate::pty::session::RenameContext {

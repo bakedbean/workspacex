@@ -261,7 +261,7 @@ async fn fire_chip(app: &mut App, idx: usize) {
         // deadline elapses (or earlier if the user interacts with the
         // input directly).
         app.dashboard.reply_draft = command_text;
-        let now_ms = crate::time::now_ms_u64();
+        let now_ms = crate::util::time::now_ms_u64();
         app.dashboard.reply_draft_clear_at_ms = Some(now_ms + 600);
         app.focus = crate::ui::PaneFocus::Dashboard;
     }
@@ -1195,7 +1195,7 @@ async fn handle_key_attached(
                             .find(|(_, w)| w.id == id)
                             .map(|(_, w)| w.clone());
                         if let Some(ws) = ws_info {
-                            if crate::names::is_generated_slug(&ws.name) {
+                            if crate::util::names::is_generated_slug(&ws.name) {
                                 let repo = app.repos.iter().find(|r| r.id == ws.repo_id).cloned();
                                 if let Some(repo) = repo {
                                     // Fire-and-forget: rename failure shouldn't disrupt the keystroke.
@@ -1303,7 +1303,7 @@ fn launch_workspace_command(
     else {
         return "error: workspace not found".to_string();
     };
-    let now_ms = crate::time::now_ms_u64();
+    let now_ms = crate::util::time::now_ms_u64();
     let log_dir = crate::config::Dirs::discover().log_dir();
     let log_path = crate::commands::external::background_log_path(&log_dir, workspace_id.0, now_ms);
     match crate::commands::external::spawn_background_command(&worktree, command, &log_path) {
@@ -1459,7 +1459,7 @@ async fn handle_key_modal(
                 // `None` — `reconcile_create_result` needs the exact name
                 // that will be (or would have been) inserted so it can
                 // tell, on failure, whether a row exists at all (F5 part 2).
-                let final_name = name.unwrap_or_else(crate::names::generate);
+                let final_name = name.unwrap_or_else(crate::util::names::generate);
                 let repo = app.repos.iter().find(|r| r.id == repo_id).unwrap().clone();
                 let base = app.worktree_base.clone();
                 let cancel = tokio_util::sync::CancellationToken::new();
@@ -2984,7 +2984,7 @@ pub(crate) async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent
             // window drag doesn't trigger a repaint storm. See
             // `crate::app::resize_sync`.
             app.resize_debounce
-                .note(cols, rows, crate::time::now_ms_u64());
+                .note(cols, rows, crate::util::time::now_ms_u64());
         }
         _ => {}
     }

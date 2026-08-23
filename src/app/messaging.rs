@@ -223,7 +223,7 @@ impl crate::app::App {
     /// run `drain_agent_messages` again — a failed injection has to be
     /// redispatched by someone, and the external-change poll won't fire for it.
     pub(crate) fn apply_delivery_outcomes(&mut self) -> bool {
-        let now_ms = crate::time::now_ms_u64();
+        let now_ms = crate::util::time::now_ms_u64();
         self.requeue_due_acks(now_ms);
         let outcomes: Vec<DeliveryOutcome> = {
             let mut guard = self.delivery_outcomes.lock().unwrap();
@@ -306,7 +306,7 @@ impl crate::app::App {
     /// - `Ok(Ok)` but no session   → leave pending to retry rather than
     ///   silently dropping (shouldn't happen right after a successful ensure).
     pub(crate) fn drain_agent_messages(&mut self) {
-        let now_ms = crate::time::now_ms_u64();
+        let now_ms = crate::util::time::now_ms_u64();
         // Assume nothing is left over; the arms below re-arm the heartbeat if
         // they leave a message waiting on something no DB commit will announce.
         self.clear_mail_retry();
@@ -573,7 +573,7 @@ mod tests {
         // Without an explicit startup drain those messages sit forever.
         let (app, _ids) = app_with_queued_messages(1);
         assert!(
-            app.mail_drain_due(crate::time::now_ms_u64()),
+            app.mail_drain_due(crate::util::time::now_ms_u64()),
             "a fresh App must drain the inbox on its first tick"
         );
     }

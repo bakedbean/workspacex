@@ -44,16 +44,16 @@ pub use crate::app::background::{
 pub use crate::app::bell::{BellPattern, COLD_START_WINDOW, alert_decision, fire_bell};
 pub use crate::app::render::draw_for_test;
 
-pub mod reconcile;
-pub mod remote;
-pub mod repo_setting;
-pub mod run;
-pub mod selection;
-pub mod session;
-pub mod spawn;
-pub mod state;
-pub mod status;
-pub mod types;
+pub(crate) mod reconcile;
+pub(crate) mod remote;
+pub(crate) mod repo_setting;
+pub(crate) mod run;
+pub(crate) mod selection;
+pub(crate) mod session;
+pub(crate) mod spawn;
+pub(crate) mod state;
+pub(crate) mod status;
+pub(crate) mod types;
 
 pub use remote::{RemoteList, RemoteTarget};
 pub use repo_setting::RepoSettingField;

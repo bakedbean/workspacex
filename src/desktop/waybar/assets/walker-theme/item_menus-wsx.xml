@@ -2,7 +2,7 @@
 <!-- wsx item layout for the menus:wsx provider, derived from walker's
      default item.xml. The one difference: static Pango attribute ranges on
      ItemText that color the fixed-column fields wsx emits (see the column
-     constants in src/waybar/entries.rs — start/end are BYTE offsets and the
+     constants in src/desktop/waybar/entries.rs — start/end are BYTE offsets and the
      two files must stay in sync; a unit test enforces it). Walker's
      set_text() disables markup but leaves these attributes intact.
      Colors: lavender PR, yellow dirty dot, green additions, red deletions —

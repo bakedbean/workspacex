@@ -1,8 +1,6 @@
 //! Drawing the dashboard view: the workspace list, its columns, and
 //! the detail bar pinned under it.
 
-// render — extracted from src/app.rs (see docs/superpowers/specs/2026-05-25-app-rs-refactor-design.md)
-
 use super::*;
 use crate::app::activity::classify_activity_with_events;
 use crate::app::bell::{COLD_START_WINDOW, alert_decision};

@@ -12,13 +12,13 @@
 //!   [`mouse`]      clicks and wheel, including hit-testing
 //!   [`keys`]       key <-> byte encoding and input tracing
 
-pub mod attached;
-pub mod dashboard;
-pub mod footer;
-pub mod keys;
-pub mod leader;
-pub mod modal;
-pub mod mouse;
+pub(crate) mod attached;
+pub(crate) mod dashboard;
+pub(crate) mod footer;
+pub(crate) mod keys;
+pub(crate) mod leader;
+pub(crate) mod modal;
+pub(crate) mod mouse;
 
 pub(in crate::app::input) use attached::*;
 pub(in crate::app::input) use dashboard::*;

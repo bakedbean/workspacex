@@ -8,9 +8,9 @@
 //!   [`attached`]   PTY panes, local split tree or ssh-attached remote
 //!   [`overlay`]    the modal stack and the two anchored pickers
 
-pub mod attached;
-pub mod dashboard;
-pub mod overlay;
+pub(crate) mod attached;
+pub(crate) mod dashboard;
+pub(crate) mod overlay;
 
 pub(crate) use dashboard::resolve_dashboard_detail_cfg;
 pub(crate) use overlay::translate_activity;

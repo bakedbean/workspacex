@@ -8,12 +8,12 @@
 //! commands wsx advertises and the commands it accepts cannot drift apart.
 //! [`resolve`] holds the lookups and validation more than one `run` arm needs.
 
-pub mod action;
-pub mod groups;
-pub mod help;
-pub mod parse;
-pub mod resolve;
-pub mod run;
+pub(crate) mod action;
+pub(crate) mod groups;
+pub(crate) mod help;
+pub(crate) mod parse;
+pub(crate) mod resolve;
+pub(crate) mod run;
 
 #[cfg(test)]
 mod tests;

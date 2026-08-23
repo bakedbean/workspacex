@@ -8,12 +8,12 @@ use super::action::{CliAction, HelpTopic};
 use super::groups::group_name;
 use crate::error::{Error, Result};
 
-pub mod agent;
-pub mod config;
-pub mod desktop;
-pub mod repo;
-pub mod reporting;
-pub mod workspace;
+pub(crate) mod agent;
+pub(crate) mod config;
+pub(crate) mod desktop;
+pub(crate) mod repo;
+pub(crate) mod reporting;
+pub(crate) mod workspace;
 
 use agent::parse_agent;
 use config::parse_config;

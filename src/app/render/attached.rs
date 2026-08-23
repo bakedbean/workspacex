@@ -1,8 +1,6 @@
 //! Drawing an attached view: the local split tree of PTY panes, the
 //! ssh-attached remote pane, and the leader-key nav overlay.
 
-// render — extracted from src/app.rs (see docs/superpowers/specs/2026-05-25-app-rs-refactor-design.md)
-
 use super::*;
 use crate::app::App;
 

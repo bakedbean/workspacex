@@ -1,8 +1,6 @@
 //! Drawing whatever sits on top of the current view: the modal stack,
 //! and the two pickers anchored to a widget rather than centered.
 
-// render — extracted from src/app.rs (see docs/superpowers/specs/2026-05-25-app-rs-refactor-design.md)
-
 use super::*;
 use crate::app::{ActivityState, App};
 

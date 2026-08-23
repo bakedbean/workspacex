@@ -170,8 +170,9 @@ mod ipc_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn handle_line_selects_workspace() {
-        // Build a SharedApp exactly like src/app.rs:2703 app_with_one_workspace()
-        // (in-memory store + App::new), wrapped in Arc<tokio::sync::Mutex<_>>.
+        // Build a SharedApp the way `crate::app::selection`'s test helper
+        // `app_with_one_workspace` does (in-memory store + App::new), wrapped in
+        // Arc<tokio::sync::Mutex<_>>.
         let app: crate::app::SharedApp = {
             use crate::data::store::{NewWorkspace, Store};
             let store = Store::open_in_memory().unwrap();

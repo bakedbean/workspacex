@@ -11,7 +11,7 @@ use crate::data::store::Store;
 use crate::error::{Error, Result};
 
 pub fn jump(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
-    for (path, pid) in crate::tui_ipc::live_socket_candidates() {
+    for (path, pid) in crate::app::ipc::live_socket_candidates() {
         match std::os::unix::net::UnixStream::connect(&path) {
             Ok(mut stream) => {
                 if writeln!(stream, "select {repo} {slug}").is_ok() {

@@ -14,6 +14,8 @@ pub mod activity;
 pub mod background;
 pub mod bell;
 pub mod input;
+#[cfg(unix)]
+pub mod ipc;
 pub mod messaging;
 pub mod render;
 pub mod resize_sync;

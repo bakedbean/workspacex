@@ -14,8 +14,6 @@ pub mod menubar;
 pub mod pty;
 #[doc(hidden)]
 pub mod test_support;
-#[cfg(unix)]
-pub mod tui_ipc;
 pub mod ui;
 pub mod util;
 #[cfg(target_os = "linux")]

@@ -2271,7 +2271,7 @@ fn lookup_workspace(
 ///
 /// Splits on the LAST `/`: repo names may contain spaces and other
 /// characters, but a workspace slug never contains `/` (the same assumption
-/// `tui_ipc::parse_line` makes). Errors list the valid alternatives, because
+/// `app::ipc::parse_line` makes). Errors list the valid alternatives, because
 /// the caller is usually an agent that cannot enumerate them itself.
 fn resolve_workspace_spec(
     store: &crate::data::store::Store,
@@ -2356,7 +2356,7 @@ fn enqueue_for_agent(
         .and_then(|s| s.parse::<i64>().ok())
         .map(crate::data::store::AgentInstanceId);
     store.enqueue_message(workspace, target, from, body)?;
-    if !crate::tui_ipc::any_live_tui() {
+    if !crate::app::ipc::any_live_tui() {
         eprintln!(
             "warning: no wsx dashboard is running — this message is queued and \
              will not be delivered until one starts. Tell the user to open `wsx`."

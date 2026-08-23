@@ -4,6 +4,9 @@
 // `mod pm_state_tests` blocks would `use super::*;` on this empty
 // wrapper module.
 use super::*;
+use crate::app::{SelectionTarget, attach_workspace};
+use crate::ui::split::SplitDirection;
+use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 #[cfg(test)]
 mod pm_state_tests {

@@ -8,10 +8,10 @@ use std::path::Path;
 
 use crate::data::scm_cache::ScmCacheRow;
 use crate::data::store::{ReportedState, Store};
+use crate::desktop::menubar::escape::{esc_text, quote_param};
+use crate::desktop::rows::{RowInput, attention_rank, collect_rows_cached, state_glyph};
 use crate::error::Result;
 use crate::git::forge::BranchLifecycle;
-use crate::menubar::escape::{esc_text, quote_param};
-use crate::workspace_rows::{RowInput, attention_rank, collect_rows_cached, state_glyph};
 
 const SF_SYMBOL: &str = "arrow.triangle.branch";
 pub(crate) const ROW_FONT: &str = "font=SFMono-Regular size=12";
@@ -163,7 +163,7 @@ pub(crate) fn render(
     }
     lines.push("---".into());
     lines.push("Project Manager".into());
-    lines.extend(crate::menubar::pm::pm_section_lines(
+    lines.extend(crate::desktop::menubar::pm::pm_section_lines(
         repo_names, rows, recaps, wsx_bin, now_ms,
     ));
     lines.push("---".into());
@@ -223,7 +223,7 @@ fn spawn_refresh(wsx_bin: &str) {
 /// Never fails: SwiftBar polls this; on any error print the bare symbol
 /// and exit 0 so the bar shows a quiet idle item, never an error string.
 pub fn print_plugin(db_path: &Path) {
-    let wsx_bin = crate::install_common::preferred_wsx_bin(dirs::home_dir());
+    let wsx_bin = crate::desktop::install_support::preferred_wsx_bin(dirs::home_dir());
     match Store::open(db_path).and_then(|s| plugin_document(&s, &wsx_bin)) {
         Ok(doc) => println!("{doc}"),
         Err(_) => println!("{}", error_header()),
@@ -236,9 +236,9 @@ mod plugin_tests {
     use super::*;
     use crate::data::scm_cache::ScmCacheRow;
     use crate::data::store::{ReportedState, ReportedStatus};
+    use crate::desktop::rows::RowInput;
     use crate::git::forge::BranchLifecycle;
     use crate::git::forge::ReviewDecision;
-    use crate::workspace_rows::RowInput;
 
     fn status(state: ReportedState, msg: Option<&str>) -> ReportedStatus {
         ReportedStatus {

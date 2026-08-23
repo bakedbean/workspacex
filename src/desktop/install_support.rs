@@ -47,7 +47,7 @@ pub(crate) fn preferred_wsx_bin(home: Option<PathBuf>) -> String {
 }
 
 #[cfg(test)]
-mod install_common_tests {
+mod tests {
     use super::*;
 
     #[test]

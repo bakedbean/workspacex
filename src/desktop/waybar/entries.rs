@@ -6,9 +6,9 @@ use crate::data::scm_cache::ScmCacheRow;
 use crate::data::store::ReportedState;
 use crate::data::store::ReportedStatus;
 use crate::data::store::Store;
+use crate::desktop::rows::{RowInput, collect_rows_fresh, sanitize};
 use crate::error::Result;
 use crate::git::forge::BranchLifecycle;
-use crate::workspace_rows::{RowInput, collect_rows_fresh, sanitize};
 
 const GLYPH_BRANCH: &str = "\u{e0a0}"; // powerline branch
 const GLYPH_PR: &str = "\u{f407}"; // nf-oct-git_pull_request
@@ -212,7 +212,7 @@ pub(crate) fn action_cmd(wsx_bin: &str, repo: &str, slug: &str) -> String {
 fn icon_glyph(state: Option<ReportedState>) -> &'static str {
     match state {
         Some(ReportedState::Blocked) => "\u{f12a}", // nf-fa-exclamation
-        other => crate::workspace_rows::state_glyph(other),
+        other => crate::desktop::rows::state_glyph(other),
     }
 }
 
@@ -255,7 +255,7 @@ pub async fn run_menu_entries(store: &Store) -> Result<()> {
     Ok(())
 }
 
-pub use crate::workspace_rows::run_refresh_prs;
+pub use crate::desktop::rows::run_refresh_prs;
 
 #[cfg(test)]
 mod entry_tests {
@@ -687,7 +687,7 @@ mod entry_tests {
         // +N −N but keeps its PR indicator (#5).
         store.upsert_scm_git(ids[0], true, 4, 2, 0).unwrap();
 
-        let rows = crate::workspace_rows::collect_rows_fresh(&store)
+        let rows = crate::desktop::rows::collect_rows_fresh(&store)
             .await
             .unwrap();
         let entries = super::build_entries(&rows, "/bin/wsx");

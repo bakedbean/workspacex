@@ -1445,7 +1445,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     if matches!(action, CliAction::WaybarStatus) {
         #[cfg(target_os = "linux")]
         {
-            crate::waybar::status::print_status(&dirs.db_path());
+            crate::desktop::waybar::status::print_status(&dirs.db_path());
             return Ok(());
         }
         #[cfg(not(target_os = "linux"))]
@@ -1454,7 +1454,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     if matches!(action, CliAction::SetupWaybar) {
         #[cfg(target_os = "linux")]
         {
-            for line in crate::waybar::install::run()? {
+            for line in crate::desktop::waybar::install::run()? {
                 println!("{line}");
             }
             return Ok(());
@@ -1465,7 +1465,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     if matches!(action, CliAction::MenubarPlugin) {
         #[cfg(target_os = "macos")]
         {
-            crate::menubar::plugin::print_plugin(&dirs.db_path());
+            crate::desktop::menubar::plugin::print_plugin(&dirs.db_path());
             return Ok(());
         }
         #[cfg(not(target_os = "macos"))]
@@ -1474,7 +1474,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
     if matches!(action, CliAction::SetupMenubar) {
         #[cfg(target_os = "macos")]
         {
-            for line in crate::menubar::install::run()? {
+            for line in crate::desktop::menubar::install::run()? {
                 println!("{line}");
             }
             return Ok(());
@@ -2136,13 +2136,17 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             println!("recap cleared");
         }
         #[cfg(target_os = "linux")]
-        CliAction::WaybarMenu => crate::waybar::menu::run_menu(&store)?,
+        CliAction::WaybarMenu => crate::desktop::waybar::menu::run_menu(&store)?,
         #[cfg(target_os = "linux")]
-        CliAction::WaybarJump { repo, slug } => crate::waybar::jump::jump(&repo, &slug)?,
+        CliAction::WaybarJump { repo, slug } => crate::desktop::waybar::jump::jump(&repo, &slug)?,
         #[cfg(target_os = "linux")]
-        CliAction::WaybarMenuEntries => crate::waybar::entries::run_menu_entries(&store).await?,
+        CliAction::WaybarMenuEntries => {
+            crate::desktop::waybar::entries::run_menu_entries(&store).await?
+        }
         #[cfg(target_os = "linux")]
-        CliAction::WaybarRefreshPrs => crate::waybar::entries::run_refresh_prs(&store).await?,
+        CliAction::WaybarRefreshPrs => {
+            crate::desktop::waybar::entries::run_refresh_prs(&store).await?
+        }
         #[cfg(not(target_os = "linux"))]
         CliAction::WaybarMenu
         | CliAction::WaybarJump { .. }
@@ -2151,14 +2155,14 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         #[cfg(target_os = "macos")]
         CliAction::MenubarJump { repo, slug } => {
             let terminal_cmd = store.get_setting("terminal_cmd")?;
-            crate::menubar::jump::jump(&repo, &slug, terminal_cmd.as_deref())?
+            crate::desktop::menubar::jump::jump(&repo, &slug, terminal_cmd.as_deref())?
         }
         #[cfg(target_os = "macos")]
         CliAction::MenubarCopyPath { repo, slug } => {
-            crate::menubar::jump::copy_path(&store, &repo, &slug)?
+            crate::desktop::menubar::jump::copy_path(&store, &repo, &slug)?
         }
         #[cfg(target_os = "macos")]
-        CliAction::MenubarRefresh => crate::menubar::refresh::run_refresh(&store).await?,
+        CliAction::MenubarRefresh => crate::desktop::menubar::refresh::run_refresh(&store).await?,
         #[cfg(not(target_os = "macos"))]
         CliAction::MenubarJump { .. }
         | CliAction::MenubarCopyPath { .. }

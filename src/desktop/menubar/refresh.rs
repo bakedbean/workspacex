@@ -5,6 +5,6 @@ use crate::data::store::Store;
 use crate::error::Result;
 
 pub async fn run_refresh(store: &Store) -> Result<()> {
-    crate::workspace_rows::refresh_git_facts(store).await?;
-    crate::workspace_rows::run_refresh_prs(store).await
+    crate::desktop::rows::refresh_git_facts(store).await?;
+    crate::desktop::rows::run_refresh_prs(store).await
 }

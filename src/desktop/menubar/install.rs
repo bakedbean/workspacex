@@ -5,8 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::desktop::install_support::{preferred_wsx_bin, write_atomic};
 use crate::error::Result;
-use crate::install_common::{preferred_wsx_bin, write_atomic};
 
 /// Filename encodes SwiftBar's refresh interval.
 pub(crate) const SHIM_NAME: &str = "wsx-menubar.10s.sh";

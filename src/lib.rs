@@ -5,16 +5,11 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod data;
+pub mod desktop;
 pub mod error;
 pub mod git;
-pub(crate) mod install_common;
-#[cfg(target_os = "macos")]
-pub mod menubar;
 pub mod pty;
 #[doc(hidden)]
 pub mod test_support;
 pub mod ui;
 pub mod util;
-#[cfg(target_os = "linux")]
-pub mod waybar;
-pub mod workspace_rows;

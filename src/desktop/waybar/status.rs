@@ -3,8 +3,8 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::data::store::{ReportedState, Store};
+use crate::desktop::rows::{attention_rank, state_glyph};
 use crate::error::Result;
-use crate::workspace_rows::{attention_rank, state_glyph};
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct StatusPayload {

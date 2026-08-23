@@ -2,7 +2,7 @@
 //! menu protocol, plus length caps and param quoting. Shared by the plugin
 //! document renderer and the Project Manager section.
 
-use crate::workspace_rows::sanitize;
+use crate::desktop::rows::sanitize;
 
 /// Cap on a rendered line's *display text* segment, in chars — keeps one
 /// hostile/huge status message from ballooning the SwiftBar document. Never

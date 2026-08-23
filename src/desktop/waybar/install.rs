@@ -9,8 +9,8 @@
 
 use std::path::Path;
 
+use crate::desktop::install_support::{preferred_wsx_bin, write_atomic};
 use crate::error::{Error, Result};
-use crate::install_common::{preferred_wsx_bin, write_atomic};
 
 /// The wsx waybar module definition, embedded at compile time.
 const MODULE_JSONC: &str = include_str!("assets/wsx.jsonc");

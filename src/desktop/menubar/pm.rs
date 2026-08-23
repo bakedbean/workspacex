@@ -5,10 +5,10 @@
 use std::collections::HashMap;
 
 use crate::data::store::{ReportedStatus, WorkspaceId, WorkspaceRecap};
-use crate::menubar::escape::{esc_text, esc_text_uncapped, quote_param};
-use crate::menubar::plugin::{ROW_FONT, pr_field};
+use crate::desktop::menubar::escape::{esc_text, esc_text_uncapped, quote_param};
+use crate::desktop::menubar::plugin::{ROW_FONT, pr_field};
+use crate::desktop::rows::{RowInput, state_glyph};
 use crate::util::time::format_age;
-use crate::workspace_rows::{RowInput, state_glyph};
 
 /// One workspace's PM entry: its menu row plus the recap narrative, if any.
 pub(crate) struct PmCard<'a> {
@@ -22,7 +22,7 @@ pub(crate) struct PmCard<'a> {
 /// Needs-attention rank: blocked (0) before waiting (1) before the rest (2).
 ///
 /// Mirrors the TUI digest's `ui::pm_pane::attention_rank`. Deliberately NOT
-/// `workspace_rows::attention_rank`, which ranks descending and puts `Done`
+/// `desktop::rows::attention_rank`, which ranks descending and puts `Done`
 /// above `Waiting` — that one exists to pick the menubar header's worst
 /// state, a different question.
 fn pm_attention_rank(status: Option<&ReportedStatus>) -> u8 {
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn done_and_working_share_the_lowest_rank() {
         // Parity with the TUI digest: only blocked and waiting are ranked
-        // ahead. (workspace_rows::attention_rank, used for the header
+        // ahead. (desktop::rows::attention_rank, used for the header
         // color, ranks Done above Waiting — deliberately not reused here.)
         let mut rows = vec![row("alpha", "done", 1), row("alpha", "waiting", 2)];
         rows[0].status = Some(status(ReportedState::Done, 5_000));

@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use crate::data::store::Store;
 use crate::error::{Error, Result};
 
-pub(crate) use crate::workspace_rows::sanitize;
+pub(crate) use crate::desktop::rows::sanitize;
 
 pub fn menu_line(repo: &str, slug: &str, message: Option<&str>) -> String {
     let repo = sanitize(repo);
@@ -158,7 +158,7 @@ fn run_pipe_menu(store: &Store, cmd: Vec<String>) -> Result<()> {
         return Ok(()); // dismissed
     }
     if let Some((repo, slug)) = parse_menu_line(selection) {
-        crate::waybar::jump::jump(&repo, &slug)?;
+        crate::desktop::waybar::jump::jump(&repo, &slug)?;
     }
     Ok(())
 }

@@ -209,5 +209,4 @@ pub(crate) fn test_target(
 }
 
 #[cfg(test)]
-#[path = "../input_tests.rs"]
 mod tests;

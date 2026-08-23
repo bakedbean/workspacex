@@ -1,6 +1,6 @@
 //! Bottom-pinned detail bar shown when a workspace is selected on the
 //! dashboard. Renders header strip, a 1–4 container body (each
-//! container holding one or more modules from `crate::detail_modules`),
+//! container holding one or more modules from `crate::ui::detail_modules`),
 //! and an inline reply input.
 //!
 //! See `docs/superpowers/specs/2026-05-25-detail-bar-modules-design.md`.
@@ -47,7 +47,7 @@ pub struct DetailInputs<'a> {
     /// of derived content.
     pub events_scanned: bool,
     pub config: &'a DetailBarConfig,
-    pub registry: &'a crate::detail_modules::Registry,
+    pub registry: &'a crate::ui::detail_modules::Registry,
     /// Pinned commands resolved for the selected workspace's repo. When
     /// empty, no chip row is rendered.
     pub pinned: &'a [crate::commands::pinned::PinnedCommand],
@@ -269,7 +269,7 @@ fn render_body_region(
         .constraints(h_constraints)
         .split(area);
 
-    let ctx = crate::detail_modules::DetailContext {
+    let ctx = crate::ui::detail_modules::DetailContext {
         repo: inputs.repo,
         workspace: inputs.workspace,
         events: inputs.events,
@@ -353,8 +353,8 @@ fn render_container(
     f: &mut Frame,
     area: Rect,
     module_ids: &[String],
-    ctx: &crate::detail_modules::DetailContext<'_>,
-    reg: &crate::detail_modules::Registry,
+    ctx: &crate::ui::detail_modules::DetailContext<'_>,
+    reg: &crate::ui::detail_modules::Registry,
     theme: &Theme,
     offset: &mut u16,
 ) {
@@ -777,9 +777,9 @@ mod tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
-    fn make_registry() -> crate::detail_modules::Registry {
-        let mut reg = crate::detail_modules::Registry::new();
-        crate::detail_modules::register_builtins(&mut reg);
+    fn make_registry() -> crate::ui::detail_modules::Registry {
+        let mut reg = crate::ui::detail_modules::Registry::new();
+        crate::ui::detail_modules::register_builtins(&mut reg);
         reg
     }
 
@@ -1775,7 +1775,7 @@ mod tests {
         let mut offset: u16 = 0;
         let (_store, repo, workspace) = seed_workspace();
         let theme = Theme::default();
-        let ctx = crate::detail_modules::DetailContext {
+        let ctx = crate::ui::detail_modules::DetailContext {
             repo: &repo,
             workspace: &workspace,
             events: None,
@@ -1827,7 +1827,7 @@ mod tests {
         let mut offset: u16 = 0;
         let (_store, repo, workspace) = seed_workspace();
         let theme = Theme::default();
-        let ctx = crate::detail_modules::DetailContext {
+        let ctx = crate::ui::detail_modules::DetailContext {
             repo: &repo,
             workspace: &workspace,
             events: None,
@@ -1877,7 +1877,7 @@ mod tests {
         let mut offset: u16 = 50; // wildly past end
         let (_store, repo, workspace) = seed_workspace();
         let theme = Theme::default();
-        let ctx = crate::detail_modules::DetailContext {
+        let ctx = crate::ui::detail_modules::DetailContext {
             repo: &repo,
             workspace: &workspace,
             events: None,

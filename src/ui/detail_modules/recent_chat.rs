@@ -1,7 +1,7 @@
 //! Recent chat module. Renders the agent's most recent user/assistant
 //! turns for the selected workspace.
 
-use crate::detail_modules::{DetailContext, DetailModule};
+use crate::ui::detail_modules::{DetailContext, DetailModule};
 
 pub struct RecentChat;
 
@@ -34,13 +34,13 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
         return vec![Line::from(Span::styled("—".to_string(), theme.dim_style()))];
     };
 
-    crate::detail_modules::markdown::render(text, width, theme)
+    crate::ui::detail_modules::markdown::render(text, width, theme)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detail_modules::tests_helpers::stub_context;
+    use crate::ui::detail_modules::tests_helpers::stub_context;
 
     #[test]
     fn id_is_recent_chat() {

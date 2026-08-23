@@ -645,7 +645,7 @@ pub struct App {
     /// from attached view instead of waiting for the next 2s poll.
     /// Drained by `run_loop` after each handled event.
     pub pending_workspace_refresh: std::collections::HashSet<crate::data::store::WorkspaceId>,
-    pub registry: crate::detail_modules::Registry,
+    pub registry: crate::ui::detail_modules::Registry,
     /// Workspaces whose shared tmux session is alive on the server while wsx
     /// holds no client for it (e.g. right after a wsx restart). Refreshed by
     /// `refresh_shared_detached`, throttled — `tmux has-session` is a subprocess.
@@ -696,8 +696,8 @@ impl App {
             .flatten()
             .unwrap_or_default();
         let theme = crate::ui::theme::Theme::by_name(&theme_name);
-        let mut registry = crate::detail_modules::Registry::new();
-        crate::detail_modules::register_builtins(&mut registry);
+        let mut registry = crate::ui::detail_modules::Registry::new();
+        crate::ui::detail_modules::register_builtins(&mut registry);
         let mut dashboard = DashboardState::default();
         dashboard.load_ordering_prefs(&store);
         let mut app = Self {

@@ -430,7 +430,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let model_tokens = app
                 .workspace_events
                 .get(&focused_id)
-                .and_then(crate::detail_modules::session_summary::format_chip_model_tokens);
+                .and_then(crate::ui::detail_modules::session_summary::format_chip_model_tokens);
 
             // Build agents list for the footer agents row. Only shown when
             // the focused workspace has more than its primary agent.

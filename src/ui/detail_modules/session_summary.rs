@@ -4,10 +4,10 @@
 
 use crate::activity::events::WorkspaceEvents;
 use crate::data::store::WorkspaceRecap;
-use crate::detail_modules::{DetailContext, DetailModule};
 use crate::ui::dashboard::column_content::{
     format_ago_short, format_state_line, format_tool_trace,
 };
+use crate::ui::detail_modules::{DetailContext, DetailModule};
 
 pub struct SessionSummary;
 
@@ -515,8 +515,8 @@ fn wrap_lines(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::activity::events::{StopReason, WorkspaceEvents};
-    use crate::detail_modules::tests_helpers::stub_context;
     use crate::ui::dashboard::status::Status;
+    use crate::ui::detail_modules::tests_helpers::stub_context;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 

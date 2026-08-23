@@ -1,7 +1,7 @@
 //! Recent files module. Shows files the agent has recently edited
 //! within the workspace, with per-file diff stats.
 
-use crate::detail_modules::{DetailContext, DetailModule};
+use crate::ui::detail_modules::{DetailContext, DetailModule};
 
 pub struct RecentFiles;
 
@@ -26,7 +26,7 @@ impl DetailModule for RecentFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detail_modules::tests_helpers::stub_context;
+    use crate::ui::detail_modules::tests_helpers::stub_context;
 
     #[test]
     fn id_is_recent_files() {

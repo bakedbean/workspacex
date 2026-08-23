@@ -2196,7 +2196,7 @@ mod tests {
 
     #[test]
     fn lifecycle_badge_derivation_table() {
-        use crate::app::render::lifecycle_badge_for;
+        use crate::app::render::dashboard::lifecycle_badge_for;
         use crate::data::in_flight::InFlightKind;
         use crate::data::store::{SetupStatus, WorkspaceState};
 

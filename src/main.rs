@@ -93,8 +93,8 @@ async fn main() -> Result<()> {
 
     #[cfg(unix)]
     let ipc_socket = {
-        let path = wsx::tui_ipc::socket_path_for(std::process::id());
-        tokio::spawn(wsx::tui_ipc::listen(app.clone(), path.clone()));
+        let path = wsx::app::ipc::socket_path_for(std::process::id());
+        tokio::spawn(wsx::app::ipc::listen(app.clone(), path.clone()));
         path
     };
 

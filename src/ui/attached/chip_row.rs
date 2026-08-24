@@ -1,8 +1,8 @@
 //! Extracted from ui/attached.rs.
 
 use super::*;
-use crate::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::dashboard::status::Status;
+use crate::ui::detail_modules::session_summary::ChipModelTokens;
 
 /// The focused pane's PR, as the chip row needs it. A struct rather than a
 /// tuple because the review verdict is a third, differently-shaped field and

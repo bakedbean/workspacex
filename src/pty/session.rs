@@ -159,7 +159,7 @@ impl Session {
         if last == 0 {
             return None;
         }
-        Some(crate::time::now_ms_u64().saturating_sub(last) / 1000)
+        Some(crate::util::time::now_ms_u64().saturating_sub(last) / 1000)
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
@@ -882,7 +882,7 @@ pub fn spawn_command_session(
 }
 
 fn now_ms() -> u64 {
-    crate::time::now_ms_u64()
+    crate::util::time::now_ms_u64()
 }
 
 pub struct SessionManager {

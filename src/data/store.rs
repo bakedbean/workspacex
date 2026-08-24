@@ -387,7 +387,7 @@ impl Store {
 }
 
 pub(crate) fn now_ms() -> i64 {
-    crate::time::now_ms()
+    crate::util::time::now_ms()
 }
 
 fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {

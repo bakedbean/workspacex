@@ -291,7 +291,7 @@ fn review_gate_cache() -> &'static ReviewGateCache {
 /// are re-probed immediately; a known answer is reused.
 async fn fetch_requires_approval(worktree: &Path, slug: &str, base: &str) -> Option<bool> {
     let key = (slug.to_string(), base.to_string());
-    let now = crate::workspace_rows::unix_now();
+    let now = crate::desktop::rows::unix_now();
     if let Ok(cache) = review_gate_cache().lock() {
         if let Some((gated, at)) = cache.get(&key) {
             if now.saturating_sub(*at) < REVIEW_GATE_TTL_SECS {

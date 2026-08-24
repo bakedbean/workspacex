@@ -50,8 +50,8 @@ impl Store {
     /// Nothing here expires a stale `Busy` from a session that died mid-flight;
     /// the dashboard's escape is the `session_running` guard in
     /// `Status::classify`. Consumers that render `all_workspace_status`
-    /// directly — waybar (`src/waybar/status.rs`) and the menubar rows
-    /// (`src/workspace_rows.rs`) — have no liveness signal and so show the last
+    /// directly — waybar (`src/desktop/waybar/status.rs`) and the menubar rows
+    /// (`src/desktop/rows.rs`) — have no liveness signal and so show the last
     /// stored state indefinitely, exactly as they already do for a `Working`
     /// push whose session was killed.
     ///

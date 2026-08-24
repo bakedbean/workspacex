@@ -43,7 +43,7 @@ mod tests {
         // must stay at the spec's 8 fps. If `TICK` moves and this divisor
         // doesn't, this fails instead of the spinner quietly drifting.
         assert_eq!(
-            crate::app::TICK * SPINNER.len() as u32,
+            crate::app::run::TICK * SPINNER.len() as u32,
             Duration::from_secs(1)
         );
     }

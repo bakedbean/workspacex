@@ -108,4 +108,4 @@ Two rendering details cannot be unit-tested — check them explicitly:
    single NBSP.
 2. **Indentation.** The recap and fact lines must sit indented under their
    workspace name. If they are flush left, SwiftBar trimmed the NBSPs —
-   change `RECAP_INDENT` in `src/menubar/pm.rs` to `"\u{2502} "`.
+   change `RECAP_INDENT` in `src/desktop/menubar/pm.rs` to `"\u{2502} "`.

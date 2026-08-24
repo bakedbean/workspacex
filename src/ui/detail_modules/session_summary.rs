@@ -1,0 +1,1282 @@
+//! Session summary module. Leads with the workspace's agent-authored
+//! recap, then shows the agent's current status, last activity, and
+//! tool-use trace for the selected workspace.
+
+use crate::activity::events::WorkspaceEvents;
+use crate::data::store::WorkspaceRecap;
+use crate::ui::dashboard::column_content::{
+    format_ago_short, format_state_line, format_tool_trace,
+};
+use crate::ui::detail_modules::{DetailContext, DetailModule};
+
+pub struct SessionSummary;
+
+impl DetailModule for SessionSummary {
+    fn id(&self) -> &'static str {
+        "session_summary"
+    }
+    fn title(&self) -> &'static str {
+        "SESSION SUMMARY"
+    }
+
+    fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
+        build_lines(ctx, width)
+    }
+}
+
+fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+
+    // Pull `Duration` once so `now_ms` and `now_secs` share the
+    // same time base. The rest of the codebase uses
+    // `as_millis() as i64` for epoch-ms (see `app.rs`,
+    // `app/background.rs`); deriving `now_ms` from `as_secs() * 1000`
+    // would truncate sub-second precision and skew the 3s threshold
+    // in `pending_permission_tool`.
+    let now_duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let now_ms = now_duration.as_millis() as i64;
+    let now_secs = now_duration.as_secs();
+    let created_at_secs = (ctx.workspace.created_at.max(0) / 1000) as u64;
+    let created_secs = now_secs.saturating_sub(created_at_secs);
+
+    let events = if ctx.events_scanned { ctx.events } else { None };
+    let theme = ctx.theme;
+    let status = ctx.status;
+    let column_width = width as usize;
+    let inner_width = column_width.saturating_sub(2).max(1);
+    let ago_secs = ctx.ago_secs;
+
+    let mut out: Vec<Line<'static>> = Vec::new();
+
+    // Bullet prefix takes the workspace's status color so the SESSION
+    // SUMMARY column visually echoes the row's status gutter.
+    let prefix = Span::styled("▸ ".to_string(), theme.status_style(status));
+    // Continuation indent for wrapped/multi-line prompts: 2 cells, so
+    // wrapped lines align with the first character of the prompt text.
+    let continuation = Span::raw("  ".to_string());
+
+    // The agent-authored recap leads: goal/state/next is a fresher answer
+    // to "what is this workspace doing" than the prompt that opened the
+    // session. It comes from SQLite rather than the JSONL scan, so it
+    // renders above the `match` — visible even while events are loading.
+    let recap = ctx
+        .recap
+        .map(|r| recap_lines(r, &prefix, theme, inner_width))
+        .unwrap_or_default();
+    let has_recap = !recap.is_empty();
+    out.extend(recap);
+
+    match events {
+        None => {
+            out.push(Line::from(Span::styled(
+                "  loading…".to_string(),
+                theme.dim_style(),
+            )));
+        }
+        Some(evt) => {
+            // The opening prompt is the pre-recap fallback only — once a
+            // recap exists it answers the same question, better.
+            if let Some(prompt) = evt.first_user_text.as_deref().filter(|_| !has_recap) {
+                let trimmed = prompt.trim();
+                if !trimmed.is_empty() {
+                    // Respect `\n` from the original prompt AND wrap long lines
+                    // to the column width so the prompt is fully readable.
+                    let wrapped = wrap_lines(trimmed, inner_width);
+                    let italic = Style::default().add_modifier(Modifier::ITALIC);
+                    for (i, line_text) in wrapped.iter().enumerate() {
+                        let leader = if i == 0 {
+                            prefix.clone()
+                        } else {
+                            continuation.clone()
+                        };
+                        out.push(Line::from(vec![
+                            leader,
+                            Span::styled(line_text.clone(), italic),
+                        ]));
+                    }
+                }
+            }
+
+            let trace = format_tool_trace(&evt.tool_use_counts);
+            let trace_body = if trace.is_empty() {
+                Span::styled("—".to_string(), theme.dim_style())
+            } else {
+                Span::raw(truncate_to_chars(&trace, inner_width))
+            };
+            out.push(Line::from(vec![prefix.clone(), trace_body]));
+
+            // State line: canonical status label, optionally enriched
+            // with a why-detail (pending tool, stall duration) that
+            // RECENT CHAT can't surface.
+            let state_text = format_state_line(status, evt, now_ms);
+            out.push(Line::from(vec![
+                prefix.clone(),
+                Span::styled(
+                    truncate_to_chars(&state_text, inner_width),
+                    theme.dim_style(),
+                ),
+            ]));
+
+            // Recent files: 1–3 basenames from the edited-files ring.
+            // Omitted when the ring is empty so we don't reserve a row
+            // for a meaningless dash.
+            if let Some(files_text) = format_recent_files(&evt.recent_edited_files, inner_width) {
+                out.push(Line::from(vec![
+                    prefix.clone(),
+                    Span::styled(files_text, theme.dim_style()),
+                ]));
+            }
+
+            // Model line: which model the session is running on. Shown
+            // as soon as the model id is known, independent of token
+            // data, so it appears even before the first usage block.
+            // The value takes the code hue so it stands apart from the
+            // dim data lines around it.
+            if let Some(model_id) = evt.model_id.as_deref() {
+                out.push(label_value_line(
+                    prefix.clone(),
+                    "model: ",
+                    &short_model_label(model_id),
+                    theme.model_style(),
+                    theme,
+                    inner_width,
+                ));
+            }
+
+            // Context-window fill: a live signal the row never shows.
+            // Traffic-light value: ok while there's headroom, warn near
+            // the limit.
+            if let Some((ctx_text, warn)) = format_context_line(evt) {
+                let style = if warn {
+                    theme.warn_style()
+                } else {
+                    theme.ok_style()
+                };
+                out.push(label_value_line(
+                    prefix.clone(),
+                    "context: ",
+                    &ctx_text,
+                    style,
+                    theme,
+                    inner_width,
+                ));
+            }
+        }
+    }
+
+    let created_text = format!("created {} ago", format_ago_short(Some(created_secs)));
+    out.push(Line::from(vec![
+        prefix.clone(),
+        Span::styled(created_text, theme.dim_style()),
+    ]));
+
+    let active_text = match ago_secs {
+        Some(s) => format!("active {} ago", format_ago_short(Some(s))),
+        None => "active —".to_string(),
+    };
+    out.push(Line::from(vec![
+        prefix.clone(),
+        Span::styled(active_text, theme.dim_style()),
+    ]));
+
+    out
+}
+
+/// Labels for the three recap slots. Padded to a common width so the
+/// values column-align with each other and with the `model: ` /
+/// `context: ` lines further down the module.
+const RECAP_LABELS: [&str; 3] = ["goal:  ", "state: ", "next:  "];
+
+/// Resolve one recap slot: the long form, falling back to the agent's
+/// short form when the long one is absent or blank. The PM pane reads
+/// only the long fields, so a workspace whose agent ran
+/// `wsx recap set --goal-short` alone renders empty there; that hole
+/// isn't worth reproducing on a second surface.
+fn recap_field<'a>(long: Option<&'a str>, short: Option<&'a str>) -> Option<&'a str> {
+    [long, short]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+}
+
+/// The recap block: one `▸ goal:  …` line per populated slot, values
+/// wrapped to the width left after the label and hanging-indented so
+/// continuation lines sit under the value's first character. Empty when
+/// every slot is absent or blank — the caller then falls back to the
+/// opening prompt.
+fn recap_lines(
+    recap: &WorkspaceRecap,
+    prefix: &ratatui::text::Span<'static>,
+    theme: &crate::ui::theme::Theme,
+    inner_width: usize,
+) -> Vec<ratatui::text::Line<'static>> {
+    use ratatui::text::{Line, Span};
+
+    let slots = [
+        recap_field(recap.goal.as_deref(), recap.goal_short.as_deref()),
+        recap_field(recap.state.as_deref(), recap.state_short.as_deref()),
+        recap_field(recap.next.as_deref(), recap.next_short.as_deref()),
+    ];
+
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for (label, value) in RECAP_LABELS.iter().zip(slots) {
+        let Some(value) = value else { continue };
+        let label_chars = label.chars().count();
+        // Too narrow for label + value: degrade to a truncated dim label,
+        // the same way `label_value_line` does for `model:`/`context:`.
+        if label_chars >= inner_width {
+            out.push(Line::from(vec![
+                prefix.clone(),
+                Span::styled(truncate_to_chars(label, inner_width), theme.dim_style()),
+            ]));
+            continue;
+        }
+        // Wrapped lines align under the value, past the 2-cell prefix and
+        // the label.
+        let indent = Span::raw(" ".repeat(2 + label_chars));
+        for (i, text) in wrap_lines(value, inner_width - label_chars)
+            .into_iter()
+            .enumerate()
+        {
+            let mut spans = if i == 0 {
+                vec![
+                    prefix.clone(),
+                    Span::styled(label.to_string(), theme.dim_style()),
+                ]
+            } else {
+                vec![indent.clone()]
+            };
+            spans.push(Span::styled(text, theme.dim_style()));
+            out.push(Line::from(spans));
+        }
+    }
+    out
+}
+
+/// A `label value` data line: dim label, value in its own color so the
+/// datum reads at a glance. The value is truncated to the width left
+/// after the label; on columns too narrow for even the label, degrades
+/// to a truncated dim label alone.
+fn label_value_line(
+    prefix: ratatui::text::Span<'static>,
+    label: &str,
+    value: &str,
+    value_style: ratatui::style::Style,
+    theme: &crate::ui::theme::Theme,
+    max_width: usize,
+) -> ratatui::text::Line<'static> {
+    use ratatui::text::{Line, Span};
+    let label_chars = label.chars().count();
+    if label_chars >= max_width {
+        return Line::from(vec![
+            prefix,
+            Span::styled(truncate_to_chars(label, max_width), theme.dim_style()),
+        ]);
+    }
+    Line::from(vec![
+        prefix,
+        Span::styled(label.to_string(), theme.dim_style()),
+        Span::styled(
+            truncate_to_chars(value, max_width - label_chars),
+            value_style,
+        ),
+    ])
+}
+
+/// Abbreviate a token count as `950` / `77k` / `1M` / `1.2M`. The `k` form
+/// floors (77_999 → "77k"); exact precision is meaningless for a fill gauge.
+fn abbreviate_tokens(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        let m = n as f64 / 1_000_000.0;
+        if (m - m.round()).abs() < 0.05 {
+            format!("{}M", m.round() as u64)
+        } else {
+            format!("{m:.1}M")
+        }
+    }
+}
+
+/// Resolve the context-window size for a model id. Known families default
+/// to 200k; if the current fill already exceeds that, treat the session as
+/// the 1M variant (the model id doesn't encode the variant). Unknown or
+/// absent model → None (render raw tokens without a percentage).
+///
+/// The `>` is strict: exactly 200k stays on the 200k window (100%, warn), and
+/// 200_001 flips to the 1M window (20%). That discontinuity is intended — a
+/// session past 200k provably isn't on a 200k-window model.
+fn resolve_window(context_tokens: u64, model_id: Option<&str>) -> Option<u64> {
+    let base = model_id.and_then(|m| {
+        if m.contains("opus") || m.contains("sonnet") || m.contains("haiku") {
+            Some(200_000u64)
+        } else {
+            None
+        }
+    })?;
+    Some(if context_tokens > base {
+        1_000_000
+    } else {
+        base
+    })
+}
+
+/// A short display label for a model id: the Claude family word plus its
+/// version, e.g. `claude-opus-4-8[1m]` → `opus 4.8`, `claude-sonnet-5` →
+/// `sonnet 5`. The version is the run of short (1-2 digit) numeric segments
+/// right after the family, so a trailing date segment like `20251001` is
+/// ignored. Unknown / non-Claude ids fall back to the id with any leading
+/// `claude-` stripped, truncated to 12 chars.
+pub(crate) fn short_model_label(model_id: &str) -> String {
+    // Drop a trailing bracketed variant tag like "[1m]".
+    let base = model_id.split('[').next().unwrap_or(model_id);
+    let segments: Vec<&str> = base.split('-').collect();
+    let family_pos = segments
+        .iter()
+        .position(|s| matches!(*s, "opus" | "sonnet" | "haiku"));
+    match family_pos {
+        Some(i) => {
+            let family = segments[i];
+            let is_short_numeric =
+                |s: &str| !s.is_empty() && s.len() <= 2 && s.bytes().all(|b| b.is_ascii_digit());
+            let version: Vec<&str> = segments[i + 1..]
+                .iter()
+                .copied()
+                .take_while(|s| is_short_numeric(s))
+                .collect();
+            if version.is_empty() {
+                family.to_string()
+            } else {
+                format!("{} {}", family, version.join("."))
+            }
+        }
+        None => {
+            let cleaned = base.strip_prefix("claude-").unwrap_or(base);
+            cleaned.chars().take(12).collect()
+        }
+    }
+}
+
+/// Build the value part of the detail bar's context-fill line (the caller
+/// prepends the dim `context: ` label) and whether it should render in the
+/// warn color. None when there's no token data yet (omit the line).
+fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
+    // Treat a 0 sum (no usage yet, or a malformed all-zero usage block) the
+    // same as "no data" — a `context: 0` line is noise, not signal.
+    let n = evt.context_tokens.filter(|&n| n > 0)?;
+    match resolve_window(n, evt.model_id.as_deref()) {
+        Some(w) => {
+            let pct = (n.saturating_mul(100) / w).min(999);
+            let text = format!(
+                "{} / {} · {}%",
+                abbreviate_tokens(n),
+                abbreviate_tokens(w),
+                pct
+            );
+            Some((text, pct >= 85))
+        }
+        None => Some((format!("{} tokens", abbreviate_tokens(n)), n >= 150_000)),
+    }
+}
+
+/// The chat view's compact model + token-usage chip, split into parts so
+/// the renderer can color the model and the token fill independently —
+/// the same treatment as the detail bar's model/context lines.
+pub(crate) struct ChipModelTokens {
+    /// Short model label (e.g. `opus 4.8`); `None` when the model id is
+    /// unknown (the chip renders the tokens alone).
+    pub model: Option<String>,
+    /// Token fill: `{used}/{window}` when the window is resolvable
+    /// (e.g. `45k/200k`), else raw `{used}`.
+    pub tokens: String,
+    /// Mirrors the detail bar (`format_context_line`): fill ≥ 85% of a
+    /// known window, or raw tokens ≥ 150k when the window is unknown.
+    pub warn: bool,
+}
+
+/// Build the chip's parts, or `None` when there's no token data.
+pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<ChipModelTokens> {
+    let n = evt.context_tokens.filter(|&n| n > 0)?;
+    let model = evt.model_id.as_deref().map(short_model_label);
+    let (tokens, warn) = match resolve_window(n, evt.model_id.as_deref()) {
+        Some(w) => {
+            let pct = (n.saturating_mul(100) / w).min(999);
+            (
+                format!("{}/{}", abbreviate_tokens(n), abbreviate_tokens(w)),
+                pct >= 85,
+            )
+        }
+        None => (abbreviate_tokens(n), n >= 150_000),
+    };
+    Some(ChipModelTokens {
+        model,
+        tokens,
+        warn,
+    })
+}
+
+/// Render the most-recently-edited files as up to 3 basenames, joined
+/// with commas under a "files:" label. Returns None when the ring is
+/// empty so the caller can skip the line entirely.
+fn format_recent_files(
+    files: &std::collections::VecDeque<String>,
+    max_width: usize,
+) -> Option<String> {
+    if files.is_empty() {
+        return None;
+    }
+    let basenames: Vec<String> = files
+        .iter()
+        .take(3)
+        .map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.clone())
+        })
+        .collect();
+    Some(truncate_to_chars(
+        &format!("files: {}", basenames.join(", ")),
+        max_width,
+    ))
+}
+
+fn truncate_to_chars(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let count = s.chars().count();
+    if count <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Greedy word-wrap. Splits long words at the column boundary.
+fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            if word.chars().count() > width {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+                let mut buf: String = String::new();
+                for ch in word.chars() {
+                    if buf.chars().count() == width {
+                        out.push(std::mem::take(&mut buf));
+                    }
+                    buf.push(ch);
+                }
+                if !buf.is_empty() {
+                    current = buf;
+                }
+                continue;
+            }
+            let projected = if current.is_empty() {
+                word.chars().count()
+            } else {
+                current.chars().count() + 1 + word.chars().count()
+            };
+            if projected > width {
+                out.push(std::mem::take(&mut current));
+                current.push_str(word);
+            } else {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(word);
+            }
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::activity::events::{StopReason, WorkspaceEvents};
+    use crate::ui::dashboard::status::Status;
+    use crate::ui::detail_modules::tests_helpers::stub_context;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn render_to_text(ctx: &DetailContext<'_>, w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                use ratatui::widgets::Paragraph;
+                let area = ratatui::layout::Rect::new(0, 0, w, h);
+                let lines = SessionSummary.lines(ctx, w);
+                f.render_widget(Paragraph::new(lines), area);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut s = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                s.push_str(buf[(x, y)].symbol());
+            }
+            s.push('\n');
+        }
+        s
+    }
+
+    // -- recap block ------------------------------------------------
+
+    /// Leak a recap built from the three long fields (the shape
+    /// `wsx recap set --goal/--state/--next` produces).
+    fn leak_recap(
+        goal: Option<&str>,
+        state: Option<&str>,
+        next: Option<&str>,
+    ) -> &'static WorkspaceRecap {
+        Box::leak(Box::new(WorkspaceRecap {
+            goal: goal.map(str::to_string),
+            state: state.map(str::to_string),
+            next: next.map(str::to_string),
+            ..Default::default()
+        }))
+    }
+
+    /// Leak events carrying an opening prompt — the pre-recap fallback.
+    fn leak_events_with_prompt(prompt: &str) -> &'static WorkspaceEvents {
+        Box::leak(Box::new(WorkspaceEvents {
+            first_user_text: Some(prompt.to_string()),
+            ..WorkspaceEvents::default()
+        }))
+    }
+
+    #[test]
+    fn recap_replaces_the_opening_prompt() {
+        let mut ctx = stub_context();
+        ctx.events = Some(leak_events_with_prompt("the original prompt text"));
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(
+            Some("fix the auth regression"),
+            Some("tests failing"),
+            Some("debug the regex"),
+        ));
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(text.contains("goal:"), "missing goal label:\n{text}");
+        assert!(text.contains("fix the auth regression"), "{text}");
+        assert!(text.contains("state:"), "missing state label:\n{text}");
+        assert!(text.contains("tests failing"), "{text}");
+        assert!(text.contains("next:"), "missing next label:\n{text}");
+        assert!(text.contains("debug the regex"), "{text}");
+        assert!(
+            !text.contains("the original prompt text"),
+            "prompt must yield to the recap:\n{text}"
+        );
+    }
+
+    #[test]
+    fn partial_recap_renders_present_slots_only_and_still_hides_the_prompt() {
+        let mut ctx = stub_context();
+        ctx.events = Some(leak_events_with_prompt("the original prompt text"));
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(Some("fix the auth regression"), None, None));
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(text.contains("goal:"), "{text}");
+        assert!(
+            !text.contains("state:"),
+            "absent slot must be skipped:\n{text}"
+        );
+        assert!(
+            !text.contains("next:"),
+            "absent slot must be skipped:\n{text}"
+        );
+        assert!(
+            !text.contains("the original prompt text"),
+            "one populated slot is still a recap — no prompt:\n{text}"
+        );
+    }
+
+    #[test]
+    fn blank_recap_falls_back_to_the_prompt() {
+        let mut ctx = stub_context();
+        ctx.events = Some(leak_events_with_prompt("the original prompt text"));
+        ctx.events_scanned = true;
+        // A row exists but every field is whitespace — indistinguishable
+        // from no recap at all.
+        ctx.recap = Some(leak_recap(Some("   "), Some(""), Some("\n\t")));
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(!text.contains("goal:"), "{text}");
+        assert!(text.contains("the original prompt text"), "{text}");
+    }
+
+    #[test]
+    fn absent_recap_falls_back_to_the_prompt() {
+        let mut ctx = stub_context();
+        ctx.events = Some(leak_events_with_prompt("the original prompt text"));
+        ctx.events_scanned = true;
+        ctx.recap = None;
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(!text.contains("goal:"), "{text}");
+        assert!(text.contains("the original prompt text"), "{text}");
+    }
+
+    #[test]
+    fn recap_renders_before_events_are_scanned() {
+        // The recap comes from SQLite, not the JSONL scan, so it must be
+        // visible during the `loading…` window rather than waiting on it.
+        let mut ctx = stub_context();
+        ctx.events = None;
+        ctx.events_scanned = false;
+        ctx.recap = Some(leak_recap(Some("fix the auth regression"), None, None));
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(text.contains("fix the auth regression"), "{text}");
+        assert!(
+            text.contains("loading"),
+            "events-derived content is still loading:\n{text}"
+        );
+    }
+
+    #[test]
+    fn recap_falls_back_to_the_short_form_when_the_long_field_is_absent() {
+        // `wsx recap set --goal-short` alone: the PM pane shows nothing,
+        // this module shows the short form.
+        let recap: &'static WorkspaceRecap = Box::leak(Box::new(WorkspaceRecap {
+            goal_short: Some("audit V2 invoices".into()),
+            state: Some("3/12 checked".into()),
+            state_short: Some("3/12".into()),
+            ..Default::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events_scanned = true;
+        ctx.recap = Some(recap);
+
+        let text = render_to_text(&ctx, 60, 14);
+        assert!(text.contains("audit V2 invoices"), "{text}");
+        assert!(
+            text.contains("3/12 checked"),
+            "the long form still wins when both are set:\n{text}"
+        );
+    }
+
+    #[test]
+    fn long_recap_value_wraps_with_a_hanging_indent() {
+        let mut ctx = stub_context();
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(
+            Some("audit all V2 invoices auto-issued today for the amount-drift bug"),
+            None,
+            None,
+        ));
+
+        // inner_width 28, label 7 -> values wrap at 21 chars.
+        let lines = SessionSummary.lines(&ctx, 30);
+        let goal_idx = lines
+            .iter()
+            .position(|l| {
+                let t: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                t.contains("goal:")
+            })
+            .expect("goal line");
+        let cont = &lines[goal_idx + 1];
+        assert_eq!(
+            cont.spans[0].content.as_ref(),
+            "         ",
+            "continuation must be indented past the prefix + label"
+        );
+        let cont_text: String = cont.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            !cont_text.contains('▸'),
+            "continuation must not repeat the bullet: {cont_text:?}"
+        );
+        // Every wrapped fragment stays within the value column.
+        for line in &lines[goal_idx..=goal_idx + 1] {
+            let t: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(t.chars().count() <= 30, "line overflows the column: {t:?}");
+        }
+    }
+
+    #[test]
+    fn recap_line_degrades_to_label_only_when_narrow() {
+        // inner_width for lines(ctx, 8) is 6 — narrower than the 7-char
+        // "goal:  " label.
+        let mut ctx = stub_context();
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(Some("fix the auth regression"), None, None));
+
+        let lines = SessionSummary.lines(&ctx, 8);
+        let line = find_line(&lines, "goal");
+        assert_eq!(line.spans.len(), 2, "expected prefix + label only");
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[1].content.chars().count(), 6);
+    }
+
+    #[test]
+    fn recap_label_and_value_share_the_dim_style() {
+        // One grey for every recap — the same call commit e4bf119 made
+        // for the dashboard row's flex column.
+        let mut ctx = stub_context();
+        ctx.events_scanned = true;
+        ctx.recap = Some(leak_recap(Some("fix the auth regression"), None, None));
+
+        let lines = SessionSummary.lines(&ctx, 60);
+        let line = find_line(&lines, "goal:");
+        assert_eq!(line.spans[1].content.as_ref(), "goal:  ");
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[2].content.as_ref(), "fix the auth regression");
+        assert_eq!(line.spans[2].style, ctx.theme.dim_style());
+    }
+
+    #[test]
+    fn recap_field_prefers_long_then_short_then_nothing() {
+        assert_eq!(recap_field(Some("long"), Some("short")), Some("long"));
+        assert_eq!(recap_field(None, Some("short")), Some("short"));
+        assert_eq!(recap_field(Some("  "), Some("short")), Some("short"));
+        assert_eq!(recap_field(Some(" long "), None), Some("long"));
+        assert_eq!(recap_field(None, None), None);
+        assert_eq!(recap_field(Some(""), Some("\t")), None);
+    }
+
+    #[test]
+    fn id_is_session_summary() {
+        assert_eq!(SessionSummary.id(), "session_summary");
+    }
+
+    #[test]
+    fn title_is_uppercase() {
+        assert_eq!(SessionSummary.title(), "SESSION SUMMARY");
+    }
+
+    // -- state line + recent files ----------------------------------
+
+    #[test]
+    fn render_shows_status_label() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents::default()));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        ctx.status = Status::Thinking;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(
+            text.contains("thinking"),
+            "expected status label in output:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_state_line_appends_pending_permission_tool_when_question() {
+        // pending_permission_tool requires the tool_use to be ≥3s old.
+        // render() derives `now_ms` from SystemTime::now(); we can't
+        // easily inject "now" without a refactor, so seed the
+        // pending_tool_uses timestamp at epoch 0 to guarantee
+        // (now_ms - timestamp) far exceeds the 3s threshold.
+        let mut pending = std::collections::HashMap::new();
+        pending.insert("tu_1".to_string(), ("Bash".to_string(), 0_i64));
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            pending_tool_uses: pending,
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        ctx.status = Status::Question;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(text.contains("question"), "missing label:\n{text}");
+        assert!(text.contains("Bash"), "missing pending tool:\n{text}");
+    }
+
+    #[test]
+    fn render_state_line_prefers_question_tool_over_permission_tool() {
+        // Both an AskUserQuestion and a generic permission-prompt tool
+        // are pending. The state line must surface the question tool
+        // (it's the more specific signal).
+        let mut pending = std::collections::HashMap::new();
+        pending.insert("tu_q".to_string(), ("AskUserQuestion".to_string(), 0_i64));
+        pending.insert("tu_b".to_string(), ("Bash".to_string(), 0_i64));
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            pending_tool_uses: pending,
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        ctx.status = Status::Question;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(
+            text.contains("AskUserQuestion"),
+            "expected question tool to win over permission tool:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_state_line_shows_stall_duration() {
+        // For Stalled, the state line should append a "quiet" duration
+        // derived from now_ms - last_log_activity_ms. We can't fix
+        // wall-clock now here, so just assert that the line gets a
+        // " · " suffix beyond the bare "stalled" label — proves the
+        // duration branch ran.
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            // 1ms after epoch — far enough in the past that any plausible
+            // `now_ms` produces a non-zero quiet duration.
+            last_log_activity_ms: 1,
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        ctx.status = Status::Stalled;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(text.contains("stalled"), "missing stalled label:\n{text}");
+        assert!(
+            text.contains(" · "),
+            "expected ' · <duration>' suffix on stalled line:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_lists_recent_files_as_basenames() {
+        // Use the production helper so the ring's most-recent-first
+        // ordering matches what real edits produce.
+        let mut evt = WorkspaceEvents::default();
+        for path in ["/abs/path/to/alpha.rs", "relative/beta.rs", "gamma.rs"] {
+            evt.push_recent_edited_file(path.to_string());
+        }
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(evt));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(text.contains("files:"), "missing files label:\n{text}");
+        assert!(text.contains("alpha.rs"), "missing alpha basename:\n{text}");
+        assert!(text.contains("beta.rs"), "missing beta basename:\n{text}");
+        assert!(text.contains("gamma.rs"), "missing gamma basename:\n{text}");
+        assert!(
+            !text.contains("/abs/path/to/"),
+            "expected basename only, found full path:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_files_line_caps_at_three_most_recent() {
+        // Use the production helper so the ring is most-recent-first
+        // (push_front). With 5 push-fronts in this order, the front
+        // ends up: five, four, three, two, one. The cap takes the
+        // front 3 → the 3 most-recently-edited files.
+        let mut evt = WorkspaceEvents::default();
+        for name in ["one.rs", "two.rs", "three.rs", "four.rs", "five.rs"] {
+            evt.push_recent_edited_file(name.to_string());
+        }
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(evt));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(
+            text.contains("five.rs"),
+            "missing most-recent file:\n{text}"
+        );
+        assert!(text.contains("four.rs"), "missing 2nd-most-recent:\n{text}");
+        assert!(
+            text.contains("three.rs"),
+            "missing 3rd-most-recent:\n{text}"
+        );
+        assert!(
+            !text.contains("two.rs"),
+            "expected list capped at 3 most-recent; found older entry:\n{text}"
+        );
+        assert!(
+            !text.contains("one.rs"),
+            "expected list capped at 3 most-recent; found oldest entry:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_omits_files_line_when_ring_empty() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents::default()));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 10);
+        assert!(
+            !text.contains("files:"),
+            "expected no files line when ring is empty:\n{text}"
+        );
+    }
+
+    #[test]
+    fn lines_loading_state_emits_loading_line() {
+        let mut ctx = stub_context();
+        ctx.events_scanned = false;
+        let out = SessionSummary.lines(&ctx, 40);
+        assert!(!out.is_empty());
+        // First line in the loading branch is "  loading…" in dim style.
+        let first_text: String = out[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            first_text.contains("loading"),
+            "expected 'loading' line, got: {first_text:?}"
+        );
+    }
+
+    #[test]
+    fn abbreviate_tokens_uses_k_and_m() {
+        assert_eq!(abbreviate_tokens(950), "950");
+        assert_eq!(abbreviate_tokens(77_081), "77k");
+        assert_eq!(abbreviate_tokens(200_000), "200k");
+        assert_eq!(abbreviate_tokens(1_000_000), "1M");
+        assert_eq!(abbreviate_tokens(1_250_000), "1.2M");
+    }
+
+    #[test]
+    fn resolve_window_maps_known_models_and_upgrades_past_default() {
+        assert_eq!(
+            resolve_window(50_000, Some("claude-opus-4-8")),
+            Some(200_000)
+        );
+        // current fill above the 200k default → treat as the 1M variant
+        assert_eq!(
+            resolve_window(250_000, Some("claude-opus-4-8")),
+            Some(1_000_000)
+        );
+        assert_eq!(resolve_window(50_000, Some("some-unknown-model")), None);
+        assert_eq!(resolve_window(50_000, None), None);
+    }
+
+    #[test]
+    fn format_context_line_known_window_shows_percent() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(100_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_context_line(&evt).unwrap();
+        assert_eq!(text, "100k / 200k · 50%");
+        assert!(!warn);
+    }
+
+    #[test]
+    fn format_context_line_warns_near_limit() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(190_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (_text, warn) = format_context_line(&evt).unwrap();
+        assert!(warn, "expected warn at 95% fill");
+    }
+
+    #[test]
+    fn format_context_line_unknown_window_shows_raw_tokens() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(77_000),
+            model_id: None,
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_context_line(&evt).unwrap();
+        assert_eq!(text, "77k tokens");
+        assert!(!warn);
+    }
+
+    #[test]
+    fn format_context_line_none_when_no_tokens() {
+        let evt = WorkspaceEvents::default();
+        assert!(format_context_line(&evt).is_none());
+    }
+
+    #[test]
+    fn format_context_line_none_when_zero_tokens() {
+        // A present-but-zero usage sum is noise, not a real fill — omit it.
+        let evt = WorkspaceEvents {
+            context_tokens: Some(0),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        assert!(format_context_line(&evt).is_none());
+    }
+
+    #[test]
+    fn render_shows_model_line() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 12);
+        assert!(
+            text.contains("model: opus 4.8"),
+            "missing model line:\n{text}"
+        );
+    }
+
+    /// The line whose concatenated span text contains `needle`.
+    fn find_line<'a>(
+        lines: &'a [ratatui::text::Line<'static>],
+        needle: &str,
+    ) -> &'a ratatui::text::Line<'static> {
+        lines
+            .iter()
+            .find(|l| {
+                let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                text.contains(needle)
+            })
+            .unwrap_or_else(|| panic!("no line containing {needle:?}"))
+    }
+
+    #[test]
+    fn model_line_colors_value_with_model_hue() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let lines = SessionSummary.lines(&ctx, 60);
+        let line = find_line(&lines, "model:");
+        // prefix, dim label, colored value
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[2].content.as_ref(), "opus 4.8");
+        assert_eq!(line.spans[2].style, ctx.theme.model_style());
+    }
+
+    #[test]
+    fn context_line_colors_value_ok_when_healthy() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            context_tokens: Some(100_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let lines = SessionSummary.lines(&ctx, 60);
+        let line = find_line(&lines, "context:");
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[2].content.as_ref(), "100k / 200k · 50%");
+        assert_eq!(line.spans[2].style, ctx.theme.ok_style());
+    }
+
+    #[test]
+    fn context_line_colors_value_warn_near_limit() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            context_tokens: Some(190_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let lines = SessionSummary.lines(&ctx, 60);
+        let line = find_line(&lines, "context:");
+        assert_eq!(line.spans[2].style, ctx.theme.warn_style());
+    }
+
+    #[test]
+    fn label_value_line_degrades_to_label_only_when_narrow() {
+        // inner_width for lines(ctx, 8) is 6 — narrower than the 7-char
+        // "model: " label. The line must degrade to a truncated dim
+        // label without underflowing the value width.
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let lines = SessionSummary.lines(&ctx, 8);
+        let line = find_line(&lines, "model");
+        assert_eq!(line.spans.len(), 2, "expected prefix + label only");
+        assert_eq!(line.spans[1].style, ctx.theme.dim_style());
+        assert_eq!(line.spans[1].content.chars().count(), 6);
+    }
+
+    #[test]
+    fn render_omits_model_line_when_model_unknown() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents::default()));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 12);
+        assert!(
+            !text.contains("model:"),
+            "expected no model line without a model id:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_shows_context_fill_line() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents {
+            context_tokens: Some(100_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        }));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+        ctx.status = Status::Thinking;
+
+        let text = render_to_text(&ctx, 60, 12);
+        assert!(text.contains("context:"), "missing context line:\n{text}");
+        assert!(text.contains("100k"), "missing token count:\n{text}");
+    }
+
+    #[test]
+    fn render_omits_context_line_when_no_tokens() {
+        let evt: &'static WorkspaceEvents = Box::leak(Box::new(WorkspaceEvents::default()));
+        let mut ctx = stub_context();
+        ctx.events = Some(evt);
+        ctx.events_scanned = true;
+
+        let text = render_to_text(&ctx, 60, 12);
+        assert!(
+            !text.contains("context:"),
+            "expected no context line without token data:\n{text}"
+        );
+    }
+
+    #[test]
+    fn short_model_label_parses_family_and_version() {
+        assert_eq!(short_model_label("claude-opus-4-8"), "opus 4.8");
+        assert_eq!(short_model_label("claude-sonnet-5"), "sonnet 5");
+        assert_eq!(short_model_label("claude-haiku-4-5"), "haiku 4.5");
+    }
+
+    #[test]
+    fn short_model_label_strips_bracketed_variant() {
+        assert_eq!(short_model_label("claude-opus-4-8[1m]"), "opus 4.8");
+    }
+
+    #[test]
+    fn short_model_label_ignores_trailing_date_segment() {
+        // The date segment (>2 digits) is not part of the version.
+        assert_eq!(short_model_label("claude-haiku-4-5-20251001"), "haiku 4.5");
+    }
+
+    #[test]
+    fn short_model_label_falls_back_for_unknown_ids() {
+        // No known family word: strip a leading "claude-" and truncate to 12.
+        assert_eq!(short_model_label("gpt-5-codex"), "gpt-5-codex");
+        assert_eq!(
+            short_model_label("some-really-long-unknown-model-id"),
+            "some-really-"
+        );
+    }
+
+    #[test]
+    fn short_model_label_family_without_version() {
+        assert_eq!(short_model_label("claude-opus"), "opus");
+    }
+
+    #[test]
+    fn format_chip_model_tokens_known_window() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(45_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("opus 4.8"));
+        assert_eq!(chip.tokens, "45k/200k");
+        assert!(!chip.warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_warns_past_85_percent() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(190_000),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("opus 4.8"));
+        assert_eq!(chip.tokens, "190k/200k");
+        assert!(chip.warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_unknown_window_shows_raw_tokens() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(77_000),
+            model_id: Some("gpt-5-codex".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(chip.tokens, "77k");
+        assert!(!chip.warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_unknown_window_warns_past_150k() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(160_000),
+            model_id: Some("gpt-5-codex".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert!(chip.warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_none_when_no_tokens() {
+        let evt = WorkspaceEvents {
+            context_tokens: None,
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        assert!(format_chip_model_tokens(&evt).is_none());
+        let zero = WorkspaceEvents {
+            context_tokens: Some(0),
+            model_id: Some("claude-opus-4-8".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        assert!(format_chip_model_tokens(&zero).is_none());
+    }
+
+    #[test]
+    fn format_chip_model_tokens_tokens_only_when_no_model() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(45_000),
+            model_id: None,
+            ..WorkspaceEvents::default()
+        };
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert!(chip.model.is_none());
+        assert_eq!(chip.tokens, "45k");
+    }
+}

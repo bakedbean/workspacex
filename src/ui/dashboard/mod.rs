@@ -292,6 +292,26 @@ pub fn render_without_footer(
             (items, chips, Vec::new())
         }
     };
+    // Nothing to show. An empty body reads as "the tool is broken", and the
+    // two causes need opposite responses: a filter that hid every row wants
+    // the filter cleared, while a fresh install wants a repo registered —
+    // which is CLI-only, so the remedy names the command rather than a key.
+    // Those are the only two reachable causes: once a repo exists, by-repo
+    // always draws its header and by-attention always draws it under QUIET
+    // REPOS, so `items` is empty only when there are no repos at all or a
+    // filter hid every row.
+    if items.is_empty() {
+        let msg = if state.filter.as_deref().filter(|f| !f.is_empty()).is_some() {
+            "(no matching workspaces)"
+        } else {
+            "(no repos · run wsx repo add <path>)"
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.dim_style()))),
+            chunks[3],
+        );
+        return ListClickTargets::default();
+    }
     let list = List::new(items).highlight_style(theme.selected_bg_style());
     f.render_stateful_widget(list, chunks[3], &mut state.list_state);
 

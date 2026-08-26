@@ -156,6 +156,13 @@ impl Store {
             self.add_column_if_missing("workspaces", "name_color", "name_color INTEGER")?;
             self.conn().execute("PRAGMA user_version = 22", [])?;
         }
+        if v < 23 {
+            // Unresolved review-thread count for the PR. NULL means "never
+            // fetched / couldn't fetch", distinct from 0 — every conversation
+            // resolved — which renders as no number either way.
+            self.add_column_if_missing("scm_cache", "pr_unresolved", "pr_unresolved INTEGER")?;
+            self.conn().execute("PRAGMA user_version = 23", [])?;
+        }
         Ok(())
     }
 

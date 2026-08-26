@@ -18,6 +18,10 @@ pub struct ScmCacheRow {
     /// gate, when the verdict was never fetched, or when `gh` couldn't
     /// answer. All three render as no indicator.
     pub pr_review: Option<ReviewDecision>,
+    /// Unresolved review-thread count, or `None` when it was never fetched
+    /// or couldn't be. `Some(0)` — all conversations resolved — renders the
+    /// same as `None`: no number.
+    pub pr_unresolved: Option<u32>,
     pub dirty: Option<bool>,
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
@@ -76,13 +80,14 @@ impl Store {
             // that knows the lifecycle but not the url must not regress the
             // menu's "Open PR" action. NoPr clears it — no PR, no URL.
             //
-            // pr_review takes the opposite rule and overwrites
-            // unconditionally, including with NULL. A verdict is a live
-            // property of the PR — an approval is dismissed the moment a
-            // protected branch takes a new commit — so a stale one is
-            // actively misleading, unlike a stale-but-still-correct URL.
-            "INSERT INTO scm_cache (workspace_id, pr_lifecycle, pr_number, pr_url, pr_review, fetched_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            // pr_review and pr_unresolved take the opposite rule and
+            // overwrite unconditionally, including with NULL. Both are live
+            // properties of the PR — an approval is dismissed the moment a
+            // protected branch takes a new commit, a thread resolves on a
+            // click — so a stale one is actively misleading, unlike a
+            // stale-but-still-correct URL.
+            "INSERT INTO scm_cache (workspace_id, pr_lifecycle, pr_number, pr_url, pr_review, pr_unresolved, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(workspace_id) DO UPDATE SET
                pr_lifecycle = excluded.pr_lifecycle,
                pr_number    = excluded.pr_number,
@@ -92,6 +97,7 @@ impl Store {
                  ELSE scm_cache.pr_url
                END,
                pr_review    = excluded.pr_review,
+               pr_unresolved = excluded.pr_unresolved,
                fetched_at   = excluded.fetched_at",
             rusqlite::params![
                 id.0,
@@ -99,6 +105,7 @@ impl Store {
                 status.number,
                 status.url.as_deref(),
                 status.review.map(review_to_str),
+                status.unresolved,
                 fetched_at
             ],
         )?;
@@ -149,6 +156,7 @@ impl Store {
                pr_number    = NULL,
                pr_url       = NULL,
                pr_review    = NULL,
+               pr_unresolved = NULL,
                fetched_at   = NULL",
             rusqlite::params![id.0],
         )?;
@@ -173,7 +181,7 @@ impl Store {
     pub fn all_scm_cache(&self) -> Result<HashMap<WorkspaceId, ScmCacheRow>> {
         let mut stmt = self.conn().prepare(
             "SELECT workspace_id, pr_lifecycle, pr_number, dirty, additions, deletions, \
-                    fetched_at, pr_url, git_fetched_at, pr_review
+                    fetched_at, pr_url, git_fetched_at, pr_review, pr_unresolved
              FROM scm_cache",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -195,6 +203,7 @@ impl Store {
                         .get::<_, Option<String>>(9)?
                         .as_deref()
                         .and_then(review_from_str),
+                    pr_unresolved: r.get(10)?,
                 },
             ))
         })?;
@@ -227,7 +236,7 @@ mod scm_cache_tests {
             number,
             url: url.map(str::to_string),
             review,
-            unresolved: None,
+            unresolved: Some(2),
         }
     }
 
@@ -470,6 +479,31 @@ mod scm_cache_tests {
     }
 
     #[test]
+    fn unresolved_count_persists_and_clears() {
+        let (store, id) = store_with_workspace();
+        let with_count = |unresolved| PrStatus {
+            unresolved,
+            ..pr(
+                BranchLifecycle::PrOpen,
+                Some(7),
+                Some(ReviewDecision::ChangesRequested),
+            )
+        };
+        store.upsert_scm_pr(id, &with_count(Some(3)), 1000).unwrap();
+        assert_eq!(store.all_scm_cache().unwrap()[&id].pr_unresolved, Some(3));
+
+        // Zero is a real answer and must overwrite, not be dropped.
+        store.upsert_scm_pr(id, &with_count(Some(0)), 2000).unwrap();
+        assert_eq!(store.all_scm_cache().unwrap()[&id].pr_unresolved, Some(0));
+
+        // Like pr_review and unlike pr_url, a count that drops back to None
+        // must CLEAR the stored one: threads resolve at any moment, and a
+        // failed probe must not leave a confidently stale number behind.
+        store.upsert_scm_pr(id, &with_count(None), 3000).unwrap();
+        assert_eq!(store.all_scm_cache().unwrap()[&id].pr_unresolved, None);
+    }
+
+    #[test]
     fn git_only_upsert_leaves_review_decision_alone() {
         let (store, id) = store_with_workspace();
         store
@@ -515,6 +549,7 @@ mod scm_cache_tests {
 
         let row = store.all_scm_cache().unwrap()[&id].clone();
         assert_eq!(row.pr_review, None, "verdict cleared");
+        assert_eq!(row.pr_unresolved, None, "unresolved count cleared");
         assert_eq!(row.pr_lifecycle, None, "lifecycle cleared");
         assert_eq!(row.pr_number, None, "number cleared");
         assert_eq!(row.pr_url, None, "url cleared");

@@ -264,7 +264,7 @@ pub(crate) fn toggle_workspace_shared(
         return Ok(());
     }
     let all_instances = app.store.workspace_agents(ws_id)?;
-    // Derived from `all_instances` (not `app.live_instances`/`agent_roster`):
+    // Derived from `all_instances` (not `app.strip_instances`/`agent_roster`):
     // a row inserted on this same tick — e.g. `resolve_primary_instance`
     // backfilling a missing primary during attach — has no `refresh()` on
     // its path, so the cache can be missing it indefinitely. Deriving from

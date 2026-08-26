@@ -227,6 +227,7 @@ mod scm_cache_tests {
             number,
             url: url.map(str::to_string),
             review,
+            unresolved: None,
         }
     }
 
@@ -237,6 +238,7 @@ mod scm_cache_tests {
             number,
             url: url.map(str::to_string),
             review: None,
+            unresolved: None,
         }
     }
 
@@ -251,6 +253,7 @@ mod scm_cache_tests {
             number,
             url: None,
             review,
+            unresolved: None,
         }
     }
 

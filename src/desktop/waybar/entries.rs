@@ -677,6 +677,7 @@ mod entry_tests {
                     number: Some(5),
                     url: None,
                     review: None,
+                    unresolved: None,
                 },
                 0,
             )

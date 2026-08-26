@@ -17,6 +17,11 @@ https://github.com/user-attachments/assets/30c68dc1-9954-4dc6-b1a1-a8559ea5d665
 Searchable, navigable docs covering keybindings, configuration, the CLI,
 integrations, and more.
 
+## Community
+
+Join the [wsx Discord server](https://discord.gg/a9a9Q6jcH) to connect with
+other users, ask questions, and share feedback.
+
 ## Key features
 
 - **Parallel agent sessions in git worktrees** — every workspace is its own

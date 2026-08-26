@@ -46,6 +46,18 @@ pub struct WorkspaceUpdateInfo<'a> {
     /// for the App's stale threshold. Caller computes via
     /// `App::awaiting_permission`.
     pub awaiting_tool: Option<(String, i64)>,
+    /// The dashboard's recency signal for this workspace (seconds since
+    /// last interaction, `None` = never active). Caller computes via
+    /// `workspace_age_secs` so the attention line orders entries exactly
+    /// like the dashboard's NEEDS ATTENTION section.
+    pub ago_secs: Option<u64>,
+    /// The dashboard's canonical classification for this workspace.
+    /// Caller computes via `App::classify_status`; deliberately NOT
+    /// derived from the legacy bell `activity`, whose classifier lacks
+    /// the dashboard's PTY-active question suppression and pushed
+    /// `ReportedState` handling, so the two can disagree. Drives the
+    /// sort so ordering matches the dashboard rows.
+    pub status: Status,
 }
 
 /// One workspace that the user should pay attention to. Carries
@@ -208,16 +220,28 @@ pub fn format_attention_line_styled(
 }
 
 /// Collect every workspace whose `needs_attention` flag is set, excluding
-/// the currently-attached one. Sorted by most-recent-first (newest
-/// alerts surface at the front of the inline list).
+/// the currently-attached one. Ordered like the dashboard's NEEDS
+/// ATTENTION section: status priority descending (Stalled before
+/// Question before Waiting), then most-recently-interacted first by the
+/// dashboard's `ago_secs` recency signal (`None` = never active sorts
+/// last).
 pub fn collect_attention(
     candidates: &[WorkspaceUpdateInfo],
     attached_workspace: Option<WorkspaceId>,
     now_ms: i64,
 ) -> Vec<AttentionEntry> {
-    let mut out: Vec<AttentionEntry> = candidates
+    let mut filtered: Vec<&WorkspaceUpdateInfo> = candidates
         .iter()
         .filter(|c| c.needs_attention && Some(c.id) != attached_workspace)
+        .collect();
+    filtered.sort_by(|a, b| {
+        b.status
+            .priority()
+            .cmp(&a.status.priority())
+            .then_with(|| ago_sort_key(a.ago_secs).cmp(&ago_sort_key(b.ago_secs)))
+    });
+    filtered
+        .into_iter()
         .map(|c| {
             let age_anchor_ms = c
                 .awaiting_tool
@@ -237,10 +261,13 @@ pub fn collect_attention(
                 lifecycle: c.lifecycle,
             }
         })
-        .collect();
-    // Most recent first.
-    out.sort_by_key(|e| -e.age_anchor_ms);
-    out
+        .collect()
+}
+
+/// Mirror of the dashboard's `ago_key`: smaller `ago_secs` ⇒ more recent
+/// ⇒ sorts earlier; `None` (never active) sorts last.
+fn ago_sort_key(ago_secs: Option<u64>) -> u64 {
+    ago_secs.unwrap_or(u64::MAX)
 }
 
 /// Render the inline status-row line:
@@ -318,8 +345,10 @@ mod tests {
         ActivityState,
         bool,
         Option<(String, i64)>,
-        String, // name
-        String, // repo_name
+        String,      // name
+        String,      // repo_name
+        Option<u64>, // ago_secs
+        Status,      // canonical dashboard status
     );
 
     fn ws(
@@ -330,6 +359,19 @@ mod tests {
         needs_attention: bool,
         awaiting: Option<(String, i64)>,
     ) -> WsOwned {
+        ws_ago(id, name, events, activity, needs_attention, awaiting, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn ws_ago(
+        id: i64,
+        name: &str,
+        events: Option<WorkspaceEvents>,
+        activity: ActivityState,
+        needs_attention: bool,
+        awaiting: Option<(String, i64)>,
+        ago_secs: Option<u64>,
+    ) -> WsOwned {
         (
             WorkspaceId(id),
             events,
@@ -338,6 +380,10 @@ mod tests {
             awaiting,
             name.to_string(),
             "test-repo".to_string(),
+            ago_secs,
+            // Tests that need the canonical status to diverge from the
+            // legacy activity construct WorkspaceUpdateInfo directly.
+            status_for_activity(activity),
         )
     }
 
@@ -359,7 +405,17 @@ mod tests {
     fn to_candidates(rows: &[WsOwned]) -> Vec<WorkspaceUpdateInfo<'_>> {
         rows.iter()
             .map(
-                |(id, events, activity, needs_attention, awaiting, name, repo_name)| {
+                |(
+                    id,
+                    events,
+                    activity,
+                    needs_attention,
+                    awaiting,
+                    name,
+                    repo_name,
+                    ago_secs,
+                    status,
+                )| {
                     WorkspaceUpdateInfo {
                         id: *id,
                         name: name.as_str(),
@@ -369,6 +425,8 @@ mod tests {
                         needs_attention: *needs_attention,
                         lifecycle: None,
                         awaiting_tool: awaiting.clone(),
+                        ago_secs: *ago_secs,
+                        status: *status,
                     }
                 },
             )
@@ -385,18 +443,125 @@ mod tests {
     }
 
     #[test]
-    fn collect_attention_sorts_newest_first() {
-        let older = events_with_latest("older", 1_000);
-        let newer = events_with_latest("newer", 8_000);
+    fn collect_attention_sorts_most_recently_interacted_first() {
+        // Same status priority — order falls to the dashboard's ago_secs
+        // recency signal (smaller = more recent = first), NOT the event
+        // timestamps (which here would give the opposite order).
+        let older_evt = events_with_latest("stale-ws-newer-event", 9_000);
+        let newer_evt = events_with_latest("fresh-ws-older-event", 1_000);
         let rows = [
-            ws(1, "older", Some(older), ActivityState::Waiting, true, None),
-            ws(2, "newer", Some(newer), ActivityState::Awaiting, true, None),
+            ws_ago(
+                1,
+                "stale",
+                Some(older_evt),
+                ActivityState::Awaiting,
+                true,
+                None,
+                Some(600),
+            ),
+            ws_ago(
+                2,
+                "fresh",
+                Some(newer_evt),
+                ActivityState::Awaiting,
+                true,
+                None,
+                Some(5),
+            ),
         ];
         let candidates = to_candidates(&rows);
         let entries = collect_attention(&candidates, None, 10_000);
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].name, "newer");
-        assert_eq!(entries[1].name, "older");
+        assert_eq!(entries[0].name, "fresh");
+        assert_eq!(entries[1].name, "stale");
+    }
+
+    #[test]
+    fn collect_attention_sorts_status_priority_before_recency() {
+        // Mirrors the dashboard NEEDS ATTENTION section: Stalled (5)
+        // outranks AwaitingAnswer/Question (4) outranks Waiting (3),
+        // even when lower-priority entries are more recent.
+        let rows = [
+            ws_ago(
+                1,
+                "waiting",
+                None,
+                ActivityState::Waiting,
+                true,
+                None,
+                Some(1),
+            ),
+            ws_ago(
+                2,
+                "question",
+                None,
+                ActivityState::AwaitingAnswer,
+                true,
+                None,
+                Some(2),
+            ),
+            ws_ago(
+                3,
+                "stalled",
+                None,
+                ActivityState::Stalled,
+                true,
+                None,
+                Some(300),
+            ),
+        ];
+        let candidates = to_candidates(&rows);
+        let entries = collect_attention(&candidates, None, 10_000);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["stalled", "question", "waiting"]);
+    }
+
+    #[test]
+    fn collect_attention_sorts_by_canonical_status_not_legacy_activity() {
+        // Both carry the legacy bell activity AwaitingAnswer (→ Question),
+        // but the dashboard's canonical classifier downgraded ws1 to
+        // Waiting (e.g. PTY-active question suppression). The sort must
+        // follow the canonical status, so ws2 outranks ws1 despite ws1
+        // being far more recent.
+        let mk = |id: i64, name: &'static str, status: Status, ago: u64| WorkspaceUpdateInfo {
+            id: WorkspaceId(id),
+            name,
+            repo_name: "test-repo",
+            events: None,
+            activity: ActivityState::AwaitingAnswer,
+            needs_attention: true,
+            lifecycle: None,
+            awaiting_tool: None,
+            ago_secs: Some(ago),
+            status,
+        };
+        let candidates = vec![
+            mk(1, "suppressed", Status::Waiting, 1),
+            mk(2, "question", Status::Question, 500),
+        ];
+        let entries = collect_attention(&candidates, None, 10_000);
+        assert_eq!(entries[0].name, "question");
+        assert_eq!(entries[1].name, "suppressed");
+    }
+
+    #[test]
+    fn collect_attention_sorts_never_active_last() {
+        let rows = [
+            ws_ago(1, "never", None, ActivityState::Awaiting, true, None, None),
+            ws_ago(
+                2,
+                "old",
+                None,
+                ActivityState::Awaiting,
+                true,
+                None,
+                Some(9_999),
+            ),
+        ];
+        let candidates = to_candidates(&rows);
+        let entries = collect_attention(&candidates, None, 10_000);
+        assert_eq!(entries[0].name, "old");
+        assert_eq!(entries[1].name, "never");
     }
 
     #[test]

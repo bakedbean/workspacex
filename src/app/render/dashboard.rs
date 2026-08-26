@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::app::activity::classify_activity_with_events;
-use crate::app::bell::{COLD_START_WINDOW, alert_decision};
+use crate::app::bell::alert_decision;
 use crate::app::{App, SelectionTarget};
 use crate::config::detail_bar_config::DetailBarConfig;
 use crate::data::store::Store;
@@ -112,9 +112,9 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
             classify_activity_with_events(secs, running, awaiting, stopped_kind, stalled);
         if app.workspace_events_scanned.contains(&ws.id) {
             let prev = app.workspace_activity.get(&ws.id).copied();
-            let is_cold_start = app.started_at.elapsed() < COLD_START_WINDOW;
+            let startup_workspace = app.startup_workspace_ids.contains(&ws.id);
             let (mark_attention, fire_bell) =
-                alert_decision(prev, activity, notifications_on, is_cold_start);
+                alert_decision(prev, activity, notifications_on, startup_workspace);
             if mark_attention {
                 app.workspace_needs_attention.insert(ws.id);
             }
@@ -656,6 +656,87 @@ mod selection_anchoring_tests {
         assert!(
             app.selection_target_exists(sel.unwrap()),
             "fallback target actually exists"
+        );
+    }
+}
+
+#[cfg(test)]
+mod cold_start_bell_tests {
+    //! The bell loop's cold-start suppression must key on "did this
+    //! workspace exist when wsx started", not on wall-clock elapsed
+    //! since startup — the first JSONL scan of each workspace is queued
+    //! behind the sequential 2s poll loop (git status, diff stats, a
+    //! `gh` network call per workspace), so with many workspaces the
+    //! first observation of later ones lands long after any fixed
+    //! window and used to ring once per already-waiting workspace.
+    use crate::app::App;
+    use crate::data::store::{NewWorkspace, Store, WorkspaceId};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::path::{Path, PathBuf};
+
+    fn draw_once(app: &mut App) {
+        let backend = TestBackend::new(120, 40);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| super::draw_for_test(f, app)).unwrap();
+    }
+
+    /// Simulate the tail loop's first successful scan of a workspace
+    /// whose agent is already waiting: mark it scanned and give it an
+    /// events entry that classifies as `Complete` (a user interrupt is
+    /// the smallest fixture that derives an alertable StoppedKind).
+    fn first_scan_sees_complete(app: &mut App, id: WorkspaceId) {
+        let evt = crate::activity::events::WorkspaceEvents {
+            last_user_interrupted: true,
+            ..Default::default()
+        };
+        app.workspace_events.insert(id, evt);
+        app.workspace_events_scanned.insert(id);
+    }
+
+    #[test]
+    fn startup_workspace_stays_silent_even_when_first_scan_is_slow() {
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(Path::new("/tmp/r"), "r", "x").unwrap();
+        let a = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        // Workspace exists BEFORE App::new — it was present at startup.
+        // No time manipulation: suppression is identity-based, so this
+        // holds however long the first scan takes.
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        first_scan_sees_complete(&mut app, a);
+        draw_once(&mut app);
+        assert!(
+            app.pending_bells.is_empty(),
+            "first observation of a startup workspace must not ring, however late the scan"
+        );
+        assert!(
+            app.workspace_needs_attention.contains(&a),
+            "visual attention marker still surfaces"
+        );
+    }
+
+    #[test]
+    fn workspace_created_after_startup_rings_on_first_observation() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Workspace appears AFTER startup (created / imported mid-session).
+        let b = app.test_workspace("fresh");
+        first_scan_sees_complete(&mut app, b);
+        draw_once(&mut app);
+        assert_eq!(
+            app.pending_bells.len(),
+            1,
+            "an already-alertable workspace that appears mid-session must ring"
         );
     }
 }

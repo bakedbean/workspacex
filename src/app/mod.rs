@@ -41,7 +41,7 @@ pub use crate::app::activity::{ActivityState, classify_activity, classify_activi
 pub use crate::app::background::{
     branch_drift_poll, branch_drift_poll_with, tail_workspace_events,
 };
-pub use crate::app::bell::{BellPattern, COLD_START_WINDOW, alert_decision, fire_bell};
+pub use crate::app::bell::{BellPattern, alert_decision, fire_bell};
 pub use crate::app::render::draw_for_test;
 
 pub(crate) mod reconcile;

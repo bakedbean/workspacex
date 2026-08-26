@@ -441,13 +441,17 @@ pub(crate) fn review_glyph(d: crate::git::forge::ReviewDecision) -> &'static str
 }
 
 /// The review mark with its trailing unresolved-conversation count:
-/// `✗3` for changes requested with three threads still open, bare `✗`
-/// when every thread is resolved (or the count is unknown). Fused into
-/// one string so surfaces that can only style a single run — the walker
-/// menu's static Pango attribute range — paint mark and count together.
+/// `✗ 3` for changes requested with three threads still open, bare `✗`
+/// when every thread is resolved (or the count is unknown). One string so
+/// surfaces that can only style a single run — the walker menu's static
+/// Pango attribute range — paint mark and count together. The space is
+/// load-bearing: the verdict glyphs are ambiguous-width (`◌` is literally
+/// the dotted-circle combining-mark carrier), and many terminal fonts draw
+/// them wider than one cell, so a digit fused directly onto the glyph
+/// renders on top of it.
 pub(crate) fn review_mark(d: crate::git::forge::ReviewDecision, unresolved: Option<u32>) -> String {
     match unresolved {
-        Some(n) if n > 0 => format!("{}{n}", review_glyph(d)),
+        Some(n) if n > 0 => format!("{} {n}", review_glyph(d)),
         _ => review_glyph(d).to_string(),
     }
 }
@@ -630,7 +634,7 @@ mod pr_chip_tests {
     #[test]
     fn unresolved_count_trails_the_mark() {
         let chip = pr_chip(PrOpen, Some(262), Some(ChangesRequested), Some(3), WIDE).expect("chip");
-        assert_eq!(chip.text(), "⏺ #262 open ✗3");
+        assert_eq!(chip.text(), "⏺ #262 open ✗ 3");
         assert_eq!(chip.width(), chip.text().chars().count());
     }
 
@@ -657,7 +661,7 @@ mod pr_chip_tests {
     /// lifecycle word is the half that yields.
     #[test]
     fn a_tight_column_keeps_the_counted_mark() {
-        // "⏺ #1234 conflict ✗12" is 20 cols; at 16 the label goes.
+        // "⏺ #1234 conflict ✗ 12" is 21 cols; at 16 the label goes.
         let chip = pr_chip(
             PrConflicted,
             Some(1234),
@@ -666,7 +670,7 @@ mod pr_chip_tests {
             16,
         )
         .expect("chip");
-        assert_eq!(chip.text(), "⏺ #1234 ✗12");
+        assert_eq!(chip.text(), "⏺ #1234 ✗ 12");
         assert!(chip.width() <= 16);
     }
 

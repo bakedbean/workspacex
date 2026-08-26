@@ -358,7 +358,7 @@ mod plugin_tests {
             pr_unresolved: Some(3),
             ..Default::default()
         };
-        assert_eq!(pr_field(&c), "#7 ✗3");
+        assert_eq!(pr_field(&c), "#7 ✗ 3");
         // Zero and unknown both render the bare mark.
         for unresolved in [Some(0), None] {
             let c = ScmCacheRow {

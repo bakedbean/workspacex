@@ -1669,14 +1669,14 @@ mod tests {
         let widths = ColumnWidths::default();
         let line = render(&inputs, widths, 0, &theme, 120);
         let text = line_text(&line);
-        assert!(text.contains("✗3"), "counted mark missing: {text:?}");
+        assert!(text.contains("✗ 3"), "counted mark missing: {text:?}");
         // Mark and count travel as one span in the verdict's color.
         let mark_span = line
             .spans
             .iter()
             .find(|s| s.content.contains('✗'))
             .expect("mark span");
-        assert_eq!(mark_span.content.as_ref(), "✗3");
+        assert_eq!(mark_span.content.as_ref(), "✗ 3");
         assert_eq!(
             mark_span.style.fg,
             theme.review_style(ReviewDecision::ChangesRequested).fg

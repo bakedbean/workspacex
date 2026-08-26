@@ -942,7 +942,7 @@ impl SessionManager {
     /// `status`, bypassing the real spawn path entirely (no process, no
     /// Tokio runtime needed — see `Session::fake`). `sessions` is private,
     /// so tests that need to control an instance's `SessionStatus` (e.g.
-    /// `App::live_instances` liveness filtering) have no other way to
+    /// `App::strip_instances` exit filtering) have no other way to
     /// populate this map.
     #[cfg(test)]
     pub fn insert_fake_session(

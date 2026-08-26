@@ -362,11 +362,11 @@ pub(super) fn build_row_inputs(
     let shared_active = ws.shared && (session_running || app.shared_detached.contains(&ws.id));
     crate::ui::dashboard::row::RowInputs {
         agent: ws.agent,
-        // Live peers only, primary excluded — it renders unconditionally as
+        // Peers only, primary excluded — it renders unconditionally as
         // the rightmost bar. Order is roster order (creation time), so a
         // newly added peer lands next to the primary.
         peers: app
-            .live_instances(ws.id)
+            .strip_instances(ws.id)
             .into_iter()
             .filter(|inst| !inst.is_primary)
             .map(|inst| inst.agent)
@@ -666,7 +666,7 @@ mod build_row_inputs_tests {
     //! `TestBackend` frame — it's the extracted per-workspace loop body from
     //! `draw`, so calling it needs only an `App` and a `Workspace`, not a
     //! full render pass. `test_workspace` / `test_spawn_session` are the
-    //! `pub(crate)` fixture helpers from `app::live_instances_tests`.
+    //! `pub(crate)` fixture helpers from `app::strip_instances_tests`.
     use super::*;
     use crate::pty::session::{AgentKind, SessionStatus};
 
@@ -782,6 +782,26 @@ mod build_row_inputs_tests {
             peers,
             vec![AgentKind::Codex],
             "primary and dead peer excluded"
+        );
+    }
+
+    #[test]
+    fn row_peers_include_registered_peers_with_no_session_after_a_restart() {
+        let mut app = test_app();
+        let ws = app.test_workspace("restarted");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        app.refresh().unwrap();
+        // No sessions at all: this is the state right after a wsx restart,
+        // where the previous process killed every PTY on quit but the roster
+        // rows survive in the DB.
+        let peers = row_inputs(&app, ws).peers;
+        assert_eq!(
+            peers,
+            vec![AgentKind::Codex],
+            "a registered peer with no session this run still gets a bar"
         );
     }
 

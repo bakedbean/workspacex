@@ -131,10 +131,12 @@ impl LifecycleBadge {
 #[derive(Debug, Clone)]
 pub struct RowInputs {
     pub agent: AgentKind,
-    /// Live non-primary agents in this workspace, in creation order. The
-    /// primary is `agent` and is rendered unconditionally; peers appear
-    /// only while their session is running, so a finished reviewer drops
-    /// out and the strip narrows back on its own.
+    /// Non-primary agents in this workspace, in creation order. The
+    /// primary is `agent` and is rendered unconditionally; a peer appears
+    /// unless its session exited in this wsx run, so a finished reviewer
+    /// drops out and the strip narrows back on its own, while a registered
+    /// peer whose PTY died with the previous wsx process keeps its bar
+    /// across restarts (see `App::strip_instances`).
     pub peers: Vec<AgentKind>,
     pub status: Status,
     pub branch: String,

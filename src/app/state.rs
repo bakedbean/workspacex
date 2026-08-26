@@ -195,8 +195,8 @@ impl App {
     }
 
     /// Whether `id` currently has a live (`SessionStatus::Running`) session
-    /// in `self.sessions`. The shared liveness predicate: `live_instances`,
-    /// `has_live_instance`, and any caller with its own already-fetched
+    /// in `self.sessions`. The shared liveness predicate:
+    /// `has_live_instance` and any caller with its own already-fetched
     /// instance list (e.g. `toggle_workspace_shared`, which cannot use
     /// `agent_roster` — see its comment) all filter through this so there is
     /// exactly one definition of "running" in the app.
@@ -209,11 +209,28 @@ impl App {
         })
     }
 
-    /// The workspace's agent instances that currently have a running
-    /// session, in roster order (primary first). Instances registered in
-    /// the DB but with no session — never started, or exited — are
-    /// excluded: nothing reaps an instance row when its agent exits, so
-    /// "registered" and "running" diverge permanently.
+    /// Whether the instance was spawned in this wsx process and its agent has
+    /// since exited. Distinct from "not running": an instance with no session
+    /// entry at all was never spawned *this run* — typically because the
+    /// previous wsx quit killed every PTY — and its conversation resumes with
+    /// `--continue` on the next attach, so it is not "gone" the way an exited
+    /// one is.
+    pub fn instance_has_exited(&self, id: crate::data::store::AgentInstanceId) -> bool {
+        self.sessions.get(id).is_some_and(|s| {
+            matches!(
+                *s.status.read().unwrap(),
+                crate::pty::session::SessionStatus::Exited { .. }
+            )
+        })
+    }
+
+    /// The workspace's agent instances to draw on the dashboard agent strip,
+    /// in roster order (primary first). Every registered instance counts
+    /// except those whose session exited in this wsx run: a finished
+    /// reviewer drops off the strip, but a peer with no session entry —
+    /// registered in the DB, killed by a previous wsx quit — keeps its bar,
+    /// since sessions never survive a restart and the roster is the only
+    /// record that the agent exists.
     ///
     /// Reads the cached `agent_roster`, so it can lag behind the DB by up to
     /// one `refresh()` — fine for the dashboard render path this feeds, but
@@ -221,7 +238,7 @@ impl App {
     /// to reflect that mutation immediately (see `toggle_workspace_shared`,
     /// which filters its own freshly-fetched instance list instead of
     /// calling this).
-    pub fn live_instances(
+    pub fn strip_instances(
         &self,
         ws: crate::data::store::WorkspaceId,
     ) -> Vec<crate::data::agents::AgentInstance> {
@@ -230,7 +247,7 @@ impl App {
             .map(|instances| {
                 instances
                     .iter()
-                    .filter(|inst| self.instance_is_running(inst.id))
+                    .filter(|inst| !self.instance_has_exited(inst.id))
                     .cloned()
                     .collect()
             })
@@ -238,10 +255,10 @@ impl App {
     }
 
     /// Whether the workspace has any instance with a running session — not
-    /// just the primary, see `live_instances`. Equivalent to
-    /// `!self.live_instances(ws).is_empty()` but doesn't clone the roster
-    /// just to test non-emptiness. Same cache-staleness caveat as
-    /// `live_instances` applies.
+    /// just the primary. Same cache-staleness caveat as `strip_instances`
+    /// applies. Note the asymmetry with the strip: this is strictly
+    /// `Running`, since it feeds liveness checks (the shared badge), while
+    /// the strip also keeps never-started-this-run instances.
     pub fn has_live_instance(&self, ws: crate::data::store::WorkspaceId) -> bool {
         self.agent_roster.get(&ws).is_some_and(|instances| {
             instances
@@ -699,7 +716,7 @@ mod external_change_tests {
 }
 
 #[cfg(test)]
-mod live_instances_tests {
+mod strip_instances_tests {
     use super::*;
     use crate::data::store::NewWorkspace;
     use crate::pty::session::{AgentKind, SessionStatus};
@@ -759,7 +776,7 @@ mod live_instances_tests {
     }
 
     #[test]
-    fn live_instances_excludes_exited_and_never_started_peers() {
+    fn strip_instances_excludes_exited_but_keeps_never_started_peers() {
         let mut app = test_app();
         let ws = app.test_workspace("multi");
         let primary = app
@@ -768,8 +785,9 @@ mod live_instances_tests {
             .unwrap();
         let peer_running = app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
         let peer_exited = app.store.add_workspace_agent(ws, AgentKind::Pi).unwrap();
-        // `peer_never_started` gets no session entry at all.
-        let _peer_never_started = app
+        // `peer_never_started` gets no session entry at all — the state every
+        // registered peer is in right after a wsx restart.
+        let peer_never_started = app
             .store
             .add_workspace_agent(ws, AgentKind::Hermes)
             .unwrap();
@@ -779,15 +797,18 @@ mod live_instances_tests {
         app.test_spawn_session(peer_running.id, SessionStatus::Running { pid: 2 });
         app.test_spawn_session(peer_exited.id, SessionStatus::Exited { code: 0 });
 
-        let live: Vec<_> = app.live_instances(ws).into_iter().map(|i| i.id).collect();
-        assert_eq!(live, vec![primary.id, peer_running.id]);
+        let strip: Vec<_> = app.strip_instances(ws).into_iter().map(|i| i.id).collect();
+        assert_eq!(
+            strip,
+            vec![primary.id, peer_running.id, peer_never_started.id]
+        );
     }
 
     #[test]
-    fn live_instances_is_empty_for_unknown_workspace() {
+    fn strip_instances_is_empty_for_unknown_workspace() {
         let app = test_app();
         assert!(
-            app.live_instances(crate::data::store::WorkspaceId(9999))
+            app.strip_instances(crate::data::store::WorkspaceId(9999))
                 .is_empty()
         );
     }

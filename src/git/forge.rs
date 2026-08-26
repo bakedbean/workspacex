@@ -272,9 +272,12 @@ const UNRESOLVED_THREADS_QUERY: &str = "query($owner:String!,$name:String!,$numb
      reviewThreads(first:100){nodes{isResolved}}}}}";
 
 /// The argv (after `gh`) that fetches the PR's review threads. `None` when
-/// `slug` isn't `owner/name` shaped — nothing sane to ask for. `-F` (not
-/// `-f`) for the variables so `number` is typed as an Int, which the query
-/// declares; `-f` would send a string and GitHub would reject the call.
+/// `slug` isn't `owner/name` shaped — nothing sane to ask for.
+///
+/// `$number` is declared `Int!`, so it rides typed `-F`; the `String!`
+/// variables ride raw `-f` deliberately. `gh api -F` type-coerces its
+/// value — an all-numeric owner or repo name (GitHub allows both) would be
+/// sent as an integer and the whole query rejected.
 pub(crate) fn unresolved_threads_argv(slug: &str, number: u32) -> Option<Vec<String>> {
     let (owner, name) = slug.split_once('/')?;
     Some(vec![
@@ -282,9 +285,9 @@ pub(crate) fn unresolved_threads_argv(slug: &str, number: u32) -> Option<Vec<Str
         "graphql".into(),
         "-f".into(),
         format!("query={UNRESOLVED_THREADS_QUERY}"),
-        "-F".into(),
+        "-f".into(),
         format!("owner={owner}"),
-        "-F".into(),
+        "-f".into(),
         format!("name={name}"),
         "-F".into(),
         format!("number={number}"),
@@ -309,14 +312,18 @@ struct GhThreadsPr {
     #[serde(rename = "reviewThreads")]
     review_threads: GhThreadNodes,
 }
+// `nodes` and `isResolved` are deliberately NOT `#[serde(default)]`: a
+// truncated payload like `"reviewThreads":{}` would otherwise read as
+// `Some(0)` — "every conversation resolved" — and a node missing
+// `isResolved` would count as unresolved. Both must fail the parse so the
+// probe reports unknown instead of inventing an answer.
 #[derive(Debug, Deserialize)]
 struct GhThreadNodes {
-    #[serde(default)]
     nodes: Vec<GhThreadNode>,
 }
 #[derive(Debug, Deserialize)]
 struct GhThreadNode {
-    #[serde(rename = "isResolved", default)]
+    #[serde(rename = "isResolved")]
     is_resolved: bool,
 }
 
@@ -411,7 +418,29 @@ async fn fetch_requires_approval(worktree: &Path, slug: &str, base: &str) -> Opt
     Some(gated)
 }
 
+/// A branch's full PR status: the `gh pr view` payload plus the follow-up
+/// probes (review gate, unresolved-thread count) that make the review mark
+/// accurate. Callers that only consume lifecycle/number — especially under
+/// a deadline — should use [`fetch_pr_status_basic`] instead.
 pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrStatus>> {
+    fetch_pr_status_probed(worktree, branch, true).await
+}
+
+/// [`fetch_pr_status`] minus the follow-up subprocesses: one `gh pr view`,
+/// nothing else. `review` still carries whatever verdict that payload
+/// reported, but no gate probe fills in a missing one and `unresolved`
+/// stays `None`. For callers like shared-workspace enrichment that wrap the
+/// fetch in a hard timeout and read only lifecycle/number — a slow, unused
+/// probe there would burn the deadline and discard an already-known status.
+pub async fn fetch_pr_status_basic(worktree: &Path, branch: &str) -> Result<Option<PrStatus>> {
+    fetch_pr_status_probed(worktree, branch, false).await
+}
+
+async fn fetch_pr_status_probed(
+    worktree: &Path,
+    branch: &str,
+    probes: bool,
+) -> Result<Option<PrStatus>> {
     let out = Command::new("gh")
         .current_dir(worktree)
         .args(["pr", "view", branch, "--json", pr_view_json_fields()])
@@ -429,6 +458,9 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
         let Some(status) = parse_gh_pr_status(&stdout) else {
             return Ok(None);
         };
+        if !probes {
+            return Ok(Some(status));
+        }
         let slug = status.url.as_deref().and_then(repo_slug_from_pr_url);
         // Nothing to fill in unless GitHub left the verdict empty on a PR
         // that's still open. Checked before the probe so the common cases —
@@ -1144,6 +1176,11 @@ mod tests {
             r#"{"data":{"repository":null}}"#,
             r#"{"data":{"repository":{"pullRequest":null}}}"#,
             r#"{"errors":[{"message":"rate limited"}]}"#,
+            // Truncated responses: a thread list with no `nodes` must not
+            // read as "all resolved", and a node missing `isResolved` must
+            // not count as unresolved — both are unknowns.
+            r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{}}}}}"#,
+            r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{}]}}}}}"#,
             "not json",
             "",
         ] {
@@ -1153,20 +1190,39 @@ mod tests {
 
     #[test]
     fn unresolved_threads_argv_types_the_number_as_int() {
+        let pair = |argv: &[String], flag: &str, field: &str| {
+            argv.windows(2).any(|w| w[0] == flag && w[1] == field)
+        };
         let argv = unresolved_threads_argv("o/r", 42).expect("argv");
         assert_eq!(argv[0], "api");
         assert_eq!(argv[1], "graphql");
-        // `-F` (typed), not `-f` (string): the query declares $number as Int.
-        assert!(argv.contains(&"-F".to_string()));
-        assert!(argv.contains(&"owner=o".to_string()));
-        assert!(argv.contains(&"name=r".to_string()));
-        assert!(argv.contains(&"number=42".to_string()));
+        // Only $number is declared Int and rides typed `-F`. The String!
+        // variables must stay raw `-f`: `gh api -F` type-coerces, so an
+        // all-numeric owner or repo name (GitHub allows both) would be sent
+        // as an integer and the whole query rejected.
+        assert!(pair(&argv, "-f", "owner=o"), "{argv:?}");
+        assert!(pair(&argv, "-f", "name=r"), "{argv:?}");
+        assert!(pair(&argv, "-F", "number=42"), "{argv:?}");
         let query = argv
             .iter()
             .find(|a| a.starts_with("query="))
             .expect("query");
         assert!(query.contains("reviewThreads"));
         assert!(query.contains("isResolved"));
+    }
+
+    /// An all-numeric slug half is the case the `-f`/`-F` split exists for.
+    #[test]
+    fn unresolved_threads_argv_keeps_numeric_names_as_strings() {
+        let argv = unresolved_threads_argv("123/456", 7).expect("argv");
+        assert!(
+            argv.windows(2).any(|w| w[0] == "-f" && w[1] == "owner=123"),
+            "{argv:?}"
+        );
+        assert!(
+            argv.windows(2).any(|w| w[0] == "-f" && w[1] == "name=456"),
+            "{argv:?}"
+        );
     }
 
     /// A slug that isn't `owner/name` shaped has nothing to query.

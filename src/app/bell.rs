@@ -24,33 +24,32 @@ impl BellPattern {
     }
 }
 
-/// Window after wsx starts during which a first-observation of an
-/// alertable workspace is treated as cold-start noise (visual marker
-/// only, no bell). Sized to comfortably cover the 2s tail-loop tick so
-/// every initial scan lands inside the window.
-pub const COLD_START_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
-
 /// Decide what to do when a workspace's activity classification changes.
 /// Returns `(mark_attention, fire_bell)`.
 ///
-/// During the cold-start window the bell is suppressed on the very first
-/// observation of a workspace (`prev.is_none()`), so wsx doesn't ring
-/// once per workspace at launch when several agents were already waiting
-/// before startup. The visual attention marker still fires so the
-/// dashboard reflects current state. Outside the window a first
-/// observation rings normally — a workspace that just appeared
-/// (newly created or freshly imported) and is already alertable is
-/// something the user wants to be notified about.
+/// `startup_workspace` is true when the workspace already existed when
+/// wsx started. For those, the bell is suppressed on the very first
+/// observation (`prev.is_none()`) — whatever state the agent was in, it
+/// was reached before launch, so ringing once per workspace at startup
+/// is pure noise. This is keyed on identity, not a time window: the
+/// first JSONL scan of each workspace is queued behind the sequential
+/// poll loop (git status, diff stats, a `gh` call per workspace), so
+/// with many workspaces the first observation can land arbitrarily late.
+/// The visual attention marker still fires so the dashboard reflects
+/// current state. A first observation of a non-startup workspace (newly
+/// created or freshly imported mid-session) rings normally — it just
+/// appeared and is already alertable, which the user wants to hear
+/// about. Real transitions (`prev` is `Some`) always ring.
 pub fn alert_decision(
     prev: Option<ActivityState>,
     activity: ActivityState,
     notifications_on: bool,
-    is_cold_start: bool,
+    startup_workspace: bool,
 ) -> (bool, bool) {
     if !notifications_on || !activity.is_alertable() || prev == Some(activity) {
         return (false, false);
     }
-    let fire_bell = prev.is_some() || !is_cold_start;
+    let fire_bell = prev.is_some() || !startup_workspace;
     (true, fire_bell)
 }
 
@@ -165,16 +164,19 @@ mod bell_tests {
     }
 
     #[test]
-    fn alert_decision_suppresses_bell_on_first_observation_during_cold_start() {
-        // Cold start: prev is None, workspace already alertable.
+    fn alert_decision_suppresses_bell_on_first_observation_of_startup_workspace() {
+        // Workspace existed at startup: prev is None, already alertable.
         // Visual marker should light up, bell should stay silent.
         let (mark, ring) = alert_decision(None, ActivityState::AwaitingAnswer, true, true);
         assert!(mark, "visual marker must surface on first observation");
-        assert!(!ring, "bell must NOT ring during cold start");
+        assert!(
+            !ring,
+            "bell must NOT ring for a startup workspace's first observation"
+        );
     }
 
     #[test]
-    fn alert_decision_rings_on_first_observation_after_cold_start() {
+    fn alert_decision_rings_on_first_observation_of_new_workspace() {
         // A new workspace appears mid-session and is already alertable
         // (e.g. it raced ahead and asked a question before the tail loop
         // could record an intermediate Active). User wants to know.
@@ -182,20 +184,20 @@ mod bell_tests {
         assert!(mark);
         assert!(
             ring,
-            "bell must ring for a fresh workspace after cold start"
+            "bell must ring for a workspace that appeared mid-session"
         );
     }
 
     #[test]
     fn alert_decision_rings_on_transition_into_alertable() {
         // Active -> AwaitingAnswer: real mid-session transition, ring
-        // regardless of cold-start window.
-        for is_cold_start in [true, false] {
+        // whether or not the workspace existed at startup.
+        for startup_workspace in [true, false] {
             let (mark, ring) = alert_decision(
                 Some(ActivityState::Active),
                 ActivityState::AwaitingAnswer,
                 true,
-                is_cold_start,
+                startup_workspace,
             );
             assert!(mark);
             assert!(ring, "transition with prev=Some must always ring");

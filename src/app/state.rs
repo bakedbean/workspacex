@@ -97,7 +97,7 @@ impl App {
             name_color_swatch_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             pending_bells: Vec::new(),
-            started_at: std::time::Instant::now(),
+            startup_workspace_ids: std::collections::HashSet::new(),
             last_data_version: 0,
             registry,
             shared_detached: std::collections::HashSet::new(),
@@ -118,6 +118,9 @@ impl App {
             app.activity_history.extend(buckets);
         }
         app.refresh()?;
+        // Everything present after the initial refresh predates this
+        // process — its first activity observation must not ring.
+        app.startup_workspace_ids = app.workspaces.iter().map(|(_, w)| w.id).collect();
         app.last_data_version = app.store.data_version().unwrap_or(0);
         Ok(app)
     }
@@ -620,9 +623,14 @@ pub struct App {
     /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
     /// with ratatui's escape sequences.
     pub pending_bells: Vec<ActivityState>,
-    /// When the process started — used to distinguish cold-start
-    /// first-observations (suppress bell) from mid-session ones (ring).
-    pub started_at: std::time::Instant,
+    /// Workspaces that already existed when wsx started. Their first
+    /// activity observation is cold-start catch-up, not news — the bell
+    /// loop suppresses the ring (visual marker only). Keyed on identity
+    /// rather than a time window because the first JSONL scan of each
+    /// workspace is queued behind the sequential 2s poll loop and can
+    /// land arbitrarily late when many workspaces exist. Never pruned:
+    /// membership only matters for a workspace's first observation.
+    pub startup_workspace_ids: std::collections::HashSet<crate::data::store::WorkspaceId>,
     /// Last `PRAGMA data_version` value observed from the store. Compared
     /// each tick by `poll_external_changes` to detect writes from sibling
     /// `wsx` CLI processes (e.g. `wsx workspace create`) so the dashboard

@@ -82,6 +82,7 @@ pub(super) fn compute_attention_line(
                 lifecycle: app.pr_lifecycle.get(&w.id).copied(),
                 awaiting_tool: app.awaiting_permission(w.id),
                 ago_secs: dashboard::workspace_age_secs(app, w.id, now_ms),
+                status: app.classify_status(w),
             }
         })
         .collect();

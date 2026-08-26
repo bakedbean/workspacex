@@ -51,6 +51,13 @@ pub struct WorkspaceUpdateInfo<'a> {
     /// `workspace_age_secs` so the attention line orders entries exactly
     /// like the dashboard's NEEDS ATTENTION section.
     pub ago_secs: Option<u64>,
+    /// The dashboard's canonical classification for this workspace.
+    /// Caller computes via `App::classify_status`; deliberately NOT
+    /// derived from the legacy bell `activity`, whose classifier lacks
+    /// the dashboard's PTY-active question suppression and pushed
+    /// `ReportedState` handling, so the two can disagree. Drives the
+    /// sort so ordering matches the dashboard rows.
+    pub status: Status,
 }
 
 /// One workspace that the user should pay attention to. Carries
@@ -228,9 +235,9 @@ pub fn collect_attention(
         .filter(|c| c.needs_attention && Some(c.id) != attached_workspace)
         .collect();
     filtered.sort_by(|a, b| {
-        let pa = status_for_activity(a.activity).priority();
-        let pb = status_for_activity(b.activity).priority();
-        pb.cmp(&pa)
+        b.status
+            .priority()
+            .cmp(&a.status.priority())
             .then_with(|| ago_sort_key(a.ago_secs).cmp(&ago_sort_key(b.ago_secs)))
     });
     filtered
@@ -341,6 +348,7 @@ mod tests {
         String,      // name
         String,      // repo_name
         Option<u64>, // ago_secs
+        Status,      // canonical dashboard status
     );
 
     fn ws(
@@ -373,6 +381,9 @@ mod tests {
             name.to_string(),
             "test-repo".to_string(),
             ago_secs,
+            // Tests that need the canonical status to diverge from the
+            // legacy activity construct WorkspaceUpdateInfo directly.
+            status_for_activity(activity),
         )
     }
 
@@ -394,7 +405,17 @@ mod tests {
     fn to_candidates(rows: &[WsOwned]) -> Vec<WorkspaceUpdateInfo<'_>> {
         rows.iter()
             .map(
-                |(id, events, activity, needs_attention, awaiting, name, repo_name, ago_secs)| {
+                |(
+                    id,
+                    events,
+                    activity,
+                    needs_attention,
+                    awaiting,
+                    name,
+                    repo_name,
+                    ago_secs,
+                    status,
+                )| {
                     WorkspaceUpdateInfo {
                         id: *id,
                         name: name.as_str(),
@@ -405,6 +426,7 @@ mod tests {
                         lifecycle: None,
                         awaiting_tool: awaiting.clone(),
                         ago_secs: *ago_secs,
+                        status: *status,
                     }
                 },
             )
@@ -492,6 +514,34 @@ mod tests {
         let entries = collect_attention(&candidates, None, 10_000);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["stalled", "question", "waiting"]);
+    }
+
+    #[test]
+    fn collect_attention_sorts_by_canonical_status_not_legacy_activity() {
+        // Both carry the legacy bell activity AwaitingAnswer (→ Question),
+        // but the dashboard's canonical classifier downgraded ws1 to
+        // Waiting (e.g. PTY-active question suppression). The sort must
+        // follow the canonical status, so ws2 outranks ws1 despite ws1
+        // being far more recent.
+        let mk = |id: i64, name: &'static str, status: Status, ago: u64| WorkspaceUpdateInfo {
+            id: WorkspaceId(id),
+            name,
+            repo_name: "test-repo",
+            events: None,
+            activity: ActivityState::AwaitingAnswer,
+            needs_attention: true,
+            lifecycle: None,
+            awaiting_tool: None,
+            ago_secs: Some(ago),
+            status,
+        };
+        let candidates = vec![
+            mk(1, "suppressed", Status::Waiting, 1),
+            mk(2, "question", Status::Question, 500),
+        ];
+        let entries = collect_attention(&candidates, None, 10_000);
+        assert_eq!(entries[0].name, "question");
+        assert_eq!(entries[1].name, "suppressed");
     }
 
     #[test]

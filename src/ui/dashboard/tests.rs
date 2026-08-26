@@ -1040,3 +1040,81 @@ fn chip_hit_spans_use_the_widened_strip() {
         "derived width must reach the render: a 3-wide strip shifts every chip 2 columns"
     );
 }
+
+/// Renders a dashboard whose row list comes back empty, and returns the body
+/// text. `repos` drives which empty state applies.
+fn render_empty_body(repos: &[Repo], group: GroupMode, filter: Option<&str>) -> String {
+    let repo_refs: Vec<&Repo> = repos.iter().collect();
+    let activity: Vec<u32> = (0..24).collect();
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces: Vec::new(),
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+        github_remotes: &Default::default(),
+        nerd_fonts: false,
+    };
+    let mut state = DashboardState {
+        group_mode: group,
+        filter: filter.map(str::to_string),
+        ..Default::default()
+    };
+    let theme = Theme::wsx();
+    let mut term = Terminal::new(TestBackend::new(160, 12)).unwrap();
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+        .unwrap();
+    let buf = term.backend().buffer().clone();
+    (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// An empty body must say why it is empty. The two causes need opposite
+/// responses — clear the filter, or register a repo — so they must not share
+/// a message.
+#[test]
+fn empty_body_distinguishes_no_repos_from_a_filter_that_hid_everything() {
+    let none: Vec<Repo> = Vec::new();
+    for group in [GroupMode::Repo, GroupMode::Attention] {
+        let body = render_empty_body(&none, group, None);
+        assert!(
+            body.contains("(no repos · run wsx repo add <path>)"),
+            "{group:?} with no repos should name the remedy:\n{body}"
+        );
+    }
+
+    let one = vec![fake_repo(1, "alpha", "/tmp/alpha")];
+    let filtered = render_empty_body(&one, GroupMode::Attention, Some("zzz"));
+    assert!(
+        filtered.contains("(no matching workspaces)"),
+        "a filter that hid every row must not read as 'no repos':\n{filtered}"
+    );
+    assert!(
+        !filtered.contains("no repos"),
+        "a filter that hid every row must not read as 'no repos':\n{filtered}"
+    );
+}
+
+/// The remedy is only correct while there genuinely are no repos: a
+/// registered repo always draws something (its header, or a QUIET REPOS row),
+/// so the empty-body message must never appear alongside one.
+#[test]
+fn a_registered_repo_never_shows_the_empty_body_message() {
+    let one = vec![fake_repo(1, "alpha", "/tmp/alpha")];
+    for group in [GroupMode::Repo, GroupMode::Attention] {
+        let body = render_empty_body(&one, group, None);
+        assert!(
+            body.contains("alpha"),
+            "{group:?} should draw the repo:\n{body}"
+        );
+        assert!(
+            !body.contains("no repos"),
+            "{group:?} has a repo, so the empty-body message is wrong:\n{body}"
+        );
+    }
+}

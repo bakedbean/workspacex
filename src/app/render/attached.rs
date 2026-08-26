@@ -95,6 +95,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
                 lifecycle: lc,
                 number: n,
                 review: app.pr_review.get(&focused_id).copied(),
+                unresolved: app.pr_unresolved.get(&focused_id).copied(),
             })
     });
 
@@ -303,6 +304,7 @@ pub(super) fn draw_attached_remote(
                             lifecycle: lc,
                             number: n,
                             review: None,
+                            unresolved: None,
                         })
                     })
                 })

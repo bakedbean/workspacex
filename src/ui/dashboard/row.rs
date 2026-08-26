@@ -170,6 +170,9 @@ pub struct RowInputs {
     /// `None` when the repo has no approval gate, when the verdict hasn't
     /// been fetched, or when `gh` couldn't answer — all render as no mark.
     pub review: Option<ReviewDecision>,
+    /// Unresolved review-thread count, drawn as digits after the mark
+    /// (`✗3`). `None` or zero draw nothing; ignored without a verdict.
+    pub unresolved: Option<u32>,
     pub nerd_fonts: bool,
     /// The workspace's custom name color, chosen from the xterm-256 palette
     /// via the `C` picker. `None` = the theme's default styling for the span.
@@ -397,11 +400,10 @@ pub fn render(
             // The verdict mark is its own span so it can carry the verdict's
             // traffic-light color rather than the lifecycle's. It's painted
             // first-come: the lifecycle half is truncated to whatever the
-            // column leaves after reserving the mark's two columns, so the
+            // column leaves after reserving the mark's columns, so the
             // mark can't be clipped off the end.
-            match chip.review {
-                Some(d) => {
-                    let mark = crate::ui::theme::review_glyph(d);
+            match chip.mark() {
+                Some((mark, d)) => {
                     let head_width = pr_width.saturating_sub(mark.chars().count() + 1);
                     spans.push(Span::styled(
                         truncate(&chip.lifecycle_text, head_width),
@@ -409,8 +411,8 @@ pub fn render(
                     ));
                     let painted = truncate(&chip.lifecycle_text, head_width).chars().count();
                     spans.push(Span::raw(" ".to_string()));
-                    spans.push(Span::styled(mark.to_string(), theme.review_style(d)));
                     let used = painted + 1 + mark.chars().count();
+                    spans.push(Span::styled(mark, theme.review_style(d)));
                     spans.push(Span::raw(" ".repeat(pr_width.saturating_sub(used))));
                 }
                 None => spans.push(Span::styled(
@@ -530,7 +532,13 @@ pub fn render(
 /// renders blank. Shared by `render` and `pr_chip_hit_span` so the painted
 /// chip and its click target can't drift.
 fn pr_chip(inputs: &RowInputs, pr_width: usize) -> Option<crate::ui::theme::PrChip> {
-    crate::ui::theme::pr_chip(inputs.lifecycle?, inputs.pr_number, inputs.review, pr_width)
+    crate::ui::theme::pr_chip(
+        inputs.lifecycle?,
+        inputs.pr_number,
+        inputs.review,
+        inputs.unresolved,
+        pr_width,
+    )
 }
 
 /// Char-offset and char-width of the clickable PR chip within a workspace
@@ -722,6 +730,7 @@ mod tests {
             has_multi_pane_layout: false,
             lifecycle: None,
             review: None,
+            unresolved: None,
             nerd_fonts: false,
             name_color: None,
             workspace_id: crate::data::store::WorkspaceId(0),
@@ -1647,6 +1656,31 @@ mod tests {
         let cell: String = text.chars().skip(start).take(widths.pr).collect();
         assert_eq!(cell, "⏺ #1234 ✗       ", "terse marked chip, then padding");
         assert!(!cell.contains('…'), "the word yields whole, not clipped");
+    }
+
+    #[test]
+    fn unresolved_count_renders_after_the_mark_in_its_color() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.lifecycle = Some(BranchLifecycle::PrOpen);
+        inputs.pr_number = Some(262);
+        inputs.review = Some(ReviewDecision::ChangesRequested);
+        inputs.unresolved = Some(3);
+        let widths = ColumnWidths::default();
+        let line = render(&inputs, widths, 0, &theme, 120);
+        let text = line_text(&line);
+        assert!(text.contains("✗ 3"), "counted mark missing: {text:?}");
+        // Mark and count travel as one span in the verdict's color.
+        let mark_span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains('✗'))
+            .expect("mark span");
+        assert_eq!(mark_span.content.as_ref(), "✗ 3");
+        assert_eq!(
+            mark_span.style.fg,
+            theme.review_style(ReviewDecision::ChangesRequested).fg
+        );
     }
 
     #[test]

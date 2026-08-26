@@ -49,10 +49,10 @@
             </style>
             <attributes>
               <attribute name="foreground" value="#b4befe" start="38" end="48"></attribute>
-              <attribute name="foreground" value="#cdd6f4" start="60" end="63"></attribute>
-              <attribute name="foreground" value="#f9e2af" start="65" end="68"></attribute>
-              <attribute name="foreground" value="#a6e3a1" start="70" end="76"></attribute>
-              <attribute name="foreground" value="#f38ba8" start="77" end="83"></attribute>
+              <attribute name="foreground" value="#cdd6f4" start="60" end="66"></attribute>
+              <attribute name="foreground" value="#f9e2af" start="68" end="71"></attribute>
+              <attribute name="foreground" value="#a6e3a1" start="73" end="79"></attribute>
+              <attribute name="foreground" value="#f38ba8" start="80" end="86"></attribute>
             </attributes>
             <property name="ellipsize">end</property>
             <property name="vexpand-set">true</property>

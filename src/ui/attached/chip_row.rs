@@ -12,6 +12,8 @@ pub(crate) struct ChipPr {
     pub lifecycle: BranchLifecycle,
     pub number: u32,
     pub review: Option<crate::git::forge::ReviewDecision>,
+    /// Unresolved review-thread count, drawn as digits after the mark.
+    pub unresolved: Option<u32>,
 }
 
 impl ChipPr {
@@ -22,6 +24,7 @@ impl ChipPr {
             lifecycle,
             number,
             review: None,
+            unresolved: None,
         }
     }
 }
@@ -34,17 +37,20 @@ fn pr_chip_parts(pr: Option<ChipPr>, theme: &Theme) -> Option<(Vec<Span<'static>
     let pr = pr?;
     // Laid out inline against the whole row, so the lifecycle word never has
     // to yield to the mark here.
-    let chip = crate::ui::theme::pr_chip(pr.lifecycle, Some(pr.number), pr.review, usize::MAX)?;
+    let chip = crate::ui::theme::pr_chip(
+        pr.lifecycle,
+        Some(pr.number),
+        pr.review,
+        pr.unresolved,
+        usize::MAX,
+    )?;
     let style = theme
         .lifecycle_style(Some(pr.lifecycle))
         .unwrap_or_else(|| theme.dim_style());
     let mut spans = vec![Span::styled(chip.lifecycle_text.clone(), style)];
-    if let Some(d) = chip.review {
+    if let Some((mark, d)) = chip.mark() {
         spans.push(Span::raw(" ".to_string()));
-        spans.push(Span::styled(
-            crate::ui::theme::review_glyph(d).to_string(),
-            theme.review_style(d),
-        ));
+        spans.push(Span::styled(mark, theme.review_style(d)));
     }
     Some((spans, chip.width()))
 }
@@ -470,6 +476,7 @@ mod tests {
                         lifecycle: BranchLifecycle::PrOpen,
                         number: 152,
                         review: Some(ReviewDecision::ChangesRequested),
+                        unresolved: None,
                     }),
                     None,
                     &theme,

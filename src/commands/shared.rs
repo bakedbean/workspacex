@@ -110,9 +110,13 @@ pub async fn enrich_with_pr_status(records: &mut [SharedWorkspaceRecord]) {
         let path = std::path::PathBuf::from(&rec.worktree_path);
         let branch = rec.branch.clone();
         async move {
+            // The basic fetch: only lifecycle/pr_number are consumed here,
+            // and the full fetch's follow-up probes (review gate, unresolved
+            // threads) could burn the timeout and discard a status `gh pr
+            // view` had already answered.
             match tokio::time::timeout(
                 PR_ENRICH_TIMEOUT,
-                crate::git::forge::fetch_pr_status(&path, &branch),
+                crate::git::forge::fetch_pr_status_basic(&path, &branch),
             )
             .await
             {

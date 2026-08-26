@@ -37,8 +37,14 @@ const BLANK_GLYPH: &str = "\u{2007}"; // figure space: 3 bytes, digit width
 /// ranges in assets/walker-theme/item_menus-wsx.xml.
 pub(crate) const PR_START: usize = NAME_W + 2; // glyph + " " + "#N"
 pub(crate) const PR_END: usize = PR_START + 3 + 1 + PR_W;
+// Glyph (3 bytes) + a separating space + up to 2 ASCII digits of
+// unresolved-thread count, space-padded: ASCII digits and spaces are both
+// 1 byte, so the slot's byte width holds still however many digits show.
+// The separator matches ui::theme::review_mark — the verdict glyphs render
+// wider than one cell in many fonts, and a fused digit overlaps them.
 pub(crate) const REVIEW_START: usize = PR_END + 2 + SUFFIX_W + 2;
-pub(crate) const REVIEW_END: usize = REVIEW_START + 3;
+pub(crate) const REVIEW_END: usize = REVIEW_START + 3 + 1 + REVIEW_COUNT_W;
+const REVIEW_COUNT_W: usize = 2;
 pub(crate) const DIRTY_START: usize = REVIEW_END + 2;
 pub(crate) const DIRTY_END: usize = DIRTY_START + 3;
 pub(crate) const ADDS_START: usize = DIRTY_END + 2;
@@ -88,15 +94,25 @@ pub(crate) fn compose_text(repo: &str, slug: &str, row: &ScmCacheRow) -> String 
     // The approval mark gets its own fixed slot. A Pango attribute range is
     // a single static color, so unlike the TUI chip this mark can't be
     // colored per verdict — the glyph shapes carry the whole distinction and
-    // the theme paints the slot one neutral hue.
-    let review = row
-        .pr_review
-        .filter(|_| {
-            row.pr_lifecycle
-                .is_some_and(crate::ui::theme::lifecycle_shows_review)
-        })
-        .map(crate::ui::theme::review_glyph)
-        .unwrap_or(BLANK_GLYPH);
+    // the theme paints the slot one neutral hue. The unresolved-thread
+    // count rides directly after the glyph (`✗3`), clamped to 99 so it
+    // can't outgrow its two ASCII columns.
+    let review = match row.pr_review.filter(|_| {
+        row.pr_lifecycle
+            .is_some_and(crate::ui::theme::lifecycle_shows_review)
+    }) {
+        Some(d) => {
+            let count = match row.pr_unresolved {
+                Some(n) if n > 0 => n.min(99).to_string(),
+                _ => String::new(),
+            };
+            format!(
+                "{} {count:<REVIEW_COUNT_W$}",
+                crate::ui::theme::review_glyph(d)
+            )
+        }
+        None => format!("{BLANK_GLYPH} {:REVIEW_COUNT_W$}", ""),
+    };
     let dirty = if row.dirty == Some(true) {
         GLYPH_DIRTY
     } else {
@@ -394,13 +410,40 @@ mod entry_tests {
             let text = compose_text("workspacex", "fix-bug", &row);
             assert_eq!(
                 &text[REVIEW_START..REVIEW_END],
-                glyph,
+                format!("{glyph}   "),
                 "{verdict:?}: {text}"
             );
             // The fields after it must not have shifted.
             assert_eq!(&text[DIRTY_START..DIRTY_END], "\u{25cf}", "{text}");
             assert_eq!(&text[ADDS_START..ADDS_END], "+45   ", "{text}");
         }
+    }
+
+    #[test]
+    fn unresolved_count_rides_the_mark_without_moving_later_fields() {
+        let mut row = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrOpen),
+            pr_number: Some(123),
+            pr_review: Some(ReviewDecision::ChangesRequested),
+            dirty: Some(true),
+            additions: Some(45),
+            deletions: Some(12),
+            fetched_at: Some(0),
+            ..Default::default()
+        };
+        // One digit, two digits, and the 99 clamp all stay inside the
+        // slot's fixed byte width, so every later colored range holds still.
+        for (unresolved, want) in [(3, "✗ 3 "), (12, "✗ 12"), (250, "✗ 99")] {
+            row.pr_unresolved = Some(unresolved);
+            let text = compose_text("workspacex", "fix-bug", &row);
+            assert_eq!(&text[REVIEW_START..REVIEW_END], want, "{text}");
+            assert_eq!(&text[DIRTY_START..DIRTY_END], "\u{25cf}", "{text}");
+            assert_eq!(&text[ADDS_START..ADDS_END], "+45   ", "{text}");
+        }
+        // Zero renders a bare mark, same as unknown.
+        row.pr_unresolved = Some(0);
+        let text = compose_text("workspacex", "fix-bug", &row);
+        assert_eq!(&text[REVIEW_START..REVIEW_END], "✗   ", "{text}");
     }
 
     #[test]
@@ -424,7 +467,11 @@ mod entry_tests {
         };
         for row in [base.clone(), merged] {
             let text = compose_text("workspacex", "fix-bug", &row);
-            assert_eq!(&text[REVIEW_START..REVIEW_END], BLANK_GLYPH, "{text}");
+            assert_eq!(
+                &text[REVIEW_START..REVIEW_END],
+                format!("{BLANK_GLYPH}   "),
+                "{text}"
+            );
             assert_eq!(&text[DIRTY_START..DIRTY_END], "\u{25cf}", "{text}");
         }
     }
@@ -677,6 +724,7 @@ mod entry_tests {
                     number: Some(5),
                     url: None,
                     review: None,
+                    unresolved: None,
                 },
                 0,
             )

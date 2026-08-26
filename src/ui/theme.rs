@@ -440,6 +440,22 @@ pub(crate) fn review_glyph(d: crate::git::forge::ReviewDecision) -> &'static str
     }
 }
 
+/// The review mark with its trailing unresolved-conversation count:
+/// `✗ 3` for changes requested with three threads still open, bare `✗`
+/// when every thread is resolved (or the count is unknown). One string so
+/// surfaces that can only style a single run — the walker menu's static
+/// Pango attribute range — paint mark and count together. The space is
+/// load-bearing: the verdict glyphs are ambiguous-width (`◌` is literally
+/// the dotted-circle combining-mark carrier), and many terminal fonts draw
+/// them wider than one cell, so a digit fused directly onto the glyph
+/// renders on top of it.
+pub(crate) fn review_mark(d: crate::git::forge::ReviewDecision, unresolved: Option<u32>) -> String {
+    match unresolved {
+        Some(n) if n > 0 => format!("{} {n}", review_glyph(d)),
+        _ => review_glyph(d).to_string(),
+    }
+}
+
 /// Whether a verdict is worth showing for this lifecycle.
 ///
 /// Delegates to [`crate::git::forge::BranchLifecycle::awaits_review`] rather
@@ -458,14 +474,25 @@ pub(crate) struct PrChip {
     /// `None` when the PR has no verdict, or when its lifecycle doesn't
     /// warrant showing one — see [`lifecycle_shows_review`].
     pub review: Option<crate::git::forge::ReviewDecision>,
+    /// Unresolved review-thread count, rendered as digits after the mark.
+    /// Only meaningful alongside `review` — without a verdict there is no
+    /// mark to hang it on and the chip ignores it.
+    pub unresolved: Option<u32>,
 }
 
 impl PrChip {
+    /// The trailing mark — `✗3`, `✓`, … — with the verdict that colors it,
+    /// or `None` when the chip has no verdict to mark. The one place the
+    /// mark's text is composed, so the TUI and desktop surfaces can't drift.
+    pub fn mark(&self) -> Option<(String, crate::git::forge::ReviewDecision)> {
+        self.review.map(|d| (review_mark(d, self.unresolved), d))
+    }
+
     /// The chip as one string. Callers that need per-part color build spans
     /// from the fields instead.
     pub fn text(&self) -> String {
-        match self.review {
-            Some(d) => format!("{} {}", self.lifecycle_text, review_glyph(d)),
+        match self.mark() {
+            Some((mark, _)) => format!("{} {}", self.lifecycle_text, mark),
             None => self.lifecycle_text.clone(),
         }
     }
@@ -473,7 +500,8 @@ impl PrChip {
     /// Display columns the chip occupies. Every glyph involved is
     /// single-width, so char count is the column count.
     pub fn width(&self) -> usize {
-        self.lifecycle_text.chars().count() + if self.review.is_some() { 2 } else { 0 }
+        self.lifecycle_text.chars().count()
+            + self.mark().map_or(0, |(mark, _)| 1 + mark.chars().count())
     }
 }
 
@@ -490,6 +518,7 @@ pub(crate) fn pr_chip(
     lifecycle: crate::git::forge::BranchLifecycle,
     number: Option<u32>,
     review: Option<crate::git::forge::ReviewDecision>,
+    unresolved: Option<u32>,
     max_width: usize,
 ) -> Option<PrChip> {
     let (glyph, label) = lifecycle_chip(lifecycle);
@@ -504,6 +533,7 @@ pub(crate) fn pr_chip(
     let mut chip = PrChip {
         lifecycle_text: with_label,
         review,
+        unresolved: unresolved.filter(|_| review.is_some()),
     };
     if review.is_some() && chip.width() > max_width {
         chip.lifecycle_text = match number {
@@ -570,7 +600,7 @@ mod pr_chip_tests {
 
     #[test]
     fn approval_mark_trails_the_lifecycle_label() {
-        let chip = pr_chip(PrOpen, Some(262), Some(Approved), WIDE).expect("chip");
+        let chip = pr_chip(PrOpen, Some(262), Some(Approved), None, WIDE).expect("chip");
         assert_eq!(chip.lifecycle_text, "⏺ #262 open");
         assert_eq!(chip.review, Some(Approved));
         assert_eq!(chip.text(), "⏺ #262 open ✓");
@@ -580,7 +610,7 @@ mod pr_chip_tests {
     fn chip_without_a_verdict_is_unchanged() {
         // A repo with no approval gate reports no verdict; its chip must be
         // byte-identical to what wsx rendered before this feature existed.
-        let chip = pr_chip(PrOpen, Some(262), None, WIDE).expect("chip");
+        let chip = pr_chip(PrOpen, Some(262), None, None, WIDE).expect("chip");
         assert_eq!(chip.text(), "⏺ #262 open");
     }
 
@@ -590,15 +620,58 @@ mod pr_chip_tests {
         // PR would otherwise carry a permanent green tick. Drafts hide it
         // too: a PR isn't eligible for approval until it's marked ready.
         for lc in [PrMerged, PrClosed, PrDraft] {
-            let chip = pr_chip(lc, Some(7), Some(Approved), WIDE).expect("chip");
+            let chip = pr_chip(lc, Some(7), Some(Approved), None, WIDE).expect("chip");
             assert_eq!(chip.review, None, "{lc:?} must not show a verdict");
             assert!(!chip.text().contains('✓'), "{lc:?}: {:?}", chip.text());
         }
         // Open and conflicted are still open, and still awaiting review.
         for lc in [PrOpen, PrConflicted] {
-            let chip = pr_chip(lc, Some(7), Some(Approved), WIDE).expect("chip");
+            let chip = pr_chip(lc, Some(7), Some(Approved), None, WIDE).expect("chip");
             assert_eq!(chip.review, Some(Approved), "{lc:?} must show a verdict");
         }
+    }
+
+    #[test]
+    fn unresolved_count_trails_the_mark() {
+        let chip = pr_chip(PrOpen, Some(262), Some(ChangesRequested), Some(3), WIDE).expect("chip");
+        assert_eq!(chip.text(), "⏺ #262 open ✗ 3");
+        assert_eq!(chip.width(), chip.text().chars().count());
+    }
+
+    #[test]
+    fn zero_and_unknown_counts_render_a_bare_mark() {
+        // Some(0) — every conversation resolved — and None — never fetched —
+        // both draw nothing: a literal "✓0" would read as noise.
+        for unresolved in [Some(0), None] {
+            let chip = pr_chip(PrOpen, Some(262), Some(Approved), unresolved, WIDE).expect("chip");
+            assert_eq!(chip.text(), "⏺ #262 open ✓", "unresolved {unresolved:?}");
+        }
+    }
+
+    #[test]
+    fn a_count_without_a_verdict_is_dropped() {
+        // No mark, nothing to hang the number on — the chip must be
+        // byte-identical to a count-less one.
+        let chip = pr_chip(PrOpen, Some(262), None, Some(4), WIDE).expect("chip");
+        assert_eq!(chip.text(), "⏺ #262 open");
+        assert_eq!(chip.unresolved, None);
+    }
+
+    /// The count survives a tight column the same way the mark does: the
+    /// lifecycle word is the half that yields.
+    #[test]
+    fn a_tight_column_keeps_the_counted_mark() {
+        // "⏺ #1234 conflict ✗ 12" is 21 cols; at 16 the label goes.
+        let chip = pr_chip(
+            PrConflicted,
+            Some(1234),
+            Some(ChangesRequested),
+            Some(12),
+            16,
+        )
+        .expect("chip");
+        assert_eq!(chip.text(), "⏺ #1234 ✗ 12");
+        assert!(chip.width() <= 16);
     }
 
     #[test]
@@ -606,11 +679,13 @@ mod pr_chip_tests {
         // `⏺ #1234 conflict ✗` is 18 cols and doesn't fit the 16-col default
         // PR column. The lifecycle word is the redundant half — the chip's
         // color already encodes lifecycle — so the verdict survives.
-        let chip = pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), 16).expect("chip");
+        let chip =
+            pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), None, 16).expect("chip");
         assert_eq!(chip.text(), "⏺ #1234 ✗");
         assert!(chip.width() <= 16);
         // Given the room for the full form, nothing is dropped.
-        let roomy = pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), 18).expect("chip");
+        let roomy =
+            pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), None, 18).expect("chip");
         assert_eq!(roomy.text(), "⏺ #1234 conflict ✗");
     }
 
@@ -618,18 +693,18 @@ mod pr_chip_tests {
     fn the_label_is_kept_when_there_is_no_mark_to_protect() {
         // Without a verdict there's nothing to trade the label against, so
         // an overlong chip truncates exactly as it always did.
-        let chip = pr_chip(PrConflicted, Some(1234), None, 16).expect("chip");
+        let chip = pr_chip(PrConflicted, Some(1234), None, None, 16).expect("chip");
         assert_eq!(chip.text(), "⏺ #1234 conflict");
     }
 
     #[test]
     fn no_pr_yields_no_chip() {
-        assert!(pr_chip(NoPr, None, Some(Approved), WIDE).is_none());
+        assert!(pr_chip(NoPr, None, Some(Approved), None, WIDE).is_none());
     }
 
     #[test]
     fn width_counts_characters_not_bytes() {
-        let chip = pr_chip(PrOpen, Some(262), Some(Approved), WIDE).expect("chip");
+        let chip = pr_chip(PrOpen, Some(262), Some(Approved), None, WIDE).expect("chip");
         assert_eq!(chip.width(), chip.text().chars().count());
         assert_eq!(chip.width(), 13);
     }

@@ -329,6 +329,7 @@ mod tests {
                     number: Some(42),
                     url: Some("https://github.com/o/r/pull/42".into()),
                     review: Some(crate::git::forge::ReviewDecision::Approved),
+                    unresolved: None,
                 },
                 // Stale enough that the refresh will actually try to refetch.
                 0,
@@ -382,6 +383,7 @@ mod tests {
                 number: Some(42),
                 url: None,
                 review: None,
+                unresolved: None,
             }))
         })
         .await

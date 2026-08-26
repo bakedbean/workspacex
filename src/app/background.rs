@@ -327,6 +327,7 @@ where
                     g.pr_lifecycle.remove(&id);
                     g.pr_number.remove(&id);
                     g.pr_review.remove(&id);
+                    g.pr_unresolved.remove(&id);
                     g.pr_last_poll_ms.remove(&id);
                     // The persisted row too, not just these in-memory maps:
                     // `wsx waybar menu-entries` and `wsx menubar plugin` are
@@ -428,6 +429,16 @@ where
                         }
                         None => {
                             g.pr_review.remove(&id);
+                        }
+                    }
+                    // Same removal rule as the verdict: a probe that
+                    // couldn't answer must not leave a stale count behind.
+                    match status.unresolved {
+                        Some(n) => {
+                            g.pr_unresolved.insert(id, n);
+                        }
+                        None => {
+                            g.pr_unresolved.remove(&id);
                         }
                     }
                     // Write-through so `wsx waybar menu-entries` (a separate

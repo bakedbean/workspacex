@@ -62,9 +62,9 @@ pub(crate) fn pr_field(c: &ScmCacheRow) -> String {
             .is_some_and(crate::ui::theme::lifecycle_shows_review)
     }) {
         Some(d) => {
-            let mark = crate::ui::theme::review_glyph(d);
+            let mark = crate::ui::theme::review_mark(d, c.pr_unresolved);
             if field.is_empty() {
-                mark.to_string()
+                mark
             } else {
                 format!("{field} {mark}")
             }
@@ -347,6 +347,26 @@ mod plugin_tests {
             ..Default::default()
         };
         assert_eq!(pr_field(&draft), "#7 draft");
+    }
+
+    #[test]
+    fn pr_field_appends_the_unresolved_count_to_the_mark() {
+        let c = ScmCacheRow {
+            pr_lifecycle: Some(BranchLifecycle::PrOpen),
+            pr_number: Some(7),
+            pr_review: Some(ReviewDecision::ChangesRequested),
+            pr_unresolved: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(pr_field(&c), "#7 ✗ 3");
+        // Zero and unknown both render the bare mark.
+        for unresolved in [Some(0), None] {
+            let c = ScmCacheRow {
+                pr_unresolved: unresolved,
+                ..c.clone()
+            };
+            assert_eq!(pr_field(&c), "#7 ✗", "unresolved {unresolved:?}");
+        }
     }
 
     #[test]

@@ -37,6 +37,8 @@ pub struct DetailInputs<'a> {
     /// The PR's review verdict, drawn as a trailing mark on the header chip.
     /// `None` when the repo has no approval gate or the verdict is unknown.
     pub review: Option<ReviewDecision>,
+    /// Unresolved review-thread count, drawn as digits after the mark.
+    pub unresolved: Option<u32>,
     pub status: Status,
     pub ago_secs: Option<u64>,
     pub reply_draft: &'a str,
@@ -139,6 +141,7 @@ pub fn render(
         inputs.lifecycle,
         inputs.pr_number,
         inputs.review,
+        inputs.unresolved,
         inputs.diff,
         inputs.procs.len() as u32,
         inputs.status,
@@ -421,6 +424,7 @@ pub(crate) fn build_header_strip(
     lifecycle: Option<BranchLifecycle>,
     pr_number: Option<u32>,
     review: Option<ReviewDecision>,
+    unresolved: Option<u32>,
     diff: Option<DiffStats>,
     procs: u32,
     status: Status,
@@ -455,7 +459,8 @@ pub(crate) fn build_header_strip(
     if let Some(lc) = lifecycle {
         // The header lays the chip out inline, so it never has to trade the
         // lifecycle word against the approval mark — hence the unbounded width.
-        if let Some(chip) = crate::ui::theme::pr_chip(lc, pr_number, review, usize::MAX) {
+        if let Some(chip) = crate::ui::theme::pr_chip(lc, pr_number, review, unresolved, usize::MAX)
+        {
             col += 2;
             spans.push(Span::raw("  ".to_string()));
             let chip_width = chip.width();
@@ -474,12 +479,9 @@ pub(crate) fn build_header_strip(
                     .lifecycle_style(Some(lc))
                     .unwrap_or_else(|| theme.dim_style()),
             ));
-            if let Some(d) = chip.review {
+            if let Some((mark, d)) = chip.mark() {
                 spans.push(Span::raw(" ".to_string()));
-                spans.push(Span::styled(
-                    crate::ui::theme::review_glyph(d).to_string(),
-                    theme.review_style(d),
-                ));
+                spans.push(Span::styled(mark, theme.review_style(d)));
             }
         }
     }
@@ -865,6 +867,7 @@ mod tests {
                 pr_title: None,
                 pr_number: None,
                 review: None,
+                unresolved: None,
                 status: Status::Idle,
                 ago_secs: None,
                 reply_draft: "",
@@ -887,6 +890,7 @@ mod tests {
             "repo-overview",
             "bakedbean/repo-overview",
             Some(BranchLifecycle::PrOpen),
+            None,
             None,
             None,
             Some(DiffStats {
@@ -927,6 +931,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             0,
             Status::Idle,
             None,
@@ -944,6 +949,7 @@ mod tests {
         let (line, chip) = build_header_strip(
             "ws",
             "br",
+            None,
             None,
             None,
             None,
@@ -974,6 +980,7 @@ mod tests {
             Some(99),
             None,
             None,
+            None,
             0,
             Status::Idle,
             None,
@@ -994,6 +1001,7 @@ mod tests {
             Some(BranchLifecycle::PrOpen),
             Some(152),
             Some(ReviewDecision::Approved),
+            None,
             None,
             0,
             Status::Idle,
@@ -1026,6 +1034,7 @@ mod tests {
             Some(152),
             Some(ReviewDecision::Approved),
             None,
+            None,
             0,
             Status::Idle,
             None,
@@ -1045,6 +1054,7 @@ mod tests {
             "br",
             Some(BranchLifecycle::PrOpen),
             Some(152),
+            None,
             None,
             None,
             0,
@@ -1154,6 +1164,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Question,
             ago_secs: Some(29),
             reply_draft: "",
@@ -1205,6 +1216,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1253,6 +1265,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1307,6 +1320,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1349,6 +1363,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1398,6 +1413,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1451,6 +1467,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1507,6 +1524,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",
@@ -1709,6 +1727,7 @@ mod tests {
             pr_title: None,
             pr_number: None,
             review: None,
+            unresolved: None,
             status: Status::Idle,
             ago_secs: None,
             reply_draft: "",

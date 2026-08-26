@@ -1161,7 +1161,10 @@ mod tests {
         assert!(argv.contains(&"owner=o".to_string()));
         assert!(argv.contains(&"name=r".to_string()));
         assert!(argv.contains(&"number=42".to_string()));
-        let query = argv.iter().find(|a| a.starts_with("query=")).expect("query");
+        let query = argv
+            .iter()
+            .find(|a| a.starts_with("query="))
+            .expect("query");
         assert!(query.contains("reviewThreads"));
         assert!(query.contains("isResolved"));
     }

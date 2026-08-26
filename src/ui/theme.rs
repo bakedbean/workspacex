@@ -497,9 +497,7 @@ impl PrChip {
     /// single-width, so char count is the column count.
     pub fn width(&self) -> usize {
         self.lifecycle_text.chars().count()
-            + self
-                .mark()
-                .map_or(0, |(mark, _)| 1 + mark.chars().count())
+            + self.mark().map_or(0, |(mark, _)| 1 + mark.chars().count())
     }
 }
 
@@ -631,8 +629,7 @@ mod pr_chip_tests {
 
     #[test]
     fn unresolved_count_trails_the_mark() {
-        let chip =
-            pr_chip(PrOpen, Some(262), Some(ChangesRequested), Some(3), WIDE).expect("chip");
+        let chip = pr_chip(PrOpen, Some(262), Some(ChangesRequested), Some(3), WIDE).expect("chip");
         assert_eq!(chip.text(), "⏺ #262 open ✗3");
         assert_eq!(chip.width(), chip.text().chars().count());
     }
@@ -661,8 +658,14 @@ mod pr_chip_tests {
     #[test]
     fn a_tight_column_keeps_the_counted_mark() {
         // "⏺ #1234 conflict ✗12" is 20 cols; at 16 the label goes.
-        let chip =
-            pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), Some(12), 16).expect("chip");
+        let chip = pr_chip(
+            PrConflicted,
+            Some(1234),
+            Some(ChangesRequested),
+            Some(12),
+            16,
+        )
+        .expect("chip");
         assert_eq!(chip.text(), "⏺ #1234 ✗12");
         assert!(chip.width() <= 16);
     }
@@ -672,11 +675,13 @@ mod pr_chip_tests {
         // `⏺ #1234 conflict ✗` is 18 cols and doesn't fit the 16-col default
         // PR column. The lifecycle word is the redundant half — the chip's
         // color already encodes lifecycle — so the verdict survives.
-        let chip = pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), None, 16).expect("chip");
+        let chip =
+            pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), None, 16).expect("chip");
         assert_eq!(chip.text(), "⏺ #1234 ✗");
         assert!(chip.width() <= 16);
         // Given the room for the full form, nothing is dropped.
-        let roomy = pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), None, 18).expect("chip");
+        let roomy =
+            pr_chip(PrConflicted, Some(1234), Some(ChangesRequested), None, 18).expect("chip");
         assert_eq!(roomy.text(), "⏺ #1234 conflict ✗");
     }
 

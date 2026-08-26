@@ -81,6 +81,7 @@ pub(super) fn compute_attention_line(
                 needs_attention: app.workspace_needs_attention.contains(&w.id),
                 lifecycle: app.pr_lifecycle.get(&w.id).copied(),
                 awaiting_tool: app.awaiting_permission(w.id),
+                ago_secs: dashboard::workspace_age_secs(app, w.id, now_ms),
             }
         })
         .collect();

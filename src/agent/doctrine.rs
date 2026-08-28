@@ -2,8 +2,9 @@
 //!
 //! These are non-negotiable defaults; an agent may stand them down only if a
 //! task plainly does not warrant the planning. An install may replace the text
-//! via the `process_doctrine` setting, or disable injection entirely by setting
-//! it to a disable sentinel (`off` / `none` / `disabled`).
+//! via the `process_doctrine` setting, append its own clauses via
+//! `process_doctrine_extra`, or disable injection entirely by setting
+//! `process_doctrine` to a disable sentinel (`off` / `none` / `disabled`).
 
 use crate::pty::session::AgentKind;
 
@@ -16,10 +17,6 @@ const DOCTRINE_HEADER: &str = "## wsx workspace operating doctrine\n\n\
 const CLAUSE_PLAN: &str = "- Think and plan before acting. Determine scope first, \
     applying maximum effort and explicit planning until the scope is clear. Do not \
     start editing code before you understand what you are building.";
-
-const CLAUSE_SUPERPOWERS: &str = "- Use the superpowers skills by default when \
-    evaluating the initial request. If the task turns out not to need that level \
-    of planning, you may discard them and proceed.";
 
 const CLAUSE_COMMITS: &str = "- Break the work into logical commits on this branch. \
     A workspace that ends with a single commit should be the exception, reserved \
@@ -74,46 +71,55 @@ const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
 /// The effective doctrine for a spawn, or `None` when injection is disabled.
 ///
 /// Resolution of the `process_doctrine` setting:
-/// - unset, or blank/whitespace-only → the agent-tailored default.
+/// - unset, or blank/whitespace-only → the built-in default.
 /// - a disable sentinel (`off` / `none` / `disabled`, case-insensitive) →
 ///   `None`, suppressing injection for that install.
 /// - any other value → that value verbatim, for every agent.
+///
+/// Then, unless injection is disabled, a non-blank `process_doctrine_extra`
+/// setting is appended verbatim — neither string is trimmed; a separating
+/// newline is inserted only when the base does not already end in one. This
+/// is the additive hook: it lets an install add clauses (e.g. "use the
+/// superpowers skills by default") without freezing a copy of the whole
+/// default text.
 pub fn resolve_effective_doctrine(
     store: &crate::data::store::Store,
     agent: AgentKind,
 ) -> Option<String> {
-    match store.get_setting("process_doctrine") {
+    let base = match store.get_setting("process_doctrine") {
         Ok(Some(v)) => {
             let trimmed = v.trim();
             if trimmed.is_empty() {
-                Some(process_doctrine(agent))
+                process_doctrine(agent)
             } else if DISABLE_SENTINELS.contains(&trimmed.to_lowercase().as_str()) {
-                None
+                return None;
             } else {
-                Some(v)
+                v
             }
         }
-        _ => Some(process_doctrine(agent)),
-    }
+        _ => process_doctrine(agent),
+    };
+    let extra = match store.get_setting("process_doctrine_extra") {
+        Ok(Some(v)) if !v.trim().is_empty() => v,
+        _ => return Some(base),
+    };
+    let sep = if base.ends_with('\n') { "" } else { "\n" };
+    Some(format!("{base}{sep}{extra}"))
 }
 
-pub fn process_doctrine(agent: AgentKind) -> String {
-    // omp, like Claude and Pi, loads skills from ~/.claude/skills — its Claude
-    // discovery provider reads `<user .claude>/skills/*/SKILL.md` — so the
-    // superpowers clause points at something that is actually there. Observed
-    // live: a cold omp resolves skill://using-superpowers on startup. Codex and
-    // Hermes do not, which is why they stay excluded.
-    let include_superpowers = matches!(agent, AgentKind::Claude | AgentKind::Pi | AgentKind::Omp);
-    let mut clauses = vec![CLAUSE_PLAN];
-    if include_superpowers {
-        clauses.push(CLAUSE_SUPERPOWERS);
-    }
-    clauses.push(CLAUSE_COMMITS);
-    clauses.push(CLAUSE_WSX_SKILL);
-    clauses.push(CLAUSE_HANDOFF_OUT);
-    clauses.push(CLAUSE_HANDOFF_IN);
-    clauses.push(CLAUSE_STATUS);
-    clauses.push(CLAUSE_RECAP);
+/// The default doctrine. Every agent kind receives the same text: the
+/// doctrine deliberately names no third-party skill bundle (which skills a
+/// developer runs is a per-install choice — see `process_doctrine_extra`).
+pub fn process_doctrine(_agent: AgentKind) -> String {
+    let clauses = [
+        CLAUSE_PLAN,
+        CLAUSE_COMMITS,
+        CLAUSE_WSX_SKILL,
+        CLAUSE_HANDOFF_OUT,
+        CLAUSE_HANDOFF_IN,
+        CLAUSE_STATUS,
+        CLAUSE_RECAP,
+    ];
     format!("{DOCTRINE_HEADER}\n\n{}", clauses.join("\n"))
 }
 
@@ -122,68 +128,37 @@ mod tests {
     use super::*;
     use crate::pty::session::AgentKind;
 
-    /// omp reads ~/.claude/skills natively, so it belongs with Claude and Pi,
-    /// not with Codex.
     #[test]
-    fn omp_gets_the_superpowers_clause() {
-        let d = process_doctrine(AgentKind::Omp).to_lowercase();
-        assert!(d.contains("superpowers"), "omp must get superpowers: {d}");
-        assert!(d.contains("wsx skill"), "{d}");
-        assert!(d.contains("commit"), "{d}");
+    fn doctrine_covers_core_practices_for_every_agent() {
+        for agent in AgentKind::ALL {
+            let d = process_doctrine(agent).to_lowercase();
+            assert!(
+                d.contains("plan"),
+                "{agent:?} must get planning clause: {d}"
+            );
+            assert!(
+                d.contains("commit"),
+                "{agent:?} must get commits clause: {d}"
+            );
+            assert!(
+                d.contains("wsx skill"),
+                "{agent:?} must get wsx skill clause: {d}"
+            );
+        }
     }
 
+    /// Which skill bundles a developer runs is a per-install choice, so the
+    /// built-in doctrine names none. Installs that want one opt in through
+    /// `process_doctrine_extra`.
     #[test]
-    fn doctrine_covers_all_practices_for_claude() {
-        let d = process_doctrine(AgentKind::Claude).to_lowercase();
-        assert!(d.contains("plan"), "must mention planning: {d}");
-        assert!(
-            d.contains("superpowers"),
-            "claude must get superpowers clause: {d}"
-        );
-        assert!(d.contains("commit"), "must mention commits: {d}");
-        assert!(d.contains("wsx skill"), "must mention the wsx skill: {d}");
-    }
-
-    #[test]
-    fn pi_also_gets_superpowers() {
-        let d = process_doctrine(AgentKind::Pi).to_lowercase();
-        assert!(
-            d.contains("superpowers"),
-            "pi must get superpowers clause: {d}"
-        );
-    }
-
-    #[test]
-    fn hermes_omits_superpowers_but_keeps_the_rest() {
-        let d = process_doctrine(AgentKind::Hermes).to_lowercase();
-        assert!(
-            !d.contains("superpowers"),
-            "hermes must NOT get superpowers clause: {d}"
-        );
-        assert!(
-            d.contains("plan"),
-            "hermes must still get planning clause: {d}"
-        );
-        assert!(
-            d.contains("commit"),
-            "hermes must still get commits clause: {d}"
-        );
-        assert!(
-            d.contains("wsx skill"),
-            "hermes must still get wsx skill clause: {d}"
-        );
-    }
-
-    #[test]
-    fn codex_omits_superpowers_but_keeps_the_rest() {
-        let d = process_doctrine(AgentKind::Codex).to_lowercase();
-        assert!(
-            !d.contains("superpowers"),
-            "codex must NOT get superpowers clause (skills live under ~/.claude): {d}"
-        );
-        assert!(d.contains("plan"), "codex keeps planning clause: {d}");
-        assert!(d.contains("commit"), "codex keeps commits clause: {d}");
-        assert!(d.contains("wsx skill"), "codex keeps wsx skill clause: {d}");
+    fn doctrine_names_no_third_party_skill_bundle() {
+        for agent in AgentKind::ALL {
+            let d = process_doctrine(agent).to_lowercase();
+            assert!(
+                !d.contains("superpowers"),
+                "{agent:?} doctrine must not hardcode superpowers: {d}"
+            );
+        }
     }
 
     #[test]
@@ -273,6 +248,74 @@ mod tests {
                 "sentinel {sentinel:?} should disable the doctrine"
             );
         }
+    }
+
+    #[test]
+    fn resolve_appends_extra_to_default() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        // Indentation and the trailing newline are the operator's, and must
+        // survive verbatim (`@file` content routinely carries both).
+        let extra = "- Use the superpowers skills.\n  - Prefer brainstorming first.\n";
+        store.set_setting("process_doctrine_extra", extra).unwrap();
+        let d = resolve_effective_doctrine(&store, AgentKind::Claude).unwrap();
+        let base = process_doctrine(AgentKind::Claude);
+        assert_eq!(d, format!("{base}\n{extra}"));
+    }
+
+    #[test]
+    fn resolve_does_not_double_newline_when_base_already_ends_with_one() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store
+            .set_setting("process_doctrine", "CUSTOM DOCTRINE\n")
+            .unwrap();
+        store
+            .set_setting("process_doctrine_extra", "EXTRA")
+            .unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Hermes),
+            Some("CUSTOM DOCTRINE\nEXTRA".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_appends_extra_to_custom_override() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store
+            .set_setting("process_doctrine", "CUSTOM DOCTRINE")
+            .unwrap();
+        store
+            .set_setting("process_doctrine_extra", "EXTRA")
+            .unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Codex),
+            Some("CUSTOM DOCTRINE\nEXTRA".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_ignores_blank_extra() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store
+            .set_setting("process_doctrine_extra", "  \n ")
+            .unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Pi),
+            Some(process_doctrine(AgentKind::Pi))
+        );
+    }
+
+    #[test]
+    fn resolve_disabled_doctrine_drops_extra_too() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store.set_setting("process_doctrine", "off").unwrap();
+        store
+            .set_setting("process_doctrine_extra", "EXTRA")
+            .unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Claude),
+            None,
+            "a disabled doctrine must not leak the extra clauses"
+        );
     }
 
     #[test]

@@ -77,9 +77,11 @@ const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
 /// - any other value → that value verbatim, for every agent.
 ///
 /// Then, unless injection is disabled, a non-blank `process_doctrine_extra`
-/// setting is appended verbatim on its own line. This is the additive hook:
-/// it lets an install add clauses (e.g. "use the superpowers skills by
-/// default") without freezing a copy of the whole default text.
+/// setting is appended verbatim — neither string is trimmed; a separating
+/// newline is inserted only when the base does not already end in one. This
+/// is the additive hook: it lets an install add clauses (e.g. "use the
+/// superpowers skills by default") without freezing a copy of the whole
+/// default text.
 pub fn resolve_effective_doctrine(
     store: &crate::data::store::Store,
     agent: AgentKind,
@@ -101,7 +103,8 @@ pub fn resolve_effective_doctrine(
         Ok(Some(v)) if !v.trim().is_empty() => v,
         _ => return Some(base),
     };
-    Some(format!("{}\n{}", base.trim_end(), extra.trim()))
+    let sep = if base.ends_with('\n') { "" } else { "\n" };
+    Some(format!("{base}{sep}{extra}"))
 }
 
 /// The default doctrine. Every agent kind receives the same text: the
@@ -125,17 +128,9 @@ mod tests {
     use super::*;
     use crate::pty::session::AgentKind;
 
-    const ALL_AGENTS: [AgentKind; 5] = [
-        AgentKind::Claude,
-        AgentKind::Pi,
-        AgentKind::Omp,
-        AgentKind::Hermes,
-        AgentKind::Codex,
-    ];
-
     #[test]
     fn doctrine_covers_core_practices_for_every_agent() {
-        for agent in ALL_AGENTS {
+        for agent in AgentKind::ALL {
             let d = process_doctrine(agent).to_lowercase();
             assert!(
                 d.contains("plan"),
@@ -157,7 +152,7 @@ mod tests {
     /// `process_doctrine_extra`.
     #[test]
     fn doctrine_names_no_third_party_skill_bundle() {
-        for agent in ALL_AGENTS {
+        for agent in AgentKind::ALL {
             let d = process_doctrine(agent).to_lowercase();
             assert!(
                 !d.contains("superpowers"),
@@ -258,14 +253,27 @@ mod tests {
     #[test]
     fn resolve_appends_extra_to_default() {
         let store = crate::data::store::Store::open_in_memory().unwrap();
-        store
-            .set_setting("process_doctrine_extra", "- Use the superpowers skills.\n")
-            .unwrap();
+        // Indentation and the trailing newline are the operator's, and must
+        // survive verbatim (`@file` content routinely carries both).
+        let extra = "- Use the superpowers skills.\n  - Prefer brainstorming first.\n";
+        store.set_setting("process_doctrine_extra", extra).unwrap();
         let d = resolve_effective_doctrine(&store, AgentKind::Claude).unwrap();
-        assert!(d.starts_with(&process_doctrine(AgentKind::Claude)), "{d}");
-        assert!(
-            d.ends_with("dashboard row renders the short forms.\n- Use the superpowers skills."),
-            "extra must follow the last default clause on its own line: {d}"
+        let base = process_doctrine(AgentKind::Claude);
+        assert_eq!(d, format!("{base}\n{extra}"));
+    }
+
+    #[test]
+    fn resolve_does_not_double_newline_when_base_already_ends_with_one() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store
+            .set_setting("process_doctrine", "CUSTOM DOCTRINE\n")
+            .unwrap();
+        store
+            .set_setting("process_doctrine_extra", "EXTRA")
+            .unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Hermes),
+            Some("CUSTOM DOCTRINE\nEXTRA".to_string())
         );
     }
 

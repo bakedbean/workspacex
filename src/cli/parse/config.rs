@@ -10,6 +10,7 @@ pub(in crate::cli) fn known_setting_key(k: &str) -> bool {
         "branch_prefix"
             | "custom_instructions"
             | "process_doctrine"
+            | "process_doctrine_extra"
             | "nerd_fonts"
             | "editor_cmd"
             | "terminal_cmd"

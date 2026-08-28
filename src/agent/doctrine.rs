@@ -2,8 +2,9 @@
 //!
 //! These are non-negotiable defaults; an agent may stand them down only if a
 //! task plainly does not warrant the planning. An install may replace the text
-//! via the `process_doctrine` setting, or disable injection entirely by setting
-//! it to a disable sentinel (`off` / `none` / `disabled`).
+//! via the `process_doctrine` setting, append its own clauses via
+//! `process_doctrine_extra`, or disable injection entirely by setting
+//! `process_doctrine` to a disable sentinel (`off` / `none` / `disabled`).
 
 use crate::pty::session::AgentKind;
 
@@ -70,27 +71,37 @@ const DISABLE_SENTINELS: [&str; 3] = ["off", "none", "disabled"];
 /// The effective doctrine for a spawn, or `None` when injection is disabled.
 ///
 /// Resolution of the `process_doctrine` setting:
-/// - unset, or blank/whitespace-only → the agent-tailored default.
+/// - unset, or blank/whitespace-only → the built-in default.
 /// - a disable sentinel (`off` / `none` / `disabled`, case-insensitive) →
 ///   `None`, suppressing injection for that install.
 /// - any other value → that value verbatim, for every agent.
+///
+/// Then, unless injection is disabled, a non-blank `process_doctrine_extra`
+/// setting is appended verbatim on its own line. This is the additive hook:
+/// it lets an install add clauses (e.g. "use the superpowers skills by
+/// default") without freezing a copy of the whole default text.
 pub fn resolve_effective_doctrine(
     store: &crate::data::store::Store,
     agent: AgentKind,
 ) -> Option<String> {
-    match store.get_setting("process_doctrine") {
+    let base = match store.get_setting("process_doctrine") {
         Ok(Some(v)) => {
             let trimmed = v.trim();
             if trimmed.is_empty() {
-                Some(process_doctrine(agent))
+                process_doctrine(agent)
             } else if DISABLE_SENTINELS.contains(&trimmed.to_lowercase().as_str()) {
-                None
+                return None;
             } else {
-                Some(v)
+                v
             }
         }
-        _ => Some(process_doctrine(agent)),
-    }
+        _ => process_doctrine(agent),
+    };
+    let extra = match store.get_setting("process_doctrine_extra") {
+        Ok(Some(v)) if !v.trim().is_empty() => v,
+        _ => return Some(base),
+    };
+    Some(format!("{}\n{}", base.trim_end(), extra.trim()))
 }
 
 /// The default doctrine. Every agent kind receives the same text: the
@@ -126,8 +137,14 @@ mod tests {
     fn doctrine_covers_core_practices_for_every_agent() {
         for agent in ALL_AGENTS {
             let d = process_doctrine(agent).to_lowercase();
-            assert!(d.contains("plan"), "{agent:?} must get planning clause: {d}");
-            assert!(d.contains("commit"), "{agent:?} must get commits clause: {d}");
+            assert!(
+                d.contains("plan"),
+                "{agent:?} must get planning clause: {d}"
+            );
+            assert!(
+                d.contains("commit"),
+                "{agent:?} must get commits clause: {d}"
+            );
             assert!(
                 d.contains("wsx skill"),
                 "{agent:?} must get wsx skill clause: {d}"
@@ -236,6 +253,61 @@ mod tests {
                 "sentinel {sentinel:?} should disable the doctrine"
             );
         }
+    }
+
+    #[test]
+    fn resolve_appends_extra_to_default() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store
+            .set_setting("process_doctrine_extra", "- Use the superpowers skills.\n")
+            .unwrap();
+        let d = resolve_effective_doctrine(&store, AgentKind::Claude).unwrap();
+        assert!(d.starts_with(&process_doctrine(AgentKind::Claude)), "{d}");
+        assert!(
+            d.ends_with("dashboard row renders the short forms.\n- Use the superpowers skills."),
+            "extra must follow the last default clause on its own line: {d}"
+        );
+    }
+
+    #[test]
+    fn resolve_appends_extra_to_custom_override() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store
+            .set_setting("process_doctrine", "CUSTOM DOCTRINE")
+            .unwrap();
+        store
+            .set_setting("process_doctrine_extra", "EXTRA")
+            .unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Codex),
+            Some("CUSTOM DOCTRINE\nEXTRA".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_ignores_blank_extra() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store
+            .set_setting("process_doctrine_extra", "  \n ")
+            .unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Pi),
+            Some(process_doctrine(AgentKind::Pi))
+        );
+    }
+
+    #[test]
+    fn resolve_disabled_doctrine_drops_extra_too() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        store.set_setting("process_doctrine", "off").unwrap();
+        store
+            .set_setting("process_doctrine_extra", "EXTRA")
+            .unwrap();
+        assert_eq!(
+            resolve_effective_doctrine(&store, AgentKind::Claude),
+            None,
+            "a disabled doctrine must not leak the extra clauses"
+        );
     }
 
     #[test]

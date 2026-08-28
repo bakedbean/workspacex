@@ -1360,6 +1360,7 @@ fn detail_bar_config_default_seed_round_trips() {
 #[test]
 fn process_doctrine_is_a_known_setting() {
     assert!(known_setting_key("process_doctrine"));
+    assert!(known_setting_key("process_doctrine_extra"));
 }
 
 #[test]

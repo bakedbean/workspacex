@@ -74,9 +74,7 @@ pub fn hermes_skills_dir() -> Option<PathBuf> {
 /// `WSX_HERMES_BIN` is set, `hermes` is on PATH, or `~/.hermes` exists.
 ///
 /// There is intentionally no separate Pi target: Pi loads skills from
-/// `~/.claude/skills` (the same reason Pi, like Claude, receives the
-/// superpowers-skills doctrine clause and Codex does not — see
-/// `agent::doctrine`), so the Claude target already covers it.
+/// `~/.claude/skills`, so the Claude target already covers it.
 pub fn default_install_targets() -> Option<Vec<InstallTarget>> {
     let mut agents: Vec<(&'static str, PathBuf)> = vec![("Claude", claude_skills_dir()?)];
     if codex_is_installed() {

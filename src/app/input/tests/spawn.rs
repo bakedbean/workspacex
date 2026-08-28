@@ -94,8 +94,8 @@ async fn build_spawn_info_populates_doctrine() {
         crate::pty::session::SpawnMode::Fresh { doctrine, .. } => {
             let d = doctrine.expect("doctrine must be populated");
             assert!(
-                d.contains("superpowers"),
-                "claude doctrine includes superpowers: {d}"
+                d.contains("wsx skill"),
+                "claude doctrine includes the wsx-skill clause: {d}"
             );
         }
         other => panic!("expected Fresh, got {other:?}"),
@@ -104,9 +104,8 @@ async fn build_spawn_info_populates_doctrine() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn build_spawn_info_doctrine_is_agent_tailored_for_hermes() {
-    // Proves the agent-tailored doctrine flows through the call site for a
-    // non-Claude agent: Hermes must get the doctrine but NOT the superpowers
-    // clause (which is Claude/Pi-only), while keeping the wsx-skill clause.
+    // Proves the doctrine flows through the call site for a non-Claude agent:
+    // Hermes must get the doctrine, including the wsx-skill clause.
     use crate::data::store::{NewWorkspace, Store, WorkspaceState};
     let store = Store::open_in_memory().unwrap();
     let repo_id = store
@@ -132,10 +131,6 @@ async fn build_spawn_info_doctrine_is_agent_tailored_for_hermes() {
     match mode {
         crate::pty::session::SpawnMode::Fresh { doctrine, .. } => {
             let d = doctrine.expect("doctrine must be populated");
-            assert!(
-                !d.contains("superpowers"),
-                "hermes doctrine must omit superpowers: {d}"
-            );
             assert!(
                 d.contains("wsx skill"),
                 "hermes doctrine keeps wsx skill clause: {d}"

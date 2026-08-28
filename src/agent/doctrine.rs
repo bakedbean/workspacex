@@ -17,10 +17,6 @@ const CLAUSE_PLAN: &str = "- Think and plan before acting. Determine scope first
     applying maximum effort and explicit planning until the scope is clear. Do not \
     start editing code before you understand what you are building.";
 
-const CLAUSE_SUPERPOWERS: &str = "- Use the superpowers skills by default when \
-    evaluating the initial request. If the task turns out not to need that level \
-    of planning, you may discard them and proceed.";
-
 const CLAUSE_COMMITS: &str = "- Break the work into logical commits on this branch. \
     A workspace that ends with a single commit should be the exception, reserved \
     for the simplest tasks — not the norm.";
@@ -97,23 +93,19 @@ pub fn resolve_effective_doctrine(
     }
 }
 
-pub fn process_doctrine(agent: AgentKind) -> String {
-    // omp, like Claude and Pi, loads skills from ~/.claude/skills — its Claude
-    // discovery provider reads `<user .claude>/skills/*/SKILL.md` — so the
-    // superpowers clause points at something that is actually there. Observed
-    // live: a cold omp resolves skill://using-superpowers on startup. Codex and
-    // Hermes do not, which is why they stay excluded.
-    let include_superpowers = matches!(agent, AgentKind::Claude | AgentKind::Pi | AgentKind::Omp);
-    let mut clauses = vec![CLAUSE_PLAN];
-    if include_superpowers {
-        clauses.push(CLAUSE_SUPERPOWERS);
-    }
-    clauses.push(CLAUSE_COMMITS);
-    clauses.push(CLAUSE_WSX_SKILL);
-    clauses.push(CLAUSE_HANDOFF_OUT);
-    clauses.push(CLAUSE_HANDOFF_IN);
-    clauses.push(CLAUSE_STATUS);
-    clauses.push(CLAUSE_RECAP);
+/// The default doctrine. Every agent kind receives the same text: the
+/// doctrine deliberately names no third-party skill bundle (which skills a
+/// developer runs is a per-install choice — see `process_doctrine_extra`).
+pub fn process_doctrine(_agent: AgentKind) -> String {
+    let clauses = [
+        CLAUSE_PLAN,
+        CLAUSE_COMMITS,
+        CLAUSE_WSX_SKILL,
+        CLAUSE_HANDOFF_OUT,
+        CLAUSE_HANDOFF_IN,
+        CLAUSE_STATUS,
+        CLAUSE_RECAP,
+    ];
     format!("{DOCTRINE_HEADER}\n\n{}", clauses.join("\n"))
 }
 
@@ -122,68 +114,39 @@ mod tests {
     use super::*;
     use crate::pty::session::AgentKind;
 
-    /// omp reads ~/.claude/skills natively, so it belongs with Claude and Pi,
-    /// not with Codex.
-    #[test]
-    fn omp_gets_the_superpowers_clause() {
-        let d = process_doctrine(AgentKind::Omp).to_lowercase();
-        assert!(d.contains("superpowers"), "omp must get superpowers: {d}");
-        assert!(d.contains("wsx skill"), "{d}");
-        assert!(d.contains("commit"), "{d}");
-    }
+    const ALL_AGENTS: [AgentKind; 5] = [
+        AgentKind::Claude,
+        AgentKind::Pi,
+        AgentKind::Omp,
+        AgentKind::Hermes,
+        AgentKind::Codex,
+    ];
 
     #[test]
-    fn doctrine_covers_all_practices_for_claude() {
-        let d = process_doctrine(AgentKind::Claude).to_lowercase();
-        assert!(d.contains("plan"), "must mention planning: {d}");
-        assert!(
-            d.contains("superpowers"),
-            "claude must get superpowers clause: {d}"
-        );
-        assert!(d.contains("commit"), "must mention commits: {d}");
-        assert!(d.contains("wsx skill"), "must mention the wsx skill: {d}");
+    fn doctrine_covers_core_practices_for_every_agent() {
+        for agent in ALL_AGENTS {
+            let d = process_doctrine(agent).to_lowercase();
+            assert!(d.contains("plan"), "{agent:?} must get planning clause: {d}");
+            assert!(d.contains("commit"), "{agent:?} must get commits clause: {d}");
+            assert!(
+                d.contains("wsx skill"),
+                "{agent:?} must get wsx skill clause: {d}"
+            );
+        }
     }
 
+    /// Which skill bundles a developer runs is a per-install choice, so the
+    /// built-in doctrine names none. Installs that want one opt in through
+    /// `process_doctrine_extra`.
     #[test]
-    fn pi_also_gets_superpowers() {
-        let d = process_doctrine(AgentKind::Pi).to_lowercase();
-        assert!(
-            d.contains("superpowers"),
-            "pi must get superpowers clause: {d}"
-        );
-    }
-
-    #[test]
-    fn hermes_omits_superpowers_but_keeps_the_rest() {
-        let d = process_doctrine(AgentKind::Hermes).to_lowercase();
-        assert!(
-            !d.contains("superpowers"),
-            "hermes must NOT get superpowers clause: {d}"
-        );
-        assert!(
-            d.contains("plan"),
-            "hermes must still get planning clause: {d}"
-        );
-        assert!(
-            d.contains("commit"),
-            "hermes must still get commits clause: {d}"
-        );
-        assert!(
-            d.contains("wsx skill"),
-            "hermes must still get wsx skill clause: {d}"
-        );
-    }
-
-    #[test]
-    fn codex_omits_superpowers_but_keeps_the_rest() {
-        let d = process_doctrine(AgentKind::Codex).to_lowercase();
-        assert!(
-            !d.contains("superpowers"),
-            "codex must NOT get superpowers clause (skills live under ~/.claude): {d}"
-        );
-        assert!(d.contains("plan"), "codex keeps planning clause: {d}");
-        assert!(d.contains("commit"), "codex keeps commits clause: {d}");
-        assert!(d.contains("wsx skill"), "codex keeps wsx skill clause: {d}");
+    fn doctrine_names_no_third_party_skill_bundle() {
+        for agent in ALL_AGENTS {
+            let d = process_doctrine(agent).to_lowercase();
+            assert!(
+                !d.contains("superpowers"),
+                "{agent:?} doctrine must not hardcode superpowers: {d}"
+            );
+        }
     }
 
     #[test]

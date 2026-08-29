@@ -90,12 +90,12 @@
         </a>
       </div>
       <div class="cmd reveal mono" data-d="4">
-        <button class="copy-btn" data-copy="cargo build --release&#10;./target/release/wsx repo add /path/to/your/repo&#10;./target/release/wsx" aria-label="Copy install commands">
+        <button class="copy-btn" data-copy="brew tap bakedbean/workspacex https://github.com/bakedbean/workspacex&#10;brew install bakedbean/workspacex/wsx&#10;wsx" aria-label="Copy install commands">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         </button>
-        <div class="cmd-row"><span class="pfx">$</span><span class="txt">cargo build --release</span></div>
-        <div class="cmd-row"><span class="pfx">$</span><span class="txt">./target/release/wsx repo add /path/to/repo</span></div>
-        <div class="cmd-row"><span class="pfx">$</span><span class="txt">./target/release/wsx</span><span class="cmt"># launch TUI</span></div>
+        <div class="cmd-row"><span class="pfx">$</span><span class="txt">brew tap bakedbean/workspacex https://github.com/bakedbean/workspacex</span></div>
+        <div class="cmd-row"><span class="pfx">$</span><span class="txt">brew install bakedbean/workspacex/wsx</span></div>
+        <div class="cmd-row"><span class="pfx">$</span><span class="txt">wsx</span><span class="cmt"># launch TUI</span></div>
       </div>
     </div>
 
@@ -157,20 +157,20 @@
     <div class="sec-head reveal">
       <p class="kicker">Quickstart</p>
       <h2>Four commands to a running fleet.</h2>
-      <p>No daemon, no config server. Build the binary, put it on your PATH, point it at your repos, and launch. Spin up isolated worktrees in the app and start orchestrating.</p>
+      <p>No daemon, no config server. Install the binary, point it at your repos, and launch. Spin up isolated worktrees in the app and start orchestrating.</p>
     </div>
     <div class="steps">
       <div class="step reveal" data-d="1">
         <span class="step-line"></span>
-        <h3>Build</h3>
-        <p>Compile the release binary. One static Rust executable, no runtime dependencies.</p>
-        <div class="scmd"><span class="pfx">$ </span>cargo build --release</div>
+        <h3>Install</h3>
+        <p>One Rust executable, no runtime dependencies. Homebrew on macOS and Linux, or Nix, cargo-binstall, or a tarball from the releases page.</p>
+        <div class="scmd"><span class="pfx">$ </span>brew tap bakedbean/workspacex https://github.com/bakedbean/workspacex</div>
       </div>
       <div class="step reveal" data-d="2">
         <span class="step-line"></span>
-        <h3>Add to PATH</h3>
-        <p>Put the release executable on your PATH so you can call <span class="mono">wsx</span> from anywhere.</p>
-        <div class="scmd"><span class="pfx">$ </span>export PATH="$PWD/target/release:$PATH"</div>
+        <h3>Or use Nix</h3>
+        <p>The repo is a flake. Run <span class="mono">wsx</span> once without installing it, or add it to your profile.</p>
+        <div class="scmd"><span class="pfx">$ </span>nix run github:bakedbean/workspacex</div>
       </div>
       <div class="step reveal" data-d="3">
         <span class="step-line"></span>

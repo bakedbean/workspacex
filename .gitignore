@@ -10,3 +10,7 @@ tags
 
 # mdBook build output
 /docs/book/book
+
+# nix build output symlinks
+/result
+/result-*

@@ -28,7 +28,7 @@ name = "wsx"
 path = "src/main.rs"
 
 [dependencies]
-sessionx = { git = "https://github.com/bakedbean/sessionx", rev = "462c4fcb72dd359ddf5ba737d1454c14af68149e" }
+sessionx = { git = "https://github.com/bakedbean/sessionx", rev = "75903d4299e072c0946dcea55eca364b15d03190" }
 ratatui = "0.29"
 crossterm = { version = "0.29", features = ["event-stream", "bracketed-paste"] }
 portable-pty = "0.9"

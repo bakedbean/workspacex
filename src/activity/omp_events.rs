@@ -381,9 +381,6 @@ mod tests {
             !update.events.is_empty(),
             "expected parsed events from a real session"
         );
-        // NOT `first_user_text`: the shared pi parser never populates that
-        // field (only the claude and codex parsers do), so pi workspaces have
-        // the same gap. What proves the user line parsed is the event it emits.
         assert!(
             update
                 .events
@@ -391,6 +388,13 @@ mod tests {
                 .any(|e| matches!(e.kind, crate::activity::events::EventKind::UserMessage)),
             "the user prompt must parse into a UserMessage event: {:?}",
             update.events
+        );
+        // The status classifier's `user_has_prompted` gate reads this field;
+        // when the shared pi parser left it unset, a running omp session
+        // classified as Idle forever (the "active but shows idle" bug).
+        assert!(
+            update.first_user_text.is_some(),
+            "the opening user prompt must populate first_user_text"
         );
         assert!(
             update.last_assistant_text.is_some(),

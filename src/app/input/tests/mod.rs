@@ -15,6 +15,7 @@ mod agents;
 mod attached_wheel_forwarding;
 mod common;
 mod confirm_quit;
+mod ctrl_d_suppression;
 mod ctrl_x_shift_d;
 mod ctrl_z_suppression;
 mod dashboard;

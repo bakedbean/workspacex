@@ -22,6 +22,14 @@ pub(in crate::app::input) fn encode_key(k: crossterm::event::KeyEvent) -> Vec<u8
                 if c.eq_ignore_ascii_case(&'z') {
                     return vec![];
                 }
+                // Ctrl-D encodes to 0x04 (EOF). Every attached pane hosts an
+                // agent REPL, and EOF on an empty composer makes the agent
+                // exit — which drops the workspace into a terminal state. It
+                // sits right next to the Ctrl-x leader, so like Ctrl-Z it's a
+                // one-keystroke fat-finger with no undo: swallow it.
+                if c.eq_ignore_ascii_case(&'d') {
+                    return vec![];
+                }
                 vec![(c.to_ascii_lowercase() as u8) - b'a' + 1]
             } else {
                 let mut buf = [0u8; 4];

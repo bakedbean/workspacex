@@ -101,6 +101,26 @@ pub async fn workspace_status(worktree: &Path) -> Result<WorkspaceStatus> {
     Ok(parse_porcelain(&out))
 }
 
+/// `git log --oneline <base>..HEAD`, newest first, at most `limit` lines.
+/// Each line is `"<short sha> <subject>"`. Empty when HEAD is at `base`.
+/// Errors propagate (unknown base, not a repo) so callers can decide
+/// whether to omit the section.
+pub async fn log_oneline(worktree: &Path, base: &str, limit: usize) -> Result<Vec<String>> {
+    let limit = limit.to_string();
+    let range = format!("{base}..HEAD");
+    let out = run(
+        worktree,
+        &["log", "--oneline", "--no-decorate", "-n", &limit, &range],
+    )
+    .await?;
+    Ok(out
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 fn parse_porcelain(out: &str) -> WorkspaceStatus {
     let mut status = WorkspaceStatus::default();
     for line in out.lines() {
@@ -252,6 +272,62 @@ pub(super) mod tests {
             .unwrap();
         let base = resolve_base_branch(dir.path()).await;
         assert_eq!(base, "main");
+    }
+
+    #[tokio::test]
+    async fn log_oneline_lists_commits_ahead_of_base_newest_first() {
+        let dir = init_repo();
+        let run = |args: &[&str]| {
+            let status = StdCmd::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        run(&["checkout", "-q", "-b", "feature"]);
+        run(&["commit", "--allow-empty", "-q", "-m", "first change"]);
+        run(&["commit", "--allow-empty", "-q", "-m", "second change"]);
+
+        let lines = log_oneline(dir.path(), "main", 20).await.unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with(" second change"), "{lines:?}");
+        assert!(lines[1].ends_with(" first change"), "{lines:?}");
+        // "<sha> <subject>": sha is 7+ hex chars followed by a space.
+        let sha = lines[0].split(' ').next().unwrap();
+        assert!(sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[tokio::test]
+    async fn log_oneline_respects_limit() {
+        let dir = init_repo();
+        let run = |args: &[&str]| {
+            let status = StdCmd::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {:?} failed", args);
+        };
+        run(&["checkout", "-q", "-b", "feature"]);
+        for i in 0..3 {
+            run(&["commit", "--allow-empty", "-q", "-m", &format!("c{i}")]);
+        }
+        let lines = log_oneline(dir.path(), "main", 2).await.unwrap();
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn log_oneline_is_empty_when_at_base() {
+        let dir = init_repo();
+        let lines = log_oneline(dir.path(), "main", 20).await.unwrap();
+        assert!(lines.is_empty());
+    }
+
+    #[tokio::test]
+    async fn log_oneline_errors_on_unknown_base() {
+        let dir = init_repo();
+        assert!(log_oneline(dir.path(), "no-such-branch", 20).await.is_err());
     }
 
     #[test]

@@ -42,6 +42,9 @@ wsx agent send [--workspace <repo>/<slug>] <label> <message…>
                                             # label `primary` = that workspace's
                                             # primary agent (always correct for a
                                             # workspace you just created).
+
+wsx context show                            # markdown digest of this workspace (for editor-hosted agents)
+wsx context write                           # same, written under the state dir; prints the path
 ```
 
 Run `wsx --help` or `wsx <command> --help` to list commands and arguments directly from the CLI.
@@ -226,6 +229,20 @@ fetch.rs (line 88) has no upper bound — can you cap it?"
 
 Because all agents in a workspace share the worktree, coordinate before making
 overlapping edits to the same files — prefer messaging to hand off work.
+
+## External editor agents
+
+The user may open this worktree in an editor whose own AI agent (for example
+magenta.nvim in neovim) shares your branch and working tree. That agent
+reads a digest produced by `wsx context write` — your recap, status, peers,
+recent commits, and your last message — so it already knows what you are
+doing. It does not set status or recap; it reports back with
+`wsx agent send <your label> "<summary>"`, which reaches you as a bare
+`[message]` banner with no sender label.
+
+Treat those messages as the user's follow-up instructions, and run
+`git status` / `git diff` before assuming the tree matches your last edit.
+You can inspect the same digest yourself with `wsx context show`.
 
 ## When NOT to use
 

@@ -1471,6 +1471,7 @@ fn registry_matches_dispatched_groups() {
         "setup",
         "status",
         "recap",
+        "context",
         "waybar",
         "menubar",
     ];
@@ -1732,6 +1733,26 @@ fn parses_recap_show_and_clear() {
         parse(&["recap", "clear"]).unwrap(),
         CliAction::RecapClear
     ));
+}
+
+#[test]
+fn parses_context_show_and_write() {
+    assert!(matches!(
+        parse(&["context", "show"]).unwrap(),
+        CliAction::ContextShow
+    ));
+    assert!(matches!(
+        parse(&["context", "write"]).unwrap(),
+        CliAction::ContextWrite
+    ));
+}
+
+#[test]
+fn context_rejects_missing_unknown_and_trailing_args() {
+    assert!(parse(&["context"]).is_err());
+    assert!(parse(&["context", "bogus"]).is_err());
+    assert!(parse(&["context", "show", "extra"]).is_err());
+    assert!(parse(&["context", "write", "--workspace", "r/s"]).is_err());
 }
 
 #[test]

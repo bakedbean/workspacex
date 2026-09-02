@@ -185,6 +185,10 @@ pub enum CliAction {
     },
     RecapShow,
     RecapClear,
+    /// `wsx context show` — print the workspace context digest.
+    ContextShow,
+    /// `wsx context write` — write the digest under the state dir, print its path.
+    ContextWrite,
 }
 
 #[derive(Debug)]

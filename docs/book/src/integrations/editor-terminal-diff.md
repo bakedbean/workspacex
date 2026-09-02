@@ -57,3 +57,10 @@ The base ref is auto-detected from `origin/HEAD` and substituted as the **upstre
 **Why three dots?** `git diff A..B` (two dots) lists every commit on `B` that isn't on `A`'s current tip. If your local `main` is behind `origin/main`, those upstream commits show up as "extra changes" in your branch diff. `A...B` (three dots) anchors at the merge base — the commit where your branch diverged — so stale local refs don't pollute the view. This is what `gh pr` and most code-review tools use.
 
 For `editor_cmd` and `terminal_cmd`, if neither the setting nor the env-var fallback is set, an error modal explains how to configure. `diff_cmd` has no env-var fallback and errors directly if unset.
+
+## Giving your editor's agent wsx context
+
+If the editor you open has its own AI agent, see
+[Editor-hosted agent context](editor-agent-context.md) for `wsx context
+write`, which renders the workspace's recap, status, peers, and the primary
+agent's last message into a file that agent can read.

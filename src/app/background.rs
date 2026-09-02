@@ -35,23 +35,7 @@ pub async fn tail_workspace_events(
     if !worktree_path.exists() {
         return;
     }
-    let current_file = match ws_agent {
-        crate::pty::session::AgentKind::Claude => {
-            crate::activity::events::locate_session_file(&worktree_path)
-        }
-        crate::pty::session::AgentKind::Pi => {
-            crate::activity::pi_events::locate_session_file(&worktree_path)
-        }
-        crate::pty::session::AgentKind::Hermes => {
-            crate::activity::hermes_events::locate_session_file(&worktree_path)
-        }
-        crate::pty::session::AgentKind::Codex => {
-            crate::activity::codex_events::locate_session_file(&worktree_path)
-        }
-        crate::pty::session::AgentKind::Omp => {
-            crate::activity::omp_events::locate_session_file(&worktree_path)
-        }
-    };
+    let current_file = crate::activity::locate_session_file_for(ws_agent, &worktree_path);
     // Snapshot the FULL (file_path, byte_offset) pair so the commit can
     // detect a concurrent tail that landed between our snapshot and now.
     let (snapshot_file, snapshot_offset) = {
@@ -71,23 +55,7 @@ pub async fn tail_workspace_events(
     let Some(file) = current_file else {
         return;
     };
-    let tail_result = match ws_agent {
-        crate::pty::session::AgentKind::Claude => {
-            crate::activity::events::tail_session(&file, tail_from).map_err(Into::into)
-        }
-        crate::pty::session::AgentKind::Pi => {
-            crate::activity::pi_events::tail_session(&file, tail_from).map_err(Into::into)
-        }
-        crate::pty::session::AgentKind::Hermes => {
-            crate::activity::hermes_events::tail_session(&file, tail_from)
-        }
-        crate::pty::session::AgentKind::Codex => {
-            crate::activity::codex_events::tail_session(&file, tail_from).map_err(Into::into)
-        }
-        crate::pty::session::AgentKind::Omp => {
-            crate::activity::omp_events::tail_session(&file, tail_from).map_err(Into::into)
-        }
-    };
+    let tail_result = crate::activity::tail_session_for(ws_agent, &file, tail_from);
     let Ok(update) = tail_result else {
         return;
     };

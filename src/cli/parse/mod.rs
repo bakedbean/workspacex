@@ -19,7 +19,7 @@ use agent::parse_agent;
 use config::parse_config;
 use desktop::{parse_menubar, parse_remote, parse_setup, parse_waybar};
 use repo::parse_repo;
-use reporting::{parse_recap, parse_status};
+use reporting::{parse_context, parse_recap, parse_status};
 use workspace::{parse_shared, parse_workspace};
 
 /// The dashed help flags. Bare `help` is handled separately — only in a
@@ -101,6 +101,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         "setup" => parse_setup(&mut it).map_err(|e| tag_group(e, group)),
         "status" => parse_status(&mut it).map_err(|e| tag_group(e, group)),
         "recap" => parse_recap(&mut it).map_err(|e| tag_group(e, group)),
+        "context" => parse_context(&mut it).map_err(|e| tag_group(e, group)),
         "waybar" => parse_waybar(&mut it).map_err(|e| tag_group(e, group)),
         "menubar" => parse_menubar(&mut it).map_err(|e| tag_group(e, group)),
         other => Err(Error::Usage {

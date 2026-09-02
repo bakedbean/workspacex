@@ -230,6 +230,21 @@ pub static GROUPS: &[GroupInfo] = &[
         ],
     },
     GroupInfo {
+        name: "context",
+        blurb: "Workspace context digest for editor-hosted agents",
+        commands: &[
+            CmdInfo {
+                usage: "show",
+                blurb: "Print the digest (branch, agents, status, recap, recent commits, \
+                        primary agent's last message, instructions for an external agent)",
+            },
+            CmdInfo {
+                usage: "write",
+                blurb: "Write the digest to <state>/wsx/context/<repo>/<workspace>.md and print the path",
+            },
+        ],
+    },
+    GroupInfo {
         name: "waybar",
         blurb: "Linux waybar status module and workspace jumper",
         commands: &[

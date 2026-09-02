@@ -748,6 +748,25 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             store.clear_workspace_recap(ws.id)?;
             println!("recap cleared");
         }
+        CliAction::ContextShow => {
+            let ws = resolve_current_workspace(&store)?;
+            let digest = crate::commands::context::gather(&store, &ws).await?;
+            print!("{}", crate::commands::context::render(&digest));
+        }
+        CliAction::ContextWrite => {
+            let ws = resolve_current_workspace(&store)?;
+            let digest = crate::commands::context::gather(&store, &ws).await?;
+            let path = crate::commands::context::digest_path(
+                dirs,
+                &digest.repo_name,
+                &digest.workspace_name,
+            );
+            crate::commands::context::write_atomic(
+                &path,
+                &crate::commands::context::render(&digest),
+            )?;
+            println!("{}", path.display());
+        }
         #[cfg(target_os = "linux")]
         CliAction::WaybarMenu => crate::desktop::waybar::menu::run_menu(&store)?,
         #[cfg(target_os = "linux")]

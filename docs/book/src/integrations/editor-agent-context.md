@@ -1,5 +1,3 @@
-# Editor-hosted agent context
-
 When you open a workspace's worktree in your editor and use an AI agent that
 lives there (magenta.nvim, Cursor, a VS Code extension), that agent has no
 idea what wsx knows: the workspace's goal, the status its primary agent last

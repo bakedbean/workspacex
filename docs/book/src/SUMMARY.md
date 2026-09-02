@@ -26,6 +26,7 @@
   - [Per-repo setup scripts](configuration/per-repo-setup-scripts.md)
 - [Integrations and remote access](integrations/index.md)
   - [Editor, terminal, and diff integration](integrations/editor-terminal-diff.md)
+  - [Editor-hosted agent context](integrations/editor-agent-context.md)
   - [Remote access](integrations/remote-access.md)
   - [Shared workspaces](integrations/shared-workspaces.md)
   - [Remote control](integrations/remote-control.md)

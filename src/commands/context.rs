@@ -188,9 +188,14 @@ pub fn render(d: &ContextDigest) -> String {
         None => "-".to_string(),
         Some(s) => {
             let age = format_age(d.now_ms, s.reported_at);
+            let source = if s.source.trim().is_empty() {
+                "-"
+            } else {
+                s.source.as_str()
+            };
             match s.message.as_deref().filter(|m| !m.trim().is_empty()) {
-                Some(m) => format!("{} — \"{}\" ({}, {})", s.state.as_str(), m, s.source, age),
-                None => format!("{} ({}, {})", s.state.as_str(), s.source, age),
+                Some(m) => format!("{} — \"{}\" ({}, {})", s.state.as_str(), m, source, age),
+                None => format!("{} ({}, {})", s.state.as_str(), source, age),
             }
         }
     };
@@ -241,14 +246,39 @@ pub fn render(d: &ContextDigest) -> String {
     out
 }
 
+/// Replace anything outside `[A-Za-z0-9._-]` with `-` (same rule as
+/// `sanitize` in `src/data/setup_log.rs`), then guard against the result
+/// being empty or a bare `.` / `..`, which would otherwise let a
+/// repo/workspace name escape the context dir or collide with a directory
+/// entry.
+fn safe_component(s: &str) -> String {
+    let out: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if out.is_empty() || out == "." || out == ".." {
+        "_".to_string()
+    } else {
+        out
+    }
+}
+
 pub fn digest_path(dirs: &Dirs, repo_name: &str, workspace_name: &str) -> PathBuf {
     dirs.context_dir()
-        .join(repo_name)
-        .join(format!("{workspace_name}.md"))
+        .join(safe_component(repo_name))
+        .join(format!("{}.md", safe_component(workspace_name)))
 }
 
 /// Write via a sibling temp file + rename so a concurrent reader never
-/// observes a partial digest.
+/// observes a partial digest. On Unix the temp file (and thus the final
+/// file, via rename) is created user-only (`0600`) since the digest can
+/// quote agent transcript text.
 pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
@@ -267,6 +297,11 @@ pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
         rand::random::<u32>()
     ));
     std::fs::write(&tmp, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -416,6 +451,19 @@ mod tests {
     }
 
     #[test]
+    fn status_with_empty_source_renders_dash() {
+        let mut d = minimal();
+        d.status = Some(ReportedStatus {
+            state: ReportedState::Working,
+            message: None,
+            source: "".into(),
+            reported_at: 1_000_000 - 240_000,
+        });
+        d.now_ms = 1_000_000;
+        assert!(render(&d).contains("- status: working (-, 4m ago)\n"));
+    }
+
+    #[test]
     fn clean_tree_says_clean_and_git_failure_omits_line() {
         let mut d = full();
         d.uncommitted = Some(crate::git::WorkspaceStatus::default());
@@ -489,6 +537,38 @@ mod tests {
     }
 
     #[test]
+    fn digest_path_sanitizes_separators_and_dotdot() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dirs = Dirs::for_test(dir.path());
+        for (repo, workspace) in [("../../etc", "w"), ("r", "/abs/../x")] {
+            let path = digest_path(&dirs, repo, workspace);
+            assert!(
+                path.starts_with(dirs.context_dir()),
+                "{path:?} escaped context dir"
+            );
+            for component in path.strip_prefix(dirs.context_dir()).unwrap().components() {
+                let s = component.as_os_str().to_string_lossy();
+                assert!(!s.contains('/'), "{s:?} contains a separator");
+                assert_ne!(s, "..", "{s:?} is a parent-dir component");
+            }
+        }
+    }
+
+    #[test]
+    fn digest_path_maps_dot_names_to_underscore() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dirs = Dirs::for_test(dir.path());
+        assert_eq!(
+            digest_path(&dirs, "..", "w"),
+            dirs.context_dir().join("_").join("w.md")
+        );
+        assert_eq!(
+            digest_path(&dirs, "r", "."),
+            dirs.context_dir().join("r").join("_.md")
+        );
+    }
+
+    #[test]
     fn write_atomic_creates_parents_and_leaves_no_temp_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let target = dir.path().join("a/b/c.md");
@@ -502,6 +582,17 @@ mod tests {
         // Overwrite works too.
         write_atomic(&target, "again\n").unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "again\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_sets_user_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("digest.md");
+        write_atomic(&target, "hello\n").unwrap();
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     /// Build a real repo with one commit on `main`, then a feature branch

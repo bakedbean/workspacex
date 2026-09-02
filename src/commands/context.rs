@@ -10,7 +10,8 @@
 
 use crate::config::Dirs;
 use crate::data::agents::AgentInstance;
-use crate::data::store::{ReportedStatus, WorkspaceRecap};
+use crate::data::store::{ReportedStatus, Store, Workspace, WorkspaceRecap};
+use crate::error::Result;
 use std::path::{Path, PathBuf};
 
 /// Hard cap on the primary agent's last message, in chars.
@@ -78,6 +79,83 @@ fn truncate_chars(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(max).collect();
     out.push_str("… [truncated]");
     out
+}
+
+/// Fill a digest for `ws`. Store reads propagate errors (the DB is the
+/// one thing we cannot render without); git and transcript failures
+/// degrade to `None` / empty so the digest never fails on a dirty or
+/// missing worktree.
+pub async fn gather(store: &Store, ws: &Workspace) -> Result<ContextDigest> {
+    let repo_name = store
+        .repos()?
+        .into_iter()
+        .find(|r| r.id == ws.repo_id)
+        .map(|r| r.name)
+        .unwrap_or_else(|| "?".to_string());
+    let agents = store.workspace_agents(ws.id)?;
+    let status = store.workspace_status(ws.id)?;
+    let recap = store.workspace_recap(ws.id)?;
+
+    let worktree = ws.worktree_path.clone();
+    let worktree_exists = worktree.is_dir();
+
+    let base_ref = if worktree_exists {
+        crate::git::resolve_base_branch(&worktree).await
+    } else {
+        "main".to_string()
+    };
+    let commits = if worktree_exists {
+        crate::git::log_oneline(&worktree, &base_ref, MAX_COMMITS)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let uncommitted = if worktree_exists {
+        crate::git::workspace_status(&worktree).await.ok()
+    } else {
+        None
+    };
+
+    let primary_kind = agents
+        .iter()
+        .find(|a| a.is_primary)
+        .map(|a| a.agent)
+        .unwrap_or(ws.agent);
+    let last_assistant_text = if worktree_exists {
+        last_assistant_text(primary_kind, &worktree)
+    } else {
+        None
+    };
+
+    Ok(ContextDigest {
+        repo_name,
+        workspace_name: ws.name.clone(),
+        branch: ws.branch.clone(),
+        base_ref,
+        worktree,
+        agents,
+        status,
+        recap,
+        commits,
+        uncommitted,
+        last_assistant_text,
+        now_ms: crate::data::store::now_ms(),
+    })
+}
+
+/// Whole-transcript scan for the primary agent's most recent assistant
+/// text. Any failure (no session, parse error) is `None`; the digest is
+/// advisory and must not fail because a log is mid-write.
+fn last_assistant_text(kind: crate::pty::session::AgentKind, worktree: &Path) -> Option<String> {
+    let file = crate::activity::locate_session_file_for(kind, worktree)?;
+    match crate::activity::tail_session_for(kind, &file, 0) {
+        Ok(update) => update.last_assistant_text,
+        Err(e) => {
+            tracing::debug!(?file, error = %e, "context digest: transcript tail failed");
+            None
+        }
+    }
 }
 
 pub fn render(d: &ContextDigest) -> String {
@@ -420,5 +498,104 @@ mod tests {
         // Overwrite works too.
         write_atomic(&target, "again\n").unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "again\n");
+    }
+
+    /// Build a real repo with one commit on `main`, then a feature branch
+    /// one commit ahead, and register it as a workspace with a recap, a
+    /// status, and a primary agent. `gather` must reflect all of it and
+    /// tolerate the missing transcript.
+    #[tokio::test]
+    async fn gather_reads_store_git_and_tolerates_missing_transcript() {
+        use crate::data::store::{NewWorkspace, Store};
+        use std::process::Command;
+
+        let repo = tempfile::TempDir::new().unwrap();
+        let git = |args: &[&str]| {
+            let st = Command::new("git")
+                .current_dir(repo.path())
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "T"]);
+        git(&["commit", "--allow-empty", "-q", "-m", "init"]);
+        git(&["checkout", "-q", "-b", "feat/x"]);
+        git(&["commit", "--allow-empty", "-q", "-m", "do the thing"]);
+        std::fs::write(repo.path().join("scratch.txt"), "x").unwrap();
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store.add_repo(repo.path(), "myrepo", "feat").unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "x",
+                branch: "feat/x",
+                worktree_path: repo.path(),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .add_primary_agent(ws_id, AgentKind::Claude, 0)
+            .unwrap();
+        store.add_workspace_agent(ws_id, AgentKind::Codex).unwrap();
+        store
+            .set_workspace_recap(ws_id, Some("ship x"), None, Some("tests"), None, None, None)
+            .unwrap();
+        store
+            .set_workspace_status(ws_id, ReportedState::Working, Some("on it"), "claude")
+            .unwrap();
+        let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
+
+        let d = gather(&store, &ws).await.unwrap();
+        assert_eq!(d.repo_name, "myrepo");
+        assert_eq!(d.workspace_name, "x");
+        assert_eq!(d.branch, "feat/x");
+        assert_eq!(d.base_ref, "main"); // no origin → fallback
+        assert_eq!(d.worktree, repo.path());
+        let labels: Vec<_> = d.agents.iter().map(|a| a.label()).collect();
+        assert_eq!(labels, vec!["claude", "codex"]);
+        assert!(d.agents[0].is_primary);
+        assert_eq!(d.status.as_ref().unwrap().message.as_deref(), Some("on it"));
+        assert_eq!(d.recap.as_ref().unwrap().goal.as_deref(), Some("ship x"));
+        assert_eq!(d.commits.len(), 1);
+        assert!(d.commits[0].ends_with(" do the thing"));
+        assert_eq!(d.uncommitted.unwrap().untracked, 1);
+        assert!(d.last_assistant_text.is_none());
+        assert!(d.now_ms > 0);
+    }
+
+    /// A worktree that no longer exists on disk must still produce a
+    /// digest from the store alone.
+    #[tokio::test]
+    async fn gather_survives_missing_worktree() {
+        use crate::data::store::{NewWorkspace, Store};
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store.add_repo(Path::new("/tmp/nope"), "r", "").unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "b/w",
+                worktree_path: Path::new("/nonexistent/wsx-test/wt"),
+                yolo: false,
+                agent: AgentKind::Pi,
+                shared: false,
+            })
+            .unwrap();
+        let ws = store.workspace_by_id(ws_id).unwrap().unwrap();
+        let d = gather(&store, &ws).await.unwrap();
+        assert!(d.commits.is_empty());
+        assert!(d.uncommitted.is_none());
+        assert!(d.last_assistant_text.is_none());
+        assert!(d.agents.is_empty());
+        assert!(d.status.is_none());
+        assert!(d.recap.is_none());
+        let out = render(&d);
+        assert!(out.contains("- agents: -\n"));
     }
 }

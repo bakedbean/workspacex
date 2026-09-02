@@ -110,7 +110,15 @@ pub async fn log_oneline(worktree: &Path, base: &str, limit: usize) -> Result<Ve
     let range = format!("{base}..HEAD");
     let out = run(
         worktree,
-        &["log", "--oneline", "--no-decorate", "-n", &limit, &range],
+        &[
+            "log",
+            "--oneline",
+            "--no-decorate",
+            "-n",
+            &limit,
+            &range,
+            "--",
+        ],
     )
     .await?;
     Ok(out

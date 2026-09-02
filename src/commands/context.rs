@@ -209,14 +209,14 @@ pub fn render(d: &ContextDigest) -> String {
         for line in d.commits.iter().take(MAX_COMMITS) {
             out.push_str(&format!("- {line}\n"));
         }
-        if let Some(u) = &d.uncommitted {
-            let summary = if u.modified == 0 && u.untracked == 0 {
-                "clean".to_string()
-            } else {
-                format!("{} modified, {} untracked", u.modified, u.untracked)
-            };
-            out.push_str(&format!("\nUncommitted: {summary}\n"));
-        }
+    }
+    if let Some(u) = &d.uncommitted {
+        let summary = if u.modified == 0 && u.untracked == 0 {
+            "clean".to_string()
+        } else {
+            format!("{} modified, {} untracked", u.modified, u.untracked)
+        };
+        out.push_str(&format!("\nUncommitted: {summary}\n"));
     }
 
     if let Some(text) = d
@@ -261,7 +261,11 @@ pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("digest.md");
-    let tmp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    let tmp = parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        rand::random::<u32>()
+    ));
     std::fs::write(&tmp, contents)?;
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
@@ -421,12 +425,12 @@ mod tests {
     }
 
     #[test]
-    fn commits_section_omitted_when_empty_even_with_uncommitted() {
+    fn commits_section_omitted_when_empty_but_uncommitted_line_stays() {
         let mut d = full();
         d.commits.clear();
         let out = render(&d);
         assert!(!out.contains("## Recent commits"));
-        assert!(!out.contains("Uncommitted:"));
+        assert!(out.contains("\nUncommitted: 3 modified, 1 untracked\n"));
     }
 
     #[test]

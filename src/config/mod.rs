@@ -42,6 +42,11 @@ impl Dirs {
     pub fn log_dir(&self) -> PathBuf {
         self.app_dir().join("logs")
     }
+    /// Per-workspace context digests written by `wsx context write`:
+    /// `<app_dir>/context/<repo>/<workspace>.md`.
+    pub fn context_dir(&self) -> PathBuf {
+        self.app_dir().join("context")
+    }
 
     pub fn ensure(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(self.log_dir())

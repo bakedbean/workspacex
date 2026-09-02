@@ -107,6 +107,16 @@ local function wsx_context()
 end
 
 vim.api.nvim_create_autocmd({ "VimEnter", "FocusGained" }, { callback = wsx_context })
+-- Attach when magenta's input buffer appears in a window: covers opening the
+-- sidebar and starting a new thread, so no manual :WsxContext is needed.
+vim.api.nvim_create_autocmd("BufWinEnter", {
+  callback = function(ev)
+    if vim.api.nvim_buf_get_name(ev.buf):find("Magenta Input", 1, true) then
+      added_path = nil
+      wsx_context()
+    end
+  end,
+})
 vim.api.nvim_create_user_command("WsxContext", function()
   added_path = nil
   wsx_context()
@@ -119,13 +129,16 @@ Behaviour:
   of sqlite reads, three git commands, one transcript scan.
 - It is added to magenta once per path, and only when the sidebar is
   already open, because `:Magenta context-files` force-opens the sidebar
-  otherwise. It is re-added automatically if the digest path changes (a
-  workspace rename), since `digest_path` is keyed on the workspace name.
+  otherwise. Opening the sidebar triggers the add through the `BufWinEnter`
+  hook, so there is no need to switch focus first. It is re-added
+  automatically if the digest path changes (a workspace rename), since
+  `digest_path` is keyed on the workspace name.
 - `:WsxContext` forces a rewrite and re-add.
 - Later rewrites reach the agent without further action, since magenta
   diffs tracked files before each request.
-- Magenta context is per thread, so a new magenta thread does not carry
-  the digest; run `:WsxContext` after starting a new thread.
+- Magenta context is per thread. A new thread gets its own input buffer,
+  which fires the same `BufWinEnter` hook, so the digest is attached to it
+  automatically; `:WsxContext` remains as a manual fallback.
 - The digest can quote the primary agent's last message verbatim. It is
   written with user-only permissions; do not commit or share it.
 - After a workspace rename the old digest file is left in place under

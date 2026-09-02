@@ -1,4 +1,4 @@
-//! `wsx status` and `wsx recap` — what an agent reports about itself.
+//! `wsx status`, `wsx recap`, and `wsx context` — what an agent reports about itself.
 //!
 //! Both write to the dashboard rather than doing work, and both accept
 //! the same hook/notify shapes, so they share a file.
@@ -128,4 +128,27 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
             msg: format!("unknown recap subcommand: {}", other.unwrap_or("(none)")),
         }),
     }
+}
+
+pub(in crate::cli) fn parse_context(it: &mut Args) -> Result<CliAction> {
+    let action = match it.next().as_deref() {
+        Some("show") => CliAction::ContextShow,
+        Some("write") => CliAction::ContextWrite,
+        other => {
+            return Err(Error::Usage {
+                group: None,
+                msg: format!(
+                    "unknown context subcommand: {} (usage: wsx context <show|write>)",
+                    other.unwrap_or("(none)")
+                ),
+            });
+        }
+    };
+    if let Some(extra) = it.next() {
+        return Err(Error::Usage {
+            group: None,
+            msg: format!("unexpected argument: {extra} (usage: wsx context <show|write>)"),
+        });
+    }
+    Ok(action)
 }

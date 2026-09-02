@@ -23,7 +23,9 @@ In order:
 - attached agents, primary marked `(primary)`
 - the last pushed status (`working — "message" (source, 4m ago)`)
 - the recap (goal / state / next)
-- `git log --oneline <base>..HEAD` (up to 20) and an uncommitted-changes line
+- `git log --oneline <base>..HEAD` (up to 20)
+- an uncommitted-changes line, which appears whenever git status could be
+  read, even when there are no commits ahead of base
 - the primary agent's last assistant message, from its session transcript
   (Claude Code, Pi, Hermes, Codex, and oh-my-pi are all supported), capped
   at 2000 characters
@@ -71,7 +73,7 @@ context. Add this to your neovim config:
 ```lua
 -- wsx: keep the workspace context digest fresh and hand it to magenta.nvim
 local worktrees = vim.fn.expand("~/.local/state/wsx/worktrees/")
-local added = false
+local added_path = nil
 
 local function magenta_sidebar_visible()
   for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -86,11 +88,11 @@ local function wsx_context()
   vim.system({ "wsx", "context", "write" }, { text = true }, function(out)
     if out.code ~= 0 then return end
     local path = vim.trim(out.stdout)
-    if added or path == "" then return end
+    if path == "" or path == added_path then return end
     vim.schedule(function()
       if magenta_sidebar_visible() then
         vim.cmd("Magenta context-files " .. vim.fn.fnameescape(path))
-        added = true
+        added_path = path
       end
     end)
   end)
@@ -98,7 +100,7 @@ end
 
 vim.api.nvim_create_autocmd({ "VimEnter", "FocusGained" }, { callback = wsx_context })
 vim.api.nvim_create_user_command("WsxContext", function()
-  added = false
+  added_path = nil
   wsx_context()
 end, {})
 ```
@@ -107,11 +109,15 @@ Behaviour:
 
 - The file is rewritten on every `VimEnter` and `FocusGained` — one sqlite
   read, two git commands, one transcript scan.
-- It is added to magenta once, and only when the sidebar is already open,
-  because `:Magenta context-files` force-opens the sidebar otherwise.
+- It is added to magenta once per path, and only when the sidebar is
+  already open, because `:Magenta context-files` force-opens the sidebar
+  otherwise. It is re-added automatically if the digest path changes (a
+  workspace rename), since `digest_path` is keyed on the workspace name.
 - `:WsxContext` forces a rewrite and re-add.
 - Later rewrites reach the agent without further action, since magenta
   diffs tracked files before each request.
+- Magenta context is per thread, so a new magenta thread does not carry
+  the digest; run `:WsxContext` after starting a new thread.
 
 If `$XDG_STATE_HOME` is set, change the `worktrees` path to match.
 

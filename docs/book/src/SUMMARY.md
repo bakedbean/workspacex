@@ -4,6 +4,7 @@
 
 - [Overview](overview/index.md)
   - [Key features](overview/key-features.md)
+  - [Installation](overview/installation.md)
   - [Quick start](overview/quick-start.md)
   - [Next steps: wiring up your tools](overview/wiring-up-tools.md)
 - [Daily use](daily-use/index.md)
@@ -43,3 +44,4 @@
   - [Storage and configuration files](reference/storage-and-config-files.md)
 - [Development](development/index.md)
   - [Testing](development/testing.md)
+  - [Releasing](development/releasing.md)

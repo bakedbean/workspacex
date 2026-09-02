@@ -28,11 +28,15 @@ In order:
   read, even when there are no commits ahead of base
 - the primary agent's last assistant message, from its session transcript
   (Claude Code, Pi, Hermes, Codex, and oh-my-pi are all supported), capped
-  at 2000 characters
+  at 2000 characters. When several agents of the same kind share the
+  worktree, the most recently active transcript of that kind is used; wsx
+  does not record which session belongs to which instance.
 - an **External instructions** block
 
-Sections with no data are omitted. Git and transcript problems never fail
-the command; only an unresolvable workspace or an unwritable file does.
+Optional sections with no data are omitted; the agents and status lines
+always render, showing `-` when empty. Git and transcript problems never
+fail the command; only an unresolvable workspace, a database read error,
+or an unwritable file does.
 
 ## External instructions
 
@@ -74,6 +78,7 @@ context. Add this to your neovim config:
 -- wsx: keep the workspace context digest fresh and hand it to magenta.nvim
 local worktrees = vim.fn.expand("~/.local/state/wsx/worktrees/")
 local added_path = nil
+local in_flight = false
 
 local function magenta_sidebar_visible()
   for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -84,8 +89,11 @@ local function magenta_sidebar_visible()
 end
 
 local function wsx_context()
+  if in_flight then return end
   if not vim.startswith(vim.fn.getcwd(), worktrees) then return end
+  in_flight = true
   vim.system({ "wsx", "context", "write" }, { text = true }, function(out)
+    in_flight = false
     if out.code ~= 0 then return end
     local path = vim.trim(out.stdout)
     if path == "" or path == added_path then return end
@@ -107,8 +115,8 @@ end, {})
 
 Behaviour:
 
-- The file is rewritten on every `VimEnter` and `FocusGained` — one sqlite
-  read, two git commands, one transcript scan.
+- The file is rewritten on every `VimEnter` and `FocusGained` — a handful
+  of sqlite reads, three git commands, one transcript scan.
 - It is added to magenta once per path, and only when the sidebar is
   already open, because `:Magenta context-files` force-opens the sidebar
   otherwise. It is re-added automatically if the digest path changes (a
@@ -118,6 +126,10 @@ Behaviour:
   diffs tracked files before each request.
 - Magenta context is per thread, so a new magenta thread does not carry
   the digest; run `:WsxContext` after starting a new thread.
+- The digest can quote the primary agent's last message verbatim. It is
+  written with user-only permissions; do not commit or share it.
+- After a workspace rename the old digest file is left in place under
+  `context/`; delete it by hand if it bothers you.
 
 If `$XDG_STATE_HOME` is set, change the `worktrees` path to match.
 

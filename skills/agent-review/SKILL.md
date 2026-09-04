@@ -18,9 +18,10 @@ A single optional argument: the reviewer **kind**, one of `claude`, `pi`,
 
 - `/agent-review` → spawn a `claude` reviewer
 - `/agent-review codex` → spawn a `codex` reviewer
+- `/agent-review omp` → spawn an `omp` (oh-my-pi) reviewer
 
-If an argument is given that is not one of the four kinds, stop and tell the
-user the valid kinds. Do not guess.
+If an argument is given that is not one of the kinds listed above, stop and
+tell the user the valid kinds. Do not guess.
 
 ## Steps
 

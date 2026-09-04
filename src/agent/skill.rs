@@ -231,6 +231,47 @@ mod tests {
         );
     }
 
+    /// The reviewer-kind lists in the skill are prose, so the compiler can't
+    /// catch a new `AgentKind` variant that never made it into the skill.
+    /// Derive the expected list from `AgentKind::ALL` and require the
+    /// frontmatter description and the body to name every kind.
+    #[test]
+    fn agent_review_skill_lists_every_agent_kind() {
+        use crate::pty::session::AgentKind;
+
+        let names: Vec<&str> = AgentKind::ALL.iter().map(|k| k.display_name()).collect();
+        let piped = names.join("|");
+
+        let description = AGENT_REVIEW_SKILL_CONTENT
+            .lines()
+            .find(|l| l.starts_with("description:"))
+            .expect("agent-review skill has a description line");
+        assert!(
+            description.contains(&piped),
+            "agent-review description must list every AgentKind as `{piped}`, got: {description}"
+        );
+
+        let body = AGENT_REVIEW_SKILL_CONTENT
+            .splitn(3, "---\n")
+            .nth(2)
+            .expect("agent-review skill has a body after the frontmatter");
+        for name in &names {
+            assert!(
+                body.contains(&format!("`{name}`")),
+                "agent-review skill body must name the `{name}` reviewer kind"
+            );
+        }
+
+        // A hardcoded count ("one of the four kinds") goes stale the moment a
+        // kind is added; the skill must not carry one.
+        for word in ["four kinds", "five kinds", "six kinds"] {
+            assert!(
+                !body.contains(word),
+                "agent-review skill must not hardcode the number of kinds ({word:?})"
+            );
+        }
+    }
+
     #[test]
     fn install_to_writes_the_targets_own_content() {
         // The public wrapper must write `target.content`, not a hardcoded

@@ -150,6 +150,44 @@ impl AttachedState {
         }
     }
 
+    /// Drop every pane targeting `instance` — an agent that was just
+    /// removed from its workspace — and repair `focus`:
+    ///
+    /// - the previously focused leaf keeps focus if it survived (its path
+    ///   may have shifted when a sibling was removed, so it's re-resolved
+    ///   by target rather than trusted by index);
+    /// - otherwise focus moves to a surviving pane in the same workspace
+    ///   as the dropped one, the "next available agent" there;
+    /// - otherwise the first leaf.
+    ///
+    /// Returns `Empty` when no pane survives; the caller must re-target
+    /// (e.g. attach the workspace's primary) rather than render this state.
+    pub fn remove_instance(&mut self, instance: AgentInstanceId) -> PruneOutcome {
+        let focused = self.focused_target();
+        let dropped_ws = self
+            .leaves()
+            .iter()
+            .find(|t| t.instance == instance)
+            .map(|t| t.workspace_id);
+        if let PruneOutcome::Empty = self.tree.prune(&|t| t.instance != instance) {
+            return PruneOutcome::Empty;
+        }
+        let tree = &self.tree;
+        let paths = tree.leaf_paths();
+        let path_where = |pred: &dyn Fn(AttachTarget) -> bool| {
+            paths
+                .iter()
+                .find(|p| tree.leaf_at(p).is_some_and(pred))
+                .cloned()
+        };
+        self.focus = focused
+            .filter(|f| f.instance != instance)
+            .and_then(|f| path_where(&|t| t == f))
+            .or_else(|| dropped_ws.and_then(|ws| path_where(&|t| t.workspace_id == ws)))
+            .unwrap_or_else(|| tree.first_leaf_path());
+        PruneOutcome::Kept
+    }
+
     /// Move focus in the given direction. Tree-aware: walks up from the
     /// focused leaf until it finds an ancestor split whose direction matches
     /// the arrow, then moves to the adjacent sibling's first leaf. Returns
@@ -873,5 +911,63 @@ mod tests {
         tree.split(&[], SplitDirection::Vertical, wid(2));
         tree.split(&[1], SplitDirection::Horizontal, wid(3));
         assert_eq!(tree.first_leaf_path(), vec![0]);
+    }
+    #[test]
+    fn remove_instance_keeps_focus_on_surviving_focused_leaf() {
+        // (A | B | C), focus C, remove A → (B | C), focus still C even
+        // though its index shifted.
+        let mut st = AttachedState::single(wid(1));
+        st.split(SplitDirection::Vertical, wid(2));
+        st.split(SplitDirection::Vertical, wid(3));
+        assert_eq!(st.focused_target(), Some(wid(3)));
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(1)),
+            PruneOutcome::Kept
+        ));
+        assert_eq!(st.leaves(), vec![wid(2), wid(3)]);
+        assert_eq!(st.focused_target(), Some(wid(3)));
+    }
+
+    #[test]
+    fn remove_instance_prefers_same_workspace_when_focused_leaf_dropped() {
+        // Workspace 1 has instances 1 and 3; workspace 2 has instance 2.
+        // (1 | 2 | 3) focus 3 (ws 1), remove 3 → focus goes to 1 (ws 1),
+        // not 2 (first leaf).
+        let ws1 = |i: i64| AttachTarget {
+            workspace_id: WorkspaceId(1),
+            instance: AgentInstanceId(i),
+        };
+        let mut st = AttachedState::single(ws1(1));
+        st.split(SplitDirection::Vertical, wid(2));
+        st.split(SplitDirection::Vertical, ws1(3));
+        assert_eq!(st.focused_target(), Some(ws1(3)));
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(3)),
+            PruneOutcome::Kept
+        ));
+        assert_eq!(st.leaves(), vec![ws1(1), wid(2)]);
+        assert_eq!(st.focused_target(), Some(ws1(1)));
+    }
+
+    #[test]
+    fn remove_instance_reports_empty_when_last_leaf_dropped() {
+        let mut st = AttachedState::single(wid(1));
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(1)),
+            PruneOutcome::Empty
+        ));
+    }
+
+    #[test]
+    fn remove_instance_is_noop_for_absent_instance() {
+        let mut st = AttachedState::single(wid(1));
+        st.split(SplitDirection::Vertical, wid(2));
+        let before = st.clone();
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(9)),
+            PruneOutcome::Kept
+        ));
+        assert_eq!(st.leaves(), before.leaves());
+        assert_eq!(st.focus, before.focus);
     }
 }

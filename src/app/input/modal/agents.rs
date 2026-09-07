@@ -2,7 +2,9 @@
 
 use crate::app::{App, AttachReady, SharedApp, attach_workspace, ensure_instance_session};
 use crate::error::Result;
+use crate::ui::View;
 use crate::ui::modal::Modal;
+use crate::ui::split::PruneOutcome;
 use crossterm::event::KeyCode;
 // Test-only imports: the moved test modules access `draw_for_test`,
 // `AttachedState`, `Arc`, and `Mutex` through `super::*` glob imports
@@ -148,6 +150,20 @@ pub(super) async fn agents_panel(
                 // Refill `agent_roster` so it reflects the removal —
                 // nothing else on this path goes through `refresh()`.
                 app.refresh()?;
+                app.modal = None;
+                // Drop the removed instance's pane(s) from the split tree
+                // in this same keystroke. `draw_attached` bounces the
+                // whole view to the dashboard on any leaf whose session
+                // is gone, so leaving the dead pane in place would eject
+                // the user instead of moving them to the next agent.
+                if let View::Attached(state) = &mut app.view
+                    && let PruneOutcome::Empty = state.remove_instance(last.id)
+                {
+                    // The removed peer was the only pane: re-target to
+                    // the workspace's primary (which can't be removed).
+                    app.view = View::Dashboard;
+                    attach_workspace(app, workspace_id)?;
+                }
             }
         }
         _ => {}

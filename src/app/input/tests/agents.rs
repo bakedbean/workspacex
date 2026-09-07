@@ -322,3 +322,131 @@ async fn agent_picker_enter_persists_and_retries_attach() {
     // Modal closed.
     assert!(app.modal.is_none(), "modal should be cleared on success");
 }
+
+/// Fixture for the agents-panel `x` (remove peer) tests: one workspace
+/// with a primary Claude instance and one Codex peer, both holding a
+/// fake running session so the attached view has something to draw.
+/// Returns `(app, ws, primary, peer)`.
+fn app_with_primary_and_peer() -> (
+    App,
+    crate::data::store::WorkspaceId,
+    crate::data::store::AgentInstanceId,
+    crate::data::store::AgentInstanceId,
+) {
+    use crate::pty::session::{AgentKind, SessionStatus};
+    let mut app = App::new(
+        Store::open_in_memory().unwrap(),
+        PathBuf::from("/tmp/wsx-test"),
+    )
+    .unwrap();
+    let ws = app.test_workspace("peer-remove");
+    let primary = app
+        .store
+        .add_primary_agent(ws, AgentKind::Claude, 1)
+        .unwrap()
+        .id;
+    let peer = app
+        .store
+        .add_workspace_agent(ws, AgentKind::Codex)
+        .unwrap()
+        .id;
+    app.test_spawn_session(primary, SessionStatus::Running { pid: 1 });
+    app.test_spawn_session(peer, SessionStatus::Running { pid: 2 });
+    app.refresh().unwrap();
+    (app, ws, primary, peer)
+}
+
+fn target(
+    ws: crate::data::store::WorkspaceId,
+    instance: crate::data::store::AgentInstanceId,
+) -> crate::ui::split::AttachTarget {
+    crate::ui::split::AttachTarget {
+        workspace_id: ws,
+        instance,
+    }
+}
+
+async fn press_x_in_agents_panel(app: &mut App, ws: crate::data::store::WorkspaceId) {
+    use crate::ui::modal::Modal;
+    app.modal = Some(Modal::AgentsPanel {
+        workspace_id: ws,
+        selected: 0,
+    });
+    let shared = Arc::new(Mutex::new(
+        App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap(),
+    ));
+    handle_key_modal(
+        app,
+        &shared,
+        KeyEvent::new(crossterm::event::KeyCode::Char('x'), KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+}
+
+/// The removed peer's pane must be dropped from the split tree in the
+/// same keystroke, and the panel dismissed. Without the prune the next
+/// `draw_attached` sees a leaf with no session and bounces the whole
+/// view to the dashboard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_x_dismisses_modal_and_drops_removed_pane() {
+    let (mut app, ws, primary, peer) = app_with_primary_and_peer();
+    let mut state = crate::ui::AttachedState::single(target(ws, primary));
+    assert!(state.split(SplitDirection::Vertical, target(ws, peer)));
+    // Focus back on the primary pane.
+    state.focus = vec![0];
+    app.view = View::Attached(state);
+
+    press_x_in_agents_panel(&mut app, ws).await;
+
+    assert!(
+        app.modal.is_none(),
+        "agents panel should close after removal"
+    );
+    assert!(app.sessions.get(peer).is_none(), "peer session killed");
+    let View::Attached(state) = &app.view else {
+        panic!("expected to stay attached, got {:?}", app.view);
+    };
+    assert_eq!(state.leaves(), vec![target(ws, primary)]);
+    assert_eq!(state.focused_target(), Some(target(ws, primary)));
+}
+
+/// When the focused pane is the one being removed, focus moves to a
+/// surviving pane in the same workspace rather than dangling.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_x_moves_focus_off_removed_pane() {
+    let (mut app, ws, primary, peer) = app_with_primary_and_peer();
+    let mut state = crate::ui::AttachedState::single(target(ws, primary));
+    assert!(state.split(SplitDirection::Vertical, target(ws, peer)));
+    // `split` focuses the new (peer) pane.
+    assert_eq!(state.focused_target(), Some(target(ws, peer)));
+    app.view = View::Attached(state);
+
+    press_x_in_agents_panel(&mut app, ws).await;
+
+    assert!(app.modal.is_none());
+    let View::Attached(state) = &app.view else {
+        panic!("expected to stay attached, got {:?}", app.view);
+    };
+    assert_eq!(state.focused_target(), Some(target(ws, primary)));
+}
+
+/// If the removed peer was the only pane, re-target to the workspace's
+/// primary instead of falling out to the dashboard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_x_on_sole_pane_falls_back_to_primary() {
+    let (mut app, ws, primary, peer) = app_with_primary_and_peer();
+    app.view = View::Attached(crate::ui::AttachedState::single(target(ws, peer)));
+
+    press_x_in_agents_panel(&mut app, ws).await;
+
+    assert!(app.modal.is_none());
+    let View::Attached(state) = &app.view else {
+        panic!("expected to stay attached, got {:?}", app.view);
+    };
+    assert_eq!(state.focused_target(), Some(target(ws, primary)));
+}

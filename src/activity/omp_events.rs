@@ -413,6 +413,14 @@ mod tests {
             names.contains(&"bash"),
             "omp uses pi's lowercase tool names: {names:?}"
         );
+        // The attached-view chip (`{model} {used}/{window}`) reads these two
+        // fields. The model comes from the last assistant line's
+        // `message.model`, which for omp is the bare id (the `provider/`
+        // form only appears in the earlier `model_change` record). The
+        // fill is input + cacheRead + cacheWrite of the last assistant
+        // usage block: 357 + 16128 + 0.
+        assert_eq!(update.model_id.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(update.context_tokens, Some(16_485));
     }
 
     /// The pre-17.x absolute name omp migrates only on its own first access. A

@@ -450,3 +450,91 @@ async fn agents_panel_x_on_sole_pane_falls_back_to_primary() {
     };
     assert_eq!(state.focused_target(), Some(target(ws, primary)));
 }
+
+/// The sole-pane fallback must be a plain single-pane attach to the
+/// primary, NOT `attach_workspace`: that would restore the saved layout,
+/// re-spawning its side panes (and ejecting to the dashboard if one can't
+/// spawn). The saved layout itself is left alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_x_on_sole_pane_ignores_saved_layout() {
+    let (mut app, ws, primary, peer) = app_with_primary_and_peer();
+    // Saved layout: (primary | other-workspace primary), focused on the
+    // second pane. The second workspace has no session, so restoring
+    // this layout would leave a sessionless leaf.
+    let other_ws = app.test_workspace("peer-remove-other");
+    let other_primary = app
+        .store
+        .add_primary_agent(other_ws, crate::pty::session::AgentKind::Claude, 1)
+        .unwrap()
+        .id;
+    let mut saved = crate::ui::AttachedState::single(target(ws, primary));
+    assert!(saved.split(SplitDirection::Vertical, target(other_ws, other_primary)));
+    app.store
+        .set_workspace_layout(ws, &saved.tree, &saved.focus)
+        .unwrap();
+    app.view = View::Attached(crate::ui::AttachedState::single(target(ws, peer)));
+
+    press_x_in_agents_panel(&mut app, ws).await;
+
+    let View::Attached(state) = &app.view else {
+        panic!("expected to stay attached, got {:?}", app.view);
+    };
+    assert_eq!(state.leaves(), vec![target(ws, primary)]);
+    assert_eq!(state.focused_target(), Some(target(ws, primary)));
+    // Saved layout untouched.
+    let (tree, _) = app
+        .store
+        .get_workspace_layout(ws)
+        .unwrap()
+        .expect("saved layout still present");
+    assert_eq!(tree.leaves(), saved.leaves());
+}
+
+/// If the primary can't be spawned for the sole-pane fallback, the
+/// AgentMissing modal replaces the panel and the view falls to the
+/// dashboard rather than an unrenderable empty tree.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_x_on_sole_pane_with_unspawnable_primary_shows_agent_missing() {
+    use crate::pty::session::{AgentKind, SessionStatus};
+    let mut env = EnvGuard::new();
+    env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-claude");
+    let mut app = App::new(
+        Store::open_in_memory().unwrap(),
+        PathBuf::from("/tmp/wsx-test"),
+    )
+    .unwrap();
+    let ws = app.test_workspace("peer-remove-missing");
+    app.store
+        .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+        .unwrap();
+    let _primary = app
+        .store
+        .add_primary_agent(ws, AgentKind::Claude, 1)
+        .unwrap()
+        .id;
+    let peer = app
+        .store
+        .add_workspace_agent(ws, AgentKind::Codex)
+        .unwrap()
+        .id;
+    // Only the peer has a session; the primary has none and can't spawn.
+    app.test_spawn_session(peer, SessionStatus::Running { pid: 2 });
+    app.refresh().unwrap();
+    app.view = View::Attached(crate::ui::AttachedState::single(target(ws, peer)));
+
+    press_x_in_agents_panel(&mut app, ws).await;
+
+    assert!(
+        matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::AgentMissing { ws_id, .. }) if ws_id == ws
+        ),
+        "expected AgentMissing modal, got {:?}",
+        app.modal
+    );
+    assert!(
+        matches!(app.view, View::Dashboard),
+        "expected dashboard, got {:?}",
+        app.view
+    );
+}

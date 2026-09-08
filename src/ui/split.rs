@@ -151,40 +151,53 @@ impl AttachedState {
     }
 
     /// Drop every pane targeting `instance` — an agent that was just
-    /// removed from its workspace — and repair `focus`:
+    /// removed from its workspace — and repair `focus`.
     ///
-    /// - the previously focused leaf keeps focus if it survived (its path
-    ///   may have shifted when a sibling was removed, so it's re-resolved
-    ///   by target rather than trusted by index);
-    /// - otherwise focus moves to a surviving pane in the same workspace
-    ///   as the dropped one, the "next available agent" there;
+    /// Panes are tracked by position, not by target: two panes may point at
+    /// the same instance (`switch_focused_pane_to` doesn't deduplicate), so
+    /// re-resolving focus by target could jump to the wrong duplicate.
+    /// `SplitTree::prune` keeps survivors in depth-first order, so the
+    /// focused pane's new path is simply its rank among the survivors.
+    ///
+    /// - the previously focused pane keeps focus if it survived;
+    /// - otherwise focus moves to the first surviving pane in the same
+    ///   workspace as the dropped one, the "next available agent" there;
     /// - otherwise the first leaf.
     ///
+    /// No-op (`Kept`, focus untouched) when no pane targets `instance`.
     /// Returns `Empty` when no pane survives; the caller must re-target
     /// (e.g. attach the workspace's primary) rather than render this state.
     pub fn remove_instance(&mut self, instance: AgentInstanceId) -> PruneOutcome {
-        let focused = self.focused_target();
-        let dropped_ws = self
-            .leaves()
+        let leaves = self.leaves();
+        let Some(dropped_ws) = leaves
             .iter()
             .find(|t| t.instance == instance)
-            .map(|t| t.workspace_id);
+            .map(|t| t.workspace_id)
+        else {
+            return PruneOutcome::Kept;
+        };
+        let focused_idx = self.tree.leaf_paths().iter().position(|p| *p == self.focus);
+        // Pre-prune indices of the panes that will survive, in DFS order.
+        let survivors: Vec<usize> = (0..leaves.len())
+            .filter(|&i| leaves[i].instance != instance)
+            .collect();
         if let PruneOutcome::Empty = self.tree.prune(&|t| t.instance != instance) {
             return PruneOutcome::Empty;
         }
-        let tree = &self.tree;
-        let paths = tree.leaf_paths();
-        let path_where = |pred: &dyn Fn(AttachTarget) -> bool| {
-            paths
-                .iter()
-                .find(|p| tree.leaf_at(p).is_some_and(pred))
-                .cloned()
-        };
-        self.focus = focused
-            .filter(|f| f.instance != instance)
-            .and_then(|f| path_where(&|t| t == f))
-            .or_else(|| dropped_ws.and_then(|ws| path_where(&|t| t.workspace_id == ws)))
-            .unwrap_or_else(|| tree.first_leaf_path());
+        let new_paths = self.tree.leaf_paths();
+        debug_assert_eq!(new_paths.len(), survivors.len());
+        let rank = focused_idx
+            .and_then(|fi| survivors.iter().position(|&i| i == fi))
+            .or_else(|| {
+                survivors
+                    .iter()
+                    .position(|&i| leaves[i].workspace_id == dropped_ws)
+            })
+            .unwrap_or(0);
+        self.focus = new_paths
+            .get(rank)
+            .cloned()
+            .unwrap_or_else(|| self.tree.first_leaf_path());
         PruneOutcome::Kept
     }
 
@@ -930,23 +943,103 @@ mod tests {
 
     #[test]
     fn remove_instance_prefers_same_workspace_when_focused_leaf_dropped() {
-        // Workspace 1 has instances 1 and 3; workspace 2 has instance 2.
-        // (1 | 2 | 3) focus 3 (ws 1), remove 3 → focus goes to 1 (ws 1),
-        // not 2 (first leaf).
+        // Workspace 2 owns the FIRST leaf; workspace 1 has instances 1 and 3.
+        // (2 | 1 | 3) focus 3 (ws 1), remove 3 → focus goes to 1 (ws 1, path
+        // [1]), not to the first leaf (ws 2). A plain first-leaf fallback
+        // would fail this.
         let ws1 = |i: i64| AttachTarget {
             workspace_id: WorkspaceId(1),
             instance: AgentInstanceId(i),
         };
-        let mut st = AttachedState::single(ws1(1));
-        st.split(SplitDirection::Vertical, wid(2));
+        let mut st = AttachedState::single(wid(2));
+        st.split(SplitDirection::Vertical, ws1(1));
         st.split(SplitDirection::Vertical, ws1(3));
         assert_eq!(st.focused_target(), Some(ws1(3)));
         assert!(matches!(
             st.remove_instance(AgentInstanceId(3)),
             PruneOutcome::Kept
         ));
-        assert_eq!(st.leaves(), vec![ws1(1), wid(2)]);
+        assert_eq!(st.leaves(), vec![wid(2), ws1(1)]);
+        assert_eq!(st.focus, vec![1]);
         assert_eq!(st.focused_target(), Some(ws1(1)));
+    }
+
+    #[test]
+    fn remove_instance_falls_back_to_first_leaf_without_same_workspace_survivor() {
+        // (2 | 3) focus 3 (ws 3), remove 3 → only ws 2 remains; focus [].
+        let mut st = AttachedState::single(wid(2));
+        st.split(SplitDirection::Vertical, wid(3));
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(3)),
+            PruneOutcome::Kept
+        ));
+        assert_eq!(st.focused_target(), Some(wid(2)));
+        assert!(st.focus.is_empty());
+    }
+
+    #[test]
+    fn remove_instance_keeps_focus_on_duplicate_target_pane() {
+        // (A | A | B) — two panes on the same instance, focus on the SECOND
+        // A. Removing B must keep focus on that second pane (path [1]),
+        // not jump to the first pane with the same target.
+        let mut st = AttachedState::single(wid(1));
+        st.split(SplitDirection::Vertical, wid(1));
+        st.split(SplitDirection::Vertical, wid(2));
+        st.focus = vec![1];
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(2)),
+            PruneOutcome::Kept
+        ));
+        assert_eq!(st.leaves(), vec![wid(1), wid(1)]);
+        assert_eq!(st.focus, vec![1]);
+    }
+
+    #[test]
+    fn remove_instance_absent_with_duplicate_targets_leaves_focus_alone() {
+        // (A | A) focus [1]; removing an instance not in the tree must be a
+        // pure no-op — the earlier target-based repair moved focus to [0].
+        let mut st = AttachedState::single(wid(1));
+        st.split(SplitDirection::Vertical, wid(1));
+        assert_eq!(st.focus, vec![1]);
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(9)),
+            PruneOutcome::Kept
+        ));
+        assert_eq!(st.focus, vec![1]);
+    }
+
+    #[test]
+    fn remove_instance_drops_every_pane_on_that_instance() {
+        // (P | X | X) where both X panes target instance 2; focus P.
+        // Both are dropped, the split collapses to a lone P leaf.
+        let mut st = AttachedState::single(wid(1));
+        st.split(SplitDirection::Vertical, wid(2));
+        st.split(SplitDirection::Vertical, wid(2));
+        st.focus = vec![0];
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(2)),
+            PruneOutcome::Kept
+        ));
+        assert_eq!(st.leaves(), vec![wid(1)]);
+        assert!(st.focus.is_empty());
+        assert_eq!(st.focused_target(), Some(wid(1)));
+    }
+
+    #[test]
+    fn remove_instance_repairs_focus_through_nested_collapse() {
+        // (A | (B / C)) focus C, remove A → outer split collapses to
+        // (B / C); C's path shrinks from [1, 1] to [1].
+        let mut st = AttachedState::single(wid(1));
+        st.split(SplitDirection::Vertical, wid(2));
+        st.split(SplitDirection::Horizontal, wid(3));
+        assert_eq!(st.focus, vec![1, 1]);
+        assert!(matches!(
+            st.remove_instance(AgentInstanceId(1)),
+            PruneOutcome::Kept
+        ));
+        assert_eq!(st.leaves(), vec![wid(2), wid(3)]);
+        assert_eq!(st.focus, vec![1]);
+        assert_eq!(st.focused_target(), Some(wid(3)));
     }
 
     #[test]

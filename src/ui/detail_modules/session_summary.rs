@@ -331,11 +331,15 @@ fn resolve_window(context_tokens: u64, model_id: Option<&str>) -> Option<u64> {
 /// version, e.g. `claude-opus-4-8[1m]` → `opus 4.8`, `claude-sonnet-5` →
 /// `sonnet 5`. The version is the run of short (1-2 digit) numeric segments
 /// right after the family, so a trailing date segment like `20251001` is
-/// ignored. Unknown / non-Claude ids fall back to the id with any leading
-/// `claude-` stripped, truncated to 12 chars.
+/// ignored. A `provider/` prefix (pi and omp qualify ids like
+/// `openai-codex/gpt-5.6-sol`) is dropped first. Unknown / non-Claude ids
+/// fall back to the id with any leading `claude-` stripped, truncated to
+/// 12 chars.
 pub(crate) fn short_model_label(model_id: &str) -> String {
-    // Drop a trailing bracketed variant tag like "[1m]".
-    let base = model_id.split('[').next().unwrap_or(model_id);
+    // Drop a `provider/` qualifier, then a trailing bracketed variant tag
+    // like "[1m]".
+    let unqualified = model_id.rsplit('/').next().unwrap_or(model_id);
+    let base = unqualified.split('[').next().unwrap_or(unqualified);
     let segments: Vec<&str> = base.split('-').collect();
     let family_pos = segments
         .iter()
@@ -1195,6 +1199,15 @@ mod tests {
             short_model_label("some-really-long-unknown-model-id"),
             "some-really-"
         );
+    }
+
+    #[test]
+    fn short_model_label_strips_provider_prefix() {
+        // pi / omp ids carry a `provider/` prefix (from `model_change`
+        // records or a provider-qualified `message.model`). The provider
+        // is noise in a 12-char chip: drop it before any other handling.
+        assert_eq!(short_model_label("openai-codex/gpt-5.6-sol"), "gpt-5.6-sol");
+        assert_eq!(short_model_label("anthropic/claude-opus-4-8"), "opus 4.8");
     }
 
     #[test]

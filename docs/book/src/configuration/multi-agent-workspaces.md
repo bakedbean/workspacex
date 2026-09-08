@@ -16,6 +16,8 @@ In the TUI, press `Ctrl-x a` while a workspace is selected to open the **agents 
 
 Newly added agents spawn immediately with the workspace's context injected. The primary can't be removed from the panel — it lives for the life of the workspace.
 
+Removing an agent with `x` closes the panel and drops that agent's pane from the attached view. If you were focused on it, focus moves to another pane in the same workspace; if it was the only pane, the view re-attaches to the workspace's primary. Either way you stay attached rather than being returned to the dashboard.
+
 From the CLI, the equivalent of the panel's "add" is:
 
 ```bash

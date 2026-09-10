@@ -11,6 +11,7 @@ edit-url-template = "https://github.com/bakedbean/workspacex/edit/main/docs/book
 site-url = "/docs/"
 default-theme = "navy"
 preferred-dark-theme = "navy"
+additional-js = ["theme/cf-analytics.js"]
 
 [output.html.search]
 enable = true

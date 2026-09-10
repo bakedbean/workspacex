@@ -180,6 +180,19 @@ pub fn bucket_by_worktree(
     worktrees: &[(WorkspaceId, &Path)],
 ) -> HashMap<WorkspaceId, Vec<ProcInfo>> {
     let by_pid: HashMap<i32, &ProcInfo> = procs.iter().map(|p| (p.pid, p)).collect();
+    // `lsof` reports cwds with symlinks resolved; the stored worktree path
+    // is whatever the user configured. Match on the resolved form as well
+    // as the raw one, or a worktree base behind a symlink (every macOS
+    // temp dir, via `/var -> /private/var`) never buckets anything.
+    // Resolved once per call, not per process. A path that can't be
+    // resolved (already deleted) just keeps its raw form.
+    let resolved: Vec<(WorkspaceId, &Path, Option<PathBuf>)> = worktrees
+        .iter()
+        .map(|(id, wt)| {
+            let canon = std::fs::canonicalize(wt).ok().filter(|c| c != *wt);
+            (*id, *wt, canon)
+        })
+        .collect();
     let mut out: HashMap<WorkspaceId, Vec<ProcInfo>> = HashMap::new();
     for p in procs {
         if PROC_DENYLIST.contains(&p.command.as_str()) {
@@ -188,8 +201,10 @@ pub fn bucket_by_worktree(
         if !p.listening && ancestor_denied(p.ppid, &by_pid) {
             continue;
         }
-        for (id, wt) in worktrees {
-            if p.cwd.starts_with(wt) {
+        for (id, wt, canon) in &resolved {
+            let hit =
+                p.cwd.starts_with(wt) || canon.as_deref().is_some_and(|c| p.cwd.starts_with(c));
+            if hit {
                 out.entry(*id).or_default().push(p.clone());
                 break;
             }
@@ -847,6 +862,29 @@ mod tests {
     #[test]
     fn parse_listening_pids_handles_empty() {
         assert!(parse_listening_pids("").is_empty());
+    }
+
+    /// `lsof` reports a process's cwd with symlinks resolved, while the
+    /// worktree path wsx stores is whatever the user configured. On macOS
+    /// every temp dir is behind `/var -> /private/var`, and a worktree
+    /// base under a symlink hits the same mismatch anywhere. Bucketing
+    /// must match on the resolved path.
+    #[test]
+    fn bucket_by_worktree_matches_cwd_through_a_symlinked_worktree_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("wt")).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let resolved_cwd = std::fs::canonicalize(real.join("wt")).unwrap();
+        let procs = vec![proc(100, 1, "node", resolved_cwd.to_str().unwrap())];
+        let via_link = link.join("wt");
+        let out = bucket_by_worktree(&procs, &[(WorkspaceId(1), via_link.as_path())]);
+        assert_eq!(
+            out.get(&WorkspaceId(1)).map(|v| v.len()),
+            Some(1),
+            "cwd {resolved_cwd:?} should bucket under symlinked worktree {via_link:?}"
+        );
     }
 
     // ---- terminate_pids ------------------------------------------------

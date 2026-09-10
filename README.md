@@ -37,12 +37,45 @@ other users, ask questions, and share feedback.
 See the
 [full feature list](https://bakedbean.github.io/workspacex/docs/overview/key-features.html).
 
+## Install
+
+Homebrew, on macOS and Linux:
+
+```bash
+brew tap bakedbean/workspacex https://github.com/bakedbean/workspacex
+brew install bakedbean/workspacex/wsx
+```
+
+Nix:
+
+```bash
+nix run github:bakedbean/workspacex    # try it
+nix profile add github:bakedbean/workspacex
+```
+
+cargo-binstall, which downloads the same prebuilt binary:
+
+```bash
+cargo binstall --git https://github.com/bakedbean/workspacex wsx
+```
+
+From source, which needs Rust 1.85 or later:
+
+```bash
+cargo install --path .
+```
+
+Prebuilt tarballs for macOS and Linux, on Intel and ARM, are on the
+[releases page](https://github.com/bakedbean/workspacex/releases). wsx needs
+`git` on your PATH. See the
+[installation guide](https://bakedbean.github.io/workspacex/docs/overview/installation.html)
+for details and checksum verification.
+
 ## Quick start
 
 ```bash
-cargo build --release
-./target/release/wsx repo add /path/to/your/repo
-./target/release/wsx              # launch TUI
+wsx repo add /path/to/your/repo
+wsx              # launch TUI
 ```
 
 Press `n` to create your first workspace, then `enter` to attach. Claude Code

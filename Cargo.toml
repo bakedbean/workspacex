@@ -19,6 +19,17 @@ categories = ["command-line-utilities", "development-tools"]
 # decide to publish; note the crate name `wsx` must be available there.
 publish = false
 
+# Lets cargo-binstall pull the prebuilt binary from the GitHub release
+# instead of compiling the crate:
+#   cargo binstall --git https://github.com/bakedbean/workspacex wsx
+# The `--git` form is needed because wsx is not on crates.io yet. Plain
+# `cargo binstall wsx` starts working, with no change here, once it is.
+# The names below must match the tarballs the Release workflow uploads.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/wsx-{ version }-{ target }.{ archive-format }"
+pkg-fmt = "tgz"
+bin-dir = "wsx-{ version }-{ target }/{ bin }{ binary-ext }"
+
 [lib]
 name = "wsx"
 path = "src/lib.rs"

@@ -1,0 +1,201 @@
+name: Release
+
+# Tags that start with `v` cut a release. The tag is the single source of
+# truth for the version: the packaging step derives the tarball names from
+# it, and the release job fails if it disagrees with Cargo.toml.
+on:
+  push:
+    tags: ["v*"]
+  # Lets a maintainer rebuild the artifacts for an existing tag without
+  # deleting and re-pushing that tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (for example v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Release binaries ship without symbols. This is set here rather than in
+  # Cargo.toml so local `cargo build --release` keeps its backtraces.
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both macOS targets build on the arm64 runner. The Apple SDK is
+          # universal, so `cc` cross-compiles the bundled SQLite for x86_64
+          # from the same machine. This avoids the deprecated Intel runners.
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          # 22.04 carries glibc 2.35. Building there keeps the binary usable
+          # on older distributions than the current `ubuntu-latest` allows.
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # The ARM Linux runner image does not always ship Rust, unlike the
+      # x86-64 and macOS images.
+      - name: Make sure rustup is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v rustup >/dev/null; then exit 0; fi
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      # rustup reads the pinned channel from rust-toolchain.toml and installs
+      # it on demand, so this only has to add the cross-compilation standard
+      # library.
+      - name: Add the target
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          stage="wsx-${version}-${{ matrix.target }}"
+          mkdir "$stage"
+          cp "target/${{ matrix.target }}/release/wsx" "$stage/"
+          cp README.md LICENSE "$stage/"
+          tar czf "${stage}.tar.gz" "$stage"
+          # `shasum` is present on both the macOS and the Ubuntu runners.
+          # The checksum file holds a bare hash so the Homebrew job can read
+          # it without any parsing.
+          shasum -a 256 "${stage}.tar.gz" | cut -d' ' -f1 > "${stage}.tar.gz.sha256"
+          echo "stage=$stage" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.stage }}
+          path: |
+            ${{ steps.package.outputs.stage }}.tar.gz
+            ${{ steps.package.outputs.stage }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Check the tag against Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          # A tag that disagrees with the manifest would ship binaries whose
+          # `wsx --version` contradicts the release name, so stop here.
+          manifest="$(cargo metadata --no-deps --locked --format-version 1 \
+            | jq -r '.packages[] | select(.name == "wsx") | .version')"
+          if [ "$version" != "$manifest" ]; then
+            echo "tag $tag implies version $version, but Cargo.toml says $manifest" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          # `--clobber` makes a workflow_dispatch rebuild replace the assets
+          # on an existing release instead of failing.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "$tag" \
+              --generate-notes
+          fi
+
+  homebrew:
+    name: bump the Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Check out the default branch, not the tag: the formula bump has to
+      # land on main, and a tag is a detached head.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Rewrite the formula
+        run: scripts/update-homebrew-formula.sh "${{ needs.release.outputs.version }}" dist
+
+      - name: Open the bump pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Formula/wsx.rb; then
+            echo "the formula already points at $VERSION, nothing to do"
+            exit 0
+          fi
+          branch="homebrew-bump-$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add Formula/wsx.rb
+          git commit -m "chore: bump the Homebrew formula to $VERSION"
+          git push --force origin "$branch"
+          # A pull request keeps the bump reviewable and works with branch
+          # protection on the default branch. Note that a pull request opened
+          # with GITHUB_TOKEN does not start CI, which is fine for a change
+          # that only touches the formula.
+          gh pr create \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "$branch" \
+            --title "chore: bump the Homebrew formula to $VERSION" \
+            --body "Automated bump from the Release workflow for v$VERSION." \
+            || gh pr edit "$branch" --title "chore: bump the Homebrew formula to $VERSION"

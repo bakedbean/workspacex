@@ -65,9 +65,9 @@
   const dash = document.getElementById('hero-dash');
   if (typeHost) {
     const lines = [
-      { pfx: '$ ', txt: 'cargo build --release', out: '   Compiling wsx v0.4.2\n   Finished release [optimized] target(s)' },
-      { pfx: '$ ', txt: './target/release/wsx repo add ~/work/api', out: '   added 1 repo · create worktrees in-app' },
-      { pfx: '$ ', txt: './target/release/wsx', out: '   launching dashboard…' },
+      { pfx: '$ ', txt: 'brew install bakedbean/workspacex/wsx', out: '   Pouring wsx · installed' },
+      { pfx: '$ ', txt: 'wsx repo add ~/work/api', out: '   added 1 repo · create worktrees in-app' },
+      { pfx: '$ ', txt: 'wsx', out: '   launching dashboard…' },
     ];
     if (reduce) {
       typeHost.innerHTML = lines.map((l) =>

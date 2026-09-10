@@ -44,4 +44,4 @@ Renames the workspace slug AND its git branch in sync with the wsx database. Usi
 wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
 ```
 
-Equivalent to the dashboard's archive action: stops any tracked processes running under the worktree (`SIGTERM`, a two-second grace period, then `SIGKILL` — see [Process tracking](../daily-use/process-tracking.md)), runs the per-repo archive script, removes the worktree (unless `--keep-worktree`), deletes the branch (force if `--force-delete-branch`), and drops the workspace from the registry.
+Equivalent to the dashboard's archive action: stops any tracked processes running under the worktree unless `--keep-worktree` is given (`SIGTERM`, a two-second grace period, then `SIGKILL`; best-effort — see [Process tracking](../daily-use/process-tracking.md)), runs the per-repo archive script, removes the worktree (unless `--keep-worktree`), deletes the branch (force if `--force-delete-branch`), and drops the workspace from the registry.

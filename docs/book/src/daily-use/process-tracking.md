@@ -42,10 +42,15 @@ the next scan, where `K` stops it.
   like (the `[t]` terminal keybind is one option). The feature is
   observability plus a kill hook, not lifecycle management.
 - The one exception is archive: archiving a workspace stops every
-  process this list would show for it before the worktree is removed.
-  Each gets `SIGTERM`, then two seconds to exit, then `SIGKILL` if it is
-  still running. Both the dashboard's `d` and `wsx workspace archive`
-  do this.
+  process this list would show for it before the archive script runs and
+  the worktree is removed. Each gets `SIGTERM`, then two seconds to exit,
+  then `SIGKILL` if it is still running. Both the dashboard's `d` and
+  `wsx workspace archive` do this. `--keep-worktree` skips it: keeping
+  the checkout means keeping whatever is running in it. The teardown is
+  best-effort — a process wsx cannot signal (for example one owned by
+  another user) is logged and shown in the archive progress, and the
+  archive continues. Processes started after the scan, such as by the
+  archive script itself, are not covered.
 - Requires `lsof` to be installed (standard on most Linux/macOS setups).
   If it's missing, the count stays at 0 and the modal shows "(no tracked
   processes)" — no errors.

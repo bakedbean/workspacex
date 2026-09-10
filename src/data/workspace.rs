@@ -438,7 +438,10 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     // Then stop the tracked processes (dev servers, watchers — whatever the
     // processes modal lists) so nothing keeps running against a worktree
     // that is about to be deleted. TERM first, KILL after a grace period.
-    if ws.worktree_path.exists() {
+    // `--keep-worktree` keeps the checkout for continued use, so whatever
+    // runs in it is left alone too. Best-effort: failures are logged by
+    // the helper and never block the archive.
+    if !opts.keep_worktree && ws.worktree_path.exists() {
         crate::activity::proc::kill_tracked_processes(ws.id, &ws.worktree_path).await;
     }
     // A fetch or checkout failure can now deliberately leave a row whose
@@ -508,9 +511,21 @@ pub async fn archive_with_app(
     // --- Phase 0b (unlocked, async): stop the tracked processes — the ones
     //     the processes modal lists — so a dev server or watcher isn't left
     //     running against a deleted worktree. TERM, grace, then KILL. ---
-    if ws.worktree_path.exists() {
+    //     Skipped with `keep_worktree`, same as the CLI path. Best-effort:
+    //     a process we couldn't signal is reported on the badge and the
+    //     archive carries on. ---
+    if !opts.keep_worktree && ws.worktree_path.exists() {
         note_archive_step(&app, ws.id, "stopping processes").await;
-        crate::activity::proc::kill_tracked_processes(ws.id, &ws.worktree_path).await;
+        let teardown =
+            crate::activity::proc::kill_tracked_processes(ws.id, &ws.worktree_path).await;
+        let n = teardown.tracked.len();
+        if n > 0 {
+            let plural = if n == 1 { "" } else { "es" };
+            note_archive_step(&app, ws.id, &format!("stopped {n} process{plural}")).await;
+        }
+        for (pid, err) in &teardown.report.failed {
+            note_archive_step(&app, ws.id, &format!("could not stop pid {pid}: {err}")).await;
+        }
     }
 
     // --- Phase 1 (unlocked, async): run the archive script if any. Skipped
@@ -912,23 +927,90 @@ mod tests {
         assert!(!created.workspace.worktree_path.exists());
     }
 
-    /// Archive must stop the workspace's tracked processes (the ones the
-    /// processes modal lists) before tearing the worktree out from under
-    /// them. The child listens on a TCP socket so it survives the
-    /// ancestor denylist even when the test itself runs under a
-    /// wsx-hosted `claude`, and its cwd is the worktree so `scan` buckets
-    /// it under this workspace.
-    #[tokio::test]
-    async fn archive_terminates_tracked_processes() {
-        use std::os::unix::process::ExitStatusExt;
-        if std::process::Command::new("lsof")
-            .arg("-v")
-            .output()
-            .is_err()
-        {
-            eprintln!("skipping: lsof not installed");
-            return;
+    /// A tracked-process stand-in for the archive tests: a python child
+    /// whose cwd is the worktree, listening on a TCP socket so it
+    /// survives the ancestor denylist even when the test itself runs
+    /// under a wsx-hosted `claude`. Reaped on a thread so liveness
+    /// probes see it exit promptly; SIGKILLed on drop so a failed
+    /// assertion can't leak it for its 60s lifetime.
+    struct TrackedListener {
+        pid: i32,
+        waiter: Option<std::thread::JoinHandle<std::process::ExitStatus>>,
+    }
+
+    impl TrackedListener {
+        /// `None` when the environment can't run the test at all (no
+        /// lsof, no python3) — the caller prints a skip and returns.
+        async fn spawn(ws: &Workspace) -> Option<Self> {
+            if std::process::Command::new("lsof")
+                .arg("-v")
+                .output()
+                .is_err()
+            {
+                eprintln!("skipping: lsof not installed");
+                return None;
+            }
+            let Ok(mut child) = std::process::Command::new("python3")
+                .args([
+                    "-c",
+                    "import socket,time\ns=socket.socket()\ns.bind(('127.0.0.1',0))\ns.listen()\ntime.sleep(60)",
+                ])
+                .current_dir(&ws.worktree_path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            else {
+                eprintln!("skipping: python3 not installed");
+                return None;
+            };
+            let pid = child.id() as i32;
+            let waiter = std::thread::spawn(move || child.wait().unwrap());
+            let me = Self {
+                pid,
+                waiter: Some(waiter),
+            };
+            // Wait until the scanner buckets the listener under this
+            // worktree, so the archive's own scan is guaranteed to see it.
+            for _ in 0..50 {
+                let procs = crate::activity::proc::scan().await;
+                let buckets = crate::activity::proc::bucket_by_worktree(
+                    &procs,
+                    &[(ws.id, ws.worktree_path.as_path())],
+                );
+                if buckets
+                    .get(&ws.id)
+                    .is_some_and(|v| v.iter().any(|p| p.pid == pid))
+                {
+                    return Some(me);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            panic!("scan never bucketed the listener under the worktree");
         }
+
+        fn alive(&self) -> bool {
+            crate::activity::proc::pid_alive(self.pid)
+        }
+
+        fn status(mut self) -> std::process::ExitStatus {
+            self.waiter.take().unwrap().join().unwrap()
+        }
+    }
+
+    impl Drop for TrackedListener {
+        fn drop(&mut self) {
+            if self.waiter.is_some() {
+                // SAFETY: plain signal send to a pid this test spawned.
+                unsafe {
+                    libc::kill(self.pid, libc::SIGKILL);
+                }
+            }
+        }
+    }
+
+    /// Shared setup: a repo, a workspace named "doomed", and its worktree
+    /// on disk.
+    async fn repo_with_doomed_workspace() -> (Store, TempDir, TempDir, Repo, Workspace) {
         let store = Store::open_in_memory().unwrap();
         let repo_dir = init_git_repo();
         let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
@@ -954,44 +1036,23 @@ mod tests {
         )
         .await
         .unwrap();
-        let ws = &created.workspace;
-        let Ok(mut child) = std::process::Command::new("python3")
-            .args([
-                "-c",
-                "import socket,time\ns=socket.socket()\ns.bind(('127.0.0.1',0))\ns.listen()\ntime.sleep(60)",
-            ])
-            .current_dir(&ws.worktree_path)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        else {
-            eprintln!("skipping: python3 not installed");
+        (store, repo_dir, base, repo, created.workspace)
+    }
+
+    /// Archive must stop the workspace's tracked processes (the ones the
+    /// processes modal lists) before tearing the worktree out from under
+    /// them.
+    #[tokio::test]
+    async fn archive_terminates_tracked_processes() {
+        use std::os::unix::process::ExitStatusExt;
+        let (store, _repo_dir, _base, repo, ws) = repo_with_doomed_workspace().await;
+        let Some(listener) = TrackedListener::spawn(&ws).await else {
             return;
         };
-        let pid = child.id() as i32;
-        let waiter = std::thread::spawn(move || child.wait().unwrap());
-        // Wait until the scanner can see the listener under this worktree.
-        let mut seen = false;
-        for _ in 0..50 {
-            let procs = crate::activity::proc::scan().await;
-            let buckets = crate::activity::proc::bucket_by_worktree(
-                &procs,
-                &[(ws.id, ws.worktree_path.as_path())],
-            );
-            if buckets
-                .get(&ws.id)
-                .is_some_and(|v| v.iter().any(|p| p.pid == pid))
-            {
-                seen = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-        assert!(seen, "scan never bucketed the listener under the worktree");
         archive(
             &store,
             &repo,
-            ws,
+            &ws,
             ArchiveOpts {
                 force_branch_delete: true,
                 ..Default::default()
@@ -1001,12 +1062,85 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            !crate::activity::proc::pid_alive(pid),
+            !listener.alive(),
             "tracked process still alive after archive"
         );
-        let status = waiter.join().unwrap();
-        assert_eq!(status.signal(), Some(libc::SIGTERM));
+        assert_eq!(listener.status().signal(), Some(libc::SIGTERM));
         assert!(!ws.worktree_path.exists());
+    }
+
+    /// `--keep-worktree` means the user intends to keep using the
+    /// checkout, so whatever is running in it is theirs to keep too.
+    #[tokio::test]
+    async fn archive_with_keep_worktree_leaves_tracked_processes_alone() {
+        let (store, _repo_dir, _base, repo, ws) = repo_with_doomed_workspace().await;
+        let Some(listener) = TrackedListener::spawn(&ws).await else {
+            return;
+        };
+        archive(
+            &store,
+            &repo,
+            &ws,
+            ArchiveOpts {
+                keep_worktree: true,
+                force_branch_delete: true,
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(
+            listener.alive(),
+            "--keep-worktree must not stop the worktree's processes"
+        );
+        assert!(ws.worktree_path.exists());
+        assert!(store.workspaces(repo.id).unwrap().is_empty());
+    }
+
+    /// The dashboard path goes through the same teardown as the CLI.
+    #[tokio::test]
+    async fn archive_with_app_terminates_tracked_processes() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let (store, _repo_dir, base, repo, ws) = repo_with_doomed_workspace().await;
+        let Some(listener) = TrackedListener::spawn(&ws).await else {
+            return;
+        };
+        let progress = crate::data::progress::SetupProgress::shared();
+        let app = crate::app::App::new(store, base.path().to_path_buf()).unwrap();
+        let shared = Arc::new(Mutex::new(app));
+        {
+            let mut g = shared.lock().await;
+            g.in_flight.insert(
+                ws.id,
+                crate::data::in_flight::InFlight::archive(
+                    progress.clone(),
+                    tokio_util::sync::CancellationToken::new(),
+                ),
+            );
+        }
+        archive_with_app(
+            shared.clone(),
+            repo.clone(),
+            ws.clone(),
+            ArchiveOpts {
+                force_branch_delete: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            !listener.alive(),
+            "tracked process still alive after archive_with_app"
+        );
+        assert_eq!(listener.status().signal(), Some(libc::SIGTERM));
+        let recent = progress.lock().unwrap().recent(10);
+        assert!(
+            recent.iter().any(|l| l.contains("stopped 1 process")),
+            "progress should name the count: {recent:?}"
+        );
     }
 
     /// Regression: a workspace whose directory exists on disk but is no longer

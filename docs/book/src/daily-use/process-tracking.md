@@ -41,6 +41,11 @@ the next scan, where `K` stops it.
 - wsx never starts these processes itself. Launch them however you
   like (the `[t]` terminal keybind is one option). The feature is
   observability plus a kill hook, not lifecycle management.
+- The one exception is archive: archiving a workspace stops every
+  process this list would show for it before the worktree is removed.
+  Each gets `SIGTERM`, then two seconds to exit, then `SIGKILL` if it is
+  still running. Both the dashboard's `d` and `wsx workspace archive`
+  do this.
 - Requires `lsof` to be installed (standard on most Linux/macOS setups).
   If it's missing, the count stays at 0 and the modal shows "(no tracked
   processes)" — no errors.

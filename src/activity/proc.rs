@@ -392,49 +392,91 @@ pub fn pid_alive(pid: i32) -> bool {
     rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// What `terminate_pids` did to each pid it was given.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TerminateReport {
+    /// Pids that were still alive after the grace period and got SIGKILL.
+    pub escalated: Vec<i32>,
+    /// Pids a signal could not be delivered to, with the error. A pid
+    /// that had already exited is *not* a failure — `kill_pid` absorbs
+    /// ESRCH — so this is EPERM and the like: processes archive could
+    /// see but not stop.
+    pub failed: Vec<(i32, String)>,
+}
+
 /// SIGTERM every pid, wait up to `grace` for them to exit, then SIGKILL
-/// whatever is left. Returns the pids that needed the SIGKILL. Signal
-/// failures are swallowed: a pid that vanished between scan and signal
-/// is the desired outcome, and anything else (permission denied) is not
-/// something archive can do anything about.
-pub async fn terminate_pids(pids: &[i32], grace: std::time::Duration) -> Vec<i32> {
-    for &pid in pids {
-        let _ = kill_pid(pid, "TERM").await;
+/// whatever is left. Best-effort by design — archive must not strand a
+/// workspace row over a process it cannot signal — but nothing is
+/// silently dropped: every undeliverable signal lands in the report.
+///
+/// Nonpositive pids are ignored outright. `kill 0` addresses the
+/// caller's own process group and negative pids address whole groups,
+/// so a malformed scan line must never reach the signal call.
+///
+/// Identity is by bare pid. Between TERM and KILL the pid could in
+/// principle be recycled onto an unrelated process, but that needs the
+/// pid space to wrap inside the grace window (about four million pids
+/// on Linux, about a hundred thousand on macOS, allocated sequentially),
+/// which is not a realistic rate on a workstation.
+pub async fn terminate_pids(pids: &[i32], grace: std::time::Duration) -> TerminateReport {
+    let mut report = TerminateReport::default();
+    let mut pending = Vec::new();
+    for &pid in pids.iter().filter(|&&p| p > 0) {
+        match kill_pid(pid, "TERM").await {
+            Ok(()) => pending.push(pid),
+            Err(e) => report.failed.push((pid, e.to_string())),
+        }
     }
     let deadline = std::time::Instant::now() + grace;
-    let mut pending: Vec<i32> = pids.iter().copied().filter(|&p| pid_alive(p)).collect();
+    pending.retain(|&p| pid_alive(p));
     while !pending.is_empty() && std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         pending.retain(|&p| pid_alive(p));
     }
     for &pid in &pending {
-        let _ = kill_pid(pid, "KILL").await;
+        match kill_pid(pid, "KILL").await {
+            Ok(()) => report.escalated.push(pid),
+            Err(e) => report.failed.push((pid, e.to_string())),
+        }
     }
-    pending
+    report
+}
+
+/// Outcome of `kill_tracked_processes`: what was found plus what
+/// `terminate_pids` managed to do about it.
+#[derive(Debug, Default, Clone)]
+pub struct TrackedTeardown {
+    /// Every process the scan bucketed under the worktree.
+    pub tracked: Vec<ProcInfo>,
+    pub report: TerminateReport,
 }
 
 /// Stop every process the processes modal would list for `worktree`:
 /// scan, bucket under this one worktree with the same denylist rules
-/// the modal uses, then `terminate_pids`. Returns what was signalled so
-/// callers can log or display it. A missing `lsof` yields an empty scan
-/// and therefore a no-op.
-pub async fn kill_tracked_processes(ws_id: WorkspaceId, worktree: &Path) -> Vec<ProcInfo> {
+/// the modal uses, then `terminate_pids`. A missing `lsof` yields an
+/// empty scan and therefore a no-op. The scan is a snapshot: anything
+/// started afterwards (by the archive script, say) is not covered.
+pub async fn kill_tracked_processes(ws_id: WorkspaceId, worktree: &Path) -> TrackedTeardown {
     let procs = scan().await;
     let tracked = bucket_by_worktree(&procs, &[(ws_id, worktree)])
         .remove(&ws_id)
         .unwrap_or_default();
     if tracked.is_empty() {
-        return tracked;
+        return TrackedTeardown::default();
     }
     let pids: Vec<i32> = tracked.iter().map(|p| p.pid).collect();
-    let escalated = terminate_pids(&pids, ARCHIVE_TERM_GRACE).await;
+    let report = terminate_pids(&pids, ARCHIVE_TERM_GRACE).await;
     tracing::info!(
         worktree = %worktree.display(),
-        terminated = pids.len(),
-        killed = escalated.len(),
+        signalled = pids.len(),
+        escalated = report.escalated.len(),
+        failed = report.failed.len(),
         "stopped tracked processes for archive"
     );
-    tracked
+    for (pid, err) in &report.failed {
+        tracing::warn!(pid, error = %err, "could not stop tracked process during archive");
+    }
+    TrackedTeardown { tracked, report }
 }
 
 #[cfg(test)]
@@ -809,29 +851,58 @@ mod tests {
 
     // ---- terminate_pids ------------------------------------------------
 
-    /// Spawn a child and reap it on a background thread, so the test's
-    /// liveness checks see the process exit promptly instead of lingering
-    /// as a zombie until someone calls `wait`.
-    fn spawn_reaped(
-        cmd: &mut std::process::Command,
-    ) -> (i32, std::thread::JoinHandle<std::process::ExitStatus>) {
-        let mut child = cmd.spawn().expect("spawn test child");
-        let pid = child.id() as i32;
-        let waiter = std::thread::spawn(move || child.wait().unwrap());
-        (pid, waiter)
+    /// A spawned child that is reaped on a background thread (so liveness
+    /// checks see it exit promptly rather than linger as a zombie) and
+    /// SIGKILLed on drop, so a failed assertion can't leak it past the test.
+    struct ReapedChild {
+        pid: i32,
+        waiter: Option<std::thread::JoinHandle<std::process::ExitStatus>>,
+    }
+
+    impl ReapedChild {
+        fn spawn(child: std::process::Child) -> Self {
+            let pid = child.id() as i32;
+            let mut child = child;
+            let waiter = std::thread::spawn(move || child.wait().unwrap());
+            Self {
+                pid,
+                waiter: Some(waiter),
+            }
+        }
+
+        fn status(mut self) -> std::process::ExitStatus {
+            self.waiter.take().unwrap().join().unwrap()
+        }
+    }
+
+    impl Drop for ReapedChild {
+        fn drop(&mut self) {
+            if self.waiter.is_some() {
+                // SAFETY: plain signal send to a pid this test spawned.
+                unsafe {
+                    libc::kill(self.pid, libc::SIGKILL);
+                }
+            }
+        }
     }
 
     #[tokio::test]
     async fn terminate_pids_ends_cooperative_process_with_term_only() {
         use std::os::unix::process::ExitStatusExt;
-        let (pid, waiter) = spawn_reaped(std::process::Command::new("sleep").arg("30"));
-        let escalated = terminate_pids(&[pid], std::time::Duration::from_secs(5)).await;
-        assert!(
-            escalated.is_empty(),
-            "sleep honours TERM; got {escalated:?}"
+        let child = ReapedChild::spawn(
+            std::process::Command::new("sleep")
+                .arg("30")
+                .spawn()
+                .unwrap(),
         );
-        let status = waiter.join().unwrap();
-        assert_eq!(status.signal(), Some(libc::SIGTERM));
+        let pid = child.pid;
+        let report = terminate_pids(&[pid], std::time::Duration::from_secs(5)).await;
+        assert!(
+            report.escalated.is_empty(),
+            "sleep honours TERM; got {report:?}"
+        );
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!(child.status().signal(), Some(libc::SIGTERM));
         assert!(!pid_alive(pid));
     }
 
@@ -840,39 +911,73 @@ mod tests {
         use std::os::unix::process::ExitStatusExt;
         // Handshake on stdout so TERM can't arrive before `trap` is armed —
         // an un-trapped shell dies to TERM and the test would pass for the
-        // wrong reason.
-        let mut child = std::process::Command::new("sh")
-            .args(["-c", "trap '' TERM; echo ready; sleep 10"])
+        // wrong reason. `exec` makes the ignoring `sleep` the tracked pid
+        // itself, so the KILL leaves no orphan behind.
+        let mut spawned = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; echo ready; exec sleep 10"])
             .stdout(std::process::Stdio::piped())
             .spawn()
             .expect("spawn sh");
-        let pid = child.id() as i32;
         {
             use std::io::BufRead;
             let mut line = String::new();
-            std::io::BufReader::new(child.stdout.take().unwrap())
+            std::io::BufReader::new(spawned.stdout.take().unwrap())
                 .read_line(&mut line)
                 .unwrap();
             assert_eq!(line.trim(), "ready");
         }
-        let waiter = std::thread::spawn(move || child.wait().unwrap());
-        let escalated = terminate_pids(&[pid], std::time::Duration::from_millis(300)).await;
-        assert_eq!(escalated, vec![pid]);
-        let status = waiter.join().unwrap();
-        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        let child = ReapedChild::spawn(spawned);
+        let pid = child.pid;
+        let report = terminate_pids(&[pid], std::time::Duration::from_millis(300)).await;
+        assert_eq!(report.escalated, vec![pid]);
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!(child.status().signal(), Some(libc::SIGKILL));
         assert!(!pid_alive(pid));
     }
 
     #[tokio::test]
     async fn terminate_pids_returns_promptly_for_an_already_exited_pid() {
-        let (pid, waiter) = spawn_reaped(&mut std::process::Command::new("true"));
-        waiter.join().unwrap();
+        let child = ReapedChild::spawn(std::process::Command::new("true").spawn().unwrap());
+        let pid = child.pid;
+        child.status();
         let started = std::time::Instant::now();
-        let escalated = terminate_pids(&[pid], std::time::Duration::from_secs(5)).await;
-        assert!(escalated.is_empty());
+        let report = terminate_pids(&[pid], std::time::Duration::from_secs(5)).await;
+        assert!(report.escalated.is_empty());
+        assert!(report.failed.is_empty(), "{report:?}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(2),
             "a dead pid must not wait out the grace period"
+        );
+    }
+
+    /// pid 0 means "my process group" and negative pids address whole
+    /// groups; a malformed scan line must never reach `kill` with one.
+    /// The assertion is survival: had a signal gone out, this test binary
+    /// would have received it.
+    #[tokio::test]
+    async fn terminate_pids_ignores_nonpositive_pids() {
+        let report = terminate_pids(&[0, -1], std::time::Duration::from_secs(5)).await;
+        assert!(report.escalated.is_empty());
+        assert!(report.failed.is_empty(), "{report:?}");
+    }
+
+    /// A pid we may not signal (EPERM) is reported as failed and does not
+    /// burn the grace period — there is nothing to wait for.
+    #[tokio::test]
+    async fn terminate_pids_reports_unsignallable_pid_without_waiting() {
+        // SAFETY: getuid has no side effects.
+        if unsafe { libc::getuid() } == 0 {
+            eprintln!("skipping: root can signal pid 1");
+            return;
+        }
+        let started = std::time::Instant::now();
+        let report = terminate_pids(&[1], std::time::Duration::from_secs(5)).await;
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.failed[0].0, 1);
+        assert!(report.escalated.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "an unsignallable pid must not wait out the grace period"
         );
     }
 }

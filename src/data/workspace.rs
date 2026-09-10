@@ -435,6 +435,12 @@ pub async fn archive<F: FnMut(SetupLine) + Send>(
     // removal run — a detached agent still writing to the worktree would
     // otherwise dirty it mid-archive.
     kill_tmux_sessions_for(store, ws);
+    // Then stop the tracked processes (dev servers, watchers — whatever the
+    // processes modal lists) so nothing keeps running against a worktree
+    // that is about to be deleted. TERM first, KILL after a grace period.
+    if ws.worktree_path.exists() {
+        crate::activity::proc::kill_tracked_processes(ws.id, &ws.worktree_path).await;
+    }
     // A fetch or checkout failure can now deliberately leave a row whose
     // worktree never existed on disk. `run_script` sets `.current_dir` to
     // the worktree, so running the archive script against a nonexistent
@@ -497,6 +503,14 @@ pub async fn archive_with_app(
     {
         let g = app.lock().await;
         kill_tmux_sessions_for(&g.store, &ws);
+    }
+
+    // --- Phase 0b (unlocked, async): stop the tracked processes — the ones
+    //     the processes modal lists — so a dev server or watcher isn't left
+    //     running against a deleted worktree. TERM, grace, then KILL. ---
+    if ws.worktree_path.exists() {
+        note_archive_step(&app, ws.id, "stopping processes").await;
+        crate::activity::proc::kill_tracked_processes(ws.id, &ws.worktree_path).await;
     }
 
     // --- Phase 1 (unlocked, async): run the archive script if any. Skipped
@@ -898,6 +912,103 @@ mod tests {
         assert!(!created.workspace.worktree_path.exists());
     }
 
+    /// Archive must stop the workspace's tracked processes (the ones the
+    /// processes modal lists) before tearing the worktree out from under
+    /// them. The child listens on a TCP socket so it survives the
+    /// ancestor denylist even when the test itself runs under a
+    /// wsx-hosted `claude`, and its cwd is the worktree so `scan` buckets
+    /// it under this workspace.
+    #[tokio::test]
+    async fn archive_terminates_tracked_processes() {
+        use std::os::unix::process::ExitStatusExt;
+        if std::process::Command::new("lsof")
+            .arg("-v")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping: lsof not installed");
+            return;
+        }
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let created = create(
+            &store,
+            &repo,
+            Some("doomed"),
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let ws = &created.workspace;
+        let Ok(mut child) = std::process::Command::new("python3")
+            .args([
+                "-c",
+                "import socket,time\ns=socket.socket()\ns.bind(('127.0.0.1',0))\ns.listen()\ntime.sleep(60)",
+            ])
+            .current_dir(&ws.worktree_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        else {
+            eprintln!("skipping: python3 not installed");
+            return;
+        };
+        let pid = child.id() as i32;
+        let waiter = std::thread::spawn(move || child.wait().unwrap());
+        // Wait until the scanner can see the listener under this worktree.
+        let mut seen = false;
+        for _ in 0..50 {
+            let procs = crate::activity::proc::scan().await;
+            let buckets = crate::activity::proc::bucket_by_worktree(
+                &procs,
+                &[(ws.id, ws.worktree_path.as_path())],
+            );
+            if buckets
+                .get(&ws.id)
+                .is_some_and(|v| v.iter().any(|p| p.pid == pid))
+            {
+                seen = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(seen, "scan never bucketed the listener under the worktree");
+        archive(
+            &store,
+            &repo,
+            ws,
+            ArchiveOpts {
+                force_branch_delete: true,
+                ..Default::default()
+            },
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(
+            !crate::activity::proc::pid_alive(pid),
+            "tracked process still alive after archive"
+        );
+        let status = waiter.join().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGTERM));
+        assert!(!ws.worktree_path.exists());
+    }
+
     /// Regression: a workspace whose directory exists on disk but is no longer
     /// a registered git worktree (half-created or manually-deleted worktree)
     /// must still archive cleanly. Previously `git worktree remove` errored
@@ -1279,6 +1390,10 @@ mod tests {
         .await;
         assert!(result.is_ok(), "archive_with_app failed: {result:?}");
         let recent = progress.lock().unwrap().recent(10);
+        assert!(
+            recent.iter().any(|l| l.contains("stopping processes")),
+            "{recent:?}"
+        );
         assert!(
             recent.iter().any(|l| l.contains("removing worktree")),
             "{recent:?}"

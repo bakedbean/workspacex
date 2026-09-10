@@ -106,22 +106,45 @@ impl LifecycleBadge {
     /// Rendered text, including the leading space that separates it from the
     /// branch name. `tick` drives the spinner on the in-flight variants, and
     /// is `u32` to match `spinner::frame` (`src/ui/dashboard/spinner.rs:11`).
+    ///
+    /// The in-flight variants are a bare spinner: which way the workspace is
+    /// heading (being created vs. torn down) is carried by the color the
+    /// renderer applies (`style()`), not by an extra icon cell.
     pub fn glyph(self, tick: u32) -> String {
         match self {
-            LifecycleBadge::Provisioning => format!(" {}⚙", spinner::frame(tick)),
-            LifecycleBadge::Archiving => format!(" {}⌫", spinner::frame(tick)),
+            LifecycleBadge::Provisioning | LifecycleBadge::Archiving => {
+                format!(" {}", spinner::frame(tick))
+            }
             LifecycleBadge::SetupFailed => " ⚙!".to_string(),
             LifecycleBadge::SetupCancelled => " ⚙?".to_string(),
             LifecycleBadge::NoWorktree => " ✗".to_string(),
         }
     }
 
-    /// Display columns this badge consumes. Every variant is a space plus
-    /// two cells, except `NoWorktree`, which is a space plus one.
+    /// Display columns this badge consumes: a space plus the glyph cells.
+    /// The in-flight spinners and `NoWorktree` are one cell; the setup
+    /// outcomes are two.
     pub fn width(self) -> usize {
         match self {
-            LifecycleBadge::NoWorktree => 2,
-            _ => 3,
+            LifecycleBadge::Provisioning
+            | LifecycleBadge::Archiving
+            | LifecycleBadge::NoWorktree => 2,
+            LifecycleBadge::SetupFailed | LifecycleBadge::SetupCancelled => 3,
+        }
+    }
+
+    /// Foreground for the badge. Provisioning spins in the theme's `ok`
+    /// green (something is being added); archiving spins in `err` red
+    /// (something is being removed) — the same additive/destructive pairing
+    /// the shared badge uses for live vs. dead. The terminal failure states
+    /// stay red.
+    pub fn style(self, theme: &Theme) -> Style {
+        match self {
+            LifecycleBadge::Provisioning => theme.ok_style(),
+            LifecycleBadge::Archiving
+            | LifecycleBadge::SetupFailed
+            | LifecycleBadge::SetupCancelled
+            | LifecycleBadge::NoWorktree => theme.err_style(),
         }
     }
 }
@@ -371,11 +394,7 @@ pub fn render(
         spans.push(Span::styled(name_cell, name_style));
     }
     if let Some(b) = inputs.badge {
-        let style = match b {
-            LifecycleBadge::Provisioning | LifecycleBadge::Archiving => theme.dim_style(),
-            _ => theme.err_style(),
-        };
-        spans.push(Span::styled(b.glyph(tick), style));
+        spans.push(Span::styled(b.glyph(tick), b.style(theme)));
     }
     if inputs.undelivered_mail {
         spans.push(Span::styled(" ✉!".to_string(), theme.err_style()));
@@ -2301,5 +2320,51 @@ mod tests {
             "terminal badges must be static"
         );
         assert_eq!(LifecycleBadge::SetupFailed.glyph(0), " ⚙!");
+    }
+
+    #[test]
+    fn in_flight_badges_are_a_bare_spinner_with_matching_width() {
+        // The direction of the operation is carried by color (see the test
+        // below), not by a trailing ⚙/⌫ icon, so the badge is just a space
+        // plus one spinner cell.
+        for badge in [LifecycleBadge::Provisioning, LifecycleBadge::Archiving] {
+            let text = badge.glyph(0);
+            assert_eq!(text, format!(" {}", spinner::frame(0)), "{badge:?}");
+            assert_eq!(
+                text.chars().count(),
+                badge.width(),
+                "width() must match the rendered cell count for {badge:?}: {text:?}"
+            );
+        }
+        // Terminal badges keep their two-cell icons.
+        assert_eq!(LifecycleBadge::SetupFailed.width(), 3);
+        assert_eq!(LifecycleBadge::SetupCancelled.width(), 3);
+        assert_eq!(LifecycleBadge::NoWorktree.width(), 2);
+    }
+
+    #[test]
+    fn provisioning_spinner_is_green_and_archiving_spinner_is_red() {
+        let theme = Theme::wsx();
+        let spinner_style = |badge: LifecycleBadge| {
+            let mut inputs = base();
+            inputs.badge = Some(badge);
+            let expected = badge.glyph(0);
+            let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+            line.spans
+                .iter()
+                .find(|s| s.content.as_ref() == expected)
+                .unwrap_or_else(|| panic!("spinner span {expected:?} present for {badge:?}"))
+                .style
+        };
+        assert_eq!(
+            spinner_style(LifecycleBadge::Provisioning).fg,
+            theme.ok_style().fg,
+            "creating a workspace spins green"
+        );
+        assert_eq!(
+            spinner_style(LifecycleBadge::Archiving).fg,
+            theme.err_style().fg,
+            "archiving a workspace spins red"
+        );
     }
 }

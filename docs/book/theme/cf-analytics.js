@@ -3,8 +3,8 @@
 // short of overriding index.hbs.
 (function () {
   var s = document.createElement("script");
-  s.defer = true;
+  s.type = "module";
   s.src = "https://static.cloudflareinsights.com/beacon.min.js";
-  s.setAttribute("data-cf-beacon", '{"token": "CLOUDFLARE_WEB_ANALYTICS_TOKEN"}');
+  s.setAttribute("data-cf-beacon", '{"token": "f4af87acd28e490593656ca9636659f8"}');
   document.head.appendChild(s);
 })();

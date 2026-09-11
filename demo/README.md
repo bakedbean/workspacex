@@ -29,7 +29,7 @@ is recorded there.
 | Still | Shows | Output |
 |---|---|---|
 | **dashboard-hero** | The dashboard under load: three repos, nine live workspaces, Claude + Codex sharing one of them, `?`/`✓`/spinner statuses, recaps inline and in the detail bar. Used as the site hero image. | `out/dashboard-hero-N.png` (several takes) |
-| **agent-chat** | The attached view: Claude reviews, hands the fix to Codex over `wsx agent send`, Codex fixes + commits + reports back, Claude verifies — with the pinned-command chips and the footer agents row. Progress is gated on wsx's own mail table, not sleeps. | `out/agent-chat-N.png` (several takes) |
+| **agent-chat** | The attached view: Claude reviews, hands the fix to Codex over `wsx agent send`, Codex fixes + commits + reports back, Claude verifies — with the pinned-command chips, the footer agents row, and the hero scene's other workspaces filling the top bar as they finish or ask. Progress is gated on wsx's own mail table, not sleeps. | `out/agent-chat-N.png` (several takes) |
 
 ```bash
 make -C demo hero-still         # bootstrap + demo/stills/dashboard-hero.sh

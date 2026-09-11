@@ -1,11 +1,18 @@
 //! Per-launch config overlay for oh-my-pi (`omp`).
 //!
-//! omp 18 turned off its Claude *user-level* discovery providers by default
-//! (`skills.enableClaudeUser`, `commands.enableClaudeUser`; both were on in
-//! 17.x). With them off, omp never scans `~/.claude/skills` or
-//! `~/.claude/commands`, so the skills `wsx setup install-skill` writes there
-//! and the user's pinned slash commands silently vanish from every omp session
+//! omp 18 turned off its Claude *user-level* discovery sources by default.
+//! Two legacy toggles went from on to off (`skills.enableClaudeUser`,
+//! `commands.enableClaudeUser`), and a new `enabledProviders` list (default
+//! empty) gates every foreign `~/`-level source, including Claude marketplace
+//! plugins under the `claude-plugins` id. With all of that off, omp never scans
+//! `~/.claude/skills`, `~/.claude/commands`, or the plugin cache, so the skills
+//! `wsx setup install-skill` writes, the user's pinned slash commands, and
+//! plugin skills such as superpowers silently vanish from every omp session
 //! (`read skill://wsx` → "Unknown skill: wsx").
+//!
+//! The overlay lists only `claude-plugins`, not `claude`: enabling the whole
+//! `claude` source would also pull the user's Claude hooks, MCP servers and
+//! `~/.claude/CLAUDE.md` into omp, which wsx never promised.
 //!
 //! Rather than editing the user's persistent `~/.omp/agent/config.yml`, wsx
 //! writes a small overlay file under its own state dir and passes it as
@@ -24,14 +31,19 @@ pub const OVERLAY_FILE_NAME: &str = "omp-config.yml";
 /// else falls through to the user's `config.yml` and omp's defaults.
 pub const OVERLAY_CONTENT: &str = "\
 # Written by wsx before every omp launch and passed as `omp --config <file>`.
-# omp >= 18 disables its Claude user-level discovery providers by default,
-# which hides the skills `wsx setup install-skill` writes to ~/.claude/skills
-# and the pinned commands in ~/.claude/commands. This overlay re-enables them
-# for wsx-spawned sessions only. Do not edit: wsx rewrites it on drift.
+# omp >= 18 disables its Claude user-level discovery sources by default,
+# which hides the skills `wsx setup install-skill` writes to ~/.claude/skills,
+# the pinned commands in ~/.claude/commands, and Claude marketplace plugin
+# skills (e.g. superpowers). This overlay re-enables them for wsx-spawned
+# sessions only. Do not edit: wsx rewrites it on drift.
 skills:
   enableClaudeUser: true
 commands:
   enableClaudeUser: true
+# omp replaces (not merges) this array, so it overrides any enabledProviders
+# in ~/.omp/agent/config.yml for wsx-spawned sessions.
+enabledProviders:
+  - claude-plugins
 ";
 
 /// Where the overlay lives: `<app_dir>/omp-config.yml`.
@@ -72,7 +84,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn overlay_enables_claude_user_skills_and_commands() {
+    fn overlay_enables_claude_user_skills_commands_and_plugins() {
         // Line-oriented check rather than a YAML parse: the crate has no YAML
         // dependency, and omp's overlay format is plain nested keys.
         let lines: Vec<&str> = OVERLAY_CONTENT.lines().collect();
@@ -86,14 +98,26 @@ mod tests {
             .position(|l| *l == "commands:")
             .expect("commands: section");
         assert_eq!(lines[commands + 1], "  enableClaudeUser: true");
-        // Nothing else is forced on the user: only the two keys wsx needs.
+        let providers = lines
+            .iter()
+            .position(|l| *l == "enabledProviders:")
+            .expect("enabledProviders: section");
+        assert_eq!(lines[providers + 1], "  - claude-plugins");
+        // Only marketplace plugins are opted in. Listing `claude` here would
+        // also load the user's Claude hooks, MCP servers and CLAUDE.md.
+        assert!(
+            !lines.iter().any(|l| l.trim() == "- claude"),
+            "overlay must not enable the whole claude source:\n{OVERLAY_CONTENT}"
+        );
+        // Nothing else is forced on the user: exactly three settings.
+        let settings: Vec<&&str> = lines
+            .iter()
+            .filter(|l| !l.starts_with('#') && !l.is_empty() && !l.ends_with(':'))
+            .collect();
         assert_eq!(
-            lines
-                .iter()
-                .filter(|l| !l.starts_with('#') && l.contains("enable"))
-                .count(),
-            2,
-            "overlay must set exactly the two toggles wsx relies on:\n{OVERLAY_CONTENT}"
+            settings.len(),
+            3,
+            "overlay must set exactly the settings wsx relies on:\n{OVERLAY_CONTENT}"
         );
     }
 

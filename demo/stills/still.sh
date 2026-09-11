@@ -4,6 +4,7 @@
 #
 #   still_up <cols> <rows>      launch the TUI (agent session markers cleared)
 #   still_keys <key...>         tmux send-keys (e.g. `still_keys z a`, `still_keys Down`)
+#   still_open <repo> <slug>    attach to a workspace by name over the TUI's IPC socket
 #   still_shot <out.png>        capture-pane -e -> ansi2html.py -> Chrome PNG (2x)
 #   still_down                  kill the tmux server (and every agent under it)
 #
@@ -48,6 +49,25 @@ still_up() { # <cols> <rows>
 }
 
 still_keys() { tmux -L "$STILL_SOCK" send-keys "$@"; }
+
+# Attach to <repo>/<slug> the way the desktop integrations do — `select` on
+# the TUI's per-process unix socket — so a take never depends on where the
+# row happens to sort. Socket location mirrors src/app/ipc.rs::socket_dir.
+still_open() { # <repo> <slug>
+  local pid dir sock
+  pid="$(tmux -L "$STILL_SOCK" list-panes -F '#{pane_pid}' | head -1)"
+  if [ -n "${XDG_RUNTIME_DIR:-}" ]; then dir="$XDG_RUNTIME_DIR/wsx"
+  elif [ "$(uname)" = Linux ]; then dir="${XDG_STATE_HOME:-$HOME/.local/state}/wsx/run"
+  else dir="${TMPDIR:-/tmp}/wsx-run"; fi
+  sock="$dir/tui-$pid.sock"
+  [ -S "$sock" ] || { echo "still: no TUI socket at $sock" >&2; return 1; }
+  python3 - "$sock" "$1" "$2" <<'PYSOCK'
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(sys.argv[1])
+s.sendall(f"select {sys.argv[2]} {sys.argv[3]}\n".encode()); s.close()
+PYSOCK
+  sleep 2
+}
 
 still_shot() { # <out.png>
   local png="$1" txt html size chrome

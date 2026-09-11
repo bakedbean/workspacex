@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage an agent-to-agent coordination scene and screenshot the ATTACHED view.
 #
-# One workspace (toy-api/security-review) with Claude as primary and a peer
+# The hero scene's workspaces plus toy-api/security-review with Claude as primary and a peer
 # attached — Codex by default, or another Claude with PEER=claude (its label is
 # then claude#2). Claude reviews the planted SQL injection and hands the fix to
 # the peer over `wsx agent send`; the peer fixes, commits and reports back;
@@ -13,6 +13,7 @@
 # sleeps, so a take waits exactly as long as the agents do.
 #
 # Needs tmux, Chrome/Chromium, sqlite3 and logged-in `claude` + `codex` CLIs.
+# Spawns ten agent sessions.
 #
 # Usage: demo/stills/agent-chat.sh           # after sandbox/bootstrap.sh
 #        WSX_BIN=./target/debug/wsx demo/stills/agent-chat.sh
@@ -28,7 +29,8 @@ OUT="$ROOT/demo/out"; mkdir -p "$OUT"
 PEER="${PEER:-codex}"                       # kind of the attached teammate
 PEER_LABEL="$PEER"; [ "$PEER" = claude ] && PEER_LABEL="claude#2"
 
-in_ws() { local path; path="$("$WSX" workspace path "$1" "$2")"; (cd "$path" && "$WSX" "${@:3}"); }
+# shellcheck source=/dev/null
+source "$HERE/scene.sh"
 # wait_sql <label> <timeout-s> <sql returning a count>: poll until the count is > 0.
 wait_sql() {
   local label="$1" timeout="$2" sql="$3" t=0 n
@@ -46,6 +48,11 @@ wait_sql() {
 # --- pinned commands: the chips under the chat pane ---
 "$WSX" config set pinned_commands "$(printf '%s\n' \
   '/pr=/pull-request' '/rebase=/rebase-on-main' '/feedback=/incorporate-feedback' '/agent-review=/agent-review')" >/dev/null
+
+# --- the rest of the dashboard: the hero scene's eight workspaces ---
+# Their agents finish or ask questions while this take runs, which is what
+# fills the attached view's top bar with the other workspaces needing you.
+scene_background_workspaces
 
 # --- the workspace: Claude primary, Codex attached ---
 "$WSX" workspace create toy-api --name security-review --yolo --agent claude --prompt \
@@ -65,7 +72,7 @@ echo "staged toy-api/security-review (claude=$CLAUDE_ID $PEER_LABEL=$PEER_ID)"
 source "$HERE/still.sh"
 trap still_down EXIT
 still_up 166 36
-still_keys z a; sleep 0.5; still_keys Down; still_keys Enter     # attach → Claude pane
+still_open toy-api security-review                                # attach → Claude pane
 sleep 12
 
 # Claude reviews and delegates. Its `wsx agent send <peer> …` lands in the mail

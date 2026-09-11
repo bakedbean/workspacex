@@ -96,7 +96,7 @@ h2 .pfx{color:var(--accent)}
 .cast-ph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;background:repeating-linear-gradient(45deg,transparent,transparent 11px,rgba(90,176,255,.025) 11px,rgba(90,176,255,.025) 22px),var(--bg-1);color:var(--fg-muted);font-family:var(--mono);font-size:12px;padding:20px}
 .cast-ph .play{width:46px;height:46px;border-radius:50%;border:1px solid var(--rule);display:grid;place-items:center;background:var(--bg-2);color:var(--accent)}
 .cast-ph .play svg{width:17px;height:17px;margin-left:3px}
-.cast cap,.cast-cap{display:block;font-family:var(--mono);font-size:12px;color:var(--fg-muted);margin:10px 0 0}
+.cast-cap{display:block;font-family:var(--mono);font-size:12px;color:var(--fg-muted);margin:10px 0 0}
 .cast-cap .n{color:var(--accent)}
 
 /* ── closing ──────────────────────────────────────────────────────────── */

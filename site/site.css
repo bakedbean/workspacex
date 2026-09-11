@@ -59,6 +59,11 @@ h1 .dim{color:var(--fg-muted)}
 .shell .hint-2 a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent)}
 .shell .hint-2 a:hover{text-decoration-color:var(--accent)}
 
+/* hero still: the dashboard under load, rendered from the sandbox (demo/stills) */
+.hero-shot{margin:26px 0 0;padding:0}
+.hero-shot img{display:block;width:100%;height:auto}
+.hero-shot figcaption{font-family:var(--mono);font-size:12px;color:var(--fg-muted);padding:10px 14px;border-top:1px solid var(--rule);text-wrap:pretty}
+
 /* ── sections ─────────────────────────────────────────────────────────── */
 section{padding:clamp(38px,5.5vw,62px) 0;position:relative}
 .divider{height:1px;background:var(--rule);border:0;max-width:var(--maxw);margin:0 auto}

@@ -157,7 +157,7 @@ pub fn install_to(target: &InstallTarget) -> Result<InstallOutcome> {
 /// Write `content` to `path`, creating parent dirs and reporting
 /// Created/Updated/Unchanged. Atomic: writes a temp file then renames. Used by
 /// `install_to` and directly by tests.
-fn install_content_to(path: &Path, content: &str) -> Result<InstallOutcome> {
+pub(crate) fn install_content_to(path: &Path, content: &str) -> Result<InstallOutcome> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

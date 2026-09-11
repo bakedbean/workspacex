@@ -727,7 +727,10 @@ pub fn spawn_session(
             prepare_codex_workspace(cwd, &mode);
             build_codex_command(cwd, &mode, remote)
         }
-        AgentKind::Omp => build_omp_command(cwd, &mode, remote),
+        AgentKind::Omp => {
+            let overlay = crate::agent::omp_config::ensure_overlay_default();
+            build_omp_command(cwd, &mode, remote, overlay.as_deref())
+        }
     };
     if let Some(id) = identity {
         child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());

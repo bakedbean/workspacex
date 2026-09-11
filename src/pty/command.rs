@@ -630,9 +630,14 @@ pub fn build_codex_command(
 /// related-repo context both go through real flags — no AGENTS.md rewriting
 /// (Hermes) and no `-c` config overrides (Codex).
 ///
-/// Skills and slash commands need no wiring: omp's Claude discovery provider
-/// loads `~/.claude/skills/*/SKILL.md` and `~/.claude/commands/*.md` natively,
-/// so wsx's installed skills and the user's pinned commands already reach it.
+/// Skills and slash commands ride on a config overlay. omp's Claude discovery
+/// provider can load `~/.claude/skills/*/SKILL.md` and `~/.claude/commands/*.md`,
+/// but since omp 18 that user-level scan is **off by default**
+/// (`skills.enableClaudeUser` / `commands.enableClaudeUser`), which hides the
+/// skills `wsx setup install-skill` writes and the user's pinned commands. The
+/// spawn path writes a wsx-owned overlay (see `agent::omp_config`) and passes
+/// it here as `config_overlay`, emitted as `--config <path>` so it applies to
+/// this run only. `None` (overlay write failed) launches omp without it.
 ///
 /// There is deliberately no `WSX_OMP_PROVIDER`: omp documents `--provider` as
 /// legacy and accepts `provider/id` in `--model`, so `WSX_OMP_MODEL` covers
@@ -641,6 +646,7 @@ pub fn build_omp_command(
     cwd: &Path,
     mode: &SpawnMode,
     _remote: crate::agent::remote_control::RemoteOpts,
+    config_overlay: Option<&Path>,
 ) -> CommandBuilder {
     let bin = std::env::var("WSX_OMP_BIN").unwrap_or_else(|_| "omp".to_string());
     let mut cmd = CommandBuilder::new(bin);
@@ -691,6 +697,11 @@ pub fn build_omp_command(
             )
         }
     };
+
+    if let Some(overlay) = config_overlay {
+        cmd.arg("--config");
+        cmd.arg(overlay);
+    }
 
     for dir in &add_dirs {
         cmd.arg("--add-dir");
@@ -1437,12 +1448,23 @@ mod tests {
     }
 
     mod omp_build_command {
-        /// Build an omp command for `mode` and return its argv as lossy Strings.
+        /// Build an omp command for `mode` with no config overlay and return
+        /// its argv as lossy Strings.
         fn omp_argv(mode: &super::SpawnMode) -> Vec<String> {
+            omp_argv_with_overlay(mode, None)
+        }
+
+        /// Build an omp command for `mode` with the given config overlay
+        /// path and return its argv as lossy Strings.
+        fn omp_argv_with_overlay(
+            mode: &super::SpawnMode,
+            overlay: Option<&std::path::Path>,
+        ) -> Vec<String> {
             let cmd = super::build_omp_command(
                 std::path::Path::new("/tmp/wt"),
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
+                overlay,
             );
             cmd.get_argv()
                 .iter()
@@ -1491,6 +1513,43 @@ mod tests {
             assert!(
                 !argv.iter().any(|a| a == "--append-system-prompt"),
                 "nothing to inject: {argv:?}"
+            );
+        }
+
+        /// omp 18 hides `~/.claude` skills and commands unless the overlay
+        /// re-enables them, so every spawn mode must forward it.
+        #[test]
+        fn config_overlay_is_passed_as_config_flag_in_every_mode() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.remove("WSX_OMP_MODEL");
+            let overlay = std::path::Path::new("/state/wsx/omp-config.yml");
+            for mode in [fresh(false), fresh(true), cont(false), cont(true)] {
+                let argv = omp_argv_with_overlay(&mode, Some(overlay));
+                let i = argv
+                    .iter()
+                    .position(|a| a == "--config")
+                    .unwrap_or_else(|| panic!("expected --config: {argv:?}"));
+                assert_eq!(argv[i + 1], "/state/wsx/omp-config.yml", "{argv:?}");
+                assert_eq!(
+                    argv.iter().filter(|a| *a == "--config").count(),
+                    1,
+                    "exactly one overlay: {argv:?}"
+                );
+            }
+        }
+
+        /// A failed overlay write must not turn into `--config ""` or a
+        /// dangling flag: omp then launches without the overlay.
+        #[test]
+        fn missing_config_overlay_emits_no_config_flag() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.remove("WSX_OMP_MODEL");
+            let argv = omp_argv(&fresh(false));
+            assert!(
+                !argv.iter().any(|a| a == "--config"),
+                "no overlay, no flag: {argv:?}"
             );
         }
 

@@ -100,11 +100,16 @@ but since omp 18 that user-level scan is off by default
 (`skills.enableClaudeUser` and `commands.enableClaudeUser` both default to
 `false`; they were `true` in 17.x). Left alone, omp reports `Unknown skill: wsx`
 and your pinned command chips do nothing. So before every omp spawn wsx writes a
-small overlay to `~/.local/state/wsx/omp-config.yml` that turns those two
-settings on, and launches `omp --config <that file>`. The overlay applies to
-that run only; your `~/.omp/agent/config.yml` is never edited. If the overlay
+small overlay to `<wsx state dir>/omp-config.yml` (by default
+`~/.local/state/wsx/omp-config.yml`; `XDG_STATE_HOME` relocates it) that turns
+those two settings on, and launches `omp --config <that file>`. The overlay
+applies to that run only; your `~/.omp/agent/config.yml` is never edited. It
+does take precedence over your own config, so an explicit `false` for either
+setting there is overridden in wsx-spawned sessions, and it enables every skill
+and command under `~/.claude`, not only the ones wsx installs. If the overlay
 cannot be written (read-only state dir), wsx logs a warning and launches omp
-without it. There is still no separate omp skills target for `wsx setup
+without it. omp's other skill filters (`skills.ignoredSkills`,
+`skills.includeSkills`) still apply. There is still no separate omp skills target for `wsx setup
 install-skill` — the Claude one covers it, for the same reason it covers Pi.
 
 **Session detection and activity**: omp stores sessions at

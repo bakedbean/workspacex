@@ -111,6 +111,20 @@ mod tests {
         );
     }
 
+    /// The spawn path treats a failed write as "launch omp without the
+    /// overlay", so the writer must surface the error rather than panic.
+    #[test]
+    fn ensure_overlay_fails_when_app_dir_is_not_a_directory() {
+        let tmp = TempDir::new().unwrap();
+        let app_dir = tmp.path().join("wsx");
+        std::fs::write(&app_dir, "not a directory").unwrap();
+        assert!(
+            ensure_overlay(&app_dir).is_err(),
+            "a regular file where the app dir should be must fail"
+        );
+        assert!(!overlay_path(&app_dir).exists());
+    }
+
     #[test]
     fn ensure_overlay_rewrites_a_drifted_file() {
         let tmp = TempDir::new().unwrap();

@@ -25,12 +25,28 @@
     xhr.send();
   });
 
-  // copy button
+  // copy button — async clipboard API, with an execCommand fallback for
+  // insecure contexts; the checkmark only shows when one of them succeeded
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(() => true, () => copyLegacy(text));
+    }
+    return Promise.resolve(copyLegacy(text));
+  }
+  function copyLegacy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+    return ok;
+  }
   document.querySelectorAll('[data-copy]').forEach((btn) => {
+    const orig = btn.innerHTML;
     btn.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(btn.getAttribute('data-copy')); } catch (e) {}
+      if (!(await copyText(btn.getAttribute('data-copy')))) return;
       btn.classList.add('copied');
-      const orig = btn.innerHTML;
       btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
       setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = orig; }, 1400);
     });

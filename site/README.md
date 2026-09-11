@@ -1,6 +1,7 @@
 # workspace-x.com — site handoff
 
-Static one-pager. No build step, no dependencies beyond two Google Fonts.
+Static one-pager. No build step. External requests: two Google Fonts and the
+Cloudflare Web Analytics beacon (cookieless) at the end of `index.html`.
 
 ## Files
 
@@ -9,30 +10,37 @@ Static one-pager. No build step, no dependencies beyond two Google Fonts.
       site.css        all styles (design tokens at the top)
       site.js         nav shadow, copy button, scroll reveal, lazy video
       assets/
-        01-hero.mp4       screencast 01 — dashboard triage  (ADD THIS)
-        02-parallel.mp4   screencast 02 — review / remote    (ADD THIS)
+        01-hero.mp4       screencast 01 — Claude hands a fix to Codex, one workspace
+        02-parallel.mp4   screencast 02 — parallel agents across isolated worktrees
+        og-cover.png      Open Graph / Twitter card image
 
-Drop the two mp4s into `assets/` and they appear automatically: `site.js`
-sends a HEAD request per `<video data-src>` and only sets `src` when the file
-responds 2xx/3xx. Until then the diagonal-hatch "screencast coming soon"
-placeholder shows and the console stays clean. Recommended: H.264 mp4, 16:10,
-muted, ~1600px wide, under ~8 MB each.
+`site.js` sends a HEAD request per `<video data-src>` and only sets `src`
+when the file responds 2xx/3xx; a missing file shows the diagonal-hatch
+"screencast coming soon" placeholder instead. The slots are 16:9 to match
+the current recordings (1280x720 H.264, ~1 MB each). To replace one, keep
+the same filename and aspect ratio.
 
 ## Deploy
 
-Any static host. Copy `site/` to the web root — e.g. GitHub Pages from
-`/site`, or `netlify deploy --dir=site`. Nothing is server-rendered and there
-are no absolute paths, so it also works from a subdirectory or `file://`.
+GitHub Pages, via `.github/workflows/docs.yml`: on every push to `main` that
+touches `site/**` the workflow copies `site/` to the web root and the mdBook
+build of `docs/book` under `/docs/`, which is where the Docs links point.
+Nothing is server-rendered. The favicon links use root-absolute paths, so
+serving from a subdirectory needs those adjusted; the HEAD probe needs an
+HTTP server, so `file://` shows the video placeholders.
 
 ## Page structure
 
-1. `.nav` — sticky; gains a bottom border past 8px scroll (`.scrolled`)
+1. `.nav` — sticky; gains a bottom border past 8px scroll (`.scrolled`). Below
+   600px the Star button hides, below 380px the Quickstart link too, so the
+   bar stays on one line down to 320px.
 2. `header.hero` — h1, sub line, `$ wsx` prompt with blinking cursor, two hints, CTAs
 3. `#features` — value props as `.prop` rows (glyph / name / description)
-4. `#how` — quickstart command block with copy button
+4. `#how` — quickstart command block with copy button; scrolls sideways
+   below 620px instead of truncating commands
 5. `#see` — two screencast slots
 6. `#cta` — clone line + buttons
-7. `footer`
+7. `footer` — links, tagline, license line
 
 ## Design system
 
@@ -55,10 +63,11 @@ the page is deliberately small-type and dense.
 ## Conventions worth keeping
 
 - Section heads read as commands: `$ wsx --features`. Keep that pattern if you add sections.
-- Never set body text in `--fg-faint` (2.6:1). Use `--fg-muted` (5:1) or lighter.
+- Never set text in `--fg-faint` (2.6:1), footer included. Use `--fg-muted` (5:1) or lighter.
 - `.cmd` reserves 56px of right padding for the absolutely-positioned copy button — don't remove it.
-- `.reveal` (+ optional `data-d="1..3"` for stagger) fades an element in on scroll; it is reduced-motion safe and has a 2.6s failsafe that force-reveals everything.
-- Hero copy states supported harnesses (Claude Code, Codex, oh-my-pi, Hermes) — update there when that list changes.
+- `.reveal` (+ optional `data-d="1..3"` for stagger) fades an element in on scroll; it is reduced-motion safe, has a 2.6s failsafe that force-reveals everything, and a `<noscript>` rule shows everything when JS is off.
+- Hero copy states supported harnesses (Claude Code, Codex, oh-my-pi, Hermes) — update there, in the footer tagline and in the JSON-LD when that list changes.
+- `<head>` carries canonical, favicons, Open Graph / Twitter cards and JSON-LD; keep them when re-applying a design handoff.
 
 ## Accessibility
 

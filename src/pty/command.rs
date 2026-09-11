@@ -631,13 +631,15 @@ pub fn build_codex_command(
 /// (Hermes) and no `-c` config overrides (Codex).
 ///
 /// Skills and slash commands ride on a config overlay. omp's Claude discovery
-/// provider can load `~/.claude/skills/*/SKILL.md` and `~/.claude/commands/*.md`,
-/// but since omp 18 that user-level scan is **off by default**
-/// (`skills.enableClaudeUser` / `commands.enableClaudeUser`), which hides the
-/// skills `wsx setup install-skill` writes and the user's pinned commands. The
-/// spawn path writes a wsx-owned overlay (see `agent::omp_config`) and passes
-/// it here as `config_overlay`, emitted as `--config <path>` so it applies to
-/// this run only. `None` (overlay write failed) launches omp without it.
+/// provider can load `~/.claude/skills/*/SKILL.md`, `~/.claude/commands/*.md`
+/// and Claude marketplace plugins, but since omp 18 every Claude user-level
+/// source is **off by default** (`skills.enableClaudeUser`,
+/// `commands.enableClaudeUser`, and the `enabledProviders` list), which hides
+/// the skills `wsx setup install-skill` writes, the user's pinned commands and
+/// plugin skills like superpowers. The spawn path writes a wsx-owned overlay
+/// (see `agent::omp_config`) and passes it here as `config_overlay`, emitted
+/// as `--config <path>` so it applies to this run only. `None` (overlay write
+/// failed) launches omp without it.
 ///
 /// There is deliberately no `WSX_OMP_PROVIDER`: omp documents `--provider` as
 /// legacy and accepts `provider/id` in `--model`, so `WSX_OMP_MODEL` covers

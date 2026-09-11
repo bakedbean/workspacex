@@ -95,20 +95,28 @@ flags, so nothing is written into the worktree — no `AGENTS.md` block (unlike
 Hermes) and no config overrides (unlike Codex).
 
 **Skills and slash commands ride on a config overlay.** omp's Claude discovery
-provider can load `~/.claude/skills/*/SKILL.md` and `~/.claude/commands/*.md`,
-but since omp 18 that user-level scan is off by default
-(`skills.enableClaudeUser` and `commands.enableClaudeUser` both default to
-`false`; they were `true` in 17.x). Left alone, omp reports `Unknown skill: wsx`
-and your pinned command chips do nothing. So before every omp spawn wsx writes a
-small overlay to `<wsx state dir>/omp-config.yml` (by default
-`~/.local/state/wsx/omp-config.yml`; `XDG_STATE_HOME` relocates it) that turns
-those two settings on, and launches `omp --config <that file>`. The overlay
-applies to that run only; your `~/.omp/agent/config.yml` is never edited. It
-does take precedence over your own config, so an explicit `false` for either
-setting there is overridden in wsx-spawned sessions, and it enables every skill
-and command under `~/.claude`, not only the ones wsx installs. If the overlay
-cannot be written (read-only state dir), wsx logs a warning and launches omp
-without it. omp's other skill filters (`skills.ignoredSkills`,
+provider can load `~/.claude/skills/*/SKILL.md`, `~/.claude/commands/*.md` and
+Claude marketplace plugins (superpowers, for example), but since omp 18 every
+Claude user-level source is off by default: `skills.enableClaudeUser` and
+`commands.enableClaudeUser` default to `false` (they were `true` in 17.x), and
+the new `enabledProviders` list defaults to empty, which keeps the
+`claude-plugins` source out too. Left alone, omp reports `Unknown skill: wsx`,
+your pinned command chips do nothing, and plugin skills are missing. So before
+every omp spawn wsx writes a small overlay to `<wsx state dir>/omp-config.yml`
+(by default `~/.local/state/wsx/omp-config.yml`; `XDG_STATE_HOME` relocates it)
+that turns the two toggles on and sets `enabledProviders: [claude-plugins]`,
+then launches `omp --config <that file>`.
+
+The overlay applies to that run only; your `~/.omp/agent/config.yml` is never
+edited. It does take precedence over your own config: an explicit `false` for
+either toggle is overridden in wsx-spawned sessions, and because omp replaces
+arrays rather than merging them, an `enabledProviders` list of your own is
+replaced by `[claude-plugins]` for those sessions. It enables every skill and
+command under `~/.claude`, not only the ones wsx installs. It deliberately
+lists `claude-plugins` rather than `claude`: the whole `claude` source would
+also load your Claude hooks, MCP servers and `~/.claude/CLAUDE.md` into omp. If
+the overlay cannot be written (read-only state dir), wsx logs a warning and
+launches omp without it. omp's other skill filters (`skills.ignoredSkills`,
 `skills.includeSkills`) still apply. There is still no separate omp skills target for `wsx setup
 install-skill` — the Claude one covers it, for the same reason it covers Pi.
 

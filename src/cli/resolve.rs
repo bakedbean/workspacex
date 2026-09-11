@@ -20,17 +20,23 @@ pub(in crate::cli) fn resolve_current_workspace(
             }
         }
     }
-    // 2. cwd: find the workspace whose worktree_path is an ancestor-or-equal of cwd
-    // Note: this is a raw path-prefix match. If the user `cd`'d into the
-    // worktree through a symlink (e.g. macOS /var -> /private/var), cwd may not
-    // prefix the stored worktree_path and the match will miss. Setting
-    // WSX_WORKSPACE_ID (the agent-spawn path) avoids this entirely.
+    // 2. cwd: find the workspace whose worktree_path is an ancestor-or-equal of cwd.
+    // `current_dir()` is already physical, so a worktree registered through a
+    // symlinked prefix (macOS /tmp -> /private/tmp, /var -> /private/var) would
+    // never prefix-match its stored path; compare against the canonicalized
+    // worktree_path as well. Setting WSX_WORKSPACE_ID (the agent-spawn path)
+    // avoids this lookup entirely.
     let cwd = std::env::current_dir()
         .map_err(|e| Error::UserInput(format!("cannot determine current directory: {e}")))?;
     let ws = store
         .all_workspaces()?
         .into_iter()
-        .filter(|w| cwd.starts_with(&w.worktree_path))
+        .filter(|w| {
+            cwd.starts_with(&w.worktree_path)
+                || std::fs::canonicalize(&w.worktree_path)
+                    .map(|real| cwd.starts_with(real))
+                    .unwrap_or(false)
+        })
         .max_by_key(|w| w.worktree_path.as_os_str().len())
         .ok_or_else(|| {
             Error::UserInput(

@@ -20,7 +20,13 @@ pub struct Dirs {
 
 impl Dirs {
     pub fn discover() -> Self {
-        let state_root = dirs::state_dir()
+        // Honor an explicit `XDG_STATE_HOME` on every platform. `dirs::state_dir()`
+        // only reads it on Linux; on macOS it returns `None`, which sent a sandboxed
+        // run (sandbox/bootstrap.sh) straight into the real `~/.local/state` db.
+        let state_root = std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(dirs::state_dir)
             .or_else(|| dirs::home_dir().map(|h| h.join(".local/state")))
             .unwrap_or_else(|| PathBuf::from("."));
         Self { state_root }

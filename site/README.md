@@ -15,6 +15,8 @@ Cloudflare Web Analytics beacon (cookieless) at the end of `index.html`.
         og-cover.png      Open Graph / Twitter card image
         dashboard-hero.{png,webp}  hero still — the dashboard under load
                           (regenerate with `make -C demo hero-still`)
+        agent-chat.{png,webp}      still in #see — the attached view, two agents
+                          coordinating (`make -C demo agent-chat-still`)
 
 `site.js` sends a HEAD request per `<video data-src>` and only sets `src`
 when the file responds 2xx/3xx; a missing file shows the diagonal-hatch

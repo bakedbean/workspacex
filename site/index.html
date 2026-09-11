@@ -97,7 +97,7 @@
       </a>
     </div>
 
-    <figure class="hero-shot term reveal" data-d="3">
+    <figure class="still term reveal" data-d="3">
       <picture>
         <source srcset="assets/dashboard-hero.webp" type="image/webp" />
         <img src="assets/dashboard-hero.png" width="2730" height="1196" alt="The wsx dashboard with three repos and nine workspaces: agents thinking, one waiting on a question, per-workspace diff counts, goal/state/next recaps inline, and the selected workspace's session summary, recent chat and recent files in the detail bar." loading="eager" decoding="async" />
@@ -163,8 +163,15 @@
     <div class="sec-head reveal">
       <h2 class="mono"><span class="pfx">$ </span>wsx --demo</h2>
       <span class="rule"></span>
-      <p class="note">two short sessions, unedited</p>
+      <p class="note">a live session and two short screencasts, unedited</p>
     </div>
+    <figure class="still term reveal">
+      <picture>
+        <source srcset="assets/agent-chat.webp" type="image/webp" />
+        <img src="assets/agent-chat.png" width="2738" height="1196" alt="The wsx attached view: the primary Claude agent's chat, where a [message from claude#2] banner reports the commit hash for the SQL-injection fix it was handed, the primary verifies it with git show, and along the bottom the pinned-command chips /pr, /rebase, /feedback and /agent-review plus the agents row listing both attached agents." loading="lazy" decoding="async" />
+      </picture>
+      <figcaption>the attached view · a second agent, briefed over <span class="accent">wsx agent send</span>, reports its commit back into the primary's chat · <span class="accent">/pr</span> <span class="accent">/rebase</span> <span class="accent">/feedback</span> <span class="accent">/agent-review</span> pinned one keystroke away</figcaption>
+    </figure>
     <div class="casts">
       <div class="reveal">
         <div class="term">

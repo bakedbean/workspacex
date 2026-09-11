@@ -748,6 +748,11 @@ mod tests {
 
     #[test]
     fn system_prompt_combines_rename_and_custom() {
+        // The rename block only renders when WSX_RENAME_MODE is unset or
+        // "claude"; hold the env lock so a parallel test setting it to "wsx"
+        // can't race this assertion.
+        let mut env = EnvGuard::new();
+        env.remove("WSX_RENAME_MODE");
         let ctx = RenameContext {
             current_branch: "wsx/bold-fern".into(),
             branch_prefix: "wsx".into(),

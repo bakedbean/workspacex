@@ -79,4 +79,38 @@ init_repo "$CLI"
 git -C "$CLI" add -A
 git -C "$CLI" commit -qm "feat: initial toy-cli"
 
+# --- toy-web: a tiny static front-end with planted UI/perf bugs ---
+WEB="$DEST/toy-web"; mkdir -p "$WEB/src"
+cat > "$WEB/src/app.js" <<'JS'
+export function validateForm(form) {
+  // BUG: empty email passes — only checks for "@", not for a non-empty local part.
+  return form.email.includes("@");
+}
+
+export function renderList(items, el) {
+  // BUG: O(n^2) DOM churn — re-renders the whole list on every item.
+  for (const item of items) {
+    el.innerHTML += `<li>${item}</li>`;
+  }
+}
+
+export function applyTheme(theme) {
+  // BUG: dark mode never persists — preference is not written to storage.
+  document.body.dataset.theme = theme;
+}
+JS
+cat > "$WEB/src/index.html" <<'HTML'
+<!doctype html>
+<title>toy-web</title>
+<ul id="list"></ul>
+<script type="module" src="./app.js"></script>
+HTML
+cat > "$WEB/README.md" <<'MD'
+# toy-web
+A minimal example front-end used for wsx demo recordings.
+MD
+init_repo "$WEB"
+git -C "$WEB" add -A
+git -C "$WEB" commit -qm "feat: initial toy-web"
+
 echo "generated repos in $DEST"

@@ -40,10 +40,18 @@ mkdir -p "$XDG_STATE_HOME" "$REPOS" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"
 
 # --- Isolated Claude config (auth + bypass pre-accepted) ---
 # Copy credentials so the demo agents are authenticated without a login prompt.
+# Linux keeps the OAuth token in ~/.claude/.credentials.json; macOS keeps it in the
+# login Keychain (service "Claude Code-credentials"), which a custom
+# CLAUDE_CONFIG_DIR does not see — export it into the sandbox as the same file.
 if [ -f "$HOME/.claude/.credentials.json" ]; then
   cp -a "$HOME/.claude/.credentials.json" "$CLAUDE_CONFIG_DIR/.credentials.json"
+elif command -v security >/dev/null 2>&1 \
+  && creds="$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)" \
+  && [ -n "$creds" ]; then
+  (umask 077; printf '%s\n' "$creds" > "$CLAUDE_CONFIG_DIR/.credentials.json")
+  unset creds
 else
-  echo "WARN: ~/.claude/.credentials.json not found — demo agents may not be authenticated." >&2
+  echo "WARN: no Claude credentials found (~/.claude/.credentials.json or macOS Keychain) — demo agents may not be authenticated." >&2
 fi
 # Copy app-state (onboarding/theme flags) so the TUI doesn't run first-run onboarding.
 [ -f "$HOME/.claude.json" ] && cp -a "$HOME/.claude.json" "$CLAUDE_CONFIG_DIR/.claude.json"
@@ -75,7 +83,7 @@ touch "$CODEX_HOME/config.toml"
 # Append a per-repo-root trust block only if that exact table header isn't already
 # present — re-appending would create a duplicate TOML table (invalid TOML, which
 # makes Codex fail to parse the config).
-for r in toy-api toy-cli; do
+for r in toy-api toy-cli toy-web; do
   hdr="[projects.\"$REPOS/$r\"]"
   if ! grep -qF "$hdr" "$CODEX_HOME/config.toml"; then
     printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$REPOS/$r" >> "$CODEX_HOME/config.toml"
@@ -101,19 +109,22 @@ fi
 "$HERE/gen-repos.sh" "$REPOS"
 "$WSX_BIN" repo add "$REPOS/toy-api" --name toy-api --prefix demo
 "$WSX_BIN" repo add "$REPOS/toy-cli" --name toy-cli --prefix demo
+"$WSX_BIN" repo add "$REPOS/toy-web" --name toy-web --prefix demo
 # Set the base branch explicitly. wsx's per-workspace diff poll (which powers the
 # dashboard +N/-M column and the RECENT FILES +X −Y counts) only runs when a
 # repo's base_branch is Some — `repo add` leaves it None. The repos are created
 # on `main` (gen-repos.sh: git init -b main), so point base_branch there.
 "$WSX_BIN" repo set-base-branch toy-api main
 "$WSX_BIN" repo set-base-branch toy-cli main
+"$WSX_BIN" repo set-base-branch toy-web main
 
 # --- Pre-seed Claude trust for the worktree paths the demo tapes attach to ---
 # Claude gates a fresh folder behind a "do you trust this folder?" dialog that
 # --dangerously-skip-permissions does NOT bypass, and which it does not reliably
 # persist. Worktree paths are deterministic ($XDG_STATE_HOME/wsx/worktrees/<repo>/<slug>),
 # so we mark them trusted up front and the dialog never appears on camera.
-# These (repo/slug) pairs MUST match the slugs used in demo/tapes/*.tape.
+# These (repo/slug) pairs MUST match the slugs used in demo/tapes/*.tape and
+# demo/shots/*.tape.
 WORKTREES="$XDG_STATE_HOME/wsx/worktrees"
 DEMO_PATHS=(
   "$WORKTREES/toy-api/security-review"
@@ -121,6 +132,11 @@ DEMO_PATHS=(
   "$WORKTREES/toy-api/fix-auth"
   "$WORKTREES/toy-api/null-guard"
   "$WORKTREES/toy-cli/arg-parsing"
+  "$WORKTREES/toy-cli/close-file-handle"
+  "$WORKTREES/toy-cli/config-loader"
+  "$WORKTREES/toy-web/form-validation"
+  "$WORKTREES/toy-web/persist-dark-mode"
+  "$WORKTREES/toy-web/list-render-perf"
 )
 python3 - "$CLAUDE_CONFIG_DIR/.claude.json" "${DEMO_PATHS[@]}" <<'PY'
 import json, os, sys

@@ -73,8 +73,14 @@ PY
 # --- Isolated Codex config (auth + per-repo-root trust pre-accepted) ---
 # Codex authenticates from auth.json and gates fresh repo roots behind a trust
 # prompt; both relocate with CODEX_HOME. Pre-seed trust for the demo repo roots.
+#
+# auth.json is SYMLINKED, not copied: Codex rotates its refresh token on use and
+# writes the new one back to auth.json. A copy would take that rotation with it
+# when the sandbox is wiped, leaving the real ~/.codex/auth.json holding an
+# already-used refresh token ("Please log out and sign in again"). Sharing the
+# file keeps the real login valid across bootstraps.
 if [ -f "$HOME/.codex/auth.json" ]; then
-  cp -a "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
+  ln -s "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"
 else
   echo "WARN: ~/.codex/auth.json not found — demo Codex agent may not be authenticated." >&2
 fi

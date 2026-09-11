@@ -7,7 +7,7 @@
 //!         derived per frame, not user-configurable — see `ColumnWidths`)
 //!   1ch  ▎ gutter (status color)
 //!   3ch  ├  elbow (faint, centered)
-//!   2ch  status glyph or spinner frame
+//!   2ch  status glyph (status color) or spinner frame (primary agent color)
 //!   28ch ⎇ branch (left-aligned, ellipsized)
 //!   16ch ⏺ #N pr-lifecycle chip (blank when no PR)
 //!   6ch  ● Np procs (or faint dot when zero)
@@ -284,21 +284,30 @@ pub fn render(
     // 2: elbow
     spans.push(Span::styled("├  ".to_string(), theme.dim_style()));
 
-    // 3: glyph or spinner
-    let glyph = if inputs.status.is_live() {
-        spinner::frame(tick).to_string()
+    // 3: glyph or spinner. The static glyph is colored by status like the
+    // gutter bar beside it. The live spinner instead takes the primary
+    // agent's identity color: the motion already says "busy", so the color
+    // is free to say *who* is busy — and it stays legible on the fully
+    // colorized row, where a second status-toned cell would blur into the
+    // bar. The gutter keeps the status tone, so the pair reads as a
+    // two-tone edge: agent on the spinner, status on the bar.
+    let (glyph, glyph_style) = if inputs.status.is_live() {
+        (
+            spinner::frame(tick).to_string(),
+            theme.agent_style(inputs.agent),
+        )
     } else {
-        inputs.status.glyph().to_string()
+        (
+            inputs.status.glyph().to_string(),
+            theme.status_style(inputs.status),
+        )
     };
     let mut glyph_padded = String::with_capacity(2);
     glyph_padded.push_str(&glyph);
     while display_width(&glyph_padded) < GLYPH_WIDTH {
         glyph_padded.push(' ');
     }
-    spans.push(Span::styled(
-        glyph_padded,
-        theme.status_style(inputs.status),
-    ));
+    spans.push(Span::styled(glyph_padded, glyph_style));
 
     // 4: branch — the row's identity column (the workspace name never
     // diverged from the branch in practice, so the branch alone carries
@@ -926,6 +935,52 @@ mod tests {
         let line2 = render(&inputs, ColumnWidths::default(), 1, &theme, 120);
         let text2 = line_text(&line2);
         assert!(text2.contains("⠙"), "spinner advances by tick 1: {text2:?}");
+    }
+
+    #[test]
+    fn live_spinner_takes_the_agent_color_not_the_status_color() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.agent = AgentKind::Pi; // purple — distinct from the thinking tone
+        for status in [Status::Thinking, Status::Waiting] {
+            inputs.status = status;
+            let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+            let span = line
+                .spans
+                .iter()
+                .find(|s| s.content.contains('⠋'))
+                .unwrap_or_else(|| panic!("spinner span present for {status:?}"));
+            assert_eq!(
+                span.style.fg,
+                theme.agent_style(AgentKind::Pi).fg,
+                "{status:?} spinner wears the agent color"
+            );
+            assert_ne!(
+                span.style.fg,
+                theme.status_style(status).fg,
+                "{status:?} spinner no longer wears the status color"
+            );
+            // The gutter bar next to it still carries the status tone, so
+            // the row keeps its two-tone edge: agent on the spinner, status
+            // on the bar.
+            assert_eq!(line.spans[1].style.fg, theme.status_style(status).fg);
+        }
+    }
+
+    #[test]
+    fn static_status_glyph_keeps_the_status_color() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.agent = AgentKind::Pi;
+        inputs.status = Status::Question;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let glyph = Status::Question.glyph();
+        let span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains(glyph))
+            .expect("question glyph span present");
+        assert_eq!(span.style.fg, theme.status_style(Status::Question).fg);
     }
 
     #[test]

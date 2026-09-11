@@ -43,7 +43,6 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     };
     let (dashboard_area, detail_area, pm_area) =
         dashboard_regions(inner_area, app.pm_visible, detail_visible, &detail_cfg);
-    let notifications_on = notifications_enabled(&app.store);
     let nerd_fonts = nerd_fonts_enabled(&app.store);
 
     // Build per-workspace inputs in V5 shape.
@@ -61,67 +60,6 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                 status: row.status,
                 row,
             });
-        }
-    }
-
-    // Commit the new activity states. Fires the bell on:
-    //   - transition from any non-alertable state into
-    //     AwaitingAnswer / Complete / Awaiting / Stalled,
-    //   - transition between two different alertable states
-    //     (e.g. Complete -> Awaiting when a permission prompt
-    //     arrives while the user hasn't yet replied to the prior
-    //     end_turn).
-    // Activity is not recorded — and the bell is not considered —
-    // until the tail loop has scanned the workspace's JSONL at
-    // least once (see `workspace_events_scanned`). Without that
-    // gate the classifier flickers from a provisional Active to
-    // a real AwaitingAnswer/Complete the instant events arrive,
-    // which would ring on cold start for every already-waiting
-    // workspace. Once scanned, the first observation still skips
-    // the bell (see `alert_decision`) so the visual marker can
-    // surface alertable state without making noise. Does NOT
-    // re-fire while an alertable state persists across polls.
-    //
-    // Keeps the legacy `ActivityState` vocabulary (via
-    // `classify_activity_with_events`) for the bell pipeline —
-    // the V5 `Status` enum is for display only and would lose the
-    // `Active`/`Off`/`Awaiting` distinctions `alert_decision`
-    // depends on.
-    for (_rid, ws) in &app.workspaces {
-        let session = app
-            .primary_instance(ws.id)
-            .and_then(|i| app.sessions.get(i));
-        let running = session.as_ref().is_some_and(|s| {
-            matches!(
-                *s.status.read().unwrap(),
-                crate::pty::session::SessionStatus::Running { .. }
-            )
-        });
-        let secs = session.as_ref().map(|s| s.idle_secs().unwrap_or(0));
-        let awaiting = app.awaiting_permission(ws.id).is_some();
-        let now_ms = crate::util::time::now_ms();
-        let stopped_kind = app
-            .workspace_events
-            .get(&ws.id)
-            .and_then(crate::app::derive_stopped_kind);
-        let stalled = app
-            .workspace_events
-            .get(&ws.id)
-            .is_some_and(|e| e.is_stalled(now_ms, 60_000));
-        let activity =
-            classify_activity_with_events(secs, running, awaiting, stopped_kind, stalled);
-        if app.workspace_events_scanned.contains(&ws.id) {
-            let prev = app.workspace_activity.get(&ws.id).copied();
-            let startup_workspace = app.startup_workspace_ids.contains(&ws.id);
-            let (mark_attention, fire_bell) =
-                alert_decision(prev, activity, notifications_on, startup_workspace);
-            if mark_attention {
-                app.workspace_needs_attention.insert(ws.id);
-            }
-            if fire_bell {
-                app.pending_bells.push(activity);
-            }
-            app.workspace_activity.insert(ws.id, activity);
         }
     }
 
@@ -898,5 +836,74 @@ mod build_row_inputs_tests {
         app.refresh().unwrap();
         // No sessions spawned at all.
         assert!(row_inputs(&app, ws).peers.is_empty());
+    }
+}
+
+/// Re-classify every workspace's activity and commit the result: the
+/// `workspace_activity` map, the needs-attention set, and any bells to ring.
+/// Called from `draw()` for every view — the attached view's top bar and the
+/// terminal bell depend on this running while you are attached, not only
+/// while the dashboard is on screen.
+pub(super) fn refresh_activity(app: &mut App) {
+    let notifications_on = notifications_enabled(&app.store);
+    let now_ms = crate::util::time::now_ms();
+    // Commit the new activity states. Fires the bell on:
+    //   - transition from any non-alertable state into
+    //     AwaitingAnswer / Complete / Awaiting / Stalled,
+    //   - transition between two different alertable states
+    //     (e.g. Complete -> Awaiting when a permission prompt
+    //     arrives while the user hasn't yet replied to the prior
+    //     end_turn).
+    // Activity is not recorded — and the bell is not considered —
+    // until the tail loop has scanned the workspace's JSONL at
+    // least once (see `workspace_events_scanned`). Without that
+    // gate the classifier flickers from a provisional Active to
+    // a real AwaitingAnswer/Complete the instant events arrive,
+    // which would ring on cold start for every already-waiting
+    // workspace. Once scanned, the first observation still skips
+    // the bell (see `alert_decision`) so the visual marker can
+    // surface alertable state without making noise. Does NOT
+    // re-fire while an alertable state persists across polls.
+    //
+    // Keeps the legacy `ActivityState` vocabulary (via
+    // `classify_activity_with_events`) for the bell pipeline —
+    // the V5 `Status` enum is for display only and would lose the
+    // `Active`/`Off`/`Awaiting` distinctions `alert_decision`
+    // depends on.
+    for (_rid, ws) in &app.workspaces {
+        let session = app
+            .primary_instance(ws.id)
+            .and_then(|i| app.sessions.get(i));
+        let running = session.as_ref().is_some_and(|s| {
+            matches!(
+                *s.status.read().unwrap(),
+                crate::pty::session::SessionStatus::Running { .. }
+            )
+        });
+        let secs = session.as_ref().map(|s| s.idle_secs().unwrap_or(0));
+        let awaiting = app.awaiting_permission(ws.id).is_some();
+        let stopped_kind = app
+            .workspace_events
+            .get(&ws.id)
+            .and_then(crate::app::derive_stopped_kind);
+        let stalled = app
+            .workspace_events
+            .get(&ws.id)
+            .is_some_and(|e| e.is_stalled(now_ms, 60_000));
+        let activity =
+            classify_activity_with_events(secs, running, awaiting, stopped_kind, stalled);
+        if app.workspace_events_scanned.contains(&ws.id) {
+            let prev = app.workspace_activity.get(&ws.id).copied();
+            let startup_workspace = app.startup_workspace_ids.contains(&ws.id);
+            let (mark_attention, fire_bell) =
+                alert_decision(prev, activity, notifications_on, startup_workspace);
+            if mark_attention {
+                app.workspace_needs_attention.insert(ws.id);
+            }
+            if fire_bell {
+                app.pending_bells.push(activity);
+            }
+            app.workspace_activity.insert(ws.id, activity);
+        }
     }
 }

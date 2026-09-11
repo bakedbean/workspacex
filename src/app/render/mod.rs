@@ -118,6 +118,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.usage_window_option_rects.clear();
     app.name_color_swatch_rects.clear();
     sync_session_visibility(app);
+    // Activity / attention / bells are view-independent: keep them fresh
+    // while attached too, or the top bar and bell only ever fire from the
+    // dashboard.
+    dashboard::refresh_activity(app);
 
     // Every arm binds `_`: each draw_* re-derives what it needs from
     // `app.view` itself, so the borrow taken here ends before they take a

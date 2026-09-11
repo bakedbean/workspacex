@@ -42,6 +42,8 @@ still_up() { # <cols> <rows>
     -e "ZDOTDIR=$ZDOTDIR" \
     -e "PATH=$bindir:$PATH" \
     "$wsx"
+  # Claude Code nags about focus tracking inside tmux otherwise.
+  tmux -L "$STILL_SOCK" set -g focus-events on
   sleep 3   # let the dashboard paint
 }
 

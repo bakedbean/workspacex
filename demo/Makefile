@@ -16,7 +16,7 @@ HERO_RAMP_START := 44
 HERO_RAMP_END := 69
 HERO_RAMP_FACTOR := 3.5
 
-.PHONY: all clips clean hero parallel hero-still check
+.PHONY: all clips clean hero parallel hero-still agent-chat-still check
 
 all: clips
 clips: hero parallel
@@ -55,6 +55,12 @@ parallel:
 hero-still:
 	cd $(ROOT) && bash sandbox/bootstrap.sh
 	cd $(ROOT) && bash demo/stills/dashboard-hero.sh
+
+# Still — the attached view: Claude hands a fix to Codex over `wsx agent send`,
+# Codex reports back, pinned-command chips and the agents row along the bottom.
+agent-chat-still:
+	cd $(ROOT) && bash sandbox/bootstrap.sh
+	cd $(ROOT) && bash demo/stills/agent-chat.sh
 
 # Unit checks for the scripted (non-recording) pieces.
 check:

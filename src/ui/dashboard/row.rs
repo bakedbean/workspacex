@@ -968,6 +968,53 @@ mod tests {
     }
 
     #[test]
+    fn live_spinner_keeps_the_agent_color_when_selected() {
+        // Selection tints the row background only (`selected_bg_style`), so
+        // the spinner's identity color must survive the highlight the same
+        // way the agent bar does.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.agent = AgentKind::Hermes;
+        inputs.status = Status::Thinking;
+        inputs.selected = true;
+        let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
+        let span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains('⠋'))
+            .expect("spinner span present");
+        assert_eq!(span.style.fg, theme.agent_style(AgentKind::Hermes).fg);
+    }
+
+    #[test]
+    fn live_spinner_follows_the_primary_agent_not_a_peer() {
+        // A multi-agent row has one spinner and several identity bars. The
+        // spinner tracks `inputs.agent` (the primary); peers only color
+        // their own bars in the strip.
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.agent = AgentKind::Codex;
+        inputs.peers = vec![AgentKind::Pi, AgentKind::Omp];
+        inputs.status = Status::Waiting;
+        let line = render(
+            &inputs,
+            ColumnWidths::default().with_agent(3),
+            0,
+            &theme,
+            120,
+        );
+        let span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains('⠋'))
+            .expect("spinner span present");
+        assert_eq!(span.style.fg, theme.agent_style(AgentKind::Codex).fg);
+        for peer in [AgentKind::Pi, AgentKind::Omp] {
+            assert_ne!(span.style.fg, theme.agent_style(peer).fg, "{peer:?}");
+        }
+    }
+
+    #[test]
     fn static_status_glyph_keeps_the_status_color() {
         let theme = Theme::wsx();
         let mut inputs = base();

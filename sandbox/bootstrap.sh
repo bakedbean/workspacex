@@ -83,11 +83,16 @@ touch "$CODEX_HOME/config.toml"
 # Append a per-repo-root trust block only if that exact table header isn't already
 # present — re-appending would create a duplicate TOML table (invalid TOML, which
 # makes Codex fail to parse the config).
-for r in toy-api toy-cli toy-web; do
-  hdr="[projects.\"$REPOS/$r\"]"
-  if ! grep -qF "$hdr" "$CODEX_HOME/config.toml"; then
-    printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$REPOS/$r" >> "$CODEX_HOME/config.toml"
-  fi
+# Seed both the tape-facing root and its physical form (macOS /tmp -> /private/tmp),
+# since Codex may key trust by the canonical path.
+REPOS_REAL="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$REPOS")"
+for root in "$REPOS" "$REPOS_REAL"; do
+  for r in toy-api toy-cli toy-web; do
+    hdr="[projects.\"$root/$r\"]"
+    if ! grep -qF "$hdr" "$CODEX_HOME/config.toml"; then
+      printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$root/$r" >> "$CODEX_HOME/config.toml"
+    fi
+  done
 done
 
 # --- Install the wsx agent skill into the isolated configs ---
@@ -104,6 +109,21 @@ if [ -f "$SKILL_SRC" ]; then
 else
   echo "WARN: skills/wsx/SKILL.md not found — agents won't have the wsx skill." >&2
 fi
+
+# --- Pin the sandbox's wsx first on PATH inside agent shells ---
+# Agents run their tools through the user's login shell, whose rc files
+# re-prepend directories (e.g. ~/.local/bin) and can put an installed `wsx`
+# ahead of $WSX_BIN. A ZDOTDIR shim sources the real rc files and then puts the
+# provisioning binary's directory back in front, so `wsx status set` / `wsx recap
+# set` from inside an agent hit the sandbox db. Exported by env.sh; tapes pass
+# it with `Env ZDOTDIR`.
+ZDOT="$WSX_SANDBOX_ROOT/zdot"
+mkdir -p "$ZDOT"
+WSX_BIN_DIR="$(cd "$(dirname "$(command -v "$WSX_BIN")")" && pwd)"
+for rc in .zshenv .zprofile .zshrc; do
+  printf '[ -f "$HOME/%s" ] && source "$HOME/%s"\nexport PATH="%s:$PATH"\n' \
+    "$rc" "$rc" "$WSX_BIN_DIR" > "$ZDOT/$rc"
+done
 
 # --- Synthetic repos ---
 "$HERE/gen-repos.sh" "$REPOS"
@@ -138,6 +158,8 @@ DEMO_PATHS=(
   "$WORKTREES/toy-web/persist-dark-mode"
   "$WORKTREES/toy-web/list-render-perf"
 )
+# Claude keys trust by its *canonical* cwd, so on macOS (where /tmp is a symlink
+# to /private/tmp) the physical form must be seeded as well as the tape-facing one.
 python3 - "$CLAUDE_CONFIG_DIR/.claude.json" "${DEMO_PATHS[@]}" <<'PY'
 import json, os, sys
 cfg, paths = sys.argv[1], sys.argv[2:]
@@ -148,6 +170,7 @@ if os.path.exists(cfg):
     except Exception:
         data = {}
 projs = data.setdefault("projects", {})
+paths = list(dict.fromkeys(q for p in paths for q in (p, os.path.realpath(p))))
 for p in paths:
     e = projs.setdefault(p, {})
     e["hasTrustDialogAccepted"] = True
@@ -175,10 +198,16 @@ REAL_PROJECTS="$HOME/.claude/projects"
 mkdir -p "$REAL_PROJECTS"
 # Clear stale demo symlinks from a previous run.
 find "$REAL_PROJECTS" -maxdepth 1 -type l -lname "$WSX_SANDBOX_ROOT/*" -delete 2>/dev/null || true
+# Claude names the log dir after its canonical cwd and wsx canonicalizes the
+# worktree before encoding, so on macOS the physical (/private/tmp) form is the
+# one that matters; bridge both forms so the tapes' /tmp paths keep working too.
 for p in "${DEMO_PATHS[@]}"; do
-  enc="$(encode_path "$p")"
-  mkdir -p "$CLAUDE_CONFIG_DIR/projects/$enc"
-  ln -sfn "$CLAUDE_CONFIG_DIR/projects/$enc" "$REAL_PROJECTS/$enc"
+  real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$p")"
+  for q in "$p" "$real"; do
+    enc="$(encode_path "$q")"
+    mkdir -p "$CLAUDE_CONFIG_DIR/projects/$enc"
+    ln -sfn "$CLAUDE_CONFIG_DIR/projects/$enc" "$REAL_PROJECTS/$enc"
+  done
 done
 echo "bridged ${#DEMO_PATHS[@]} session-log dirs into ~/.claude/projects (symlinks)"
 
@@ -186,3 +215,4 @@ echo "sandbox ready at $WSX_SANDBOX_ROOT"
 echo "  XDG_STATE_HOME=$XDG_STATE_HOME"
 echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
 echo "  CODEX_HOME=$CODEX_HOME"
+echo "  ZDOTDIR=$ZDOT"

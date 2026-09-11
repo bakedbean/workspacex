@@ -13,3 +13,5 @@ export WSX_SANDBOX_ROOT
 export XDG_STATE_HOME="$WSX_SANDBOX_ROOT/state"
 export CLAUDE_CONFIG_DIR="$WSX_SANDBOX_ROOT/claude-config"
 export CODEX_HOME="$WSX_SANDBOX_ROOT/codex-home"
+# Agent shells source this instead of ~/.z* so the sandbox's wsx stays first on PATH.
+export ZDOTDIR="$WSX_SANDBOX_ROOT/zdot"

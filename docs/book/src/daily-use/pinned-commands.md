@@ -23,6 +23,6 @@ FB=/feedback
 UR=/ultrareview
 ```
 
-`Label=command` shows the label as the chip; a bare line uses the command itself (truncated past 12 columns). Both sides of `=` are trimmed.
+`Label=command` shows the label as the chip; a bare line uses the command itself. Labels are truncated past 14 columns. Both sides of `=` are trimmed.
 
 At narrow terminal widths trailing chips drop from view; their keyboard shortcuts still work.

@@ -6,7 +6,7 @@ Writes the [bundled skills](#bundled-skills) to each detected agent's skills dir
 
 Codex is considered installed when `WSX_CODEX_BIN` is set, `codex` is on `PATH`, or `~/.codex` already exists; Hermes likewise via `WSX_HERMES_BIN`, `hermes` on `PATH`, or `~/.hermes`.
 
-There is intentionally no separate target for `pi` or `omp`. Both read skills from `~/.claude/skills` — omp via its Claude discovery provider, which loads `~/.claude/skills/*/SKILL.md` (and `~/.claude/commands/*.md` as slash commands) — so the Claude target already covers them.
+There is intentionally no separate target for `pi` or `omp`. Both read skills from `~/.claude/skills` — omp via its Claude discovery provider, which loads `~/.claude/skills/*/SKILL.md` (and `~/.claude/commands/*.md` as slash commands) — so the Claude target already covers them. omp 18 turned that user-level scan off by default, so wsx passes a config overlay on every omp spawn to turn it back on; see [Coding agents](../configuration/coding-agents.md).
 
 Idempotent: re-running when an installed copy already matches reports "already up to date" without writing. If an installed copy has drifted (you edited it locally, or you're upgrading wsx with skill changes), it's overwritten and reports "updated".
 

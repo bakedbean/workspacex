@@ -94,12 +94,18 @@ ride on `--add-dir`. omp is the only harness besides Claude that supports both
 flags, so nothing is written into the worktree — no `AGENTS.md` block (unlike
 Hermes) and no config overrides (unlike Codex).
 
-**Skills and slash commands work with no setup.** omp's Claude discovery
-provider loads `~/.claude/skills/*/SKILL.md` and `~/.claude/commands/*.md`
-natively, so the skills installed by `wsx setup install-skill` and your pinned
-command chips both reach omp unchanged. There is deliberately no separate omp
-skills target — the Claude one already covers it, for the same reason it covers
-Pi.
+**Skills and slash commands ride on a config overlay.** omp's Claude discovery
+provider can load `~/.claude/skills/*/SKILL.md` and `~/.claude/commands/*.md`,
+but since omp 18 that user-level scan is off by default
+(`skills.enableClaudeUser` and `commands.enableClaudeUser` both default to
+`false`; they were `true` in 17.x). Left alone, omp reports `Unknown skill: wsx`
+and your pinned command chips do nothing. So before every omp spawn wsx writes a
+small overlay to `~/.local/state/wsx/omp-config.yml` that turns those two
+settings on, and launches `omp --config <that file>`. The overlay applies to
+that run only; your `~/.omp/agent/config.yml` is never edited. If the overlay
+cannot be written (read-only state dir), wsx logs a warning and launches omp
+without it. There is still no separate omp skills target for `wsx setup
+install-skill` — the Claude one covers it, for the same reason it covers Pi.
 
 **Session detection and activity**: omp stores sessions at
 `~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl`, where the directory

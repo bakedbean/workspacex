@@ -16,7 +16,7 @@ HERO_RAMP_START := 44
 HERO_RAMP_END := 69
 HERO_RAMP_FACTOR := 3.5
 
-.PHONY: all clips clean hero parallel check
+.PHONY: all clips clean hero parallel hero-still check
 
 all: clips
 clips: hero parallel
@@ -48,6 +48,13 @@ parallel:
 	cd $(ROOT) && bash sandbox/render.sh demo/tapes/02-parallel-worktrees.tape
 	cd $(ROOT) && bash demo/deadair.sh demo/out/02-parallel-raw.mp4 demo/out/02-parallel-collapsed.mp4 $(MIN_FREEZE) $(MAX_HOLD)
 	cd $(ROOT) && bash demo/post.sh demo/out/02-parallel-collapsed.mp4 demo/out/02-parallel.mp4 demo/captions/02-parallel.txt
+
+# Still — the dashboard under load (site hero image). Three repos, nine
+# workspaces, Claude + Codex on one of them, recaps inline and in the detail
+# bar. Seeds everything from the CLI, then VHS screenshots the live dashboard.
+hero-still:
+	cd $(ROOT) && bash sandbox/bootstrap.sh
+	cd $(ROOT) && bash demo/stills/dashboard-hero.sh
 
 # Unit checks for the scripted (non-recording) pieces.
 check:

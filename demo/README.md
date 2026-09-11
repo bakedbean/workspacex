@@ -24,6 +24,21 @@ is recorded there.
 | **hero** (~66s) | One workspace, two agents coordinating with no human in the loop: Claude reviews & finds a planted SQL-injection bug, then hands the fix to its Codex teammate over `wsx agent send`; Codex fixes, commits, and reports back the commit hash; Claude verifies. | `out/01-hero.mp4` |
 | **parallel** (~61s) | Three isolated worktrees in one repo (`toy-api`), an agent deployed to each to fix + commit the planted bug, then a tour of each workspace's live detail bar (SESSION SUMMARY / RECENT CHAT / RECENT FILES with `+X −Y` line counts) as it fills in. | `out/02-parallel.mp4` |
 
+## Stills
+
+| Still | Shows | Output |
+|---|---|---|
+| **dashboard-hero** | The dashboard under load: three repos, nine live workspaces, Claude + Codex sharing one of them, `?`/`✓`/spinner statuses, recaps inline and in the detail bar. Used as the site hero image. | `out/dashboard-hero-N.png` (several takes) |
+
+```bash
+make -C demo hero-still   # bootstrap + demo/stills/dashboard-hero.sh
+```
+
+`demo/stills/dashboard-hero.sh` seeds the whole scene from the CLI — workspaces
+are created with `--prompt`, so the dashboard spawns every agent in the
+background on launch and no per-row attach choreography is needed — then renders
+`demo/stills/dashboard-hero.tape.in` with the sandbox paths substituted in.
+
 ## Prerequisites
 
 - `vhs`, `ttyd`, `ffmpeg`, and a headless-capable `chromium` (VHS renders frames

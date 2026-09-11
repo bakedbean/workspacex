@@ -9,6 +9,7 @@
 use crate::activity::events::WorkspaceEvents;
 use crate::data::store::WorkspaceId;
 use crate::git::forge::BranchLifecycle;
+use crate::ui::dashboard::sort::{SortMode, SortRow, order_workspaces};
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::text::{Line, Span};
@@ -219,27 +220,37 @@ pub fn format_attention_line_styled(
     })
 }
 
+impl SortRow for WorkspaceUpdateInfo<'_> {
+    fn sort_status(&self) -> Status {
+        self.status
+    }
+    fn sort_ago_secs(&self) -> Option<u64> {
+        self.ago_secs
+    }
+    fn sort_name(&self) -> &str {
+        self.name
+    }
+}
+
 /// Collect every workspace whose `needs_attention` flag is set, excluding
-/// the currently-attached one. Ordered like the dashboard's NEEDS
-/// ATTENTION section: status priority descending (Stalled before
-/// Question before Waiting), then most-recently-interacted first by the
-/// dashboard's `ago_secs` recency signal (`None` = never active sorts
-/// last).
+/// the currently-attached one. Ordered by the dashboard's own workspace
+/// comparator under the dashboard's current sort mode, so the row reads
+/// the same way the by-repo list does: in the default recency mode a
+/// freshly blocked workspace is pinned first and everything else sits in
+/// its recency bucket, while status mode ranks by status priority. Callers
+/// pass `DashboardState::sort_mode` and `blocked_pin_max_age_secs`.
 pub fn collect_attention(
     candidates: &[WorkspaceUpdateInfo],
     attached_workspace: Option<WorkspaceId>,
     now_ms: i64,
+    sort_mode: SortMode,
+    pin_max_age_secs: u64,
 ) -> Vec<AttentionEntry> {
     let mut filtered: Vec<&WorkspaceUpdateInfo> = candidates
         .iter()
         .filter(|c| c.needs_attention && Some(c.id) != attached_workspace)
         .collect();
-    filtered.sort_by(|a, b| {
-        b.status
-            .priority()
-            .cmp(&a.status.priority())
-            .then_with(|| ago_sort_key(a.ago_secs).cmp(&ago_sort_key(b.ago_secs)))
-    });
+    order_workspaces(&mut filtered, sort_mode, pin_max_age_secs);
     filtered
         .into_iter()
         .map(|c| {
@@ -262,12 +273,6 @@ pub fn collect_attention(
             }
         })
         .collect()
-}
-
-/// Mirror of the dashboard's `ago_key`: smaller `ago_secs` ⇒ more recent
-/// ⇒ sorts earlier; `None` (never active) sorts last.
-fn ago_sort_key(ago_secs: Option<u64>) -> u64 {
-    ago_secs.unwrap_or(u64::MAX)
 }
 
 /// Render the inline status-row line:
@@ -338,6 +343,7 @@ mod tests {
     use super::*;
     use crate::activity::events::{EventKind, EventSnapshot, WorkspaceEvents};
     use crate::data::store::WorkspaceId;
+    use crate::ui::dashboard::sort::BLOCKED_PIN_MAX_AGE_DEFAULT_SECS as PIN;
 
     type WsOwned = (
         WorkspaceId,
@@ -438,7 +444,7 @@ mod tests {
         let evt = events_with_latest("recent", 5_000);
         let rows = [ws(1, "busy", Some(evt), ActivityState::Idle, false, None)];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000);
+        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert!(entries.is_empty());
     }
 
@@ -470,17 +476,17 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000);
+        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "fresh");
         assert_eq!(entries[1].name, "stale");
     }
 
     #[test]
-    fn collect_attention_sorts_status_priority_before_recency() {
-        // Mirrors the dashboard NEEDS ATTENTION section: Stalled (5)
-        // outranks AwaitingAnswer/Question (4) outranks Waiting (3),
-        // even when lower-priority entries are more recent.
+    fn collect_attention_status_mode_sorts_priority_before_recency() {
+        // The dashboard's `sort: status` mode: Stalled (5) outranks
+        // AwaitingAnswer/Question (4) outranks Waiting (3), even when
+        // lower-priority entries are more recent.
         let rows = [
             ws_ago(
                 1,
@@ -511,9 +517,52 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000);
+        let entries = collect_attention(&candidates, None, 10_000, SortMode::Status, PIN);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["stalled", "question", "waiting"]);
+    }
+
+    #[test]
+    fn collect_attention_recency_mode_orders_like_the_dashboard() {
+        // The dashboard's default `sort: recency` mode: a freshly blocked
+        // row is pinned on top, everything else sits in its recency
+        // bucket, and a block older than the pin window sorts on age like
+        // any other row. Status priority must NOT float a days-old
+        // stalled workspace over rows that were active a minute ago.
+        const DAY: u64 = 24 * 60 * 60;
+        let rows = [
+            ws_ago(
+                1,
+                "stale-stalled",
+                None,
+                ActivityState::Stalled,
+                true,
+                None,
+                Some(3 * DAY),
+            ),
+            ws_ago(
+                2,
+                "fresh-waiting",
+                None,
+                ActivityState::Waiting,
+                true,
+                None,
+                Some(30),
+            ),
+            ws_ago(
+                3,
+                "fresh-question",
+                None,
+                ActivityState::AwaitingAnswer,
+                true,
+                None,
+                Some(60),
+            ),
+        ];
+        let candidates = to_candidates(&rows);
+        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["fresh-question", "fresh-waiting", "stale-stalled"]);
     }
 
     #[test]
@@ -539,7 +588,7 @@ mod tests {
             mk(1, "suppressed", Status::Waiting, 1),
             mk(2, "question", Status::Question, 500),
         ];
-        let entries = collect_attention(&candidates, None, 10_000);
+        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].name, "question");
         assert_eq!(entries[1].name, "suppressed");
     }
@@ -559,7 +608,7 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000);
+        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].name, "old");
         assert_eq!(entries[1].name, "never");
     }
@@ -569,7 +618,13 @@ mod tests {
         let evt = events_with_latest("evt", 5_000);
         let rows = [ws(1, "self", Some(evt), ActivityState::Waiting, true, None)];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, Some(WorkspaceId(1)), 10_000);
+        let entries = collect_attention(
+            &candidates,
+            Some(WorkspaceId(1)),
+            10_000,
+            SortMode::Recency,
+            PIN,
+        );
         assert!(entries.is_empty());
     }
 
@@ -586,7 +641,7 @@ mod tests {
             Some(("Bash".to_string(), 8_000)),
         )];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000);
+        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].age_anchor_ms, 8_000);
     }
 

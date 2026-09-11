@@ -135,6 +135,20 @@ pub trait SortRow {
     fn sort_name(&self) -> &str;
 }
 
+/// A borrowed row sorts exactly like the row it borrows, so callers holding
+/// `Vec<&T>` (the attached view's attention row) can be ordered in place.
+impl<T: SortRow> SortRow for &T {
+    fn sort_status(&self) -> Status {
+        (**self).sort_status()
+    }
+    fn sort_ago_secs(&self) -> Option<u64> {
+        (**self).sort_ago_secs()
+    }
+    fn sort_name(&self) -> &str {
+        (**self).sort_name()
+    }
+}
+
 /// Order a repo's workspaces for display.
 pub fn order_workspaces<T: SortRow>(items: &mut [T], mode: SortMode, pin_max_age_secs: u64) {
     match mode {

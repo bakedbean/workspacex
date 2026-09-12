@@ -138,6 +138,81 @@ async fn click_outside_chip_rect_does_nothing() {
 
 /// Clicking the chip-row running-process count (`● Np`) opens the
 /// ProcessList modal for the focused workspace, mirroring `K` on it.
+/// Clicking an agent pill on the chip row retargets the focused pane to
+/// that agent. Drives the real draw → `agent_chip_rects` → click chain, so
+/// the pills' home in the chip row's flush-right block is covered end to
+/// end rather than only at the renderer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn click_agent_pill_switches_focused_pane() {
+    use crate::pty::session::{AgentKind, SessionStatus};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let mut app = App::new(
+        Store::open_in_memory().unwrap(),
+        PathBuf::from("/tmp/wsx-test"),
+    )
+    .unwrap();
+    let ws = app.test_workspace("pill-click");
+    let primary = app
+        .store
+        .add_primary_agent(ws, AgentKind::Claude, 1)
+        .unwrap()
+        .id;
+    let peer = app
+        .store
+        .add_workspace_agent(ws, AgentKind::Codex)
+        .unwrap()
+        .id;
+    app.test_spawn_session(primary, SessionStatus::Running { pid: 1 });
+    app.test_spawn_session(peer, SessionStatus::Running { pid: 2 });
+    app.refresh().unwrap();
+    app.view = crate::ui::View::Attached(crate::ui::split::AttachedState::single(
+        crate::ui::split::AttachTarget {
+            workspace_id: ws,
+            instance: primary,
+        },
+    ));
+
+    let (w, h) = (120u16, 30u16);
+    let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+    term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+
+    assert_eq!(app.agent_chip_rects.len(), 2, "one pill per agent");
+    let (id, rect) = app.agent_chip_rects[1];
+    assert_eq!(id, peer);
+    assert_eq!(rect.y, h - 1, "pills sit on the bottom (chip) row");
+    let buf = term.backend().buffer();
+    let painted: String = (rect.x..rect.x + rect.width)
+        .map(|x| buf[(x, rect.y)].symbol().to_string())
+        .collect();
+    assert!(
+        painted.starts_with("▎codex"),
+        "pill painted at its click rect: {painted:?}"
+    );
+
+    handle_mouse(
+        &mut app,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    )
+    .await;
+
+    let crate::ui::View::Attached(state) = &app.view else {
+        panic!("click must keep the attached view");
+    };
+    assert_eq!(
+        state.focused_target().unwrap().instance,
+        peer,
+        "focused pane retargeted to the clicked agent"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn click_procs_count_opens_process_list() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};

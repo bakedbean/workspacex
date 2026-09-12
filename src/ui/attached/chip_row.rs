@@ -1351,4 +1351,87 @@ mod tests {
             .unwrap();
         assert!(rects.is_empty());
     }
+
+    #[test]
+    fn render_chip_row_paints_keyless_pills_past_the_switch_key_pool() {
+        // Eleven agents: the pool hands out ten keys, so the eleventh pill is
+        // keyless — no ` key ` pill — yet still painted, with a click rect
+        // covering exactly its bar + `label `.
+        let keys = crate::ui::attached::agent_switch_keys(11);
+        let roster: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = (1..=11)
+            .map(|i| {
+                let label = if i == 1 {
+                    "claude".to_string()
+                } else {
+                    format!("claude#{i}")
+                };
+                (
+                    AgentInstanceId(i),
+                    AgentKind::Claude,
+                    label,
+                    keys.get(i as usize - 1).copied(),
+                )
+            })
+            .collect();
+        assert!(roster[10].3.is_none(), "eleventh agent is keyless");
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut rects = Vec::new();
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 200, 1);
+                let out =
+                    render_chip_row(f, area, &pinned, 0, None, None, None, &roster, None, &theme);
+                rects = out.agent_rects;
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        assert_eq!(rects.len(), 11, "one rect per agent, keyless included");
+        let (id, r) = rects[10];
+        assert_eq!(id, AgentInstanceId(11));
+        assert_eq!(painted(buf, r.x, r.width), "▎claude#11 ");
+        assert_eq!(r.x + r.width, 200, "last pill is flush right");
+    }
+
+    #[test]
+    fn render_chip_row_keeps_sole_pill_group_at_exact_fit_and_drops_it_one_short() {
+        // With the pills as the block's only element: ` 1 pr ` (6) + the
+        // 2-cell rule gap + the 24-col group = 32 fits exactly; one column
+        // short drops the whole group (rects empty, nothing painted).
+        let theme = Theme::wsx();
+        let pinned = cmds(&[("pr", "/pr")]);
+        for (width, kept) in [(32u16, true), (31u16, false)] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 1)).unwrap();
+            let mut rects = Vec::new();
+            terminal
+                .draw(|f| {
+                    let area = ratatui::layout::Rect::new(0, 0, width, 1);
+                    let out = render_chip_row(
+                        f,
+                        area,
+                        &pinned,
+                        0,
+                        None,
+                        None,
+                        None,
+                        &agents(),
+                        None,
+                        &theme,
+                    );
+                    rects = out.agent_rects;
+                })
+                .unwrap();
+            let row = row0(terminal.backend().buffer(), width);
+            if kept {
+                assert_eq!(row, " 1  pr  ▎claude  q    ▎codex  w ", "width {width}");
+                assert_eq!(rects.len(), 2, "width {width}");
+            } else {
+                assert!(rects.is_empty(), "width {width}: {row:?}");
+                assert!(!row.contains("claude"), "width {width}: {row:?}");
+            }
+        }
+    }
 }

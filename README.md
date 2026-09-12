@@ -1,5 +1,7 @@
 # wsx (WorkspaceX)
 
+[![CI](https://img.shields.io/github/actions/workflow/status/bakedbean/workspacex/ci.yml?branch=main&label=CI)](https://github.com/bakedbean/workspacex/actions/workflows/ci.yml) [![Docs](https://img.shields.io/badge/docs-bakedbean.github.io-blue)](https://bakedbean.github.io/workspacex/docs/) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/a9a9Q6jcH) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/bakedbean/workspacex/blob/main/LICENSE)
+
 Terminal UI for managing Claude Code, Pi, Hermes, Codex, or oh-my-pi sessions in git worktrees.
 
 ## Parallel Agent Sessions

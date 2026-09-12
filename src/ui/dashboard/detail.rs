@@ -173,9 +173,21 @@ pub fn render(
 
     // The detail bar's PR chip, diff count, and procs count live in the header
     // strip and row (above/elsewhere), so the chip row here carries pinned
-    // commands only — no right-justified procs, diff, or PR chip.
+    // commands only — no right-justified agent pills, procs, diff, or PR chip.
     let chip_rects = if let Some(area) = chip_area {
-        crate::ui::attached::render_chip_row(f, area, inputs.pinned, 0, None, None, None, theme).0
+        crate::ui::attached::render_chip_row(
+            f,
+            area,
+            inputs.pinned,
+            0,
+            None,
+            None,
+            None,
+            &[],
+            None,
+            theme,
+        )
+        .chip_rects
     } else {
         Vec::new()
     };

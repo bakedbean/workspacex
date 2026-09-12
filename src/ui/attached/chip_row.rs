@@ -1,5 +1,6 @@
 //! Extracted from ui/attached.rs.
 
+use super::agents_row::{AGENT_PILL_GAP, agent_pills_spans, agent_pills_width, layout_agent_pills};
 use super::*;
 use crate::ui::dashboard::status::Status;
 use crate::ui::detail_modules::session_summary::ChipModelTokens;
@@ -101,8 +102,8 @@ fn procs_chip_parts(procs: u32, theme: &Theme) -> Option<(Vec<Span<'static>>, us
 /// plus its column width, or `None` when there's no token data. Colors
 /// mirror the detail bar's SESSION SUMMARY lines: the model label takes the
 /// model hue, and the token fill is a traffic light — ok with headroom,
-/// warn near the limit. This is the leftmost / lowest-priority element in
-/// the flush-right block.
+/// warn near the limit. This is the lowest-priority element in the
+/// flush-right block: the first to go on a narrow row.
 fn model_tokens_chip_parts(
     model_tokens: Option<ChipModelTokens>,
     theme: &Theme,
@@ -171,26 +172,103 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
     rects
 }
 
+/// The optional elements of the chip row's flush-right block, in the order
+/// they are painted left to right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockElement {
+    /// The agent pills (`▎claude q   ▎codex w`); only present with 2+ agents.
+    Agents,
+    /// `{model} {n}/{w}` token usage.
+    ModelTokens,
+    /// `● Np` running-process count.
+    Procs,
+    /// `+A −R` diff count.
+    Diff,
+    /// `{glyph} #{n} {label}` PR chip.
+    Pr,
+}
+
+impl BlockElement {
+    /// The order elements are dropped on rows too narrow for the whole block:
+    /// first entry goes first. Distinct from the paint order — the agent pills
+    /// are painted leftmost but outlive the model + tokens stat, since they're
+    /// the row's only navigation affordance; the PR chip is the strongest
+    /// signal and goes last.
+    const DROP_ORDER: [BlockElement; 5] = [
+        BlockElement::ModelTokens,
+        BlockElement::Agents,
+        BlockElement::Procs,
+        BlockElement::Diff,
+        BlockElement::Pr,
+    ];
+
+    /// Columns painted between this element and the one following it. The
+    /// pill group keeps its own inter-pill gap after it so the pills read as
+    /// a group distinct from the stats; everything else is one space apart.
+    fn gap_after(self) -> usize {
+        match self {
+            BlockElement::Agents => AGENT_PILL_GAP as usize,
+            _ => 1,
+        }
+    }
+}
+
+/// One element of the flush-right block: what it is, its spans, its width.
+struct Element {
+    kind: BlockElement,
+    spans: Vec<Span<'static>>,
+    width: usize,
+}
+
+/// Column width of `elements` painted left to right with their gaps.
+fn block_width(elements: &[Element]) -> usize {
+    elements
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let gap = if i + 1 < elements.len() {
+                e.kind.gap_after()
+            } else {
+                0
+            };
+            e.width + gap
+        })
+        .sum()
+}
+
+/// What [`render_chip_row`] painted, for mouse hit-testing.
+#[derive(Debug, Default)]
+pub(crate) struct ChipRowOutput {
+    /// Clickable rect of each pinned-command chip, left to right.
+    pub chip_rects: Vec<Rect>,
+    /// Screen rect of the PR chip, or `None` when no PR chip was painted.
+    pub pr_rect: Option<Rect>,
+    /// Screen rect of the `● Np` procs count, or `None` when not painted.
+    pub procs_rect: Option<Rect>,
+    /// `(instance id, rect)` per agent pill, in display order. Empty when the
+    /// row has no pills (single-agent workspace) or they were dropped for
+    /// width. The diff count and model stat are not clickable.
+    pub agent_rects: Vec<(AgentInstanceId, Rect)>,
+}
+
 /// Render the pinned-command chip row, returning each chip's clickable rect.
 ///
-/// A right-justified info block — the model + token usage (`{model} {n}/{w}`),
-/// the running-process count (`● Np`), the `diff` count (`+A −R`), then the PR
-/// chip (`{glyph} #{n} {label}`, mirroring the dashboard detail header) — is
-/// painted flush to the row's right edge with the inline rule stopping short of
-/// it. Every element is optional: each renders on its own, and absent token
-/// data, zero procs, or a clean-or-absent diff each render nothing. The
-/// model+tokens element shows whenever there's token data — the `{model}` label
-/// is dropped when the model is unknown, leaving just `{n}/{w}`. On rows too
-/// narrow for the whole block, elements are dropped from the left
-/// (model+tokens first, then procs, then diff) so the PR — the strongest
-/// signal — stays visible longest; the whole block drops when the pinned chips
-/// leave no room for it.
+/// A right-justified info block — the agent pills (`▎claude q   ▎codex w`,
+/// only when the workspace has more than one agent), the model + token usage
+/// (`{model} {n}/{w}`), the running-process count (`● Np`), the `diff` count
+/// (`+A −R`), then the PR chip (`{glyph} #{n} {label}`, mirroring the
+/// dashboard detail header) — is painted flush to the row's right edge with the
+/// inline rule stopping short of it. Every element is optional: each renders
+/// on its own, and absent token data, zero procs, or a clean-or-absent diff
+/// each render nothing. The model+tokens element shows whenever there's token
+/// data — the `{model}` label is dropped when the model is unknown, leaving
+/// just `{n}/{w}`. On rows too narrow for the whole block, elements are dropped
+/// in [`BlockElement::DROP_ORDER`] (model+tokens, then the agent pills, procs,
+/// diff) so the PR — the strongest signal — stays visible longest; the whole
+/// block drops when the pinned chips leave no room for it.
 ///
-/// Returns `(chip_rects, pr_rect, procs_rect)`: the pinned-chip click rects,
-/// the PR chip's screen rect (`None` when no PR chip was painted), and the
-/// procs count's screen rect (`None` when no `● Np` was painted). Both the PR
-/// chip and the procs count are clickable for mouse hit-testing; the diff count
-/// is not.
+/// `active_agent` is the instance in the focused pane; its pill gets the
+/// heavier identity bar.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_chip_row(
     f: &mut Frame,
@@ -200,8 +278,10 @@ pub(crate) fn render_chip_row(
     diff: Option<crate::git::DiffStats>,
     pr: Option<ChipPr>,
     model_tokens: Option<ChipModelTokens>,
+    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+    active_agent: Option<AgentInstanceId>,
     theme: &Theme,
-) -> (Vec<Rect>, Option<Rect>, Option<Rect>) {
+) -> ChipRowOutput {
     let rects = layout_chip_row(area, pinned);
     let label_style = Style::default().fg(theme.path);
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 5 + 2);
@@ -219,77 +299,93 @@ pub(crate) fn render_chip_row(
         used += label_with_lead.chars().count();
         spans.push(Span::styled(label_with_lead, label_style));
     }
-    // Right-justified info block: model+tokens (`{model} {n}/{w}`), procs count
-    // (`● Np`), diff count (`+A −R`), then the PR chip, in that left-to-right
-    // order, flush to the row's right edge. The PR chip is the rightmost
-    // element; each present element is separated from its neighbour by one
-    // space. The inline rule below stops a 2-cell gap short of the whole block.
-    // When the row is too narrow for the whole block, elements are dropped from
-    // the LEFT (model+tokens first, then procs, then diff) so the PR — the most
-    // important signal — stays visible longest; the block is dropped entirely
-    // when the pinned chips leave less than the 2-cell gap, so it never overlaps.
+    // Right-justified info block, flush to the row's right edge. The inline
+    // rule below stops a 2-cell gap short of the whole block; the block is
+    // dropped entirely when the pinned chips leave less than that gap, so it
+    // never overlaps them.
     let width = area.width as usize;
     let pr_parts = pr_chip_parts(pr, theme);
     let pr_width = pr_parts.as_ref().map(|(_, w)| *w).unwrap_or(0);
 
-    // The optional elements in left-to-right order. Each is `(spans, width)`.
-    // `procs_idx` records where the procs count landed so its click rect can be
-    // recovered once the flush-right layout (and any narrow-row drops) is known.
-    let mut elements: Vec<(Vec<Span<'static>>, usize)> = Vec::with_capacity(4);
-    let mut procs_idx: Option<usize> = None;
-    if let Some(parts) = model_tokens_chip_parts(model_tokens, theme) {
-        elements.push(parts);
+    // The optional elements in paint (left-to-right) order.
+    let mut elements: Vec<Element> = Vec::with_capacity(5);
+    if !agents.is_empty() {
+        elements.push(Element {
+            kind: BlockElement::Agents,
+            spans: agent_pills_spans(agents, active_agent, theme),
+            width: agent_pills_width(agents),
+        });
     }
-    if let Some(parts) = procs_chip_parts(procs, theme) {
-        procs_idx = Some(elements.len());
-        elements.push(parts);
+    if let Some((spans, width)) = model_tokens_chip_parts(model_tokens, theme) {
+        elements.push(Element {
+            kind: BlockElement::ModelTokens,
+            spans,
+            width,
+        });
     }
-    if let Some(parts) = diff_chip_parts(diff, theme) {
-        elements.push(parts);
+    if let Some((spans, width)) = procs_chip_parts(procs, theme) {
+        elements.push(Element {
+            kind: BlockElement::Procs,
+            spans,
+            width,
+        });
+    }
+    if let Some((spans, width)) = diff_chip_parts(diff, theme) {
+        elements.push(Element {
+            kind: BlockElement::Diff,
+            spans,
+            width,
+        });
     }
     if let Some((spans, _)) = pr_parts {
-        elements.push((spans, pr_width));
+        elements.push(Element {
+            kind: BlockElement::Pr,
+            spans,
+            width: pr_width,
+        });
     }
 
-    // Width of the elements from `start` onward, joined by single-space gaps.
-    let block_width_from = |els: &[(Vec<Span<'static>>, usize)]| -> usize {
-        if els.is_empty() {
-            0
-        } else {
-            els.iter().map(|(_, w)| w).sum::<usize>() + (els.len() - 1)
-        }
-    };
-    // Drop leftmost elements until the block plus its 2-cell rule gap fits.
-    let mut start = 0;
-    while start < elements.len() && used + 2 + block_width_from(&elements[start..]) > width {
-        start += 1;
+    // Drop elements in `DROP_ORDER` until the block plus its 2-cell rule gap
+    // fits after the pinned chips.
+    while !elements.is_empty() && used + 2 + block_width(&elements) > width {
+        let victim = BlockElement::DROP_ORDER
+            .iter()
+            .copied()
+            .find(|k| elements.iter().any(|e| e.kind == *k))
+            .expect("a non-empty block has a droppable element");
+        elements.retain(|e| e.kind != victim);
     }
-    let block_width = block_width_from(&elements[start..]);
-    // The PR chip, when present, is the rightmost element and is only dropped
-    // once the whole block collapses — so its flush-right click rect is live
-    // exactly when a non-empty block remains.
-    let pr_rect = if pr_width > 0 && block_width > 0 {
-        pr_chip_rect(area, pr_width as u16)
-    } else {
-        None
-    };
-    // The procs count's click rect: `None` when it wasn't painted (no procs, or
-    // dropped from the left on a narrow row). The block is flush-right, so it
-    // starts at column `width - block_width`; the procs element sits after the
-    // kept elements to its left, each contributing its width plus a 1-cell gap.
-    let procs_rect = procs_idx.and_then(|pidx| {
-        if pidx < start || block_width == 0 {
-            return None;
+    let block_width = block_width(&elements);
+
+    // Click rects for the kept elements, walking the block from its
+    // flush-right start column. The PR chip, when kept, is always the
+    // rightmost element, so its rect hugs the right edge.
+    let mut pr_rect = None;
+    let mut procs_rect = None;
+    let mut agent_rects = Vec::new();
+    let max_x = area.x.saturating_add(area.width);
+    let mut x = area.x as usize + width.saturating_sub(block_width);
+    for el in &elements {
+        match el.kind {
+            BlockElement::Agents => {
+                let rects = layout_agent_pills(x as u16, area.y, max_x, agents);
+                agent_rects = agents.iter().map(|(id, _, _, _)| *id).zip(rects).collect();
+            }
+            BlockElement::Procs => {
+                procs_rect = Some(Rect {
+                    x: x as u16,
+                    y: area.y,
+                    width: el.width as u16,
+                    height: 1,
+                });
+            }
+            BlockElement::Pr => {
+                pr_rect = pr_chip_rect(area, pr_width as u16);
+            }
+            BlockElement::ModelTokens | BlockElement::Diff => {}
         }
-        let offset: usize = elements[start..pidx].iter().map(|(_, w)| w + 1).sum();
-        let x = area.x as usize + (width - block_width) + offset;
-        Some(Rect {
-            x: x as u16,
-            y: area.y,
-            width: elements[pidx].1 as u16,
-            height: 1,
-        })
-    });
+        x += el.width + el.kind.gap_after();
+    }
 
     // Inline rule filler matching the V5 dashboard repo-header style:
     // 2 spaces (or 0 when there are no chips), then `─` runs to the right edge
@@ -313,22 +409,28 @@ pub(crate) fn render_chip_row(
     }
 
     // Pad out to the block's flush-right start, then paint the kept elements
-    // (procs, diff, PR) left-to-right, one space between adjacent ones.
+    // left-to-right with their gaps.
     if block_width > 0 {
         let pad = width.saturating_sub(used + block_width);
         if pad > 0 {
             spans.push(Span::raw(" ".repeat(pad)));
         }
-        for (i, (el_spans, _)) in elements.into_iter().skip(start).enumerate() {
-            if i > 0 {
-                spans.push(Span::raw(" ".to_string()));
+        let last = elements.len() - 1;
+        for (i, el) in elements.into_iter().enumerate() {
+            spans.extend(el.spans);
+            if i < last {
+                spans.push(Span::raw(" ".repeat(el.kind.gap_after())));
             }
-            spans.extend(el_spans);
         }
     }
 
     f.render_widget(Paragraph::new(Line::from(spans)), area);
-    (rects, pr_rect, procs_rect)
+    ChipRowOutput {
+        chip_rects: rects,
+        pr_rect,
+        procs_rect,
+        agent_rects,
+    }
 }
 
 #[cfg(test)]
@@ -437,7 +539,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r, _procs) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -445,9 +547,11 @@ mod tests {
                     None,
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
-                pr_rect = r;
+                pr_rect = out.pr_rect;
             })
             .unwrap();
         let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
@@ -470,7 +574,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r, _procs) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -483,9 +587,11 @@ mod tests {
                         unresolved: None,
                     }),
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
-                pr_rect = r;
+                pr_rect = out.pr_rect;
             })
             .unwrap();
         let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
@@ -514,7 +620,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 16, 1);
-                let (_chips, r, _procs) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -522,9 +628,11 @@ mod tests {
                     None,
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
-                pr_rect = r;
+                pr_rect = out.pr_rect;
             })
             .unwrap();
         assert!(pr_rect.is_none());
@@ -542,7 +650,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r, _procs) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -553,9 +661,11 @@ mod tests {
                     }),
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
-                pr_rect = r;
+                pr_rect = out.pr_rect;
             })
             .unwrap();
         let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
@@ -600,6 +710,8 @@ mod tests {
                     }),
                     None,
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
             })
@@ -637,6 +749,8 @@ mod tests {
                     }),
                     None,
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
             })
@@ -660,7 +774,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r, _procs) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -671,9 +785,11 @@ mod tests {
                     }),
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
-                pr_rect = r;
+                pr_rect = out.pr_rect;
             })
             .unwrap();
         let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
@@ -701,7 +817,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                render_chip_row(f, area, &pinned, 2, None, None, None, &theme);
+                render_chip_row(f, area, &pinned, 2, None, None, None, &[], None, &theme);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -729,7 +845,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, _pr, p) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -740,9 +856,11 @@ mod tests {
                     }),
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
-                procs_rect = p;
+                procs_rect = out.procs_rect;
             })
             .unwrap();
         let rect = procs_rect.expect("procs count present and fits an 80-wide row");
@@ -766,7 +884,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 20, 1);
-                let (_chips, _pr, p) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -774,9 +892,11 @@ mod tests {
                     None,
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 9)),
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
-                procs_rect = p;
+                procs_rect = out.procs_rect;
             })
             .unwrap();
         assert!(procs_rect.is_none());
@@ -793,7 +913,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                render_chip_row(f, area, &pinned, 0, None, None, None, &theme);
+                render_chip_row(f, area, &pinned, 0, None, None, None, &[], None, &theme);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -816,7 +936,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 20, 1);
-                let (_chips, r, _procs) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -824,9 +944,11 @@ mod tests {
                     None,
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 9)),
                     None,
+                    &[],
+                    None,
                     &theme,
                 );
-                pr_rect = r;
+                pr_rect = out.pr_rect;
             })
             .unwrap();
         let rect = pr_rect.expect("PR chip kept when procs is dropped");
@@ -843,7 +965,7 @@ mod tests {
 
     #[test]
     fn render_chip_row_paints_model_tokens_leftmost() {
-        // The combined model+token element sits leftmost in the flush-right
+        // Without agent pills, the combined model+token element sits leftmost in the flush-right
         // block: model+tokens, then procs, then diff, then the PR chip.
         let theme = Theme::wsx();
         let mut terminal =
@@ -853,7 +975,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 80, 1);
-                let (_chips, r, _procs) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -864,9 +986,11 @@ mod tests {
                     }),
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
                     Some(mt("opus 4.8", "45k/200k", false)),
+                    &[],
+                    None,
                     &theme,
                 );
-                pr_rect = r;
+                pr_rect = out.pr_rect;
             })
             .unwrap();
         let rect = pr_rect.expect("PR chip present and fits an 80-wide row");
@@ -901,6 +1025,8 @@ mod tests {
                     None,
                     None,
                     Some(mt("opus 4.8", "45k/200k", false)),
+                    &[],
+                    None,
                     &theme,
                 );
             })
@@ -919,7 +1045,7 @@ mod tests {
     #[test]
     fn render_chip_row_drops_model_tokens_first_when_narrow() {
         // On a row too narrow for the whole block, the model+token element is
-        // dropped before the PR chip (it is leftmost / lowest priority).
+        // dropped before the PR chip (it is lowest priority).
         let theme = Theme::wsx();
         // "⏺ #9 open" = 9 cells; + "  " rule gap → 11. " 1 pr " chip = 6 cells.
         // Width 20 fits chip + gap + PR but not a leading model+token element.
@@ -930,7 +1056,7 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = ratatui::layout::Rect::new(0, 0, 20, 1);
-                let (_chips, r, _procs) = render_chip_row(
+                let out = render_chip_row(
                     f,
                     area,
                     &pinned,
@@ -938,9 +1064,11 @@ mod tests {
                     None,
                     Some(ChipPr::new(BranchLifecycle::PrOpen, 9)),
                     Some(mt("opus 4.8", "45k/200k", false)),
+                    &[],
+                    None,
                     &theme,
                 );
-                pr_rect = r;
+                pr_rect = out.pr_rect;
             })
             .unwrap();
         let rect = pr_rect.expect("PR chip kept when model+tokens is dropped");
@@ -976,6 +1104,8 @@ mod tests {
                     None,
                     None,
                     Some(mt("opus 4.8", "190k/200k", true)),
+                    &[],
+                    None,
                     &theme,
                 );
             })
@@ -1008,6 +1138,8 @@ mod tests {
                     None,
                     None,
                     Some(mt("opus 4.8", "45k/200k", false)),
+                    &[],
+                    None,
                     &theme,
                 );
             })
@@ -1019,5 +1151,204 @@ mod tests {
         assert_eq!(buf[(start, 0)].fg, theme.model_style().fg.unwrap());
         let tokens_start = start + "opus 4.8 ".chars().count() as u16;
         assert_eq!(buf[(tokens_start, 0)].fg, theme.ok_style().fg.unwrap());
+    }
+
+    /// Two agents in display order: the primary `claude` (key `q`) and a
+    /// `codex` peer (key `w`).
+    fn agents() -> Vec<(AgentInstanceId, AgentKind, String, Option<char>)> {
+        vec![
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".to_string(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Codex,
+                "codex".to_string(),
+                Some('w'),
+            ),
+        ]
+    }
+
+    /// The symbols painted on row 0 from `x` for `w` cells, joined.
+    fn painted(buf: &ratatui::buffer::Buffer, x: u16, w: u16) -> String {
+        (x..x + w)
+            .map(|c| buf[(c, 0)].symbol().to_string())
+            .collect()
+    }
+
+    /// The whole of row 0 as a string.
+    fn row0(buf: &ratatui::buffer::Buffer, width: u16) -> String {
+        painted(buf, 0, width)
+    }
+
+    #[test]
+    fn render_chip_row_paints_agent_pills_first_in_the_flush_right_block() {
+        // The agent pills open the flush-right block: left of the model +
+        // tokens stat, separated from it by the pills' own 3-col gap, with no
+        // `agents:` label. Each returned click rect covers exactly the painted
+        // pill (bar + label + key pill), and the active agent's bar is heavier.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut rects = Vec::new();
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 120, 1);
+                let out = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    0,
+                    None,
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
+                    Some(mt("opus 4.8", "45k/200k", false)),
+                    &agents(),
+                    Some(AgentInstanceId(1)),
+                    &theme,
+                );
+                rects = out.agent_rects;
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let row = row0(buf, 120);
+        assert!(!row.contains("agents:"), "no label: {row:?}");
+        assert_eq!(rects.len(), 2, "one rect per agent");
+        let (id0, r0) = rects[0];
+        let (id1, r1) = rects[1];
+        assert_eq!(id0, AgentInstanceId(1));
+        assert_eq!(id1, AgentInstanceId(2));
+        assert_eq!(painted(buf, r0.x, r0.width), "▌claude  q ");
+        assert_eq!(painted(buf, r1.x, r1.width), "▎codex  w ");
+        assert_eq!(r1.x, r0.x + r0.width + 3, "3-col gap between pills");
+        // The model stat starts a 3-col gap after the last pill.
+        // Byte offset → character column: the row holds multi-cell glyphs.
+        let opus = row
+            .find("opus 4.8")
+            .map(|b| row[..b].chars().count())
+            .expect("model stat painted") as u16;
+        assert_eq!(
+            opus,
+            r1.x + r1.width + 3,
+            "pills sit left of the model stat"
+        );
+        assert!(
+            row.ends_with("⏺ #152 open"),
+            "PR chip stays flush right: {row:?}"
+        );
+    }
+
+    #[test]
+    fn render_chip_row_drops_model_tokens_before_agent_pills_when_narrow() {
+        // Pills outlive the model + tokens stat: on a row too narrow for the
+        // whole block, the stat goes first even though the pills sit to its
+        // left. Widths: chips 6 + gap 2, pills 24 + gap 3, model 17 + 1,
+        // procs 4 + 1, diff 6 + 1, PR 11 → 76 needed; 70 fits only once the
+        // model stat (17 + its gap) is gone.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(70, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut rects = Vec::new();
+        let mut procs_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 70, 1);
+                let out = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    2,
+                    Some(crate::git::DiffStats {
+                        added: 12,
+                        removed: 3,
+                    }),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
+                    Some(mt("opus 4.8", "45k/200k", false)),
+                    &agents(),
+                    None,
+                    &theme,
+                );
+                rects = out.agent_rects;
+                procs_rect = out.procs_rect;
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let row = row0(buf, 70);
+        assert!(!row.contains("opus"), "model stat dropped first: {row:?}");
+        assert_eq!(rects.len(), 2, "pills survive: {row:?}");
+        assert_eq!(painted(buf, rects[0].1.x, rects[0].1.width), "▎claude  q ");
+        assert!(procs_rect.is_some(), "procs count kept");
+        assert!(row.ends_with("● 2p +12 −3 ⏺ #152 open"), "{row:?}");
+    }
+
+    #[test]
+    fn render_chip_row_drops_agent_pills_before_procs_when_narrow() {
+        // Narrower still (50 cols): after the model stat, the pills are the
+        // next to go, ahead of procs / diff / PR.
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(50, 1)).unwrap();
+        let pinned = cmds(&[("pr", "/pr")]);
+        let mut rects = vec![(AgentInstanceId(0), Rect::default())];
+        let mut procs_rect = None;
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 50, 1);
+                let out = render_chip_row(
+                    f,
+                    area,
+                    &pinned,
+                    2,
+                    Some(crate::git::DiffStats {
+                        added: 12,
+                        removed: 3,
+                    }),
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
+                    Some(mt("opus 4.8", "45k/200k", false)),
+                    &agents(),
+                    None,
+                    &theme,
+                );
+                rects = out.agent_rects;
+                procs_rect = out.procs_rect;
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let row = row0(buf, 50);
+        assert!(rects.is_empty(), "pills dropped: {row:?}");
+        assert!(!row.contains("claude"), "no pill painted: {row:?}");
+        assert!(procs_rect.is_some(), "procs count outlives the pills");
+        assert!(row.ends_with("● 2p +12 −3 ⏺ #152 open"), "{row:?}");
+    }
+
+    #[test]
+    fn render_chip_row_returns_no_agent_rects_without_agents() {
+        let theme = Theme::wsx();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
+        let mut rects = vec![(AgentInstanceId(0), Rect::default())];
+        terminal
+            .draw(|f| {
+                let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+                let out = render_chip_row(
+                    f,
+                    area,
+                    &[],
+                    0,
+                    None,
+                    Some(ChipPr::new(BranchLifecycle::PrOpen, 152)),
+                    None,
+                    &[],
+                    None,
+                    &theme,
+                );
+                rects = out.agent_rects;
+            })
+            .unwrap();
+        assert!(rects.is_empty());
     }
 }

@@ -182,7 +182,7 @@ pub(in crate::app::input) async fn dispatch_leader_action(
             Ok(())
         }
         // Fallback: any other leftover letter may be an agent switch key
-        // from the footer agents row. Matched against the same
+        // from the chip row's agent pills. Matched against the same
         // `agent_switch_keys` pool the renderer used, so the displayed key
         // equals the bound key. Placed last so it never shadows the
         // specific arms above (the pool excludes all of them).

@@ -601,7 +601,7 @@ pub struct App {
         std::sync::Arc<crate::pty::session::Session>,
         ratatui::layout::Rect,
     )>,
-    /// `(instance id, rect)` for each agent pill in the footer agents row,
+    /// `(instance id, rect)` for each agent pill in the attached chip row,
     /// populated each attached-view draw and consumed by `handle_mouse` to
     /// retarget the focused pane on click. Mirrors the `chip_rects`
     /// draw-populates / input-reads pattern; cleared each frame.

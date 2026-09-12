@@ -70,17 +70,12 @@ impl ResizeDebounce {
 }
 
 /// The pane size a single-pane attach gives a session on a terminal of
-/// `cols × rows`. Mirrors `ui::attached::layout_chrome(.., false)` so the
-/// on-attach `resize_pane` matches and stays a no-op in the common case.
-///
-/// `agents_present` is assumed `false`: while detached we don't know which
-/// workspace will be attached. When the focused workspace shows the agents row,
-/// the real pane is 1 row shorter, so the on-attach resize trims one row —
-/// cosmetic and self-healing on the agent's next repaint. The width (the
-/// dimension that drives the destructive clip) is always exact for a single
-/// pane.
+/// `cols × rows`. Mirrors `ui::attached::layout_chrome` so the on-attach
+/// `resize_pane` matches and stays a no-op in the common case. The chrome is
+/// a fixed three rows (the agent pills share the chip row), so the projection
+/// is exact for any single-pane attach.
 pub fn projected_pane_size(cols: u16, rows: u16) -> (u16, u16) {
-    let (_, _, pane, _, _) = crate::ui::attached::layout_chrome(Rect::new(0, 0, cols, rows), false);
+    let (_, _, pane, _) = crate::ui::attached::layout_chrome(Rect::new(0, 0, cols, rows));
     (pane.width, pane.height)
 }
 
@@ -148,7 +143,7 @@ mod tests {
 
     #[test]
     fn projected_pane_size_reserves_chrome_rows_and_keeps_full_width() {
-        // info + separator + chip rows are reserved (agents row absent);
+        // info + separator + chip rows are reserved;
         // width is the full terminal width.
         assert_eq!(projected_pane_size(100, 30), (100, 27));
     }

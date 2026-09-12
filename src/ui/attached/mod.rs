@@ -15,11 +15,9 @@ mod agents_row;
 mod chip_row;
 mod nav_menu;
 
-// render_panes (below) draws the chrome rows from these submodules.
-use agents_row::{agents_row_spans, layout_agents_row};
 // Re-exported for app::render / app::input via `crate::ui::attached::*`.
 pub use agents_row::agent_switch_keys;
-pub(crate) use chip_row::{ChipPr, render_chip_row};
+pub(crate) use chip_row::{ChipPr, ChipRowOutput, render_chip_row};
 pub use nav_menu::{NavItem, nav_item_key, nav_menu_items, render_nav_overlay};
 
 /// One pane in the attached view: a workspace's PTY plus its label,
@@ -51,8 +49,8 @@ pub struct PanesDrawOutput {
     pub procs_link_rect: Option<Rect>,
     /// `(session, terminal content rect)` for each rendered pane.
     pub pane_rects: Vec<(Arc<Session>, Rect)>,
-    /// `(instance id, clickable rect)` for each agent pill in the footer
-    /// agents row. Empty when the row isn't shown. Consumed by the input
+    /// `(instance id, clickable rect)` for each agent pill in the chip row's
+    /// flush-right block. Empty when no pills are shown. Consumed by the input
     /// handler to retarget the focused pane on click.
     pub agent_chip_rects: Vec<(AgentInstanceId, Rect)>,
     /// `(clickable_rect, action)` for each footer keybind hint (including the
@@ -62,7 +60,7 @@ pub struct PanesDrawOutput {
 }
 
 /// Render one or more attached panes plus the shared chrome (info line,
-/// separator, chip row, optional agents row). Returns a [`PanesDrawOutput`]:
+/// separator, chip row). Returns a [`PanesDrawOutput`]:
 /// the per-chip clickable rects plus each pane's `(session, content rect)`,
 /// both consumed by the input handler for mouse hit-testing.
 ///
@@ -71,8 +69,9 @@ pub struct PanesDrawOutput {
 ///   - a `─` separator rule beneath it,
 ///   - the pane area, subdivided per `panes[i].rect` (which the caller
 ///     pre-computed from `SplitTree::layout`),
-///   - one row of pinned-command chips / `^x` menu hint,
-///   - one row of agent pills (only when the workspace has extra agents).
+///   - one row of pinned-command chips / `^x` menu hint, with the agent
+///     pills (only when the workspace has extra agents) and workspace stats
+///     right-justified.
 ///
 /// When there are multiple panes, each pane also gets a 1-row title bar
 /// at the top of its rect showing the workspace name and a focus marker.
@@ -86,7 +85,6 @@ pub(crate) fn render_panes(
     info_area: Rect,
     separator_area: Rect,
     chip_area: Rect,
-    agents_area: Rect,
     label: &str,
     agent: Option<AgentKind>,
     attention_line: Option<Line<'static>>,
@@ -151,24 +149,30 @@ pub(crate) fn render_panes(
         width: chip_area.width.saturating_sub(hint_w + 2),
         height: 1,
     };
-    let (chip_rects, pr_link_rect, procs_link_rect) =
-        render_chip_row(f, chips_area, pinned, procs, diff, pr, model_tokens, theme);
-
-    let agent_chip_rects: Vec<(AgentInstanceId, Rect)> = if agents.is_empty() {
-        Vec::new()
-    } else {
-        let spans = agents_row_spans(agents, active_agent, theme);
-        f.render_widget(Paragraph::new(Line::from(spans)), agents_area);
-        let rects = layout_agents_row(agents_area, agents);
-        agents.iter().map(|(id, _, _, _)| *id).zip(rects).collect()
-    };
+    let ChipRowOutput {
+        chip_rects,
+        pr_rect,
+        procs_rect,
+        agent_rects,
+    } = render_chip_row(
+        f,
+        chips_area,
+        pinned,
+        procs,
+        diff,
+        pr,
+        model_tokens,
+        agents,
+        active_agent,
+        theme,
+    );
 
     PanesDrawOutput {
         chip_rects,
-        pr_link_rect,
-        procs_link_rect,
+        pr_link_rect: pr_rect,
+        procs_link_rect: procs_rect,
         pane_rects,
-        agent_chip_rects,
+        agent_chip_rects: agent_rects,
         footer_hint_rects,
     }
 }
@@ -254,25 +258,23 @@ fn render_dividers(f: &mut Frame, dividers: &[Divider], theme: &Theme) {
     }
 }
 
-/// Carve the attached view's `area` into info-line / separator / pane / chip /
-/// agents sub-areas. The info line hosts the focused workspace label +
-/// attention items and now sits at the TOP, with a 1-cell `─` separator rule
-/// beneath it to set it off from the pane content. The chip row stays at the
-/// bottom; the agents row below it is 1 cell when `agents_present`, else 0.
-/// Returns `(info, separator, pane, chip, agents)`.
-pub fn layout_chrome(area: Rect, agents_present: bool) -> (Rect, Rect, Rect, Rect, Rect) {
-    let agents_h = if agents_present { 1 } else { 0 };
+/// Carve the attached view's `area` into info-line / separator / pane / chip
+/// sub-areas. The info line hosts the focused workspace label + attention
+/// items and sits at the TOP, with a 1-cell `─` separator rule beneath it to
+/// set it off from the pane content. The chip row is the bottom row; the agent
+/// pills share it, so the chrome is always three rows.
+/// Returns `(info, separator, pane, chip)`.
+pub fn layout_chrome(area: Rect) -> (Rect, Rect, Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),        // info line (label + attention)
-            Constraint::Length(1),        // separator rule
-            Constraint::Min(1),           // pane area
-            Constraint::Length(1),        // chip row
-            Constraint::Length(agents_h), // agents row (0 when absent)
+            Constraint::Length(1), // info line (label + attention)
+            Constraint::Length(1), // separator rule
+            Constraint::Min(1),    // pane area
+            Constraint::Length(1), // chip row
         ])
         .split(area);
-    (chunks[0], chunks[1], chunks[2], chunks[3], chunks[4])
+    (chunks[0], chunks[1], chunks[2], chunks[3])
 }
 
 /// Resize a session's PTY to fill its pane area (minus a per-pane title
@@ -346,7 +348,7 @@ fn title_bar_spans(
 
 /// The footer/chip "key pill" style: a dim, bold glyph on the soft chip
 /// background. Shared by the footer keybinds, the pinned-chip row, and the
-/// agents row so every pill reads identically.
+/// agent pills so every pill reads identically.
 fn key_pill_style(theme: &Theme) -> Style {
     Style::default()
         .fg(theme.dim)
@@ -357,7 +359,7 @@ fn key_pill_style(theme: &Theme) -> Style {
 /// The three spans forming one key pill: a 1-cell pad, the `key` glyph in
 /// [`key_pill_style`], and a trailing 1-cell pad — all on the chip background.
 /// Width is always `2 + key.chars().count()`. Callers append any label tail
-/// themselves (the agents row has none; the footer/chip rows do).
+/// themselves (the agent pills have none; the footer/chip rows do).
 fn key_pill_spans(key: &str, theme: &Theme) -> [Span<'static>; 3] {
     let pad_style = theme.chip_bg_style();
     [
@@ -396,22 +398,19 @@ mod tests {
 
     #[test]
     fn layout_chrome_puts_info_line_on_top_with_separator() {
-        let area = ratatui::layout::Rect::new(0, 0, 80, 30);
-        let (info, separator, pane, chip, agents) = layout_chrome(area, false);
-        // Info line is the top row; the separator sits directly beneath it.
-        assert_eq!(info.y, area.y, "info line is the top row");
-        assert_eq!(separator.y, info.y + 1, "separator sits just below info");
-        assert_eq!(pane.y, separator.y + 1, "pane content follows the rule");
-        assert_eq!(info.height, 1, "info line always present");
-        assert_eq!(separator.height, 1, "separator always present");
+        let area = Rect::new(0, 0, 80, 24);
+        let (info, separator, pane, chip) = layout_chrome(area);
+        assert_eq!(info.y, 0);
+        assert_eq!(info.height, 1);
+        assert_eq!(separator.y, 1);
+        assert_eq!(separator.height, 1);
+        assert_eq!(pane.y, 2);
         assert_eq!(chip.height, 1);
-        assert_eq!(agents.height, 0);
+        assert_eq!(chip.y, 23, "chip row is the bottom row");
         assert_eq!(
-            info.height + separator.height + pane.height + chip.height + agents.height,
-            area.height
+            info.height + separator.height + pane.height + chip.height,
+            24
         );
-        let (_, _, _, _, agents2) = layout_chrome(area, true);
-        assert_eq!(agents2.height, 1);
     }
 
     #[test]
@@ -423,7 +422,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| {
             let area = Rect::new(0, 0, w, h);
-            let (info, separator, _pane, chip, agents) = layout_chrome(area, false);
+            let (info, separator, _pane, chip) = layout_chrome(area);
             // Empty pane slice → renders only the chrome rows (no live Session).
             render_panes(
                 f,
@@ -432,7 +431,6 @@ mod tests {
                 info,
                 separator,
                 chip,
-                agents,
                 "wsx/foo",
                 None,
                 None,

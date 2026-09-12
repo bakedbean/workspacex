@@ -105,8 +105,8 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     // same 10s diff poll as the agent makes commits.
     let diff = app.workspace_diff.get(&focused_id).copied();
 
-    // Running-process count for the focused workspace, drawn leftmost in
-    // the chip row's flush-right block. Same `app.workspace_processes`
+    // Running-process count for the focused workspace, drawn in the chip
+    // row's flush-right block. Same `app.workspace_processes`
     // map the dashboard row/detail bar count, so the chip-row `● Np`
     // matches them and refreshes on the same process-rescan tick.
     let procs = app
@@ -115,7 +115,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         .map(|v| v.len() as u32)
         .unwrap_or(0);
 
-    // Model + token usage for the chip row's leftmost element, sourced
+    // Model + token usage for the chip row's flush-right block, sourced
     // from the same events the dashboard SESSION SUMMARY reads, so the
     // chat-view chip and the detail bar stay in lockstep.
     let model_tokens = app
@@ -123,8 +123,8 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         .get(&focused_id)
         .and_then(crate::ui::detail_modules::session_summary::format_chip_model_tokens);
 
-    // Build agents list for the footer agents row. Only shown when
-    // the focused workspace has more than its primary agent.
+    // Build the agent pill list for the chip row's flush-right block. Only
+    // shown when the focused workspace has more than its primary agent.
     let focused_agents_list: Vec<(
         crate::data::store::AgentInstanceId,
         crate::pty::session::AgentKind,
@@ -146,10 +146,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
             Vec::new()
         }
     };
-    let agents_present = !focused_agents_list.is_empty();
-
-    let (info_area, separator_area, pane_area, chip_area, agents_area) =
-        attached::layout_chrome(area, agents_present);
+    let (info_area, separator_area, pane_area, chip_area) = attached::layout_chrome(area);
     let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> = attention
         .as_ref()
         .map(|a| {
@@ -177,9 +174,9 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
     let multi_pane = panes.len() > 1;
 
-    // The agent instance in the focused pane is the "active" one; the
-    // footer agents row thickens its identity bar so it's clear which
-    // attached agent you're currently driving.
+    // The agent instance in the focused pane is the "active" one; its chip
+    // row pill thickens its identity bar so it's clear which attached agent
+    // you're currently driving.
     let active_agent = panes
         .iter()
         .find(|(_, path, _)| *path == state.focus)
@@ -236,7 +233,6 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         info_area,
         separator_area,
         chip_area,
-        agents_area,
         &focused_label,
         focused_agent,
         attention_line,
@@ -309,8 +305,7 @@ pub(super) fn draw_attached_remote(
                     })
                 })
         });
-        let (info_area, separator_area, pane_area, chip_area, agents_area) =
-            attached::layout_chrome(area, false);
+        let (info_area, separator_area, pane_area, chip_area) = attached::layout_chrome(area);
         attached::resize_pane(session, pane_area, false);
         let specs = [crate::ui::attached::PaneSpec {
             session,
@@ -326,7 +321,6 @@ pub(super) fn draw_attached_remote(
             info_area,
             separator_area,
             chip_area,
-            agents_area,
             &label,
             None,
             None,

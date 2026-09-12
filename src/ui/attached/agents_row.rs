@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Switch keys for the footer agents row, drawn from a reserved-safe pool so
+/// Switch keys for the chip row's agent pills, drawn from a reserved-safe pool so
 /// they never collide with the `^x` leader follow-ups already bound in the
 /// attached view:
 ///   - `a` → agents panel
@@ -33,11 +33,9 @@ pub fn agent_switch_keys(count: usize) -> Vec<char> {
     POOL.iter().copied().take(count).collect()
 }
 
-/// Leading label of the agents row; its width is shared by the renderer and
-/// `layout_agents_row` so the computed pill rects align with what's drawn.
-const AGENTS_ROW_PREFIX: &str = "agents:  ";
-/// Inter-pill separator width (in columns) in the agents row.
-const AGENTS_ROW_GAP: u16 = 3;
+/// Inter-pill separator width (in columns) between agent pills, and between
+/// the pill group and the next element of the chip row's flush-right block.
+pub(super) const AGENT_PILL_GAP: u16 = 3;
 
 /// Identity-bar glyph for an idle (non-focused) agent: a 1-cell quarter block.
 const AGENT_BAR_IDLE: &str = "▎";
@@ -46,7 +44,29 @@ const AGENT_BAR_IDLE: &str = "▎";
 /// you're currently driving stands out without shifting any pill rects.
 const AGENT_BAR_ACTIVE: &str = "▌";
 
-/// Spans for the footer agents row: `agents:  ▎claude q   ▎codex w`.
+/// Column width of one agent pill: the identity bar, `label `, and (when the
+/// agent has a switch key) the 3-cell ` key ` pill.
+fn agent_pill_width(label: &str, key: Option<char>) -> u16 {
+    let mut width = 1 + label.chars().count() as u16 + 1;
+    if key.is_some() {
+        width = width.saturating_add(3);
+    }
+    width
+}
+
+/// Total column width of the agent pill group as painted by
+/// [`agent_pills_spans`]: every pill plus the [`AGENT_PILL_GAP`] between
+/// neighbours. Zero when there are no agents.
+pub fn agent_pills_width(agents: &[(AgentInstanceId, AgentKind, String, Option<char>)]) -> usize {
+    let pills: usize = agents
+        .iter()
+        .map(|(_, _, label, key)| agent_pill_width(label, *key) as usize)
+        .sum();
+    let gaps = agents.len().saturating_sub(1) * AGENT_PILL_GAP as usize;
+    pills + gaps
+}
+
+/// Spans for the agent pill group in the chip row: `▎claude q   ▎codex w`.
 /// Each agent entry renders as a colored identity bar (`▎`), the agent
 /// label, and (when present) a switch key in the footer's key-pill style.
 /// Agents past the switch-key pool carry `None` and render keyless — they
@@ -55,16 +75,15 @@ const AGENT_BAR_ACTIVE: &str = "▌";
 /// `active` is the agent instance shown in the focused pane; its bar renders
 /// with the heavier [`AGENT_BAR_ACTIVE`] glyph (and a bold label) so it reads
 /// as "the one you're on" when several agents are attached.
-pub fn agents_row_spans(
+pub fn agent_pills_spans(
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active: Option<AgentInstanceId>,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(1 + agents.len() * 6);
-    spans.push(Span::raw(AGENTS_ROW_PREFIX.to_string()));
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(agents.len() * 6);
     for (i, (id, kind, label, key)) in agents.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw(" ".repeat(AGENTS_ROW_GAP as usize)));
+            spans.push(Span::raw(" ".repeat(AGENT_PILL_GAP as usize)));
         }
         let is_active = active == Some(*id);
         let bar = if is_active {
@@ -89,38 +108,30 @@ pub fn agents_row_spans(
     spans
 }
 
-/// Compute the clickable Rect for each agent pill in the footer agents row,
-/// mirroring [`layout_chip_row`]. Returns one rect per agent, in order, by
-/// walking pill widths from the leading `agents:` label. Each pill spans its
-/// color bar + `label ` + optional ` key ` pill; the inter-pill gap is not
-/// included in any rect. One rect is returned per agent (so indices stay
-/// aligned with the agents slice), but each is clamped to the row width: a
-/// pill that begins at or past the row's right edge collapses to width 0 and
-/// is therefore not hit-testable. So agents whose pills overflow the visible
-/// row width are rendered up to the edge but are not clickable — switch to
-/// them by key instead, or widen the terminal.
-pub fn layout_agents_row(
-    area: Rect,
+/// Compute the clickable Rect for each agent pill painted from column `x` on
+/// row `y`, mirroring [`agent_pills_spans`]. Returns one rect per agent, in
+/// order, by walking pill widths from `x`. Each pill spans its color bar +
+/// `label ` + optional ` key ` pill; the inter-pill gap is not included in
+/// any rect. One rect is returned per agent (so indices stay aligned with the
+/// agents slice), but each is clamped at `max_x`: a pill that begins at or
+/// past it collapses to width 0 and is therefore not hit-testable.
+pub fn layout_agent_pills(
+    x: u16,
+    y: u16,
+    max_x: u16,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
 ) -> Vec<Rect> {
     let mut rects = Vec::with_capacity(agents.len());
-    let max_x = area.x.saturating_add(area.width);
-    let mut x = area
-        .x
-        .saturating_add(AGENTS_ROW_PREFIX.chars().count() as u16);
+    let mut x = x;
     for (i, (_id, _kind, label, key)) in agents.iter().enumerate() {
         if i > 0 {
-            x = x.saturating_add(AGENTS_ROW_GAP);
+            x = x.saturating_add(AGENT_PILL_GAP);
         }
-        // "▎" (1) + "{label} " (label + 1) + optional " key " pill (3).
-        let mut width = 1 + label.chars().count() as u16 + 1;
-        if key.is_some() {
-            width = width.saturating_add(3);
-        }
+        let width = agent_pill_width(label, *key);
         let clamped_width = width.min(max_x.saturating_sub(x));
         rects.push(Rect {
             x,
-            y: area.y,
+            y,
             width: clamped_width,
             height: 1,
         });
@@ -150,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn agents_row_spans_include_label_and_color_bar() {
+    fn agent_pills_spans_include_label_and_color_bar() {
         let theme = Theme::by_name("default");
         let agents = vec![
             (
@@ -166,7 +177,7 @@ mod tests {
                 Some('w'),
             ),
         ];
-        let spans = agents_row_spans(&agents, None, &theme);
+        let spans = agent_pills_spans(&agents, None, &theme);
         let text: String = spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("claude"));
         assert!(text.contains("codex"));
@@ -175,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn agents_row_spans_thickens_active_agent_bar() {
+    fn agent_pills_spans_thickens_active_agent_bar() {
         let theme = Theme::by_name("default");
         let agents = vec![
             (
@@ -194,7 +205,7 @@ mod tests {
 
         // With the second agent active, exactly one heavier bar is drawn and
         // the idle bar still appears for the other agent.
-        let spans = agents_row_spans(&agents, Some(AgentInstanceId(2)), &theme);
+        let spans = agent_pills_spans(&agents, Some(AgentInstanceId(2)), &theme);
         let text: String = spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(
             text.matches(AGENT_BAR_ACTIVE).count(),
@@ -208,9 +219,37 @@ mod tests {
         );
 
         // With no active agent (e.g. the PM pane), every bar is idle.
-        let spans = agents_row_spans(&agents, None, &theme);
+        let spans = agent_pills_spans(&agents, None, &theme);
         let text: String = spans.iter().map(|s| s.content.to_string()).collect();
         assert_eq!(text.matches(AGENT_BAR_ACTIVE).count(), 0);
         assert_eq!(text.matches(AGENT_BAR_IDLE).count(), 2);
+    }
+
+    #[test]
+    fn layout_agent_pills_walks_from_the_given_start_column() {
+        // Pills are laid out from an arbitrary start x (the flush-right
+        // block's origin), not a fixed row prefix: bar (1) + `label ` +
+        // ` key ` (3) per pill, 3-col gaps between, clamped at `max_x`.
+        let agents = vec![
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".to_string(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Codex,
+                "codex".to_string(),
+                None,
+            ),
+        ];
+        let rects = layout_agent_pills(40, 7, 60, &agents);
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0], Rect::new(40, 7, 11, 1), "▎claude  q ");
+        // 40 + 11 + 3 gap = 54; keyless pill is 1 + 6 = 7 wide but only 6
+        // columns remain before max_x, so it clamps.
+        assert_eq!(rects[1], Rect::new(54, 7, 6, 1));
+        assert_eq!(agent_pills_width(&agents), 11 + 3 + 7);
     }
 }

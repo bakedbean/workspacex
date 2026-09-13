@@ -159,6 +159,7 @@ pub(crate) fn build_spawn_info(
             doctrine,
             additional_dirs,
             yolo,
+            pin_session_id: None,
         }
     };
     Some((ws_id, worktree, mode, repo_path, agent))
@@ -270,6 +271,7 @@ pub(crate) fn build_added_spawn_info(
             doctrine,
             additional_dirs: ctx.additional_dirs,
             yolo: ctx.yolo,
+            pin_session_id: None,
         },
     };
     Some((ctx.worktree, mode, ctx.repo_path))

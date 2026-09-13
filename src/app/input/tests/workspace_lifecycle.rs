@@ -568,6 +568,7 @@ async fn capital_t_opens_confirm_share_and_y_flips_shared_and_restarts_session()
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let inst = test_primary_instance(&app, ws_id);
     app.sessions

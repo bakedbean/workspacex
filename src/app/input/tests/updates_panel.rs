@@ -479,6 +479,7 @@ async fn updates_panel_v_splits_attached_view_vertically() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_0 = test_primary_instance(&app, first_id);
     app.sessions
@@ -500,6 +501,7 @@ async fn updates_panel_v_splits_attached_view_vertically() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_1 = test_primary_instance(&app, second_id);
     app.sessions
@@ -1619,6 +1621,7 @@ async fn attached_view_shows_status_row_for_other_workspace_needing_attention() 
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_6 = test_primary_instance(&app, attached_id);
     app.sessions
@@ -1747,6 +1750,7 @@ async fn attached_view_no_status_row_when_no_other_activity() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_7 = test_primary_instance(&app, attached_id);
     app.sessions

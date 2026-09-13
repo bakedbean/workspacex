@@ -206,6 +206,7 @@ async fn ctrl_x_digit_works_while_reply_focused() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_12 = test_primary_instance(&app, ws_id);
     app.sessions

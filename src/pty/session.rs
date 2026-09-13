@@ -661,6 +661,11 @@ pub enum SpawnMode {
         doctrine: Option<String>,
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
+        /// A harness session id minted by wsx for this instance, for harnesses
+        /// that accept one up front (pi: `--session-id`). Lets a later respawn
+        /// resume by the same id. Ignored by builders whose harness assigns
+        /// its own ids (Claude, Codex: those are captured from hooks instead).
+        pin_session_id: Option<String>,
     },
     /// Resume a prior session in this worktree. With `resume_session_id`
     /// set, resume exactly that harness session (Claude: `--resume <id>`);
@@ -1099,6 +1104,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
@@ -1206,6 +1212,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
@@ -1229,6 +1236,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let mut sm = SessionManager::new();
         let hidden = sm
@@ -1328,6 +1336,7 @@ mod tests {
                     doctrine: None,
                     additional_dirs: vec![],
                     yolo: false,
+                    pin_session_id: None,
                 },
                 crate::agent::remote_control::RemoteOpts::disabled(),
                 AgentKind::Codex,
@@ -1372,6 +1381,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
@@ -1620,6 +1630,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
@@ -1677,6 +1688,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
@@ -1728,6 +1740,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
@@ -1770,6 +1783,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
@@ -1967,6 +1981,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Claude,
@@ -2201,6 +2216,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             AgentKind::Codex,
@@ -2251,6 +2267,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let session = spawn_session(
             tmpdir.path(),
@@ -2335,6 +2352,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
 
         let s1 = spawn_session(

@@ -58,6 +58,7 @@ fn setup_two_workspaces_with_sessions(
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let __inst_11 = test_primary_instance(&app, id);
         app.sessions

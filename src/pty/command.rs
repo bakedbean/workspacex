@@ -63,6 +63,7 @@ pub fn build_claude_command(
                 doctrine,
                 additional_dirs,
                 yolo,
+                pin_session_id: _,
             } => {
                 let rename_mode =
                     std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
@@ -201,7 +202,14 @@ fn render_rename_system_prompt(
 ///
 /// Maps wsx spawn modes to pi CLI flags:
 /// - `Fresh` with `rename_ctx` → system prompt for auto-rename
-/// - `Continue` → `--continue`
+/// - `Fresh` with `pin_session_id` → `--session-id <id>`; pi creates the
+///   session under that id (printing a one-line "creating a new session with
+///   that id" notice), so the same flag resumes it on a later spawn.
+/// - `Continue` with `resume_session_id` → `--session-id <id>` (exact)
+/// - `Continue` otherwise → `--continue` (pi's most-recent-in-cwd)
+///
+/// `--session-id` and `--continue` are mutually exclusive in pi (it exits
+/// with an error if both are given), so an id always replaces `--continue`.
 ///
 /// Pi has no permission system, so yolo/--dangerously-skip-permissions
 /// and --allowedTools are no-ops. Pi has no --add-dir or --remote-control
@@ -221,20 +229,27 @@ pub fn build_pi_command(
     cmd.env("PI_OFFLINE", "1");
     cmd.env("npm_config_loglevel", "error");
 
-    let (doctrine, rename_prompt, custom, add_continue) = match mode {
+    let (doctrine, rename_prompt, custom, resume, session_id) = match mode {
         SpawnMode::Continue {
             custom_instructions,
             doctrine,
             additional_dirs: _,
             yolo: _,
-            resume_session_id: _,
-        } => (doctrine.clone(), None, custom_instructions.clone(), true),
+            resume_session_id,
+        } => (
+            doctrine.clone(),
+            None,
+            custom_instructions.clone(),
+            true,
+            resume_session_id.clone(),
+        ),
         SpawnMode::Fresh {
             rename_ctx,
             custom_instructions,
             doctrine,
             additional_dirs: _,
             yolo: _,
+            pin_session_id,
         } => {
             let rename_mode =
                 std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
@@ -252,13 +267,23 @@ pub fn build_pi_command(
             } else {
                 None
             };
-            (doctrine.clone(), rp, custom_instructions.clone(), false)
+            (
+                doctrine.clone(),
+                rp,
+                custom_instructions.clone(),
+                false,
+                pin_session_id.clone(),
+            )
         }
     };
 
-    if add_continue {
+    if let Some(id) = &session_id {
+        cmd.arg("--session-id");
+        cmd.arg(id);
+    } else if resume {
         cmd.arg("--continue");
-    } else {
+    }
+    if !resume {
         // Model selection for new pi sessions.
         //
         // Pi silently ignores `--provider` unless `--model` is also passed
@@ -517,7 +542,9 @@ fn toml_basic_string(s: &str) -> String {
 ///
 /// Spawn-mode mapping:
 /// - `Fresh`            → `codex`
-/// - `Continue`         → `codex resume --last` (cwd-filtered by Codex itself)
+/// - `Continue`         → `codex resume <id>` when the instance's thread id
+///   is recorded (captured from `notify`), else `codex resume --last`
+///   (cwd-filtered by Codex itself — ambiguous once two agents share a cwd)
 ///
 /// `yolo` adds `--dangerously-bypass-approvals-and-sandbox`. Non-yolo dev
 /// sessions pass no approval flags, inheriting Codex's interactive defaults.
@@ -586,13 +613,24 @@ pub fn build_codex_command(
     }
 
     let (resume, yolo) = match mode {
-        SpawnMode::Fresh { yolo, .. } => (false, *yolo),
-        SpawnMode::Continue { yolo, .. } => (true, *yolo),
+        SpawnMode::Fresh { yolo, .. } => (None, *yolo),
+        SpawnMode::Continue {
+            yolo,
+            resume_session_id,
+            ..
+        } => (Some(resume_session_id.clone()), *yolo),
     };
 
-    if resume {
-        cmd.arg("resume");
-        cmd.arg("--last");
+    match resume {
+        Some(Some(id)) => {
+            cmd.arg("resume");
+            cmd.arg(id);
+        }
+        Some(None) => {
+            cmd.arg("resume");
+            cmd.arg("--last");
+        }
+        None => {}
     }
 
     if yolo {
@@ -682,6 +720,7 @@ pub fn build_omp_command(
             doctrine,
             additional_dirs,
             yolo,
+            pin_session_id: _,
         } => {
             let rename_mode =
                 std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
@@ -772,6 +811,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(
@@ -911,6 +951,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(
@@ -941,6 +982,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(
@@ -965,6 +1007,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: true,
+            pin_session_id: None,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(
@@ -1012,6 +1055,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(
@@ -1084,6 +1128,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let cmd = build_claude_command(
             &cwd,
@@ -1166,6 +1211,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let opts = crate::agent::remote_control::RemoteOpts {
             enabled: true,
@@ -1193,6 +1239,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let opts = crate::agent::remote_control::RemoteOpts {
             enabled: true,
@@ -1216,6 +1263,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let cmd = build_claude_command(
             &cwd,
@@ -1244,6 +1292,7 @@ mod tests {
                 PathBuf::from("/work/marketing"),
             ],
             yolo: false,
+            pin_session_id: None,
         };
         let cmd = build_claude_command(
             &cwd,
@@ -1280,6 +1329,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let cmd = build_claude_command(
             &cwd,
@@ -1292,6 +1342,81 @@ mod tests {
             .map(|s| s.to_string_lossy().to_string())
             .collect();
         assert!(!args.iter().any(|a| a == "--add-dir"), "got: {args:?}");
+    }
+
+    fn pi_argv(mode: &SpawnMode) -> Vec<String> {
+        let cmd = build_pi_command(
+            Path::new("."),
+            mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
+        cmd.get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn pi_fresh_with_pinned_id_passes_session_id_and_model_flags() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_PI_MODEL", "claude-sonnet-4-5");
+        let argv = pi_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+            pin_session_id: Some("deadbeefcafe".into()),
+        });
+        let idx = argv
+            .iter()
+            .position(|a| a == "--session-id")
+            .expect("--session-id");
+        assert_eq!(argv[idx + 1], "deadbeefcafe");
+        assert!(!argv.iter().any(|a| a == "--continue"), "{argv:?}");
+        assert!(
+            argv.iter().any(|a| a == "--model"),
+            "a pinned fresh spawn is still a new session: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn pi_continue_with_recorded_id_uses_session_id_not_continue() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_PI_MODEL", "claude-sonnet-4-5");
+        let argv = pi_argv(&SpawnMode::Continue {
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+            resume_session_id: Some("deadbeefcafe".into()),
+        });
+        let idx = argv
+            .iter()
+            .position(|a| a == "--session-id")
+            .expect("--session-id");
+        assert_eq!(argv[idx + 1], "deadbeefcafe");
+        assert!(
+            !argv.iter().any(|a| a == "--continue"),
+            "pi rejects --session-id together with --continue: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "--model"),
+            "a resume keeps the session's own model: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn pi_continue_without_recorded_id_keeps_continue() {
+        let argv = pi_argv(&SpawnMode::Continue {
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+            resume_session_id: None,
+        });
+        assert!(argv.iter().any(|a| a == "--continue"), "{argv:?}");
+        assert!(!argv.iter().any(|a| a == "--session-id"), "{argv:?}");
     }
 
     // All branches in one test: env vars are process-global and the function
@@ -1307,6 +1432,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
 
         let argv_of = |env: &mut EnvGuard, mode: &SpawnMode| -> Vec<String> {
@@ -1405,6 +1531,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
             assert!(result.contains("wsx workspace rename 'myrepo' 'bold-fern'"));
@@ -1418,6 +1545,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
             assert!(result.contains("wsx workspace rename"));
@@ -1438,6 +1566,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
             assert_eq!(result, "Use ruff.");
@@ -1451,6 +1580,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             };
             assert!(super::compose_injected_prompt(&mode).is_none());
         }
@@ -1532,6 +1662,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo,
+                pin_session_id: None,
             }
         }
 
@@ -1699,6 +1830,7 @@ mod tests {
                     std::path::PathBuf::from("/srv/b"),
                 ],
                 yolo: false,
+                pin_session_id: None,
             });
             let dirs: Vec<&String> = argv
                 .iter()
@@ -1726,6 +1858,7 @@ mod tests {
                 doctrine: Some("DOCTRINE_MARK".into()),
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             });
             let i = argv
                 .iter()
@@ -1767,6 +1900,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             });
             assert!(
                 !argv.iter().any(|a| a == "--append-system-prompt"),
@@ -1794,6 +1928,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             }
         }
 
@@ -1841,6 +1976,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: true,
+                pin_session_id: None,
             };
             let cmd = super::build_hermes_command(
                 tmp.path(),
@@ -2160,6 +2296,7 @@ mod tests {
             doctrine: Some("DOCTRINE_MARK".to_string()),
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let cmd = build_claude_command(
             &cwd,
@@ -2241,6 +2378,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         });
         assert!(
             !argv.iter().any(|a| a == "resume"),
@@ -2270,11 +2408,31 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: true,
+            pin_session_id: None,
         });
         assert!(
             argv.iter()
                 .any(|a| a == "--dangerously-bypass-approvals-and-sandbox"),
             "yolo must bypass: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn codex_continue_with_recorded_thread_id_resumes_that_thread() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        let argv = codex_argv(&SpawnMode::Continue {
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+            resume_session_id: Some("01a080db-c2a2-7e92-a90a-d267ae83eb3d".into()),
+        });
+        let idx = argv.iter().position(|a| a == "resume").expect("resume");
+        assert_eq!(argv[idx + 1], "01a080db-c2a2-7e92-a90a-d267ae83eb3d");
+        assert!(
+            !argv.iter().any(|a| a == "--last"),
+            "an exact id replaces --last: {argv:?}"
         );
     }
 
@@ -2310,6 +2468,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         });
         assert!(
             argv.windows(2).any(|w| w[0] == "-m" && w[1] == "gpt-5.4"),
@@ -2328,6 +2487,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         });
         assert!(
             argv.windows(2).any(|w| w[0] == "-c"
@@ -2348,6 +2508,7 @@ mod tests {
             doctrine: Some("DOCTRINE_MARK".to_string()),
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         });
         let value = argv
             .iter()
@@ -2373,6 +2534,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         });
         assert!(
             argv.windows(2)
@@ -2396,6 +2558,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         });
         assert!(
             !argv
@@ -2461,6 +2624,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         });
         assert!(
             argv.windows(2)

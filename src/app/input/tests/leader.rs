@@ -60,6 +60,7 @@ async fn ctrl_x_d_closes_focused_pane_when_split() {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let __inst_2 = test_primary_instance(&app, id);
         app.sessions
@@ -165,6 +166,7 @@ async fn ctrl_x_d_detach_schedules_refresh_for_attached_workspace() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_3 = test_primary_instance(&app, id);
     app.sessions
@@ -257,6 +259,7 @@ async fn ctrl_x_shift_d_detach_schedules_refresh_for_attached_workspace() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_4 = test_primary_instance(&app, id);
     app.sessions
@@ -335,6 +338,7 @@ async fn ctrl_x_arrow_moves_focus_in_split() {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         let __inst_5 = test_primary_instance(&app, *id);
         app.sessions
@@ -421,6 +425,7 @@ async fn ctrl_x_down_enter_fires_highlighted_action() {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             crate::pty::session::AgentKind::Claude,
@@ -509,6 +514,7 @@ async fn ctrl_x_esc_dismisses_nav_overlay_without_detaching() {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             crate::pty::session::AgentKind::Claude,

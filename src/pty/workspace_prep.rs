@@ -502,6 +502,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             };
             super::prepare_hermes_workspace(tmp.path(), &mode);
 
@@ -529,6 +530,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             };
             super::prepare_hermes_workspace(tmp.path(), &fresh);
             // Now spawn Continue with nothing to inject.
@@ -580,6 +582,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             };
             super::prepare_hermes_workspace(tmp.path(), &fresh_mode);
             let marker = super::read_hermes_spawn_marker(tmp.path())
@@ -613,6 +616,7 @@ mod tests {
             doctrine: Some("DOCTRINE-MARKER".to_string()),
             additional_dirs: vec![],
             yolo: false,
+            pin_session_id: None,
         };
         prepare_codex_workspace(cwd, &mode);
 

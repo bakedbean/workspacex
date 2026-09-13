@@ -38,7 +38,10 @@ fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = wsx::ui::term_modes::leave_tui_modes(&mut io::stdout());
+        let _ = wsx::ui::term_modes::leave_tui_modes(
+            &mut io::stdout(),
+            wsx::ui::term_modes::bell_urgency_on_entry(),
+        );
         // Children are killed via Drop on Session (sends SIGKILL via ChildKiller).
         default(info);
     }));
@@ -101,6 +104,9 @@ async fn main() -> Result<()> {
     install_panic_hook();
 
     enable_raw_mode()?;
+    // Ask before touching 1042 so the exit path can put back what it found.
+    // Needs raw mode, and must precede the event stream (see the fn docs).
+    wsx::ui::term_modes::probe_bell_urgency();
     let mut stdout = io::stdout();
     wsx::ui::term_modes::enter_tui_modes(&mut stdout)?;
     let backend = CrosstermBackend::new(stdout);
@@ -112,7 +118,10 @@ async fn main() -> Result<()> {
     let _ = std::fs::remove_file(&ipc_socket);
 
     disable_raw_mode()?;
-    wsx::ui::term_modes::leave_tui_modes(terminal.backend_mut())?;
+    wsx::ui::term_modes::leave_tui_modes(
+        terminal.backend_mut(),
+        wsx::ui::term_modes::bell_urgency_on_entry(),
+    )?;
     terminal.show_cursor()?;
 
     // Drop SessionManager (kills all children).

@@ -137,7 +137,10 @@ where
 
     // Suspend the TUI, handing the terminal to the editor.
     crossterm::terminal::disable_raw_mode()?;
-    crate::ui::term_modes::leave_tui_modes(terminal.backend_mut())?;
+    crate::ui::term_modes::leave_tui_modes(
+        terminal.backend_mut(),
+        crate::ui::term_modes::bell_urgency_on_entry(),
+    )?;
 
     let result = crate::commands::external::edit_in_editor(&current, ext);
 

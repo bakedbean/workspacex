@@ -19,7 +19,8 @@ pub use crate::pty::agent_kind::AgentKind;
 // (`crate::pty::session::has_prior_session_for`, …) and this file's spawn /
 // command builders keep resolving the names unqualified.
 pub use crate::pty::session_detect::{
-    claude_session_exists, codex_session_exists, pi_session_exists,
+    claude_session_exists, codex_session_exists, omp_breadcrumb_session_file, omp_session_exists,
+    omp_terminal_id, pi_session_exists,
 };
 pub use crate::pty::session_detect::{
     has_prior_codex_session, has_prior_hermes_session, has_prior_pi_session, has_prior_session,
@@ -145,6 +146,13 @@ pub struct Session {
     /// dialog that arrives after it. The floor holds the whole draw-then-replace
     /// window shut, and it is the only cover hermes has at all.
     pub(crate) spawned_at: std::time::Instant,
+    /// The slave device of this session's PTY (`/dev/pts/N`), when the
+    /// platform reports one. This is the terminal the agent sees as its
+    /// stdin, so it is also the key under which omp files its per-terminal
+    /// session breadcrumb — see `app::omp_breadcrumbs`. For a tmux-wrapped
+    /// session it names the attach client's terminal, not the agent's pane,
+    /// so consumers must skip those.
+    pub(crate) tty_name: Option<std::path::PathBuf>,
     /// When set, this session's child is a tmux attach client and the agent
     /// lives in the tmux server under this session name. `kill()`/`Drop` kill
     /// only the client (agent survives — the shared-workspace persistence
@@ -572,8 +580,10 @@ impl Session {
             })
             .expect("openpty for fake test session");
         let (tx, _rx) = mpsc::channel::<WriteReq>(1);
+        let tty_name = pair.master.tty_name();
         Session {
             spawned_at: std::time::Instant::now(),
+            tty_name,
             parser: Arc::new(Mutex::new(Parser::new(24, 80, 1000))),
             writer: tx,
             status: Arc::new(RwLock::new(status)),
@@ -881,9 +891,11 @@ pub fn spawn_command_session(
     });
 
     let prompt = Arc::new(Mutex::new(PromptCapture::default()));
+    let tty_name = pair.master.tty_name();
 
     Ok(Session {
         spawned_at,
+        tty_name,
         parser,
         writer: tx,
         status,
@@ -949,6 +961,13 @@ impl SessionManager {
         )?);
         self.sessions.insert(id, session.clone());
         Ok(session)
+    }
+
+    /// Every live entry, in no particular order.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (crate::data::store::AgentInstanceId, &Arc<Session>)> {
+        self.sessions.iter().map(|(id, s)| (*id, s))
     }
 
     pub fn get(&self, id: crate::data::store::AgentInstanceId) -> Option<Arc<Session>> {

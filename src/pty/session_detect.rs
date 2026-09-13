@@ -133,6 +133,64 @@ pub fn codex_session_exists(session_id: &str) -> bool {
     walk(&root, 3, &suffix)
 }
 
+/// omp's name for a terminal, derived the way `@oh-my-pi/pi-tui`'s
+/// `getTerminalId` does it when stdin is a TTY: the device path minus
+/// `/dev/`, with `/` mapped to `-` (`/dev/pts/3` → `pts-3`). That name is
+/// the file omp writes its breadcrumb to, so it must match byte-for-byte.
+pub fn omp_terminal_id(tty: &Path) -> Option<String> {
+    let s = tty.to_str()?;
+    let rest = s.strip_prefix("/dev/")?;
+    (!rest.is_empty()).then(|| rest.replace('/', "-"))
+}
+
+/// The session file omp most recently opened on terminal `terminal_id`, if
+/// its breadcrumb says that session belongs to `worktree`.
+///
+/// omp keeps `~/.omp/agent/terminal-sessions/<terminal-id>` as
+/// `<cwd>\n<session-file>\n` (plus a third line `fresh` for a `/new`
+/// boundary not yet written to disk) so that its own `--continue` can find
+/// "this terminal's last session". wsx created the terminal, so while the
+/// PTY is alive the name is unique to one agent instance and the crumb is an
+/// exact answer to "which session is *this* omp in?" — the only per-instance
+/// identity omp exposes. The cwd line is checked against `worktree` (both
+/// canonicalized) because pts numbers are recycled: a crumb left by some
+/// earlier process on the same device must not be taken for this one.
+///
+/// Returns the session file path as written, whether or not it exists yet —
+/// a `fresh` crumb names a file omp will create on first output. Existence is
+/// the respawn path's concern (`omp_session_exists`).
+pub fn omp_breadcrumb_session_file(
+    terminal_id: &str,
+    worktree: &Path,
+) -> Option<std::path::PathBuf> {
+    if terminal_id.is_empty() || terminal_id.contains(['/', '\\']) {
+        return None;
+    }
+    let crumb = dirs::home_dir()?
+        .join(".omp/agent/terminal-sessions")
+        .join(terminal_id);
+    let body = std::fs::read_to_string(crumb).ok()?;
+    let mut lines = body.lines();
+    let cwd = Path::new(lines.next()?.trim());
+    let file = lines.next()?.trim();
+    if file.is_empty() {
+        return None;
+    }
+    let same_dir = match (std::fs::canonicalize(cwd), std::fs::canonicalize(worktree)) {
+        (Ok(a), Ok(b)) => a == b,
+        // A crumb whose cwd no longer exists cannot be this live worktree's.
+        _ => false,
+    };
+    same_dir.then(|| std::path::PathBuf::from(file))
+}
+
+/// True if `session_file` — the absolute path an omp breadcrumb named — is
+/// still a session file on disk. `omp --resume <path>` opens it directly.
+pub fn omp_session_exists(session_file: &str) -> bool {
+    let p = Path::new(session_file);
+    p.is_absolute() && p.extension().is_some_and(|e| e == "jsonl") && p.is_file()
+}
+
 /// A harness-reported id we are willing to splice into a file name or an
 /// argv: non-empty, no path separators. Ids are opaque otherwise.
 fn plausible_session_id(id: &str) -> bool {
@@ -606,6 +664,85 @@ mod tests {
         assert!(!codex_session_exists("../x"));
         std::fs::remove_dir_all(home.path().join(".codex")).unwrap();
         assert!(!codex_session_exists(id), "no sessions root at all");
+    }
+
+    #[test]
+    fn omp_terminal_id_mirrors_pi_tui() {
+        assert_eq!(
+            omp_terminal_id(Path::new("/dev/pts/3")).as_deref(),
+            Some("pts-3")
+        );
+        assert_eq!(
+            omp_terminal_id(Path::new("/dev/ttys004")).as_deref(),
+            Some("ttys004")
+        );
+        assert_eq!(omp_terminal_id(Path::new("/dev/")), None);
+        assert_eq!(omp_terminal_id(Path::new("pts/3")), None);
+    }
+
+    fn write_omp_crumb(home: &std::path::Path, terminal_id: &str, body: &str) {
+        let dir = home.join(".omp/agent/terminal-sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(terminal_id), body).unwrap();
+    }
+
+    #[test]
+    fn omp_breadcrumb_names_the_session_when_its_cwd_is_this_worktree() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let other = tempfile::TempDir::new().unwrap();
+        let abs = std::fs::canonicalize(work.path()).unwrap();
+        let file = home.path().join(".omp/agent/sessions/x/2026_abc.jsonl");
+        write_omp_crumb(
+            home.path(),
+            "pts-7",
+            &format!("{}\n{}\n", abs.display(), file.display()),
+        );
+        // A `/new` boundary: same shape plus a trailing `fresh`.
+        write_omp_crumb(
+            home.path(),
+            "pts-8",
+            &format!("{}\n{}\nfresh\n", abs.display(), file.display()),
+        );
+        // A crumb for a directory that has since been removed.
+        write_omp_crumb(
+            home.path(),
+            "pts-9",
+            &format!("{}/gone\n{}\n", abs.display(), file.display()),
+        );
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert_eq!(
+            omp_breadcrumb_session_file("pts-7", work.path()).as_deref(),
+            Some(file.as_path())
+        );
+        assert_eq!(
+            omp_breadcrumb_session_file("pts-8", work.path()).as_deref(),
+            Some(file.as_path()),
+            "a fresh crumb still names the file omp will write"
+        );
+        assert_eq!(
+            omp_breadcrumb_session_file("pts-7", other.path()),
+            None,
+            "a recycled pts carrying another directory's crumb is not ours"
+        );
+        assert_eq!(omp_breadcrumb_session_file("pts-9", work.path()), None);
+        assert_eq!(omp_breadcrumb_session_file("pts-404", work.path()), None);
+        assert_eq!(omp_breadcrumb_session_file("../etc", work.path()), None);
+    }
+
+    #[test]
+    fn omp_session_exists_wants_an_absolute_jsonl_on_disk() {
+        let home = tempfile::TempDir::new().unwrap();
+        let file = home.path().join("s.jsonl");
+        assert!(!omp_session_exists(file.to_str().unwrap()));
+        std::fs::write(&file, "{}").unwrap();
+        assert!(omp_session_exists(file.to_str().unwrap()));
+        assert!(!omp_session_exists("relative/s.jsonl"));
+        let txt = home.path().join("s.txt");
+        std::fs::write(&txt, "{}").unwrap();
+        assert!(!omp_session_exists(txt.to_str().unwrap()));
     }
 
     #[test]

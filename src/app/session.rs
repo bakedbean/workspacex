@@ -151,7 +151,8 @@ pub(crate) fn ensure_workspace_session(
 /// Ensure a specific agent *instance* has a live PTY session, spawning one in
 /// place if missing. Primary instances delegate to `ensure_workspace_session`
 /// so the primary path is never duplicated. Added (non-primary) instances
-/// spawn `Fresh` with an injected handoff note (see `build_added_spawn_info`).
+/// spawn `Fresh` with an injected handoff note, or resume their own recorded
+/// session once they have one (see `build_added_spawn_info`).
 /// Mirrors `ensure_workspace_session`'s return/error conventions, including the
 /// `AgentMissing` modal for a missing agent binary.
 ///

@@ -71,6 +71,16 @@ If a worktree was used with an older wsx, it may contain a wsx-created `AGENTS.m
 
 **Model**: set `WSX_CODEX_MODEL` to pass `-m <model>` to Codex (e.g. `gpt-5.4`). Unset = Codex default.
 
+### Pi integration
+
+**Session identity**: wsx writes a small extension to its state dir
+(`pi-session-report.ts`) and passes it as `pi -e <file>` on every spawn. On
+each `session_start` (startup, `/new`, `/resume`, fork) it runs `wsx status
+from-notify --agent pi` with the session id, which is how a pi instance is
+resumed exactly after a wsx restart — see [Sessions survive a
+restart](multi-agent-workspaces.md#sessions-survive-a-restart). Nothing is
+written to the worktree.
+
 ### Oh My Pi integration
 
 `omp` is [oh-my-pi](https://github.com/can1357/oh-my-pi)

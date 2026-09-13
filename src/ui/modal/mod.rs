@@ -24,7 +24,8 @@ pub use process_list::render_process_list;
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
 pub use updates_panel::{
-    PanelInputs, PanelView, UpdatesSort, ordered_workspaces_for_panel, render_updates_panel,
+    PANEL_MAX_WIDTH, PanelInputs, PanelView, ordered_workspaces_for_panel, panel_sections,
+    render_updates_panel,
 };
 pub use usage_picker::render_usage_window_picker;
 
@@ -77,9 +78,6 @@ pub enum Modal {
         /// Index into the modal's ordered workspace list. Up/Down adjust
         /// it; Enter switches `app.view` to that workspace.
         selected: usize,
-        /// Active sort mode; `o` cycles it. Not persisted — reset to
-        /// `Default` on every open.
-        sort: UpdatesSort,
         /// `None` = normal key handling. `Some(buf)` = filter-input mode,
         /// where printable keys are filter text rather than shortcuts.
         /// `Some("")` is a real state: `/` was pressed, nothing typed yet,

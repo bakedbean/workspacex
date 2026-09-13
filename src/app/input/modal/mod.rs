@@ -88,11 +88,9 @@ pub(in crate::app::input) async fn handle_key_modal(
                 .await?
         }
         Modal::WorkspaceActions => workspace::workspace_actions(app, shared, k).await?,
-        Modal::UpdatesPanel {
-            selected,
-            sort,
-            filter,
-        } => panels::updates_panel(app, shared, k, selected, sort, filter).await?,
+        Modal::UpdatesPanel { selected, filter } => {
+            panels::updates_panel(app, shared, k, selected, filter).await?
+        }
         Modal::ProcessList {
             workspace_id,
             selected,

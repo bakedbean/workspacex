@@ -108,6 +108,15 @@ impl DashboardState {
         }
     }
 
+    /// Flip between repo and attention grouping. Shared by the dashboard's
+    /// `G` and the workspace-updates panel's, which mirrors it.
+    pub fn toggle_group_mode(&mut self) {
+        self.group_mode = match self.group_mode {
+            GroupMode::Repo => GroupMode::Attention,
+            GroupMode::Attention => GroupMode::Repo,
+        };
+    }
+
     /// Move to the next sort mode and remember it, so the choice survives a
     /// restart the way the theme does.
     pub fn cycle_sort_mode(&mut self, store: &crate::data::store::Store) {

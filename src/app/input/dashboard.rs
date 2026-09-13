@@ -632,11 +632,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             nudge_status_refresh(app);
         }
         (KeyCode::Char('G'), _) => {
-            use crate::ui::dashboard::layout::GroupMode;
-            app.dashboard.group_mode = match app.dashboard.group_mode {
-                GroupMode::Repo => GroupMode::Attention,
-                GroupMode::Attention => GroupMode::Repo,
-            };
+            app.dashboard.toggle_group_mode();
         }
         (KeyCode::Char('o'), _) => {
             app.dashboard.cycle_sort_mode(&app.store);
@@ -694,30 +690,11 @@ pub(in crate::app::input) async fn handle_key_dashboard(
 /// identical inputs or the selection indices drift from the drawn rows.
 pub(in crate::app::input) fn panel_order(
     app: &App,
-    sort: crate::ui::modal::UpdatesSort,
     filter: Option<&str>,
 ) -> Vec<crate::data::store::WorkspaceId> {
-    let activity_translated: std::collections::HashMap<
-        crate::data::store::WorkspaceId,
-        crate::ui::updates_bar::ActivityState,
-    > = app
-        .workspace_activity
-        .iter()
-        .map(|(k, v)| (*k, crate::app::render::translate_activity(*v)))
-        .collect();
-    let statuses = app.classified_statuses();
-    let awaiting = app.awaiting_permission_map();
-    let inputs = crate::ui::modal::PanelInputs {
-        repos: &app.repos,
-        workspaces: &app.workspaces,
-        events: &app.workspace_events,
-        activity: &activity_translated,
-        needs_attention: &app.workspace_needs_attention,
-        awaiting: &awaiting,
-        statuses: &statuses,
-        lifecycles: &app.pr_lifecycle,
-    };
-    crate::ui::modal::ordered_workspaces_for_panel(&inputs, sort, filter)
+    let now_ms = crate::util::time::now_ms();
+    let inputs = crate::app::render::panel_inputs(app, now_ms);
+    crate::ui::modal::ordered_workspaces_for_panel(&inputs, filter)
 }
 
 /// Keep the cursor on its workspace across a re-order (a sort cycle or a

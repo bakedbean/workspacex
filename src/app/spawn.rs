@@ -75,25 +75,65 @@ pub(crate) fn resolve_spawn_context(
     })
 }
 
-/// The session this instance should `--resume` on respawn: its recorded
-/// harness session id, provided the harness still has that session on disk
-/// for `worktree`. `None` means "no exact identity" and callers fall back to
-/// the kind's cwd-wide behaviour (`--continue` for a primary, fresh for an
+/// The session this instance should resume on respawn: its recorded harness
+/// session id, provided the harness still has that session on disk. `None`
+/// means "no exact identity" and callers fall back to the kind's cwd-wide
+/// behaviour (`--continue` / `resume --last` for a primary, fresh for an
 /// added agent).
 ///
-/// Only Claude reports an id today (via its hooks, see
-/// `cli::run` `StatusFromHook`), so only Claude instances ever resolve here.
-/// The existence check matters: Claude refuses to start on an unknown id,
-/// which would leave the pane dead instead of merely un-resumed.
+/// Where the id comes from, per harness:
+/// - Claude: reported by its hooks (`cli::run` `StatusFromHook`).
+/// - Codex: the `thread-id` in its `notify` payload (`StatusFromNotify`).
+/// - Pi: minted by wsx at first spawn (`pin_session_id_for`) and handed to
+///   pi as `--session-id`.
+/// - omp and Hermes: never — neither exposes a per-instance id wsx can
+///   capture (omp keys `--continue` on the TTY device path, which changes on
+///   every restart; Hermes only has the id inside its own process).
+///
+/// The existence check matters: Claude and Codex refuse to start on an
+/// unknown id, which would leave the pane dead instead of merely un-resumed.
 pub(crate) fn recorded_resume_id(
     instance: &crate::data::agents::AgentInstance,
     worktree: &std::path::Path,
 ) -> Option<String> {
-    if instance.agent != crate::pty::session::AgentKind::Claude {
+    use crate::pty::session::{
+        AgentKind, claude_session_exists, codex_session_exists, pi_session_exists,
+    };
+    let id = instance.agent_session_id.as_deref()?;
+    let on_disk = match instance.agent {
+        AgentKind::Claude => claude_session_exists(worktree, id),
+        AgentKind::Pi => pi_session_exists(worktree, id),
+        AgentKind::Codex => codex_session_exists(id),
+        AgentKind::Omp | AgentKind::Hermes => false,
+    };
+    on_disk.then(|| id.to_string())
+}
+
+/// The id to pin on a *fresh* spawn of `instance`, for harnesses that take
+/// one up front. Pi only: reuse the id already stored for the instance (a
+/// pinned session that never materialized — pi persists lazily, so a spawn
+/// that exited before any assistant output leaves no file), else mint one
+/// and store it now so the respawn path can find it. `None` for every other
+/// harness: their ids are captured after the fact, not chosen.
+///
+/// Pi accepts `[A-Za-z0-9][A-Za-z0-9._-]*`; 32 hex chars is comfortably
+/// inside that and collision-free in practice.
+pub(crate) fn pin_session_id_for(
+    app: &App,
+    instance: &crate::data::agents::AgentInstance,
+) -> Option<String> {
+    if instance.agent != crate::pty::session::AgentKind::Pi {
         return None;
     }
-    let id = instance.agent_session_id.as_deref()?;
-    crate::pty::session::claude_session_exists(worktree, id).then(|| id.to_string())
+    if let Some(id) = &instance.agent_session_id {
+        return Some(id.clone());
+    }
+    let id = format!("{:032x}", rand::random::<u128>());
+    if let Err(e) = app.store.set_instance_agent_session(instance.id, &id) {
+        tracing::warn!(error = %e, "failed to store the minted pi session id");
+        return None;
+    }
+    Some(id)
 }
 
 pub(crate) fn build_spawn_info(
@@ -122,16 +162,24 @@ pub(crate) fn build_spawn_info(
     // An exact recorded session wins over the cwd-wide `has_prior_session_for`
     // probe: once a peer shares this worktree, "most recent session here" may
     // be the peer's, and the snapshot gate is moot for an id this workspace's
-    // own instance reported.
-    let resume_session_id = app
+    // own instance reported. A pinned-but-unmaterialized pi id likewise
+    // skips the probe: the instance never had a session, so a stray one in
+    // the cwd is not its own.
+    let primary = app
         .store
         .primary_instance_id(ws_id)
         .ok()
         .flatten()
-        .and_then(|id| app.store.workspace_agents_by_id(id).ok().flatten())
-        .and_then(|inst| recorded_resume_id(&inst, &worktree));
+        .and_then(|id| app.store.workspace_agents_by_id(id).ok().flatten());
+    let resume_session_id = primary
+        .as_ref()
+        .and_then(|inst| recorded_resume_id(inst, &worktree));
+    let pinned_unmaterialized = resume_session_id.is_none()
+        && primary.as_ref().is_some_and(|inst| {
+            inst.agent == crate::pty::session::AgentKind::Pi && inst.agent_session_id.is_some()
+        });
     let mode = if resume_session_id.is_some()
-        || crate::pty::session::has_prior_session_for(&worktree, agent)
+        || (!pinned_unmaterialized && crate::pty::session::has_prior_session_for(&worktree, agent))
     {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
@@ -159,7 +207,9 @@ pub(crate) fn build_spawn_info(
             doctrine,
             additional_dirs,
             yolo,
-            pin_session_id: None,
+            pin_session_id: primary
+                .as_ref()
+                .and_then(|inst| pin_session_id_for(app, inst)),
         }
     };
     Some((ws_id, worktree, mode, repo_path, agent))
@@ -220,7 +270,9 @@ pub(crate) fn tmux_name_for(
 /// Claude does not persist system prompts across resumes.
 ///
 /// The cwd-wide resume (`--continue`) is never used here: it would reopen
-/// whichever agent in the worktree spoke last, usually the primary.
+/// whichever agent in the worktree spoke last, usually the primary. A fresh
+/// pi peer is instead pinned to a wsx-minted id (`pin_session_id_for`), which
+/// is what its respawn resumes.
 /// Returns `(worktree, SpawnMode, repo_path)`.
 pub(crate) fn build_added_spawn_info(
     app: &App,
@@ -271,7 +323,7 @@ pub(crate) fn build_added_spawn_info(
             doctrine,
             additional_dirs: ctx.additional_dirs,
             yolo: ctx.yolo,
-            pin_session_id: None,
+            pin_session_id: pin_session_id_for(app, instance),
         },
     };
     Some((ctx.worktree, mode, ctx.repo_path))
@@ -441,6 +493,137 @@ mod added_spawn_tests {
         let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
         let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
         assert!(matches!(mode, SpawnMode::Fresh { .. }), "got {mode:?}");
+    }
+
+    fn seed_pi_file(home: &std::path::Path, worktree: &std::path::Path, id: &str) {
+        let abs = std::fs::canonicalize(worktree).unwrap();
+        let encoded = abs.to_string_lossy().replace('/', "-");
+        let dir = home
+            .join(".pi/agent/sessions")
+            .join(format!("--{encoded}--"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("2026-09-13T10-00-00_{id}.jsonl")), "{}").unwrap();
+    }
+
+    #[test]
+    fn added_pi_first_spawn_is_fresh_pinned_to_a_stored_id() {
+        let (app, _primary, added, _sid, _home, _wt, _env) = app_with_claude_session(AgentKind::Pi);
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        let pinned = match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => pin_session_id.expect("pi gets a pin"),
+            other => panic!("expected Fresh, got {other:?}"),
+        };
+        assert_eq!(pinned.len(), 32, "32 hex chars: {pinned}");
+        assert!(pinned.chars().all(|c| c.is_ascii_hexdigit()));
+        let stored = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        assert_eq!(
+            stored.agent_session_id.as_deref(),
+            Some(pinned.as_str()),
+            "the pin is persisted so the respawn finds it"
+        );
+        // A second build before pi materialized anything reuses the pin.
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &stored).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => {
+                assert_eq!(pin_session_id.as_deref(), Some(pinned.as_str()))
+            }
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn added_pi_with_materialized_pinned_session_resumes_by_id() {
+        let (app, _primary, added, _sid, home, wt, _env) = app_with_claude_session(AgentKind::Pi);
+        app.store
+            .set_instance_agent_session(added.id, "0123456789abcdef0123456789abcdef")
+            .unwrap();
+        seed_pi_file(home.path(), wt.path(), "0123456789abcdef0123456789abcdef");
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(
+                resume_session_id.as_deref(),
+                Some("0123456789abcdef0123456789abcdef")
+            ),
+            other => panic!("expected Continue by id, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn added_codex_with_recorded_thread_on_disk_resumes_it() {
+        let (app, _primary, added, _sid, home, _wt, _env) =
+            app_with_claude_session(AgentKind::Codex);
+        let id = "01a080db-c2a2-7e92-a90a-d267ae83eb3d";
+        let dir = home.path().join(".codex/sessions/2026/09/13");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("rollout-2026-09-13T07-51-21-{id}.jsonl")),
+            "{}",
+        )
+        .unwrap();
+        app.store.set_instance_agent_session(added.id, id).unwrap();
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(resume_session_id.as_deref(), Some(id)),
+            other => panic!("expected Continue by thread id, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn added_codex_without_a_recorded_thread_stays_fresh_and_unpinned() {
+        let (app, _primary, added, _sid, _home, _wt, _env) =
+            app_with_claude_session(AgentKind::Codex);
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => {
+                assert_eq!(pin_session_id, None, "codex assigns its own ids")
+            }
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn primary_pi_pinned_but_unmaterialized_stays_fresh_despite_a_stray_session() {
+        // A pi workspace whose primary was pinned but never wrote a file, while
+        // some other pi session exists in the cwd: the pin wins over the
+        // cwd-wide probe, or the respawn would `--continue` into a stranger.
+        // (The added instance is codex so the primary can take pi ordinal 1.)
+        let (app, _primary, _added, _sid, home, wt, _env) =
+            app_with_claude_session(AgentKind::Codex);
+        let ws = app.workspaces.first().unwrap().1.clone();
+        let prim = app.store.primary_instance_id(ws.id).unwrap().unwrap();
+        // Make the primary a pi instance for this scenario.
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspace_agents SET agent = 'pi', agent_session_id = 'ffffffffffffffffffffffffffffffff' WHERE id = ?1",
+                [prim.0],
+            )
+            .unwrap();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET agent = 'pi' WHERE id = ?1",
+                [ws.id.0],
+            )
+            .unwrap();
+        let mut app = app;
+        app.refresh().unwrap();
+        seed_pi_file(home.path(), wt.path(), "someone-elses-session");
+
+        let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws.id).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => assert_eq!(
+                pin_session_id.as_deref(),
+                Some("ffffffffffffffffffffffffffffffff")
+            ),
+            other => panic!("expected Fresh with the stored pin, got {other:?}"),
+        }
     }
 
     #[test]

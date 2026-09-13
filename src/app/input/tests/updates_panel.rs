@@ -706,6 +706,57 @@ fn updates_panel_orders_workspaces_exactly_like_the_dashboard() {
     assert_eq!(panel_order(&app, None), dashboard_ids);
 }
 
+/// The PR chip and diff come from the same app caches the dashboard row
+/// reads, so the panel shows exactly what the dashboard shows.
+#[test]
+fn updates_panel_render_shows_pr_chip_and_diff_from_the_dashboard_caches() {
+    use crate::git::forge::{BranchLifecycle, ReviewDecision};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let store = Store::open_in_memory().unwrap();
+    let ids = seed_two_workspaces(&store);
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.pr_lifecycle.insert(ids[0], BranchLifecycle::PrOpen);
+    app.pr_number.insert(ids[0], 2087);
+    app.pr_review.insert(ids[0], ReviewDecision::Approved);
+    app.workspace_diff.insert(
+        ids[0],
+        crate::git::DiffStats {
+            added: 184,
+            removed: 62,
+        },
+    );
+    app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+        selected: 0,
+        filter: None,
+    });
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+    let buf = term.backend().buffer();
+    let rendered = (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let alpha = rendered
+        .lines()
+        .find(|l| l.contains("alpha"))
+        .expect("alpha row");
+    assert!(alpha.contains("#2087 open"), "pr chip on alpha: {alpha:?}");
+    assert!(alpha.contains("+184 −62"), "diff on alpha: {alpha:?}");
+    let beta = rendered
+        .lines()
+        .find(|l| l.contains("beta"))
+        .expect("beta row");
+    assert!(
+        !beta.contains('#') && !beta.contains('+'),
+        "beta has no PR and no diff: {beta:?}"
+    );
+}
+
 #[test]
 fn updates_panel_render_in_attention_mode_shows_sections_with_repo_prefixed_names() {
     use crate::ui::dashboard::layout::GroupMode;

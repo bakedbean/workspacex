@@ -32,6 +32,9 @@ pub struct PanelInputs<'a> {
     pub group_mode: GroupMode,
     pub sort_mode: SortMode,
     pub blocked_pin_max_age_secs: u64,
+    /// Width of the PR-chip cell — the dashboard's configured chip column,
+    /// so a chip truncates identically in both views.
+    pub pr_width: usize,
 }
 
 impl PanelInputs<'_> {
@@ -100,8 +103,16 @@ const NAME_COL_MAX: usize = 28;
 /// Chars consumed left of the name column: 2-space indent + glyph + space.
 const ROW_PREFIX_W: usize = 4;
 
-/// Gap between adjacent columns (name→status, status→age).
+/// Gap between adjacent columns (name→chip→diff→status, status→age).
 const COL_GAP_W: usize = 2;
+
+/// Width of the diff cell, the dashboard row's.
+const DIFF_W: usize = crate::ui::dashboard::row::DIFF_WIDTH;
+
+/// The least status text a row keeps before it starts shedding the diff
+/// and PR cells: enough for the longest fixed label (`no session`) plus a
+/// little of a live one.
+const STATUS_MIN_W: usize = 12;
 
 /// Width of the shared workspace-name column: as wide as the longest name,
 /// capped at [`NAME_COL_MAX`] and clamped so prefix + name + gap always
@@ -294,12 +305,17 @@ pub fn render_updates_panel(
                 awaiting: inputs.awaiting.get(id),
                 status: item.map(|i| i.status).unwrap_or(Status::Idle),
                 lifecycle: item.and_then(|i| i.row.lifecycle),
+                pr_number: item.and_then(|i| i.row.pr_number),
+                review: item.and_then(|i| i.row.review),
+                unresolved: item.and_then(|i| i.row.unresolved),
+                diff: item.and_then(|i| i.row.diff),
             };
             lines.push(workspace_row(
                 &row,
                 is_selected,
                 now_ms,
                 name_col,
+                inputs.pr_width,
                 row_width,
                 theme,
             ));
@@ -439,6 +455,10 @@ struct RowData<'a> {
     awaiting: Option<&'a (String, i64)>,
     status: Status,
     lifecycle: Option<BranchLifecycle>,
+    pr_number: Option<u32>,
+    review: Option<crate::git::forge::ReviewDecision>,
+    unresolved: Option<u32>,
+    diff: Option<crate::git::DiffStats>,
 }
 
 fn workspace_row<'a>(
@@ -446,6 +466,7 @@ fn workspace_row<'a>(
     is_selected: bool,
     now_ms: i64,
     name_col: usize,
+    pr_width: usize,
     row_width: usize,
     theme: &Theme,
 ) -> Line<'a> {
@@ -497,11 +518,29 @@ fn workspace_row<'a>(
         .unwrap_or_else(|| Style::default().fg(ratatui::style::Color::Reset))
         .add_modifier(Modifier::BOLD);
 
-    // Column layout: indent+glyph | name | status | right-aligned age.
-    // The status text is truncated so it can never collide with the age
-    // column, and the row is padded to exactly `row_width` so the selection
-    // background spans the full row.
-    let avail = row_width.saturating_sub(ROW_PREFIX_W + name_col + COL_GAP_W);
+    // Column layout: indent+glyph | name | pr chip | diff | status |
+    // right-aligned age. The chip and diff cells are the dashboard row's
+    // own, at the dashboard's widths. In a panel too narrow to hold them
+    // and still show status text, the diff sheds first, then the chip —
+    // status is what the panel is for. The status text is truncated so it
+    // can never collide with the age column, and the row is padded to
+    // exactly `row_width` so the selection background spans the full row.
+    let mut avail = row_width.saturating_sub(ROW_PREFIX_W + name_col + COL_GAP_W);
+    let pr_cell = pr_width + COL_GAP_W;
+    let diff_cell = DIFF_W + COL_GAP_W;
+    let (show_pr, show_diff) = if avail >= pr_cell + diff_cell + STATUS_MIN_W {
+        (true, true)
+    } else if avail >= pr_cell + STATUS_MIN_W {
+        (true, false)
+    } else {
+        (false, false)
+    };
+    if show_pr {
+        avail -= pr_cell;
+    }
+    if show_diff {
+        avail -= diff_cell;
+    }
     // Drop the age column when it (plus its gap) wouldn't leave at least one
     // char of status text — a clipped age is worse than no age.
     let age = age.filter(|a| a.chars().count() + COL_GAP_W < avail);
@@ -509,17 +548,33 @@ fn workspace_row<'a>(
     let age_reserved = if age_w > 0 { age_w + COL_GAP_W } else { 0 };
     let status_budget = avail.saturating_sub(age_reserved);
     let status_txt = truncate(&status_text, status_budget);
-    let pad_w = row_width
-        .saturating_sub(ROW_PREFIX_W + name_col + COL_GAP_W + status_txt.chars().count() + age_w);
+    let pad_w = status_budget.saturating_sub(status_txt.chars().count()) + age_reserved - age_w;
 
     let mut spans = vec![
         Span::raw("  "),
         Span::styled(format!("{glyph} "), status_fg),
         Span::styled(truncate_pad(row.label, name_col), name_style),
         Span::raw(" ".repeat(COL_GAP_W)),
-        Span::styled(status_txt, status_fg),
-        Span::raw(" ".repeat(pad_w)),
     ];
+    if show_pr {
+        spans.extend(crate::ui::dashboard::row::pr_chip_spans(
+            row.lifecycle,
+            row.pr_number,
+            row.review,
+            row.unresolved,
+            pr_width,
+            theme,
+        ));
+        spans.push(Span::raw(" ".repeat(COL_GAP_W)));
+    }
+    if show_diff {
+        spans.extend(crate::ui::dashboard::row::diff_spans(
+            row.diff, DIFF_W, theme,
+        ));
+        spans.push(Span::raw(" ".repeat(COL_GAP_W)));
+    }
+    spans.push(Span::styled(status_txt, status_fg));
+    spans.push(Span::raw(" ".repeat(pad_w)));
     if let Some(a) = age {
         spans.push(Span::styled(a, theme.dim_style()));
     }
@@ -618,8 +673,20 @@ mod workspace_row_tests {
             awaiting,
             status,
             lifecycle,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            diff: None,
         };
-        workspace_row(&row, is_selected, now_ms, name_col, row_width, theme)
+        workspace_row(
+            &row,
+            is_selected,
+            now_ms,
+            name_col,
+            crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+            row_width,
+            theme,
+        )
     }
 
     fn fixture_workspace(name: &str) -> Workspace {
@@ -685,7 +752,7 @@ mod workspace_row_tests {
             None,
             10_000,
             20,
-            78,
+            98,
             &theme,
         );
         let body = line_text(&line);
@@ -711,7 +778,7 @@ mod workspace_row_tests {
             None,
             10_000,
             20,
-            78,
+            98,
             &theme,
         );
         let body = line_text(&line);
@@ -738,7 +805,7 @@ mod workspace_row_tests {
             None,
             10_000,
             20,
-            78,
+            98,
             &theme,
         );
         let body = line_text(&line);
@@ -826,7 +893,7 @@ mod workspace_row_tests {
                 None,
                 10_000,
                 20,
-                78,
+                98,
                 &theme,
             );
             assert!(
@@ -892,7 +959,7 @@ mod workspace_row_tests {
                 None,
                 10_000,
                 20,
-                78,
+                98,
                 &theme,
             );
             let glyph_span = &line.spans[1];
@@ -928,7 +995,7 @@ mod workspace_row_tests {
             None,
             10_000,
             20,
-            78,
+            98,
             &theme,
         );
         let glyph_span = &line.spans[1];
@@ -970,7 +1037,7 @@ mod workspace_row_tests {
                 lifecycle,
                 10_000,
                 20,
-                78,
+                98,
                 &theme,
             );
             let name_span = span_containing(&line, "alpha");
@@ -1004,7 +1071,7 @@ mod workspace_row_tests {
                 None,
                 10_000,
                 20,
-                78,
+                98,
                 &theme,
             );
             line_text(&line)
@@ -1012,6 +1079,142 @@ mod workspace_row_tests {
         let col_short = row(&short).find("no session").unwrap();
         let col_long = row(&long).find("no session").unwrap();
         assert_eq!(col_short, col_long, "status must start at a fixed column");
+    }
+
+    /// A row with PR and diff data, for the cell tests below.
+    fn pr_row<'a>(w: &'a Workspace, lifecycle: Option<BranchLifecycle>) -> RowData<'a> {
+        RowData {
+            label: &w.name,
+            failed: false,
+            events: None,
+            activity: None,
+            needs_attention: false,
+            awaiting: None,
+            status: Status::Idle,
+            lifecycle,
+            pr_number: Some(42),
+            review: Some(crate::git::forge::ReviewDecision::ChangesRequested),
+            unresolved: Some(3),
+            diff: Some(crate::git::DiffStats {
+                added: 12,
+                removed: 3,
+            }),
+        }
+    }
+
+    /// The PR chip and the diff sit between the name and the status text,
+    /// drawn by the dashboard row's own cell builders: chip in the
+    /// lifecycle color with the verdict mark in its own color, diff as ok
+    /// `+N` / err `−N`.
+    #[test]
+    fn workspace_row_draws_the_pr_chip_and_diff_between_name_and_status() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let row = pr_row(&w, Some(BranchLifecycle::PrOpen));
+        let line = workspace_row(
+            &row,
+            false,
+            10_000,
+            20,
+            crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+            98,
+            &theme,
+        );
+        let body = line_text(&line);
+        let name_at = body.find("alpha").unwrap();
+        let chip_at = body.find("#42 open").expect("pr chip");
+        let diff_at = body.find("+12 −3").expect("diff cell");
+        let status_at = body.find("no session").expect("status text");
+        assert!(
+            name_at < chip_at && chip_at < diff_at && diff_at < status_at,
+            "{body:?}"
+        );
+        assert_eq!(span_containing(&line, "#42").style.fg, Some(theme.ok));
+        assert_eq!(
+            span_containing(&line, "3").style.fg,
+            Some(theme.err),
+            "verdict mark"
+        );
+        assert_eq!(span_containing(&line, "+12").style.fg, Some(theme.ok));
+        assert_eq!(span_containing(&line, "−3").style.fg, Some(theme.err));
+    }
+
+    /// Rows without a PR or a diff keep both cells blank, so the status
+    /// column starts at the same x on every row of the panel.
+    #[test]
+    fn workspace_row_keeps_status_aligned_with_and_without_pr_and_diff() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let with = pr_row(&w, Some(BranchLifecycle::PrOpen));
+        let mut without = pr_row(&w, None);
+        without.pr_number = None;
+        without.review = None;
+        without.diff = None;
+        let at = |row: &RowData<'_>| {
+            let line = workspace_row(
+                row,
+                false,
+                10_000,
+                20,
+                crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+                98,
+                &theme,
+            );
+            let body = line_text(&line);
+            assert_eq!(
+                body.chars().count(),
+                98,
+                "row padded to full width: {body:?}"
+            );
+            body[..body.find("no session").unwrap()].chars().count()
+        };
+        assert_eq!(at(&with), at(&without));
+        let body = line_text(&workspace_row(
+            &without,
+            false,
+            10_000,
+            20,
+            crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+            98,
+            &theme,
+        ));
+        assert!(!body.contains('#') && !body.contains('+'), "{body:?}");
+    }
+
+    /// When the panel is too narrow for everything, the diff drops first,
+    /// then the PR chip, so the status text always keeps some room and the
+    /// row never overflows.
+    #[test]
+    fn workspace_row_sheds_diff_then_chip_as_the_panel_narrows() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let row = pr_row(&w, Some(BranchLifecycle::PrOpen));
+        let render = |width: usize| {
+            let line = workspace_row(
+                &row,
+                false,
+                10_000,
+                20,
+                crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+                width,
+                &theme,
+            );
+            let body = line_text(&line);
+            assert!(
+                body.chars().count() <= width,
+                "row must not overflow at {width}: {body:?}"
+            );
+            body
+        };
+        let wide = render(98);
+        assert!(wide.contains("#42") && wide.contains("+12"), "{wide:?}");
+        let mid = render(66);
+        assert!(mid.contains("#42"), "chip survives first: {mid:?}");
+        assert!(!mid.contains("+12"), "diff drops first: {mid:?}");
+        assert!(mid.contains("no session"), "{mid:?}");
+        let narrow = render(50);
+        assert!(!narrow.contains("#42"), "chip drops next: {narrow:?}");
+        assert!(narrow.contains("no session"), "{narrow:?}");
     }
 
     /// Names wider than the name column truncate with an ellipsis instead of
@@ -1031,7 +1234,7 @@ mod workspace_row_tests {
             None,
             10_000,
             20,
-            78,
+            98,
             &theme,
         );
         let body = line_text(&line);
@@ -1041,8 +1244,8 @@ mod workspace_row_tests {
         let status_col = body[..body.find("no session").unwrap()].chars().count();
         assert_eq!(
             status_col,
-            4 + 20 + 2,
-            "status must start right after prefix + name column + gap"
+            4 + 20 + 2 + (crate::ui::dashboard::row::DEFAULT_PR_WIDTH + 2) + (DIFF_W + 2),
+            "status must start right after prefix, name, pr and diff cells"
         );
     }
 
@@ -1065,11 +1268,11 @@ mod workspace_row_tests {
             None,
             10_000,
             20,
-            78,
+            98,
             &theme,
         );
         let body = line_text(&line);
-        assert_eq!(body.chars().count(), 78, "row must fill row_width");
+        assert_eq!(body.chars().count(), 98, "row must fill row_width");
         assert!(
             body.ends_with("5s"),
             "age must sit at the right edge: {body:?}"
@@ -1089,10 +1292,10 @@ mod workspace_row_tests {
             None,
             10_000,
             20,
-            78,
+            98,
             &theme,
         );
-        assert_eq!(line_text(&no_age).chars().count(), 78);
+        assert_eq!(line_text(&no_age).chars().count(), 98);
     }
 
     /// A long status text is truncated so it can never collide with the
@@ -1197,7 +1400,7 @@ mod workspace_row_tests {
             Some(crate::git::forge::BranchLifecycle::PrOpen),
             10_000,
             20,
-            78,
+            98,
             &theme,
         );
         // Line-level style carries only the selected bg, not a foreground.
@@ -1261,6 +1464,7 @@ mod ordering_tests {
             group_mode: maps.group_mode.unwrap_or_default(),
             sort_mode: maps.sort_mode.unwrap_or_default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+            pr_width: crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
         }
     }
 
@@ -1594,6 +1798,7 @@ mod render_tests {
             group_mode,
             sort_mode: SortMode::Recency,
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+            pr_width: crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
         };
         let view = PanelView {
             selected: 0,

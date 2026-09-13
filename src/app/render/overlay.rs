@@ -150,6 +150,7 @@ pub(crate) fn panel_inputs(app: &App, now_ms: i64) -> crate::ui::modal::PanelInp
         group_mode: app.dashboard.group_mode,
         sort_mode: app.dashboard.sort_mode,
         blocked_pin_max_age_secs: app.dashboard.blocked_pin_max_age_secs,
+        pr_width: super::dashboard::read_column_widths(&app.store).pr,
     }
 }
 

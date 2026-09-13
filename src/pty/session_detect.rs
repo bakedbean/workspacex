@@ -99,6 +99,112 @@ pub fn pi_session_exists(worktree: &Path, session_id: &str) -> bool {
     jsonl_names(&dir).iter().any(|name| name.ends_with(&suffix))
 }
 
+/// Test seam: pi's session directory for a worktree.
+#[cfg(test)]
+pub fn pi_session_dir_for_test(worktree: &Path) -> std::path::PathBuf {
+    pi_session_dir(worktree).expect("canonicalizable worktree")
+}
+
+/// One of pi's session files for a worktree: the id from its file name
+/// (`<timestamp>_<id>.jsonl`), its path, and its mtime.
+#[derive(Debug, Clone)]
+pub struct PiSessionFile {
+    pub id: String,
+    pub path: std::path::PathBuf,
+    pub modified: std::time::SystemTime,
+}
+
+/// Every pi session file in `worktree`'s session directory.
+pub fn pi_session_files(worktree: &Path) -> Vec<PiSessionFile> {
+    let Some(dir) = pi_session_dir(worktree) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_str()?;
+            let stem = name.strip_suffix(".jsonl")?;
+            let (_, id) = stem.rsplit_once('_')?;
+            if !pi_session_id_is_valid(id) {
+                return None;
+            }
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some(PiSessionFile {
+                id: id.to_string(),
+                path,
+                modified,
+            })
+        })
+        .collect()
+}
+
+/// The id of the session `path` was branched from, per its header line's
+/// `parentSession` (a path pi records on `/new` and forks). `None` for a
+/// root session or an unreadable header.
+pub fn pi_parent_session_id(path: &Path) -> Option<String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let mut first = String::new();
+    std::io::BufReader::new(file).read_line(&mut first).ok()?;
+    let header: serde_json::Value = serde_json::from_str(first.trim()).ok()?;
+    let parent = header.get("parentSession")?.as_str()?;
+    let stem = Path::new(parent)
+        .file_name()?
+        .to_str()?
+        .strip_suffix(".jsonl")?;
+    stem.rsplit_once('_').map(|(_, id)| id.to_string())
+}
+
+/// The session a pi instance pinned to `recorded` is in *now*: the newest
+/// file whose `parentSession` chain leads back to `recorded` (or `recorded`
+/// itself). pi has no hook to report a `/new`, but it records the previous
+/// session as the new one's parent, so the lineage is on disk. A session the
+/// user `/resume`d that is unrelated to the pin is not followed — there is
+/// no evidence it is this instance's rather than a peer's.
+pub fn pi_current_session_id(worktree: &Path, recorded: &str) -> Option<String> {
+    let files = pi_session_files(worktree);
+    let parents: std::collections::HashMap<String, Option<String>> = files
+        .iter()
+        .map(|f| (f.id.clone(), pi_parent_session_id(&f.path)))
+        .collect();
+    let descends_from_recorded = |start: &str| {
+        let mut id = start.to_string();
+        // Bounded walk: a parent cycle can't happen on disk, but never trust
+        // a file format with an unbounded loop.
+        for _ in 0..64 {
+            if id == recorded {
+                return true;
+            }
+            match parents.get(&id).and_then(|p| p.clone()) {
+                Some(parent) => id = parent,
+                None => return false,
+            }
+        }
+        false
+    };
+    files
+        .iter()
+        .filter(|f| descends_from_recorded(&f.id))
+        .max_by(|a, b| a.modified.cmp(&b.modified).then_with(|| a.id.cmp(&b.id)))
+        .map(|f| f.id.clone())
+}
+
+/// The newest pi session in `worktree` not in `exclude` — for adopting a
+/// pre-existing conversation as a primary's identity (it was the only pi
+/// agent there before per-instance ids existed). `exclude` carries the ids
+/// other instances already own so a peer's session is never adopted.
+pub fn newest_pi_session_id(worktree: &Path, exclude: &[String]) -> Option<String> {
+    pi_session_files(worktree)
+        .into_iter()
+        .filter(|f| !exclude.iter().any(|x| x == &f.id))
+        .max_by(|a, b| a.modified.cmp(&b.modified).then_with(|| a.id.cmp(&b.id)))
+        .map(|f| f.id)
+}
+
 /// True if Codex has a rollout for thread `session_id` on disk — a
 /// `rollout-<timestamp>-<session_id>.jsonl` anywhere under
 /// `~/.codex/sessions/YYYY/MM/DD/`. Codex indexes threads globally (not per
@@ -677,6 +783,75 @@ mod tests {
         );
         assert!(!pi_session_exists(work.path(), "zzz"));
         assert!(!pi_session_exists(work.path(), ""));
+    }
+
+    /// Write a pi session file with the given id, optional parent id, and
+    /// mtime `secs` after the epoch.
+    fn seed_pi_session(
+        home: &std::path::Path,
+        worktree: &std::path::Path,
+        id: &str,
+        parent: Option<&str>,
+        secs: u64,
+    ) {
+        let abs = std::fs::canonicalize(worktree).unwrap();
+        let encoded = abs.to_string_lossy().replace('/', "-");
+        let dir = home
+            .join(".pi/agent/sessions")
+            .join(format!("--{encoded}--"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = match parent {
+            Some(p) => format!(
+                r#"{{"type":"session","version":3,"id":"{id}","cwd":"{}","parentSession":"{}"}}"#,
+                abs.display(),
+                dir.join(format!("2026-01-01T00-00-00_{p}.jsonl")).display()
+            ),
+            None => format!(
+                r#"{{"type":"session","version":3,"id":"{id}","cwd":"{}"}}"#,
+                abs.display()
+            ),
+        };
+        let path = dir.join(format!("2026-01-01T00-00-{secs:02}_{id}.jsonl"));
+        std::fs::write(&path, format!("{header}\n")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    #[test]
+    fn pi_current_session_follows_the_new_chain_but_not_a_stranger() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        // pinned -> a (/new) -> b (/new); c is an unrelated, newer session.
+        seed_pi_session(home.path(), work.path(), "pinned0000", None, 10);
+        seed_pi_session(home.path(), work.path(), "aaaa0000", Some("pinned0000"), 20);
+        seed_pi_session(home.path(), work.path(), "bbbb0000", Some("aaaa0000"), 30);
+        seed_pi_session(home.path(), work.path(), "cccc0000", None, 40);
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert_eq!(
+            pi_current_session_id(work.path(), "pinned0000").as_deref(),
+            Some("bbbb0000")
+        );
+        assert_eq!(
+            pi_current_session_id(work.path(), "cccc0000").as_deref(),
+            Some("cccc0000"),
+            "a root session is its own current"
+        );
+        assert_eq!(pi_current_session_id(work.path(), "nope"), None);
+        assert_eq!(
+            newest_pi_session_id(work.path(), &["cccc0000".to_string()]).as_deref(),
+            Some("bbbb0000"),
+            "adoption skips ids other instances own"
+        );
+        assert_eq!(
+            newest_pi_session_id(work.path(), &[]).as_deref(),
+            Some("cccc0000")
+        );
     }
 
     #[test]

@@ -1,17 +1,24 @@
-//! Learning which session each running omp instance is in.
+//! Learning which session each running agent instance is in, for the
+//! harnesses that cannot tell us themselves.
 //!
-//! omp assigns its own session ids and reports them nowhere wsx can hook —
-//! no lifecycle hook, no notify program, no create-by-id flag. What it does
-//! keep is a breadcrumb per terminal (`~/.omp/agent/terminal-sessions/
-//! <pts-N>`: cwd + session file) so that its own `--continue` can find "this
-//! terminal's last session". wsx created that terminal, so the crumb is an
-//! exact per-instance answer while the PTY is alive. This module polls it
-//! for every running omp session and stores the session file on the
-//! instance, which is what `app::spawn::recorded_resume_id` resumes by.
+//! Claude and Codex report their session through hooks; pi is pinned to an
+//! id wsx chose. omp assigns its own ids and reports them nowhere wsx can
+//! hook, and a pi `/new` moves the instance to a new id without a word. Both
+//! leave evidence on disk, and this module polls it while the agent runs,
+//! storing the answer on the instance row that `app::spawn::recorded_resume_id`
+//! resumes by:
 //!
-//! Polled rather than captured once: `/new` inside omp rewrites the crumb,
-//! and the crumb for a fresh session only appears once omp materializes it.
-//! The cost is one small file read per running omp instance per poll.
+//! - omp keeps a breadcrumb per terminal (`~/.omp/agent/terminal-sessions/
+//!   <pts-N>`: cwd + session file) so its own `--continue` can find "this
+//!   terminal's last session". wsx created that terminal, so the crumb is an
+//!   exact per-instance answer while the PTY is alive.
+//! - pi records the previous session as a new one's `parentSession`, so the
+//!   session an instance is in now is the newest descendant of its pin.
+//!
+//! Polled rather than captured once: `/new` rewrites the omp crumb / adds a
+//! pi file, and a fresh session's evidence only appears once the harness
+//! materializes it. The cost is a few small file reads per running instance
+//! per poll.
 
 use super::*;
 
@@ -21,6 +28,52 @@ use super::*;
 pub(crate) const HARVEST_EVERY_TICKS: u32 = 16;
 
 impl App {
+    /// Refresh every polled session identity: omp breadcrumbs and pi
+    /// lineage. Called on the housekeeping tick, on quit, and before a
+    /// share/unshare respawn.
+    pub(crate) fn harvest_session_identities(&self) {
+        self.harvest_omp_breadcrumbs();
+        self.harvest_pi_sessions();
+    }
+
+    /// For each running pi instance with a pinned id, follow the
+    /// `parentSession` chain to the session it is in now and store that
+    /// (`pi_current_session_id`). A `/new` moves the pin forward; an
+    /// unrelated `/resume` does not (no evidence it is this instance's).
+    pub(crate) fn harvest_pi_sessions(&self) {
+        for (inst_id, session) in self.sessions.iter() {
+            if session.agent != crate::pty::session::AgentKind::Pi
+                || !self.instance_is_running(inst_id)
+            {
+                continue;
+            }
+            let Ok(Some(instance)) = self.store.workspace_agents_by_id(inst_id) else {
+                continue;
+            };
+            let Some(recorded) = instance.agent_session_id.as_deref() else {
+                continue;
+            };
+            let Some((_, ws)) = self
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == instance.workspace_id)
+            else {
+                continue;
+            };
+            let Some(current) =
+                crate::pty::session::pi_current_session_id(&ws.worktree_path, recorded)
+            else {
+                continue;
+            };
+            if current == recorded {
+                continue;
+            }
+            if let Err(e) = self.store.set_instance_agent_session(inst_id, &current) {
+                tracing::warn!(error = %e, "failed to record a pi session move");
+            }
+        }
+    }
+
     /// Record the session file each running omp instance is in, per the
     /// breadcrumb of the terminal its agent reads from
     /// (`Session::agent_terminal`: this PTY, or the tmux pane for a shared
@@ -88,6 +141,19 @@ mod tests {
         tempfile::TempDir,
         (EnvGuard, tempfile::TempDir),
     ) {
+        fixture_for(AgentKind::Omp)
+    }
+
+    fn fixture_for(
+        kind: AgentKind,
+    ) -> (
+        App,
+        crate::data::agents::AgentInstance,
+        String,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        (EnvGuard, tempfile::TempDir),
+    ) {
         let home = tempfile::TempDir::new().unwrap();
         let worktree = tempfile::TempDir::new().unwrap();
         let store = crate::data::store::Store::open_in_memory().unwrap();
@@ -106,18 +172,16 @@ mod tests {
             })
             .unwrap();
         store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
-        let omp = store.add_workspace_agent(ws, AgentKind::Omp).unwrap();
+        let omp = store.add_workspace_agent(ws, kind).unwrap();
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
         let state = tempfile::TempDir::new().unwrap();
         let mut app = App::new(store, state.path().to_path_buf()).unwrap();
         app.refresh().unwrap();
-        let session = app.sessions.insert_fake_session_for(
-            omp.id,
-            AgentKind::Omp,
-            SessionStatus::Running { pid: 1 },
-        );
+        let session =
+            app.sessions
+                .insert_fake_session_for(omp.id, kind, SessionStatus::Running { pid: 1 });
         let terminal_id = crate::pty::session::omp_terminal_id(
             session
                 .tty_name
@@ -209,6 +273,61 @@ mod tests {
         app.harvest_omp_breadcrumbs();
         let stored = app.store.workspace_agents_by_id(omp.id).unwrap().unwrap();
         assert_eq!(stored.agent_session_id, None, "a recycled pts is not ours");
+    }
+
+    #[test]
+    fn harvest_moves_a_pi_pin_forward_along_new_but_not_to_a_stranger() {
+        let (app, pi, _tid, home, worktree, _env) = fixture_for(AgentKind::Pi);
+        let abs = std::fs::canonicalize(worktree.path()).unwrap();
+        let dir = home
+            .path()
+            .join(".pi/agent/sessions")
+            .join(format!("--{}--", abs.to_string_lossy().replace('/', "-")));
+        std::fs::create_dir_all(&dir).unwrap();
+        let seed = |id: &str, parent: Option<&str>, secs: u64| {
+            let parent_line = parent
+                .map(|p| {
+                    format!(
+                        r#","parentSession":"{}""#,
+                        dir.join(format!("t_{p}.jsonl")).display()
+                    )
+                })
+                .unwrap_or_default();
+            let path = dir.join(format!("t{secs}_{id}.jsonl"));
+            std::fs::write(
+                &path,
+                format!(r#"{{"type":"session","id":"{id}"{parent_line}}}"#),
+            )
+            .unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(
+                    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+                )
+                .unwrap();
+        };
+        seed("pin0", None, 10);
+        seed("next0", Some("pin0"), 20);
+        seed("stranger0", None, 30);
+        app.store.set_instance_agent_session(pi.id, "pin0").unwrap();
+
+        app.harvest_pi_sessions();
+        let stored = app.store.workspace_agents_by_id(pi.id).unwrap().unwrap();
+        assert_eq!(stored.agent_session_id.as_deref(), Some("next0"));
+
+        // Unpinned pi instances are left alone (nothing to follow from).
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspace_agents SET agent_session_id = NULL WHERE id = ?1",
+                [pi.id.0],
+            )
+            .unwrap();
+        app.harvest_pi_sessions();
+        let stored = app.store.workspace_agents_by_id(pi.id).unwrap().unwrap();
+        assert_eq!(stored.agent_session_id, None);
     }
 
     #[test]

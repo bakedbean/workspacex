@@ -28,17 +28,19 @@ This runs against the **current** workspace — the one whose worktree you're in
 
 ### Sessions survive a restart
 
-Quit wsx and come back, and every agent in the workspace gets its own conversation back — not a blank chat, and not each other's. A harness's own "continue" flag can't do that: it resumes the *most recent* conversation in the directory, and once two agents share a worktree that is whichever one spoke last. So wsx tracks a session id **per agent instance** and respawns with it. How the id is obtained depends on the harness:
+Quit wsx and come back, and each Claude, Codex, pi and omp agent in the workspace gets its own conversation back — not a blank chat, and not each other's (Hermes is the exception, see below). A harness's own "continue" flag can't do that: it resumes the *most recent* conversation in the directory, and once two agents share a worktree that is whichever one spoke last. So wsx tracks a session id **per agent instance** and respawns with it. How the id is obtained depends on the harness:
 
 | Agent    | Where the id comes from                                                                                   | Respawn                 |
 | -------- | --------------------------------------------------------------------------------------------------------- | ----------------------- |
 | `claude` | Reported by the status hooks wsx injects (every payload carries it; each hook runs with that instance's `$WSX_AGENT_INSTANCE_ID`). A `/clear` moves the recorded id along with it. | `claude --resume <id>`  |
 | `codex`  | The `thread-id` in the `notify` payload wsx already receives after each turn.                             | `codex resume <id>`     |
-| `pi`     | Minted by wsx at the instance's first spawn and passed as `--session-id`, which pi creates-or-resumes. Pi prints a one-line "creating a new session with that id" notice on that first spawn. | `pi --session-id <id>`  |
-| `omp`    | Read from omp's own per-terminal breadcrumb (`~/.omp/agent/terminal-sessions/<pts-N>`), which names the session file each terminal last opened. wsx created the terminal, so the file maps to exactly one instance; wsx polls it every ~2s while the agent runs, so a `/new` is followed. Not available inside a shared (tmux) workspace, where the agent survives restarts anyway. | `omp --resume=<file>`   |
+| `pi`     | Minted by wsx at the instance's first spawn and passed as `--session-id`, which pi creates-or-resumes. Pi prints a one-line "creating a new session with that id" notice on that first spawn. A `/new` is followed: pi records the previous session as the new one's parent, and wsx polls that lineage every ~2s. A `/resume` into an unrelated session is not followed. A pi primary from before ids were tracked adopts its newest session on its next spawn, skipping any session a peer owns. | `pi --session-id <id>`  |
+| `omp`    | Read from omp's own per-terminal breadcrumb (`~/.omp/agent/terminal-sessions/<pts-N>`), which names the session file each terminal last opened. wsx created the terminal (or, in a shared workspace, asks tmux which terminal the pane is), so the file maps to exactly one instance; crumbs older than the terminal are ignored, since device numbers get reused. wsx polls it every ~2s while the agent runs and once more on quit and share/unshare, so a `/new` is followed. | `omp --resume=<file>`   |
 | `hermes` | Not available: the id only exists inside the Hermes process.                                              | added agents start fresh |
 
-Until an instance has an id — a workspace created before this was tracked, an agent that has not completed a turn yet (Codex) or written its session file yet (omp), or a `hermes` peer — the old behaviour applies: the primary falls back to its harness's cwd-wide continue, an added agent starts fresh with its handoff note. If the recorded session has since been deleted from disk, the same fallback applies rather than a failed launch.
+Until an instance has an id — a workspace created before this was tracked, an agent that has not completed a turn yet (Codex) or written its session file yet (omp), or a `hermes` peer — the old behaviour applies: the primary falls back to its harness's cwd-wide continue, an added agent starts fresh with its handoff note.
+
+An instance whose recorded session is no longer on disk starts **fresh**, primary or not, never with the cwd-wide continue: its own conversation is gone (deleted, or a `/new` that omp had not yet written out), so the directory's most recent session is by definition someone else's.
 
 ### Switching focus between agents
 

@@ -656,7 +656,7 @@ pub fn build_codex_command(
 /// - `Fresh`    → bare `omp`, plus `--model` when `WSX_OMP_MODEL` is set.
 /// - `Continue` with `resume_session_id` → `--resume=<path>`. The value is
 ///   the session file wsx learned from omp's own terminal breadcrumb
-///   (`app::omp_breadcrumbs`); a value containing `/` makes omp open that
+///   (`app::session_harvest`); a value containing `/` makes omp open that
 ///   file directly, bypassing breadcrumb and newest-in-cwd lookup both.
 /// - `Continue` otherwise → `-c`. omp's `SessionManager.continueRecent` falls
 ///   back to the newest session in the **cwd-encoded** session directory when

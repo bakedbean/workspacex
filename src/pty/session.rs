@@ -18,9 +18,12 @@ pub use crate::pty::agent_kind::AgentKind;
 // `session_detect`. Re-export the public surface so external callers
 // (`crate::pty::session::has_prior_session_for`, …) and this file's spawn /
 // command builders keep resolving the names unqualified.
+#[cfg(test)]
+pub use crate::pty::session_detect::pi_session_dir_for_test;
 pub use crate::pty::session_detect::{
-    claude_session_exists, codex_session_exists, omp_breadcrumb_session_file, omp_session_exists,
-    omp_terminal_id, pi_session_exists, pi_session_id_is_valid,
+    claude_session_exists, codex_session_exists, newest_pi_session_id, omp_breadcrumb_session_file,
+    omp_session_exists, omp_terminal_id, pi_current_session_id, pi_session_exists,
+    pi_session_id_is_valid,
 };
 pub use crate::pty::session_detect::{
     has_prior_codex_session, has_prior_hermes_session, has_prior_pi_session, has_prior_session,
@@ -149,7 +152,7 @@ pub struct Session {
     /// The slave device of this session's PTY (`/dev/pts/N`), when the
     /// platform reports one. This is the terminal the agent sees as its
     /// stdin, so it is also the key under which omp files its per-terminal
-    /// session breadcrumb — see `app::omp_breadcrumbs`. For a tmux-wrapped
+    /// session breadcrumb — see `app::session_harvest`. For a tmux-wrapped
     /// session it names the attach client's terminal, not the agent's pane,
     /// so consumers must skip those.
     pub(crate) tty_name: Option<std::path::PathBuf>,

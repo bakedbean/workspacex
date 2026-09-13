@@ -87,7 +87,7 @@ pub(crate) fn resolve_spawn_context(
 /// - Pi: minted by wsx at first spawn (`pin_session_id_for`) and handed to
 ///   pi as `--session-id`.
 /// - omp: the session *file path* read from omp's per-terminal breadcrumb
-///   for this instance's own PTY (`app::omp_breadcrumbs`), resumed with
+///   for this instance's own PTY (`app::session_harvest`), resumed with
 ///   `--resume=<path>`.
 /// - Hermes: never — the id only exists inside the Hermes process.
 ///
@@ -145,6 +145,40 @@ pub(crate) fn pin_session_id_for(
     Some(id)
 }
 
+/// A pi primary that predates per-instance ids has conversations on disk
+/// but no pin, and pi has no hook to report one later — so without this it
+/// would `--continue` forever, resuming whichever pi in the worktree spoke
+/// last once a peer is added. Adopt the newest pi session not owned by
+/// another instance as the primary's own, store it, and resume it exactly.
+/// Only for a primary with no recorded id; a session owned by a peer (its
+/// recorded id) is never adopted. Returns the adopted id.
+pub(crate) fn adopt_legacy_pi_session(
+    app: &App,
+    instance: &crate::data::agents::AgentInstance,
+    worktree: &std::path::Path,
+) -> Option<String> {
+    if instance.agent != crate::pty::session::AgentKind::Pi
+        || !instance.is_primary
+        || instance.agent_session_id.is_some()
+    {
+        return None;
+    }
+    let owned_by_peers: Vec<String> = app
+        .store
+        .workspace_agents(instance.workspace_id)
+        .ok()?
+        .into_iter()
+        .filter(|a| a.id != instance.id)
+        .filter_map(|a| a.agent_session_id)
+        .collect();
+    let id = crate::pty::session::newest_pi_session_id(worktree, &owned_by_peers)?;
+    if let Err(e) = app.store.set_instance_agent_session(instance.id, &id) {
+        tracing::warn!(error = %e, "failed to store the adopted pi session id");
+        return None;
+    }
+    Some(id)
+}
+
 pub(crate) fn build_spawn_info(
     app: &App,
     ws_id: crate::data::store::WorkspaceId,
@@ -187,7 +221,12 @@ pub(crate) fn build_spawn_info(
         .and_then(|id| app.store.workspace_agents_by_id(id).ok().flatten());
     let resume_session_id = primary
         .as_ref()
-        .and_then(|inst| recorded_resume_id(inst, &worktree));
+        .and_then(|inst| recorded_resume_id(inst, &worktree))
+        .or_else(|| {
+            primary
+                .as_ref()
+                .and_then(|inst| adopt_legacy_pi_session(app, inst, &worktree))
+        });
     let recorded_but_missing = resume_session_id.is_none()
         && primary
             .as_ref()
@@ -662,6 +701,64 @@ mod added_spawn_tests {
             ),
             other => panic!("expected Fresh with the stored pin, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn legacy_pi_primary_adopts_its_newest_session_but_never_a_peers() {
+        let (app, primary, added, _sid, home, wt, _env) = app_with_claude_session(AgentKind::Pi);
+        let ws = app.workspaces.first().unwrap().1.clone();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspace_agents SET agent = 'pi', ordinal = 0 WHERE id = ?1",
+                [primary.id.0],
+            )
+            .unwrap();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET agent = 'pi' WHERE id = ?1",
+                [ws.id.0],
+            )
+            .unwrap();
+        let mut app = app;
+        app.refresh().unwrap();
+        // Two sessions on disk: the primary's old one, and a newer one the
+        // added peer owns (its pin is recorded).
+        seed_pi_file(home.path(), wt.path(), "legacy0000000000000000000000000");
+        seed_pi_file(home.path(), wt.path(), "peer000000000000000000000000000");
+        let peer_path = crate::pty::session::pi_session_dir_for_test(wt.path())
+            .join("2026-09-13T10-00-00_peer000000000000000000000000000.jsonl");
+        std::fs::File::options()
+            .write(true)
+            .open(&peer_path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+        app.store
+            .set_instance_agent_session(added.id, "peer000000000000000000000000000")
+            .unwrap();
+
+        let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws.id).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(
+                resume_session_id.as_deref(),
+                Some("legacy0000000000000000000000000")
+            ),
+            other => panic!("expected Continue by adopted id, got {other:?}"),
+        }
+        let stored = app
+            .store
+            .workspace_agents_by_id(primary.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.agent_session_id.as_deref(),
+            Some("legacy0000000000000000000000000"),
+            "adoption is persisted"
+        );
     }
 
     #[test]

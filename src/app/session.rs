@@ -279,7 +279,7 @@ pub(crate) fn toggle_workspace_shared(
     // The respawns below resume by recorded session; capture omp's current
     // one first (a `/new` since the last poll would otherwise be lost and
     // the respawn would reopen the session before it).
-    app.harvest_omp_breadcrumbs();
+    app.harvest_session_identities();
     app.store.set_workspace_shared(ws_id, to_shared)?;
     app.refresh()?; // reload app.workspaces so spawn sees the new flag
     // `sessions.remove` calls `kill_backend` in both directions: for a direct

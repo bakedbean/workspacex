@@ -560,6 +560,11 @@ impl Session {
     /// no-op stand-in; neither is exercised by tests that construct a
     /// session this way, they only read `status`.
     fn fake(status: SessionStatus) -> Session {
+        Self::fake_for(AgentKind::Claude, status)
+    }
+
+    /// `fake`, tagged with a specific agent kind.
+    fn fake_for(agent: AgentKind, status: SessionStatus) -> Session {
         #[derive(Debug)]
         struct NoopKiller;
         impl portable_pty::ChildKiller for NoopKiller {
@@ -588,7 +593,7 @@ impl Session {
             writer: tx,
             status: Arc::new(RwLock::new(status)),
             activity_ms: Arc::new(AtomicU64::new(0)),
-            agent: AgentKind::Claude,
+            agent,
             scrollback_offset: std::sync::atomic::AtomicUsize::new(0),
             visible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             master: Mutex::new(pair.master),
@@ -987,6 +992,19 @@ impl SessionManager {
         status: SessionStatus,
     ) {
         self.sessions.insert(id, Arc::new(Session::fake(status)));
+    }
+
+    /// `insert_fake_session` for a specific agent kind.
+    #[cfg(test)]
+    pub fn insert_fake_session_for(
+        &mut self,
+        id: crate::data::store::AgentInstanceId,
+        agent: AgentKind,
+        status: SessionStatus,
+    ) -> Arc<Session> {
+        let s = Arc::new(Session::fake_for(agent, status));
+        self.sessions.insert(id, s.clone());
+        s
     }
 
     pub fn remove(&mut self, id: crate::data::store::AgentInstanceId) {

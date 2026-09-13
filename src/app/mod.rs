@@ -35,6 +35,7 @@ pub mod input;
 #[cfg(unix)]
 pub mod ipc;
 pub mod messaging;
+pub mod omp_breadcrumbs;
 pub mod render;
 pub mod resize_sync;
 pub use crate::app::activity::{ActivityState, classify_activity, classify_activity_with_events};

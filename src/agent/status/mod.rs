@@ -9,6 +9,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod pi;
 
 use crate::data::store::ReportedState;
 use crate::pty::session::AgentKind;
@@ -30,6 +31,15 @@ pub trait StatusIntegration: Sync {
     /// not status-relevant.
     fn parse_event(&self, json: &serde_json::Value) -> Option<ReportedState>;
 
+    /// The harness's own session id carried by an event payload, when the
+    /// event is one that identifies the *main* conversation of the instance
+    /// that emitted it. `None` for harnesses that don't report one, or for
+    /// events that may originate from a subagent. wsx stores it on the
+    /// instance row so a respawn can resume exactly that conversation.
+    fn session_id_from_event(&self, _json: &serde_json::Value) -> Option<String> {
+        None
+    }
+
     /// Spawn-time wiring this harness needs to report deterministically, or
     /// `None` if it has no such mechanism (tier 1 + tier 3 only). `wsx_bin` is
     /// the absolute path to the running wsx binary so callbacks invoke the same
@@ -50,10 +60,12 @@ impl StatusIntegration for NoopStatus {
 
 static CLAUDE: claude::ClaudeStatus = claude::ClaudeStatus;
 static CODEX: codex::CodexStatus = codex::CodexStatus;
+static PI: pi::PiStatus = pi::PiStatus;
 static NOOP: NoopStatus = NoopStatus;
 
 /// The status integration for an agent kind. Claude (hooks) and Codex (notify)
-/// have implementations; Pi, Hermes and omp are no-ops.
+/// report status; pi reports only its session identity (via the wsx
+/// extension); Hermes and omp are no-ops.
 ///
 /// omp is a no-op by necessity rather than by deferral: its hook capability is
 /// pre/post *tool* hooks only (`{type: "pre"|"post", tool}`), with no
@@ -65,7 +77,8 @@ pub fn for_agent(agent: AgentKind) -> &'static dyn StatusIntegration {
     match agent {
         AgentKind::Claude => &CLAUDE,
         AgentKind::Codex => &CODEX,
-        _ => &NOOP,
+        AgentKind::Pi => &PI,
+        AgentKind::Hermes | AgentKind::Omp => &NOOP,
     }
 }
 

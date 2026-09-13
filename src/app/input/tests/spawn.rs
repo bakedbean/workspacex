@@ -416,6 +416,7 @@ async fn toggle_to_shared_without_tmux_is_a_noop_with_modal() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let inst = test_primary_instance(&app, ws_id);
     app.sessions
@@ -579,6 +580,7 @@ async fn toggle_unshare_respawns_primary_seeded_after_last_refresh() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     app.sessions
         .spawn(
@@ -849,6 +851,7 @@ async fn shared_workspace_with_running_added_instance_is_not_detached() {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             crate::pty::session::AgentKind::Codex,
@@ -949,6 +952,7 @@ async fn shared_workspace_with_instance_added_after_last_refresh_is_not_detached
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                pin_session_id: None,
             },
             crate::agent::remote_control::RemoteOpts::disabled(),
             crate::pty::session::AgentKind::Codex,

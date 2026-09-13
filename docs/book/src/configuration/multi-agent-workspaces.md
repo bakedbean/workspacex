@@ -26,6 +26,24 @@ wsx agent add <kind>     # kind = claude | pi | hermes | codex | omp
 
 This runs against the **current** workspace — the one whose worktree you're in, or the one named by `$WSX_WORKSPACE_ID` (see [identity](#agent-identity-and-labels) below). It prints the new agent's label, e.g. `added claude#2`.
 
+### Sessions survive a restart
+
+Quit wsx and come back, and each Claude, Codex, pi and omp agent in the workspace gets its own conversation back — not a blank chat, and not each other's (Hermes is the exception, see below). A harness's own "continue" flag can't do that: it resumes the *most recent* conversation in the directory, and once two agents share a worktree that is whichever one spoke last. So wsx tracks a session id **per agent instance** and respawns with it. How the id is obtained depends on the harness:
+
+| Agent    | Where the id comes from                                                                                   | Respawn                 |
+| -------- | --------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `claude` | Reported by the status hooks wsx injects (every payload carries it; each hook runs with that instance's `$WSX_AGENT_INSTANCE_ID`). A `/clear` moves the recorded id along with it. | `claude --resume <id>`  |
+| `codex`  | The `thread-id` in the `notify` payload wsx already receives after each turn.                             | `codex resume <id>`     |
+| `pi`     | Minted by wsx at the instance's first spawn and passed as `--session-id`, which pi creates-or-resumes (pi prints a one-line "creating a new session with that id" notice on that first spawn). From then on pi reports every session start itself: wsx loads a small extension (`pi -e <wsx state dir>/pi-session-report.ts`) that calls back into wsx on `session_start`, so `/new`, `/resume` and forks all move the recorded id. A pi primary from before ids were tracked adopts its newest session on its next spawn, skipping any session a peer owns or a previous occupant of the path left behind; with nothing eligible it starts fresh with a new pin rather than pi's cwd-wide continue. | `pi --session-id <id>`  |
+| `omp`    | Read from omp's own per-terminal breadcrumb (`~/.omp/agent/terminal-sessions/<pts-N>`), which names the session file each terminal last opened. wsx created the terminal (or, in a shared workspace, asks tmux which terminal the pane is), so the file maps to exactly one instance. Device numbers get reused, so a crumb that already existed when wsx created the terminal is never taken for this agent's, however recent; under tmux, crumbs older than the tmux session are ignored instead. wsx polls every ~2s while the agent runs and once more on quit and share/unshare, so a `/new` is followed. | `omp --resume=<file>`   |
+| `hermes` | Not available: the id only exists inside the Hermes process.                                              | added agents start fresh |
+
+Until an instance has an id — a workspace created before this was tracked, an agent that has not completed a turn yet (Codex) or written its session file yet (omp), or a `hermes` peer — the old behaviour applies: the primary falls back to its harness's cwd-wide continue, an added agent starts fresh with its handoff note.
+
+An instance whose recorded session is no longer on disk starts **fresh**, primary or not, never with the cwd-wide continue: its own conversation is gone (deleted, or a `/new` that omp had not yet written out), so the directory's most recent session is by definition someone else's. Changing a workspace's agent kind clears the recorded identity, since a session belongs to one harness.
+
+Known limits: the session roots are the harnesses' defaults (`~/.claude/projects`, `~/.codex/sessions`, `~/.pi/agent/sessions`, `~/.omp/agent`); a non-default `CODEX_HOME`, `CLAUDE_CONFIG_DIR` or pi/omp session directory is not consulted. An omp `/new` followed by exiting omp within the same ~2s poll is not captured. The tmux lookup reads the session's active pane, so splitting the shared pane before wsx first looks can point it at the wrong terminal.
+
 ### Switching focus between agents
 
 When a workspace has more than one agent, the attached view's bottom row (the one with the pinned-command chips) gains a set of **agent pills**, right-justified ahead of the workspace stats, listing each agent with a single-letter switch key:

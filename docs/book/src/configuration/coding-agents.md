@@ -65,11 +65,21 @@ If a worktree was used with an older wsx, it may contain a wsx-created `AGENTS.m
 
 **Spawn**: fresh workspaces launch bare `codex`. Non-yolo sessions use Codex's built-in interactive approvals + workspace-write sandbox; `--yolo` workspaces add `--dangerously-bypass-approvals-and-sandbox`.
 
-**Continue**: `codex resume --last`, which Codex filters to the current directory natively — so wsx resumes the worktree's own most-recent session.
+**Continue**: `codex resume <thread-id>` once the instance's thread id has been recorded from its `notify` payload (see [Sessions survive a restart](multi-agent-workspaces.md#sessions-survive-a-restart)); before that, `codex resume --last`, which Codex filters to the current directory natively — the worktree's own most-recent session.
 
 **Activity**: the dashboard detail bar tails the worktree's rollout file under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. RECENT FILES is not yet populated for Codex (file edits are inferred-via-shell and not tracked).
 
 **Model**: set `WSX_CODEX_MODEL` to pass `-m <model>` to Codex (e.g. `gpt-5.4`). Unset = Codex default.
+
+### Pi integration
+
+**Session identity**: wsx writes a small extension to its state dir
+(`pi-session-report.ts`) and passes it as `pi -e <file>` on every spawn. On
+each `session_start` (startup, `/new`, `/resume`, fork) it runs `wsx status
+from-notify --agent pi` with the session id, which is how a pi instance is
+resumed exactly after a wsx restart — see [Sessions survive a
+restart](multi-agent-workspaces.md#sessions-survive-a-restart). Nothing is
+written to the worktree.
 
 ### Oh My Pi integration
 
@@ -84,9 +94,12 @@ omp` mean different binaries.
 whatever `tools.approvalMode` you configured; `--yolo` workspaces add
 `--approval-mode yolo`.
 
-**Continue**: `omp -c`. omp resolves `--continue` against the session directory
-for the current cwd, so this resumes the worktree's own most-recent session
-without wsx needing a marker file or a database query.
+**Continue**: `omp --resume=<file>` once wsx has read the instance's session
+file from omp's terminal breadcrumb (see [Sessions survive a
+restart](multi-agent-workspaces.md#sessions-survive-a-restart)); before that,
+`omp -c`, which omp resolves against the session directory for the current
+cwd — the worktree's own most-recent session, exact only while one omp agent
+lives there.
 
 **Instructions**: doctrine, the auto-rename directive, and a workspace's custom
 instructions compose into a single `--append-system-prompt`. Related-repo paths

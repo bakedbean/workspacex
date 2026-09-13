@@ -17,6 +17,12 @@ pub struct AgentInstance {
     pub ordinal: i64,
     pub is_primary: bool,
     pub session_ref: Option<String>,
+    /// The harness's own session identity for this instance, used to resume
+    /// exactly this instance's conversation on respawn: a session id
+    /// (Claude: from hooks; Codex: from notify; pi: minted by wsx) or a
+    /// session file path (omp: from its terminal breadcrumb). `None` until
+    /// known; never set for Hermes. See `app::spawn::recorded_resume_id`.
+    pub agent_session_id: Option<String>,
     pub created_at: i64,
 }
 
@@ -49,6 +55,7 @@ fn row_to_instance(r: &rusqlite::Row) -> rusqlite::Result<AgentInstance> {
         is_primary: r.get::<_, i64>(4)? != 0,
         session_ref: r.get(5)?,
         created_at: r.get(6)?,
+        agent_session_id: r.get(7)?,
     })
 }
 
@@ -56,7 +63,7 @@ impl Store {
     /// All instances for a workspace, primary first then by creation time.
     pub fn workspace_agents(&self, ws: WorkspaceId) -> Result<Vec<AgentInstance>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at
+            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at, agent_session_id
              FROM workspace_agents WHERE workspace_id = ?1
              ORDER BY is_primary DESC, created_at ASC, id ASC",
         )?;
@@ -73,7 +80,7 @@ impl Store {
         &self,
     ) -> Result<std::collections::HashMap<WorkspaceId, Vec<AgentInstance>>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at
+            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at, agent_session_id
              FROM workspace_agents
              ORDER BY workspace_id ASC, is_primary DESC, created_at ASC, id ASC",
         )?;
@@ -112,6 +119,7 @@ impl Store {
             ordinal: next,
             is_primary: false,
             session_ref: None,
+            agent_session_id: None,
             created_at: now,
         })
     }
@@ -135,6 +143,7 @@ impl Store {
             ordinal: 1,
             is_primary: true,
             session_ref: None,
+            agent_session_id: None,
             created_at,
         })
     }
@@ -196,6 +205,20 @@ impl Store {
         Ok(())
     }
 
+    /// Record the harness session id an instance's hooks reported. Overwrites
+    /// any earlier value: the newest report is the conversation the instance
+    /// is actually in (a `/clear` or in-session resume moves it).
+    pub fn set_instance_agent_session(&self, id: AgentInstanceId, session_id: &str) -> Result<()> {
+        let n = self.conn().execute(
+            "UPDATE workspace_agents SET agent_session_id = ?1 WHERE id = ?2",
+            rusqlite::params![session_id, id.0],
+        )?;
+        if n == 0 {
+            return Err(crate::error::Error::UserInput("agent not found".into()));
+        }
+        Ok(())
+    }
+
     /// Whether any *other* instance already claims `name` as its `session_ref`.
     /// Used by the tmux-name derivation to disambiguate first-spawn collisions:
     /// distinct workspaces can sanitize to the same base name (repo `a` + ws
@@ -236,7 +259,7 @@ impl Store {
     /// A single instance by its id.
     pub fn workspace_agents_by_id(&self, id: AgentInstanceId) -> Result<Option<AgentInstance>> {
         let mut stmt = self.conn().prepare_cached(
-            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at
+            "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at, agent_session_id
              FROM workspace_agents WHERE id = ?1",
         )?;
         let r = stmt.query_row([id.0], row_to_instance).optional()?;
@@ -440,6 +463,47 @@ mod store_tests {
             .find(|i| i.id == added.id)
             .unwrap();
         assert_eq!(reloaded.session_ref.as_deref(), Some("sess-123"));
+    }
+
+    #[test]
+    fn set_agent_session_persists_and_overwrites() {
+        let store = Store::open_in_memory().unwrap();
+        let ws = seed_ws_with_primary(&store);
+        let added = store.add_workspace_agent(ws, AgentKind::Claude).unwrap();
+        assert_eq!(
+            added.agent_session_id, None,
+            "unreported until a hook lands"
+        );
+        store
+            .set_instance_agent_session(added.id, "aaaa-1111")
+            .unwrap();
+        store
+            .set_instance_agent_session(added.id, "bbbb-2222")
+            .unwrap();
+        let reloaded = store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        assert_eq!(reloaded.agent_session_id.as_deref(), Some("bbbb-2222"));
+        // The list query carries it too, and the primary is untouched.
+        let all = store.workspace_agents(ws).unwrap();
+        let primary = all.iter().find(|a| a.is_primary).unwrap();
+        assert_eq!(primary.agent_session_id, None);
+        assert_eq!(
+            all.iter()
+                .find(|a| a.id == added.id)
+                .unwrap()
+                .agent_session_id
+                .as_deref(),
+            Some("bbbb-2222")
+        );
+    }
+
+    #[test]
+    fn set_agent_session_on_unknown_id_errors() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(
+            store
+                .set_instance_agent_session(AgentInstanceId(9999), "x")
+                .is_err()
+        );
     }
 
     #[test]

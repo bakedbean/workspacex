@@ -142,6 +142,7 @@ pub(super) fn spawn_attached_workspace(app: &mut App) -> crate::data::store::Wor
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_8 = test_primary_instance(app, ws_id);
     app.sessions

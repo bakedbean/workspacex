@@ -75,6 +75,110 @@ pub(crate) fn resolve_spawn_context(
     })
 }
 
+/// The session this instance should resume on respawn: its recorded harness
+/// session id, provided the harness still has that session on disk. `None`
+/// means "no exact identity" and callers fall back to the kind's cwd-wide
+/// behaviour (`--continue` / `resume --last` for a primary, fresh for an
+/// added agent).
+///
+/// Where the id comes from, per harness:
+/// - Claude: reported by its hooks (`cli::run` `StatusFromHook`).
+/// - Codex: the `thread-id` in its `notify` payload (`StatusFromNotify`).
+/// - Pi: minted by wsx at first spawn (`pin_session_id_for`) and handed to
+///   pi as `--session-id`.
+/// - omp: the session *file path* read from omp's per-terminal breadcrumb
+///   for this instance's own PTY (`app::session_harvest`), resumed with
+///   `--resume=<path>`.
+/// - Hermes: never — the id only exists inside the Hermes process.
+///
+/// The existence check matters: Claude and Codex refuse to start on an
+/// unknown id, which would leave the pane dead instead of merely un-resumed.
+pub(crate) fn recorded_resume_id(
+    instance: &crate::data::agents::AgentInstance,
+    worktree: &std::path::Path,
+) -> Option<String> {
+    use crate::pty::session::{
+        AgentKind, claude_session_exists, codex_session_exists, omp_session_exists,
+        pi_session_exists,
+    };
+    let id = instance.agent_session_id.as_deref()?;
+    let on_disk = match instance.agent {
+        AgentKind::Claude => claude_session_exists(worktree, id),
+        AgentKind::Pi => pi_session_exists(worktree, id),
+        AgentKind::Codex => codex_session_exists(id),
+        AgentKind::Omp => omp_session_exists(id),
+        AgentKind::Hermes => false,
+    };
+    on_disk.then(|| id.to_string())
+}
+
+/// The id to pin on a *fresh* spawn of `instance`, for harnesses that take
+/// one up front. Pi only: reuse the id already stored for the instance (a
+/// pinned session that never materialized — pi persists lazily, so a spawn
+/// that exited before any assistant output leaves no file), else mint one
+/// and store it now so the respawn path can find it. `None` for every other
+/// harness: their ids are captured after the fact, not chosen.
+///
+/// Pi accepts `[A-Za-z0-9][A-Za-z0-9._-]*`; 32 hex chars is comfortably
+/// inside that and collision-free in practice.
+pub(crate) fn pin_session_id_for(
+    app: &App,
+    instance: &crate::data::agents::AgentInstance,
+) -> Option<String> {
+    if instance.agent != crate::pty::session::AgentKind::Pi {
+        return None;
+    }
+    if let Some(id) = &instance.agent_session_id {
+        if crate::pty::session::pi_session_id_is_valid(id) {
+            return Some(id.clone());
+        }
+        tracing::warn!(
+            id,
+            "stored pi session id is not a valid pi id; minting a new one"
+        );
+    }
+    let id = format!("{:032x}", rand::random::<u128>());
+    if let Err(e) = app.store.set_instance_agent_session(instance.id, &id) {
+        tracing::warn!(error = %e, "failed to store the minted pi session id");
+        return None;
+    }
+    Some(id)
+}
+
+/// A pi primary that predates per-instance ids has conversations on disk
+/// but no pin, and pi has no hook to report one later — so without this it
+/// would `--continue` forever, resuming whichever pi in the worktree spoke
+/// last once a peer is added. Adopt the newest pi session not owned by
+/// another instance as the primary's own, store it, and resume it exactly.
+/// Only for a primary with no recorded id; a session owned by a peer (its
+/// recorded id) is never adopted. Returns the adopted id.
+pub(crate) fn adopt_legacy_pi_session(
+    app: &App,
+    instance: &crate::data::agents::AgentInstance,
+    worktree: &std::path::Path,
+) -> Option<String> {
+    if instance.agent != crate::pty::session::AgentKind::Pi
+        || !instance.is_primary
+        || instance.agent_session_id.is_some()
+    {
+        return None;
+    }
+    let owned_by_peers: Vec<String> = app
+        .store
+        .workspace_agents(instance.workspace_id)
+        .ok()?
+        .into_iter()
+        .filter(|a| a.id != instance.id)
+        .filter_map(|a| a.agent_session_id)
+        .collect();
+    let id = crate::pty::session::newest_pi_session_id(worktree, &owned_by_peers)?;
+    if let Err(e) = app.store.set_instance_agent_session(instance.id, &id) {
+        tracing::warn!(error = %e, "failed to store the adopted pi session id");
+        return None;
+    }
+    Some(id)
+}
+
 pub(crate) fn build_spawn_info(
     app: &App,
     ws_id: crate::data::store::WorkspaceId,
@@ -98,12 +202,49 @@ pub(crate) fn build_spawn_info(
         repo_path,
         ..
     } = ctx;
-    let mode = if crate::pty::session::has_prior_session_for(&worktree, agent) {
+    // An exact recorded session wins over the cwd-wide `has_prior_session_for`
+    // probe: once a peer shares this worktree, "most recent session here" may
+    // be the peer's, and the snapshot gate is moot for an id this workspace's
+    // own instance reported.
+    //
+    // A recorded session that is NOT on disk also skips the probe, and spawns
+    // fresh: the instance's own conversation is gone (deleted, never written —
+    // a pinned pi id, an omp `/new` boundary not yet persisted), so the cwd's
+    // most recent session is by definition someone else's. Falling through to
+    // `--continue` here is how a primary would reopen a peer's transcript, or
+    // omp's pre-`/new` history that omp itself refuses to resurrect.
+    let primary = app
+        .store
+        .primary_instance_id(ws_id)
+        .ok()
+        .flatten()
+        .and_then(|id| app.store.workspace_agents_by_id(id).ok().flatten());
+    let resume_session_id = primary
+        .as_ref()
+        .and_then(|inst| recorded_resume_id(inst, &worktree))
+        .or_else(|| {
+            primary
+                .as_ref()
+                .and_then(|inst| adopt_legacy_pi_session(app, inst, &worktree))
+        });
+    let recorded_but_missing = resume_session_id.is_none()
+        && primary
+            .as_ref()
+            .is_some_and(|inst| inst.agent_session_id.is_some());
+    // pi never takes the cwd-wide `--continue`: every pi instance is pinned
+    // or adopted by id, and when neither yields an eligible session (only
+    // peers' sessions on disk, say) the honest answer is a fresh pin — not
+    // whichever pi in the worktree spoke last.
+    let cwd_wide_allowed = !recorded_but_missing && agent != crate::pty::session::AgentKind::Pi;
+    let mode = if resume_session_id.is_some()
+        || (cwd_wide_allowed && crate::pty::session::has_prior_session_for(&worktree, agent))
+    {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
             doctrine: doctrine.clone(),
             additional_dirs,
             yolo,
+            resume_session_id,
         }
     } else {
         let rename_ctx = if crate::util::names::is_generated_slug(&ws.name) {
@@ -124,6 +265,9 @@ pub(crate) fn build_spawn_info(
             doctrine,
             additional_dirs,
             yolo,
+            pin_session_id: primary
+                .as_ref()
+                .and_then(|inst| pin_session_id_for(app, inst)),
         }
     };
     Some((ws_id, worktree, mode, repo_path, agent))
@@ -172,9 +316,21 @@ pub(crate) fn tmux_name_for(
     }
 }
 
-/// Build spawn parameters for an *added* (non-primary) instance. Added agents
-/// always spawn `Fresh` with an injected handoff note so they re-orient from
-/// the shared worktree + git diff (added agents never resume a session).
+/// Build spawn parameters for an *added* (non-primary) instance.
+///
+/// First spawn is `Fresh` with an injected handoff note so the agent
+/// re-orients from the shared worktree + git diff. Once the instance has
+/// reported its own harness session id (`recorded_resume_id`), a respawn —
+/// typically wsx being quit and reopened — is `Continue` with that exact id,
+/// so the peer gets its conversation back rather than a blank chat. The
+/// handoff note rides along on resume too: it is the peer's only
+/// system-prompt statement of who it is and how to reach the others, and
+/// Claude does not persist system prompts across resumes.
+///
+/// The cwd-wide resume (`--continue`) is never used here: it would reopen
+/// whichever agent in the worktree spoke last, usually the primary. A fresh
+/// pi peer is instead pinned to a wsx-minted id (`pin_session_id_for`), which
+/// is what its respawn resumes.
 /// Returns `(worktree, SpawnMode, repo_path)`.
 pub(crate) fn build_added_spawn_info(
     app: &App,
@@ -211,12 +367,22 @@ pub(crate) fn build_added_spawn_info(
         None => note,
     };
     let doctrine = crate::agent::doctrine::resolve_effective_doctrine(&app.store, instance.agent);
-    let mode = crate::pty::session::SpawnMode::Fresh {
-        rename_ctx: None,
-        custom_instructions: Some(custom_instructions),
-        doctrine,
-        additional_dirs: ctx.additional_dirs,
-        yolo: ctx.yolo,
+    let mode = match recorded_resume_id(instance, &ctx.worktree) {
+        Some(id) => crate::pty::session::SpawnMode::Continue {
+            custom_instructions: Some(custom_instructions),
+            doctrine,
+            additional_dirs: ctx.additional_dirs,
+            yolo: ctx.yolo,
+            resume_session_id: Some(id),
+        },
+        None => crate::pty::session::SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: Some(custom_instructions),
+            doctrine,
+            additional_dirs: ctx.additional_dirs,
+            yolo: ctx.yolo,
+            pin_session_id: pin_session_id_for(app, instance),
+        },
     };
     Some((ctx.worktree, mode, ctx.repo_path))
 }
@@ -272,6 +438,441 @@ mod added_spawn_tests {
                 );
             }
             other => panic!("expected Fresh, got {other:?}"),
+        }
+    }
+
+    /// A workspace on a real (canonicalizable) worktree, with a fake `$HOME`
+    /// holding one Claude session file for it. Returns the app, the primary
+    /// and the added instance, and the seeded session id. The `EnvGuard`
+    /// must outlive the assertions — it pins `HOME` to the fake dir.
+    fn app_with_claude_session(
+        added_kind: AgentKind,
+    ) -> (
+        App,
+        crate::data::agents::AgentInstance,
+        crate::data::agents::AgentInstance,
+        String,
+        TempDir,
+        TempDir,
+        crate::test_support::EnvGuard,
+    ) {
+        let home = TempDir::new().unwrap();
+        let worktree = TempDir::new().unwrap();
+        let abs = std::fs::canonicalize(worktree.path()).unwrap();
+        let encoded = crate::activity::events::encode_cwd(&abs);
+        let dir = home.path().join(".claude/projects").join(&encoded);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sid = "656c166a-911b-4375-9db9-007b8456f3e3".to_string();
+        std::fs::write(dir.join(format!("{sid}.jsonl")), "{}").unwrap();
+
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "feat",
+                branch: "wsx/feat",
+                worktree_path: worktree.path(),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let primary = store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
+        let added = store.add_workspace_agent(ws, added_kind).unwrap();
+
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        let state_dir = TempDir::new().unwrap();
+        let mut app = App::new(store, state_dir.path().to_path_buf()).unwrap();
+        app.refresh().unwrap();
+        (app, primary, added, sid, home, worktree, env)
+    }
+
+    #[test]
+    fn added_claude_with_recorded_live_session_resumes_it_with_the_note() {
+        let (app, _primary, added, sid, _home, _wt, _env) =
+            app_with_claude_session(AgentKind::Claude);
+        app.store
+            .set_instance_agent_session(added.id, &sid)
+            .unwrap();
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id,
+                custom_instructions,
+                ..
+            } => {
+                assert_eq!(resume_session_id.as_deref(), Some(sid.as_str()));
+                let note = custom_instructions.expect("handoff note still injected");
+                assert!(note.contains("wsx agent send"), "{note}");
+            }
+            other => panic!("expected Continue by id, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn added_claude_with_recorded_but_missing_session_spawns_fresh() {
+        let (app, _primary, added, _sid, _home, _wt, _env) =
+            app_with_claude_session(AgentKind::Claude);
+        app.store
+            .set_instance_agent_session(added.id, "0000-gone")
+            .unwrap();
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        assert!(
+            matches!(mode, SpawnMode::Fresh { .. }),
+            "claude would refuse an unknown id; got {mode:?}"
+        );
+    }
+
+    #[test]
+    fn added_claude_without_a_recorded_session_never_uses_cwd_wide_continue() {
+        // The primary's session is on disk in this worktree; an unreported
+        // peer must not `--continue` into it.
+        let (app, _primary, added, _sid, _home, _wt, _env) =
+            app_with_claude_session(AgentKind::Claude);
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        assert!(matches!(mode, SpawnMode::Fresh { .. }), "got {mode:?}");
+    }
+
+    #[test]
+    fn added_non_claude_ignores_a_recorded_session_id() {
+        let (app, _primary, added, sid, _home, _wt, _env) =
+            app_with_claude_session(AgentKind::Codex);
+        app.store
+            .set_instance_agent_session(added.id, &sid)
+            .unwrap();
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        assert!(matches!(mode, SpawnMode::Fresh { .. }), "got {mode:?}");
+    }
+
+    fn seed_pi_file(home: &std::path::Path, worktree: &std::path::Path, id: &str) {
+        let abs = std::fs::canonicalize(worktree).unwrap();
+        let encoded = abs.to_string_lossy().replace('/', "-");
+        let dir = home
+            .join(".pi/agent/sessions")
+            .join(format!("--{encoded}--"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("2026-09-13T10-00-00_{id}.jsonl")), "{}").unwrap();
+    }
+
+    #[test]
+    fn added_pi_first_spawn_is_fresh_pinned_to_a_stored_id() {
+        let (app, _primary, added, _sid, _home, _wt, _env) = app_with_claude_session(AgentKind::Pi);
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        let pinned = match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => pin_session_id.expect("pi gets a pin"),
+            other => panic!("expected Fresh, got {other:?}"),
+        };
+        assert_eq!(pinned.len(), 32, "32 hex chars: {pinned}");
+        assert!(pinned.chars().all(|c| c.is_ascii_hexdigit()));
+        let stored = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        assert_eq!(
+            stored.agent_session_id.as_deref(),
+            Some(pinned.as_str()),
+            "the pin is persisted so the respawn finds it"
+        );
+        // A second build before pi materialized anything reuses the pin.
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &stored).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => {
+                assert_eq!(pin_session_id.as_deref(), Some(pinned.as_str()))
+            }
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn added_pi_with_materialized_pinned_session_resumes_by_id() {
+        let (app, _primary, added, _sid, home, wt, _env) = app_with_claude_session(AgentKind::Pi);
+        app.store
+            .set_instance_agent_session(added.id, "0123456789abcdef0123456789abcdef")
+            .unwrap();
+        seed_pi_file(home.path(), wt.path(), "0123456789abcdef0123456789abcdef");
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(
+                resume_session_id.as_deref(),
+                Some("0123456789abcdef0123456789abcdef")
+            ),
+            other => panic!("expected Continue by id, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn added_codex_with_recorded_thread_on_disk_resumes_it() {
+        let (app, _primary, added, _sid, home, _wt, _env) =
+            app_with_claude_session(AgentKind::Codex);
+        let id = "01a080db-c2a2-7e92-a90a-d267ae83eb3d";
+        let dir = home.path().join(".codex/sessions/2026/09/13");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("rollout-2026-09-13T07-51-21-{id}.jsonl")),
+            "{}",
+        )
+        .unwrap();
+        app.store.set_instance_agent_session(added.id, id).unwrap();
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(resume_session_id.as_deref(), Some(id)),
+            other => panic!("expected Continue by thread id, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn added_omp_with_recorded_session_file_on_disk_resumes_it() {
+        let (app, _primary, added, _sid, home, _wt, _env) = app_with_claude_session(AgentKind::Omp);
+        let file = home.path().join(".omp/agent/sessions/-w/2026_abc.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{}").unwrap();
+        let path = file.to_string_lossy().into_owned();
+        app.store
+            .set_instance_agent_session(added.id, &path)
+            .unwrap();
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(resume_session_id.as_deref(), Some(path.as_str())),
+            other => panic!("expected Continue by path, got {other:?}"),
+        }
+        // The file gone: back to fresh rather than a failed launch.
+        std::fs::remove_file(&file).unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        assert!(matches!(mode, SpawnMode::Fresh { .. }), "got {mode:?}");
+    }
+
+    #[test]
+    fn added_codex_without_a_recorded_thread_stays_fresh_and_unpinned() {
+        let (app, _primary, added, _sid, _home, _wt, _env) =
+            app_with_claude_session(AgentKind::Codex);
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => {
+                assert_eq!(pin_session_id, None, "codex assigns its own ids")
+            }
+            other => panic!("expected Fresh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn primary_pi_pinned_but_unmaterialized_stays_fresh_despite_a_stray_session() {
+        // A pi workspace whose primary was pinned but never wrote a file, while
+        // some other pi session exists in the cwd: the pin wins over the
+        // cwd-wide probe, or the respawn would `--continue` into a stranger.
+        // (The added instance is codex so the primary can take pi ordinal 1.)
+        let (app, _primary, _added, _sid, home, wt, _env) =
+            app_with_claude_session(AgentKind::Codex);
+        let ws = app.workspaces.first().unwrap().1.clone();
+        let prim = app.store.primary_instance_id(ws.id).unwrap().unwrap();
+        // Make the primary a pi instance for this scenario.
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspace_agents SET agent = 'pi', agent_session_id = 'ffffffffffffffffffffffffffffffff' WHERE id = ?1",
+                [prim.0],
+            )
+            .unwrap();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET agent = 'pi' WHERE id = ?1",
+                [ws.id.0],
+            )
+            .unwrap();
+        let mut app = app;
+        app.refresh().unwrap();
+        seed_pi_file(home.path(), wt.path(), "someone-elses-session");
+
+        let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws.id).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => assert_eq!(
+                pin_session_id.as_deref(),
+                Some("ffffffffffffffffffffffffffffffff")
+            ),
+            other => panic!("expected Fresh with the stored pin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_pi_primary_adopts_its_newest_session_but_never_a_peers() {
+        let (app, primary, added, _sid, home, wt, _env) = app_with_claude_session(AgentKind::Pi);
+        let ws = app.workspaces.first().unwrap().1.clone();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspace_agents SET agent = 'pi', ordinal = 0 WHERE id = ?1",
+                [primary.id.0],
+            )
+            .unwrap();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET agent = 'pi' WHERE id = ?1",
+                [ws.id.0],
+            )
+            .unwrap();
+        let mut app = app;
+        app.refresh().unwrap();
+        // Two sessions on disk: the primary's old one, and a newer one the
+        // added peer owns (its pin is recorded).
+        seed_pi_file(home.path(), wt.path(), "legacy0000000000000000000000000");
+        seed_pi_file(home.path(), wt.path(), "peer000000000000000000000000000");
+        let peer_path = crate::pty::session::pi_session_dir_for_test(wt.path())
+            .join("2026-09-13T10-00-00_peer000000000000000000000000000.jsonl");
+        std::fs::File::options()
+            .write(true)
+            .open(&peer_path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+        app.store
+            .set_instance_agent_session(added.id, "peer000000000000000000000000000")
+            .unwrap();
+
+        let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws.id).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(
+                resume_session_id.as_deref(),
+                Some("legacy0000000000000000000000000")
+            ),
+            other => panic!("expected Continue by adopted id, got {other:?}"),
+        }
+        let stored = app
+            .store
+            .workspace_agents_by_id(primary.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.agent_session_id.as_deref(),
+            Some("legacy0000000000000000000000000"),
+            "adoption is persisted"
+        );
+    }
+
+    #[test]
+    fn legacy_pi_primary_with_only_peer_sessions_spawns_fresh_pinned() {
+        // Nothing eligible to adopt: the only session on disk is the peer's.
+        // The old cwd-wide --continue would have reopened exactly that peer.
+        let (app, primary, added, _sid, home, wt, _env) = app_with_claude_session(AgentKind::Pi);
+        let ws = app.workspaces.first().unwrap().1.clone();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspace_agents SET agent = 'pi', ordinal = 0 WHERE id = ?1",
+                [primary.id.0],
+            )
+            .unwrap();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET agent = 'pi' WHERE id = ?1",
+                [ws.id.0],
+            )
+            .unwrap();
+        let mut app = app;
+        app.refresh().unwrap();
+        seed_pi_file(home.path(), wt.path(), "peer000000000000000000000000000");
+        app.store
+            .set_instance_agent_session(added.id, "peer000000000000000000000000000")
+            .unwrap();
+
+        let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws.id).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => {
+                let pin = pin_session_id.expect("a new pin");
+                assert_ne!(pin, "peer000000000000000000000000000");
+                let stored = app
+                    .store
+                    .workspace_agents_by_id(primary.id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stored.agent_session_id.as_deref(), Some(pin.as_str()));
+            }
+            other => panic!("expected Fresh with a new pin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn primary_claude_with_recorded_live_session_resumes_by_id() {
+        let (app, primary, _added, sid, _home, _wt, _env) =
+            app_with_claude_session(AgentKind::Claude);
+        app.store
+            .set_instance_agent_session(primary.id, &sid)
+            .unwrap();
+        let ws_id = primary.workspace_id;
+
+        let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws_id).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(resume_session_id.as_deref(), Some(sid.as_str())),
+            other => panic!("expected Continue by id, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn primary_with_a_recorded_but_missing_session_spawns_fresh_not_continue() {
+        // The primary's own session is gone but another session exists in the
+        // cwd (the seeded one): `--continue` would reopen that stranger.
+        for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Omp] {
+            let (app, primary, _added, _sid, _home, _wt, _env) =
+                app_with_claude_session(AgentKind::Hermes);
+            app.store
+                .conn()
+                .execute(
+                    "UPDATE workspace_agents SET agent = ?1, agent_session_id = '/nowhere/gone.jsonl' WHERE id = ?2",
+                    rusqlite::params![kind.store_value(), primary.id.0],
+                )
+                .unwrap();
+            let ws_id = primary.workspace_id;
+            app.store
+                .conn()
+                .execute(
+                    "UPDATE workspaces SET agent = ?1 WHERE id = ?2",
+                    rusqlite::params![kind.store_value(), ws_id.0],
+                )
+                .unwrap();
+            let mut app = app;
+            app.refresh().unwrap();
+            let (_id, _wt, mode, _repo, _agent) =
+                build_spawn_info(&app, ws_id).expect("spawn info");
+            assert!(
+                matches!(mode, SpawnMode::Fresh { .. }),
+                "{kind:?}: expected Fresh, got {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_claude_without_a_recorded_session_keeps_cwd_wide_continue() {
+        // Pre-existing workspaces have no recorded id; the old `--continue`
+        // path (a session file present, no snapshot gate) must still apply.
+        let (app, primary, _added, _sid, _home, _wt, _env) =
+            app_with_claude_session(AgentKind::Claude);
+        let (_id, _wt, mode, _repo, _agent) =
+            build_spawn_info(&app, primary.workspace_id).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(resume_session_id, None),
+            other => panic!("expected plain Continue, got {other:?}"),
         }
     }
 }

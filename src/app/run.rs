@@ -211,6 +211,9 @@ pub async fn run<B: Backend + std::io::Write>(
             dirty = false;
             last_frame = Some(std::time::Instant::now());
             if g.quit {
+                // Last look at omp's breadcrumbs before the PTYs die: a
+                // `/new` done moments ago must outlive the poll interval.
+                g.harvest_session_identities();
                 break;
             }
         }
@@ -274,6 +277,11 @@ pub async fn run<B: Backend + std::io::Write>(
                 let mail_due = g.mail_drain_due(now_ms);
                 if g.poll_external_changes() || redeliver || mail_due {
                     g.drain_agent_messages();
+                }
+                // Learn which session each running omp instance is in, so a
+                // respawn after quitting wsx can resume exactly that one.
+                if g.tick % crate::app::session_harvest::HARVEST_EVERY_TICKS == 0 {
+                    g.harvest_session_identities();
                 }
                 let now_secs = crate::util::time::now_secs();
                 let now_hour = now_secs - (now_secs % 3600);

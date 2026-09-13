@@ -54,6 +54,7 @@ async fn ctrl_x_shift_d_saves_layout_and_returns_to_dashboard() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_9 = test_primary_instance(&app, first_id);
     app.sessions
@@ -75,6 +76,7 @@ async fn ctrl_x_shift_d_saves_layout_and_returns_to_dashboard() {
         doctrine: None,
         additional_dirs: vec![],
         yolo: false,
+        pin_session_id: None,
     };
     let __inst_10 = test_primary_instance(&app, second_id);
     app.sessions

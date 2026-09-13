@@ -151,7 +151,8 @@ pub(crate) fn ensure_workspace_session(
 /// Ensure a specific agent *instance* has a live PTY session, spawning one in
 /// place if missing. Primary instances delegate to `ensure_workspace_session`
 /// so the primary path is never duplicated. Added (non-primary) instances
-/// spawn `Fresh` with an injected handoff note (see `build_added_spawn_info`).
+/// spawn `Fresh` with an injected handoff note, or resume their own recorded
+/// session once they have one (see `build_added_spawn_info`).
 /// Mirrors `ensure_workspace_session`'s return/error conventions, including the
 /// `AgentMissing` modal for a missing agent binary.
 ///
@@ -275,6 +276,10 @@ pub(crate) fn toggle_workspace_shared(
         .filter(|inst| app.instance_is_running(inst.id))
         .cloned()
         .collect();
+    // The respawns below resume by recorded session; capture omp's current
+    // one first (a `/new` since the last poll would otherwise be lost and
+    // the respawn would reopen the session before it).
+    app.harvest_session_identities();
     app.store.set_workspace_shared(ws_id, to_shared)?;
     app.refresh()?; // reload app.workspaces so spawn sees the new flag
     // `sessions.remove` calls `kill_backend` in both directions: for a direct

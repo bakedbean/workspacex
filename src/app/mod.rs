@@ -37,6 +37,7 @@ pub mod ipc;
 pub mod messaging;
 pub mod render;
 pub mod resize_sync;
+pub mod session_harvest;
 pub use crate::app::activity::{ActivityState, classify_activity, classify_activity_with_events};
 pub use crate::app::background::{
     branch_drift_poll, branch_drift_poll_with, tail_workspace_events,

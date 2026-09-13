@@ -267,8 +267,11 @@ impl Store {
             rusqlite::params![id.0, agent.store_value()],
             |r| r.get(0),
         )?;
+        // A session identity belongs to one harness: a Claude session id means
+        // nothing to Codex, and a Hermes primary would otherwise carry a
+        // "recorded but missing" id forever. Clear it with the kind change.
         self.conn.execute(
-            "UPDATE workspace_agents SET agent = ?1, ordinal = ?2
+            "UPDATE workspace_agents SET agent = ?1, ordinal = ?2, agent_session_id = NULL
              WHERE workspace_id = ?3 AND is_primary = 1",
             rusqlite::params![agent.store_value(), next_ordinal, id.0],
         )?;
@@ -1341,6 +1344,37 @@ mod tests {
     }
 
     #[test]
+    fn set_workspace_agent_clears_the_previous_harness_session_id() {
+        use crate::pty::session::AgentKind;
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "w",
+                branch: "b",
+                worktree_path: std::path::Path::new("/tmp/w"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let primary = store.add_primary_agent(id, AgentKind::Claude, 1).unwrap();
+        store
+            .set_instance_agent_session(primary.id, "claude-session-uuid")
+            .unwrap();
+        store.set_workspace_agent(id, AgentKind::Codex).unwrap();
+        let row = store.workspace_agents_by_id(primary.id).unwrap().unwrap();
+        assert_eq!(row.agent, AgentKind::Codex);
+        assert_eq!(
+            row.agent_session_id, None,
+            "a Claude id is not a Codex thread"
+        );
+    }
+
+    #[test]
     fn set_workspace_agent_updates_row() {
         use crate::pty::session::AgentKind;
         let store = Store::open_in_memory().unwrap();
@@ -1516,7 +1550,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 23);
+        assert_eq!(v, 24);
     }
 
     #[test]

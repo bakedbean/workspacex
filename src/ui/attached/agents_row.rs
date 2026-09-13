@@ -37,15 +37,16 @@ pub fn agent_switch_keys(count: usize) -> Vec<char> {
 /// the pill group and the next element of the chip row's flush-right block.
 pub(super) const AGENT_PILL_GAP: u16 = 3;
 
-/// Identity-dot glyph for an idle (non-focused) agent: a hollow circle in the
-/// agent's kind colour.
-const AGENT_DOT_IDLE: &str = "○";
-/// Identity-dot glyph for the active (focused-pane) agent: a filled circle.
-/// Same column width as [`AGENT_DOT_IDLE`] but visually heavier, so the agent
+/// Identity dot for an idle (non-focused) agent — a hollow circle in the
+/// agent's kind colour — plus the space that separates it from the label.
+const AGENT_DOT_IDLE: &str = "○ ";
+/// Identity dot for the active (focused-pane) agent: a filled circle. Same
+/// column width as [`AGENT_DOT_IDLE`] but visually heavier, so the agent
 /// you're currently driving stands out without shifting any pill rects.
-const AGENT_DOT_ACTIVE: &str = "●";
-/// Columns taken by the identity dot and the space that separates it from the
-/// label (`● claude`).
+const AGENT_DOT_ACTIVE: &str = "● ";
+/// Columns taken by [`AGENT_DOT_IDLE`] / [`AGENT_DOT_ACTIVE`] (`● claude`).
+/// The width arithmetic and click-rect layout use this; the painter emits
+/// the strings — `dot_prefixes_match_declared_width` keeps them in step.
 const AGENT_DOT_WIDTH: u16 = 2;
 
 /// Column width of one agent pill: the identity dot + space, `label `, and
@@ -95,7 +96,7 @@ pub fn agent_pills_spans(
         } else {
             AGENT_DOT_IDLE
         };
-        spans.push(Span::styled(format!("{dot} "), theme.agent_style(*kind)));
+        spans.push(Span::styled(dot.to_string(), theme.agent_style(*kind)));
         let label_span = if is_active {
             Span::styled(
                 format!("{label} "),
@@ -187,6 +188,56 @@ mod tests {
         assert!(text.contains("codex"));
         assert!(text.contains('q'));
         assert!(text.contains('w'));
+
+        // Each pill opens with the dot span in its agent's kind colour.
+        let dots: Vec<&Span<'static>> = spans
+            .iter()
+            .filter(|s| s.content.as_ref() == AGENT_DOT_IDLE)
+            .collect();
+        assert_eq!(dots.len(), 2, "one dot per agent: {text:?}");
+        assert_eq!(dots[0].style.fg, theme.agent_style(AgentKind::Claude).fg);
+        assert_eq!(dots[1].style.fg, theme.agent_style(AgentKind::Codex).fg);
+    }
+
+    #[test]
+    fn dot_prefixes_match_declared_width() {
+        // The painter emits the prefix strings; the width arithmetic and
+        // click rects use `AGENT_DOT_WIDTH`. They must agree or rects drift.
+        assert_eq!(AGENT_DOT_IDLE.chars().count(), AGENT_DOT_WIDTH as usize);
+        assert_eq!(AGENT_DOT_ACTIVE.chars().count(), AGENT_DOT_WIDTH as usize);
+    }
+
+    #[test]
+    fn agent_pills_spans_fill_the_focused_instance_among_same_kind_agents() {
+        // Two Claude agents share a colour, so the filled dot is the only
+        // per-pill cue for which instance is focused. Focus keys off the
+        // instance id, not the kind: with `claude#2` active, its pill (and
+        // only its pill) carries the filled dot, and both dots stay Claude-
+        // coloured.
+        let theme = Theme::by_name("default");
+        let agents = vec![
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".to_string(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Claude,
+                "claude#2".to_string(),
+                Some('w'),
+            ),
+        ];
+        let spans = agent_pills_spans(&agents, Some(AgentInstanceId(2)), &theme);
+        let text: String = spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(text, "○ claude  q    ● claude#2  w ");
+        let claude_fg = theme.agent_style(AgentKind::Claude).fg;
+        for dot in spans.iter().filter(|s| {
+            s.content.as_ref() == AGENT_DOT_IDLE || s.content.as_ref() == AGENT_DOT_ACTIVE
+        }) {
+            assert_eq!(dot.style.fg, claude_fg);
+        }
     }
 
     #[test]

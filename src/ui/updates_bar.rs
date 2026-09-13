@@ -1,10 +1,10 @@
-//! Content selection for the attached-view "other workspaces" status row.
+//! Content selection for the attached-view top-bar workspace row.
 //!
-//! Pure module: takes pre-computed slices of App state, returns an inline
-//! list of attention-needing workspaces. The caller (typically
-//! `attached::render`) handles drawing. The activity-fallback path that
-//! previously surfaced "most recent event" was removed — issue #18 makes
-//! the status row exclusively about workspaces that need user action.
+//! Pure module: takes pre-computed slices of App state, returns the row's
+//! entries — every workspace but the attached one, those needing attention
+//! first, the rest in dashboard order — and lays them out as a styled line
+//! with click geometry. The caller (`app::render::attached`) handles
+//! drawing.
 
 use crate::activity::events::WorkspaceEvents;
 use crate::data::store::WorkspaceId;
@@ -120,16 +120,21 @@ pub fn glyph_for_activity(a: ActivityState) -> char {
         ActivityState::AwaitingAnswer => '?',
         ActivityState::Complete => '\u{2713}', // ✓ CHECK MARK
         ActivityState::Awaiting | ActivityState::Stalled => '⚠',
-        // Defensive default — non-alertable states shouldn't appear
-        // in the status row (collect_attention filters by
-        // needs_attention) but be safe.
+        // Defensive default for the non-alertable states.
         _ => '⚠',
     }
 }
 
-/// V5-styled variant of `format_attention_line`. Produces a `Line` whose
-/// per-entry glyph is colored by the workspace's V5 `Status`, repo/name
-/// in `path`, age in `dim`, separators in `dim`.
+/// Display width of `s` in terminal cells (double-width CJK counts 2,
+/// combining marks 0), so entry geometry matches what ratatui draws.
+fn cell_width(s: &str) -> usize {
+    Span::raw(s).width()
+}
+
+/// Produce the top-bar row as a styled `Line`: per-entry glyph colored by
+/// the workspace's dashboard status, repo/name in the lifecycle hue, age in
+/// `dim`, separators in `dim`, plus the clickable geometry of each entry
+/// and of the `… +N more` tail.
 pub fn format_attention_line_styled(
     entries: &[AttentionEntry],
     now_ms: i64,
@@ -139,19 +144,20 @@ pub fn format_attention_line_styled(
     if entries.is_empty() {
         return None;
     }
-    // Compute the visual width of one entry: "<glyph> <repo>/<name> (<age>)".
-    let widths: Vec<usize> = entries
+    let ages: Vec<String> = entries
         .iter()
-        .map(|e| {
-            let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
-            1 + 1
-                + e.repo_name.chars().count()
-                + 1
-                + e.name.chars().count()
-                + 2
-                + age.chars().count()
-                + 1
-        })
+        .map(|e| format_age(now_ms.saturating_sub(e.age_anchor_ms)))
+        .collect();
+    let names: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}/{}", e.repo_name, e.name))
+        .collect();
+    // Visual width of one entry: "<glyph> <repo>/<name> (<age>)".
+    let entry_width = |name: &str, age: &str| 1 + 1 + cell_width(name) + 2 + cell_width(age) + 1;
+    let mut widths: Vec<usize> = names
+        .iter()
+        .zip(&ages)
+        .map(|(n, a)| entry_width(n, a))
         .collect();
     let sep_w = 3; // " │ "
     let more_text = |remaining: usize| format!(" … +{remaining} more");
@@ -169,20 +175,33 @@ pub fn format_attention_line_styled(
         included += 1;
     }
     while included > 1 && included < entries.len() {
-        let tail_w = more_text(entries.len() - included).chars().count();
+        let tail_w = cell_width(&more_text(entries.len() - included));
         if total + tail_w <= max_width {
             break;
         }
         included -= 1;
         total -= widths[included] + sep_w;
     }
+    // Always render at least one entry. When that entry alone crowds out
+    // the tail, shorten its name with an ellipsis so the tail stays on
+    // screen; a lone entry with nothing behind it just clips.
+    included = included.max(1);
+    let mut first_name = names[0].clone();
+    if included < entries.len() {
+        let tail_w = cell_width(&more_text(entries.len() - included));
+        let budget = max_width.saturating_sub(tail_w);
+        if widths[0] > budget {
+            let fixed = widths[0] - cell_width(&names[0]);
+            let name_budget = budget.saturating_sub(fixed);
+            let mut kept: String = names[0].clone();
+            while cell_width(&kept) + 1 > name_budget && kept.pop().is_some() {}
+            kept.push('…');
+            first_name = kept;
+            widths[0] = entry_width(&first_name, &ages[0]);
+        }
+    }
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut segments: Vec<AttentionSegment> = Vec::new();
-    // Always render at least one entry; if the first doesn't fit we emit
-    // it as-is and rely on ratatui's clipping.
-    if included == 0 {
-        included = 1;
-    }
     let mut col: usize = 0;
     for (i, e) in entries.iter().take(included).enumerate() {
         if i > 0 {
@@ -199,12 +218,13 @@ pub fn format_attention_line_styled(
         let name_style = theme
             .lifecycle_style(e.lifecycle)
             .unwrap_or_else(|| ratatui::style::Style::default().fg(theme.path));
-        spans.push(Span::styled(
-            format!("{}/{}", e.repo_name, e.name),
-            name_style,
-        ));
-        let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
-        spans.push(Span::styled(format!(" ({age})"), theme.dim_style()));
+        let name = if i == 0 {
+            first_name.clone()
+        } else {
+            names[i].clone()
+        };
+        spans.push(Span::styled(name, name_style));
+        spans.push(Span::styled(format!(" ({})", ages[i]), theme.dim_style()));
         col += widths[i];
         segments.push(AttentionSegment {
             workspace_id: e.workspace_id,
@@ -218,7 +238,7 @@ pub fn format_attention_line_styled(
         let text = more_text(remaining);
         more = Some(AttentionMore {
             start_col: col as u16,
-            width: text.chars().count() as u16,
+            width: cell_width(&text) as u16,
         });
         spans.push(Span::styled(text, theme.dim_style()));
     }
@@ -890,7 +910,7 @@ mod tests {
     }
 
     fn line_width(line: &Line<'_>) -> usize {
-        line.spans.iter().map(|s| s.content.chars().count()).sum()
+        line.width()
     }
 
     #[test]
@@ -936,5 +956,74 @@ mod tests {
             format_attention_line_styled(&three_entries(), 10_000, 200, &theme).expect("line");
         assert_eq!(out.segments.len(), 3);
         assert_eq!(out.more, None);
+    }
+
+    fn entry(id: i64, repo: &str, name: &str) -> AttentionEntry {
+        AttentionEntry {
+            workspace_id: WorkspaceId(id),
+            repo_name: repo.into(),
+            name: name.into(),
+            age_anchor_ms: 9_000,
+            status: Status::Question,
+            lifecycle: None,
+        }
+    }
+
+    #[test]
+    fn styled_line_truncates_long_first_entry_to_keep_tail_visible() {
+        // A first entry wider than the budget used to push the tail off
+        // screen. Its name now yields (with an ellipsis) so the tail fits.
+        let theme = Theme::wsx();
+        let entries = vec![entry(1, "repo", &"n".repeat(40)), entry(2, "repo", "b")];
+        let out = format_attention_line_styled(&entries, 10_000, 30, &theme).expect("line");
+        let text: String = out.line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(line_width(&out.line) <= 30, "{text:?}");
+        assert!(text.ends_with("+1 more"), "{text:?}");
+        assert!(text.contains("repo/nnn"), "name keeps its head: {text:?}");
+        assert!(text.contains("…") && text.contains(" (1s)"), "{text:?}");
+        assert_eq!(out.segments.len(), 1);
+        assert_eq!(
+            out.segments[0].width as usize + out.more.unwrap().width as usize,
+            line_width(&out.line),
+            "segment + tail must tile the line exactly"
+        );
+    }
+
+    #[test]
+    fn styled_line_survives_zero_width_budget() {
+        let theme = Theme::wsx();
+        let out = format_attention_line_styled(&three_entries(), 10_000, 0, &theme).expect("line");
+        assert_eq!(out.segments.len(), 1, "always renders the first entry");
+    }
+
+    #[test]
+    fn styled_line_measures_widths_in_terminal_cells() {
+        // "日本" is two double-width glyphs: 4 cells, 2 chars. Segment
+        // geometry must use cells or the click rects drift.
+        let theme = Theme::wsx();
+        let entries = vec![entry(1, "a", "日本"), entry(2, "a", "q")];
+        let out = format_attention_line_styled(&entries, 10_000, 200, &theme).expect("line");
+        // "? a/日本 (1s)" = 1+1 + 1+1 + 4 + 2+2+1 = 13 cells.
+        assert_eq!(out.segments[0].width, 13);
+        assert_eq!(out.segments[1].start_col, 16);
+    }
+
+    #[test]
+    fn styled_line_tail_width_tracks_multi_digit_remainder() {
+        // Giving an entry back can push the remainder from 9 to 10 and
+        // widen the tail by a column; the fit must use the final width.
+        let theme = Theme::wsx();
+        let entries: Vec<AttentionEntry> = (1..=12).map(|i| entry(i, "a", "q")).collect();
+        for budget in [33usize, 34, 42] {
+            let out = format_attention_line_styled(&entries, 10_000, budget, &theme).expect("line");
+            let text: String = out.line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(line_width(&out.line) <= budget, "budget {budget}: {text:?}");
+            let more = out.more.expect("overflow");
+            assert_eq!(
+                more.start_col as usize + more.width as usize,
+                line_width(&out.line),
+                "budget {budget}: tail extent must end the line: {text:?}"
+            );
+        }
     }
 }

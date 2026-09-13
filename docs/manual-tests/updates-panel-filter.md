@@ -19,8 +19,10 @@ Attach to any workspace, then press `Ctrl-x` followed by `u`.
 ## Scenarios
 
 1. **Footer advertises the filter.** Expected: the footer reads
-   `[↑↓] move  [↵] switch  [v/s] split  [o] sort:default  [/] filter
-   [esc] close`, on one line, not clipped at the panel's right edge.
+   `[↑↓] move  [↵] switch  [v/s] split  [o] sort:recency  [G] group:repo
+   [/] filter  [esc] close` (the sort and group names match the
+   dashboard's title row), on one line, not clipped at the panel's right
+   edge.
 
 2. **`/` arms filter mode.** Press `/`. Expected: the footer becomes
    `/    [esc] clear  [↑↓] move  [↵] switch` — the bare `/` (followed by

@@ -86,7 +86,7 @@ pub(super) fn compute_attention_line(
             }
         })
         .collect();
-    let entries = crate::ui::updates_bar::collect_attention(
+    let entries = crate::ui::updates_bar::collect_workspace_row(
         &candidates,
         attached_id,
         now_ms,

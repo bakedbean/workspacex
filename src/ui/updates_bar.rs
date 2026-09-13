@@ -72,11 +72,9 @@ pub struct AttentionEntry {
     /// Anchor epoch-ms for the "(5m)" age display. The most recent of:
     /// pending tool_use timestamp, latest event timestamp, or `now`.
     pub age_anchor_ms: i64,
-    /// The activity state that triggered this entry. Drives the
-    /// status-row glyph (?/✓/⚠) so the user can tell at a glance
-    /// whether a workspace is waiting for an answer, finished a
-    /// task, or hit a permission prompt.
-    pub activity: ActivityState,
+    /// The workspace's dashboard status. Drives the row glyph and its
+    /// color, so an entry reads exactly like its dashboard row.
+    pub status: Status,
     /// PR lifecycle for this workspace, used to color the `repo/name`
     /// text with the same hues the dashboard uses (green=open,
     /// purple=merged, …). `None` (or a colorless lifecycle like NoPr)
@@ -115,21 +113,6 @@ pub fn glyph_for_activity(a: ActivityState) -> char {
         // in the status row (collect_attention filters by
         // needs_attention) but be safe.
         _ => '⚠',
-    }
-}
-
-/// Map the legacy `ActivityState` (used by the alert/bell pipeline) into
-/// the V5 dashboard `Status` vocabulary so the attention line can pick
-/// per-status colors that match the dashboard.
-fn status_for_activity(a: ActivityState) -> Status {
-    match a {
-        ActivityState::AwaitingAnswer => Status::Question,
-        ActivityState::Stalled => Status::Stalled,
-        ActivityState::Awaiting => Status::Question,
-        ActivityState::Complete => Status::Complete,
-        ActivityState::Active => Status::Thinking,
-        ActivityState::Waiting => Status::Waiting,
-        ActivityState::Idle | ActivityState::Off => Status::Idle,
     }
 }
 
@@ -184,9 +167,8 @@ pub fn format_attention_line_styled(
             col += sep_w;
         }
         let entry_start = col;
-        let status = status_for_activity(e.activity);
-        let glyph = status.glyph().to_string();
-        spans.push(Span::styled(glyph, theme.status_style(status)));
+        let glyph = e.status.glyph().to_string();
+        spans.push(Span::styled(glyph, theme.status_style(e.status)));
         spans.push(Span::raw(" ".to_string()));
         // Color the name by PR lifecycle to match the dashboard (green
         // open, purple merged, …). Colorless lifecycles (NoPr/PrDraft)
@@ -232,27 +214,29 @@ impl SortRow for WorkspaceUpdateInfo<'_> {
     }
 }
 
-/// Collect every workspace whose `needs_attention` flag is set, excluding
-/// the currently-attached one. Ordered by the dashboard's own workspace
-/// comparator under the dashboard's current sort mode, so the row reads
-/// the same way the by-repo list does: in the default recency mode a
-/// freshly blocked workspace is pinned first and everything else sits in
-/// its recency bucket, while status mode ranks by status priority. Callers
-/// pass `DashboardState::sort_mode` and `blocked_pin_max_age_secs`.
-pub fn collect_attention(
+/// Collect every workspace except the currently-attached one, as the
+/// attached view's top-bar row. Workspaces whose `needs_attention` flag is
+/// set are promoted ahead of the rest; inside each group the dashboard's
+/// own comparator decides under the dashboard's current sort mode, so the
+/// row reads the same way the by-repo list does. Callers pass
+/// `DashboardState::sort_mode` and `blocked_pin_max_age_secs`.
+pub fn collect_workspace_row(
     candidates: &[WorkspaceUpdateInfo],
     attached_workspace: Option<WorkspaceId>,
     now_ms: i64,
     sort_mode: SortMode,
     pin_max_age_secs: u64,
 ) -> Vec<AttentionEntry> {
-    let mut filtered: Vec<&WorkspaceUpdateInfo> = candidates
-        .iter()
-        .filter(|c| c.needs_attention && Some(c.id) != attached_workspace)
-        .collect();
-    order_workspaces(&mut filtered, sort_mode, pin_max_age_secs);
-    filtered
+    let (mut flagged, mut rest): (Vec<&WorkspaceUpdateInfo>, Vec<&WorkspaceUpdateInfo>) =
+        candidates
+            .iter()
+            .filter(|c| Some(c.id) != attached_workspace)
+            .partition(|c| c.needs_attention);
+    order_workspaces(&mut flagged, sort_mode, pin_max_age_secs);
+    order_workspaces(&mut rest, sort_mode, pin_max_age_secs);
+    flagged
         .into_iter()
+        .chain(rest)
         .map(|c| {
             let age_anchor_ms = c
                 .awaiting_tool
@@ -268,69 +252,11 @@ pub fn collect_attention(
                 repo_name: c.repo_name.to_string(),
                 name: c.name.to_string(),
                 age_anchor_ms,
-                activity: c.activity,
+                status: c.status,
                 lifecycle: c.lifecycle,
             }
         })
         .collect()
-}
-
-/// Render the inline status-row line:
-/// `repo/foo (5m) │ repo/bar (1h) │ repo/baz (15m)`
-///
-/// When the natural concatenation exceeds `max_width`, drop entries from
-/// the right and append `… +N more`. Returns `None` when `entries` is
-/// empty so the caller can collapse the status area entirely.
-pub fn format_attention_line(
-    entries: &[AttentionEntry],
-    now_ms: i64,
-    max_width: usize,
-) -> Option<String> {
-    if entries.is_empty() {
-        return None;
-    }
-    let parts: Vec<String> = entries
-        .iter()
-        .map(|e| {
-            let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
-            let g = glyph_for_activity(e.activity);
-            format!("{} {}/{} ({})", g, e.repo_name, e.name, age)
-        })
-        .collect();
-    let sep = " │ ";
-    // Greedy fit: include as many full entries as fit, then summarize the
-    // remainder with "… +N more".
-    let mut included = 0usize;
-    let mut total = 0usize;
-    for (i, p) in parts.iter().enumerate() {
-        let sep_w = if i == 0 { 0 } else { sep.chars().count() };
-        let candidate = total + sep_w + p.chars().count();
-        if candidate > max_width {
-            break;
-        }
-        total = candidate;
-        included += 1;
-    }
-    if included == 0 {
-        // Even the first entry doesn't fit — show it truncated so we never
-        // render an empty bar when there ARE pending alerts.
-        let mut truncated: String = parts[0].chars().take(max_width.saturating_sub(1)).collect();
-        truncated.push('…');
-        return Some(truncated);
-    }
-    let mut out = parts[..included].join(sep);
-    let remaining = parts.len() - included;
-    if remaining > 0 {
-        let suffix = format!(" … +{remaining} more");
-        let suffix_w = suffix.chars().count();
-        // Trim included entries from the tail until the suffix fits.
-        while included > 0 && out.chars().count() + suffix_w > max_width {
-            included -= 1;
-            out = parts[..included].join(sep);
-        }
-        out.push_str(&suffix);
-    }
-    Some(out)
 }
 
 // Moved to `crate::util::time` so non-TUI callers (the macOS menubar) can use it
@@ -344,6 +270,19 @@ mod tests {
     use crate::activity::events::{EventKind, EventSnapshot, WorkspaceEvents};
     use crate::data::store::WorkspaceId;
     use crate::ui::dashboard::sort::BLOCKED_PIN_MAX_AGE_DEFAULT_SECS as PIN;
+
+    /// Test fixture: derive a canonical status from the legacy activity.
+    fn status_for_activity(a: ActivityState) -> Status {
+        match a {
+            ActivityState::AwaitingAnswer => Status::Question,
+            ActivityState::Stalled => Status::Stalled,
+            ActivityState::Awaiting => Status::Question,
+            ActivityState::Complete => Status::Complete,
+            ActivityState::Active => Status::Thinking,
+            ActivityState::Waiting => Status::Waiting,
+            ActivityState::Idle | ActivityState::Off => Status::Idle,
+        }
+    }
 
     type WsOwned = (
         WorkspaceId,
@@ -440,16 +379,52 @@ mod tests {
     }
 
     #[test]
-    fn collect_attention_returns_empty_when_none_need_attention() {
+    fn collect_workspace_row_lists_unflagged_workspaces() {
+        // The row is a workspace list, not an alert list: a workspace with
+        // no attention flag still gets an entry.
         let evt = events_with_latest("recent", 5_000);
         let rows = [ws(1, "busy", Some(evt), ActivityState::Idle, false, None)];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
-        assert!(entries.is_empty());
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "busy");
+        assert_eq!(entries[0].status, Status::Idle);
     }
 
     #[test]
-    fn collect_attention_sorts_most_recently_interacted_first() {
+    fn collect_workspace_row_promotes_flagged_before_dashboard_order() {
+        // Flagged workspaces come first regardless of the dashboard
+        // comparator; inside each group the comparator decides (recency
+        // mode here, so the fresher unflagged row precedes the older one).
+        let rows = [
+            ws_ago(
+                1,
+                "older",
+                None,
+                ActivityState::Idle,
+                false,
+                None,
+                Some(600),
+            ),
+            ws_ago(2, "fresh", None, ActivityState::Idle, false, None, Some(5)),
+            ws_ago(
+                3,
+                "flagged-stale",
+                None,
+                ActivityState::Complete,
+                true,
+                None,
+                Some(9_000),
+            ),
+        ];
+        let candidates = to_candidates(&rows);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["flagged-stale", "fresh", "older"]);
+    }
+
+    #[test]
+    fn collect_workspace_row_sorts_most_recently_interacted_first() {
         // Same status priority — order falls to the dashboard's ago_secs
         // recency signal (smaller = more recent = first), NOT the event
         // timestamps (which here would give the opposite order).
@@ -476,14 +451,14 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "fresh");
         assert_eq!(entries[1].name, "stale");
     }
 
     #[test]
-    fn collect_attention_status_mode_sorts_priority_before_recency() {
+    fn collect_workspace_row_status_mode_sorts_priority_before_recency() {
         // The dashboard's `sort: status` mode: Stalled (5) outranks
         // AwaitingAnswer/Question (4) outranks Waiting (3), even when
         // lower-priority entries are more recent.
@@ -517,13 +492,13 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Status, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Status, PIN);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["stalled", "question", "waiting"]);
     }
 
     #[test]
-    fn collect_attention_recency_mode_orders_like_the_dashboard() {
+    fn collect_workspace_row_recency_mode_orders_like_the_dashboard() {
         // The dashboard's default `sort: recency` mode: a freshly blocked
         // row is pinned on top, everything else sits in its recency
         // bucket, and a block older than the pin window sorts on age like
@@ -560,13 +535,13 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["fresh-question", "fresh-waiting", "stale-stalled"]);
     }
 
     #[test]
-    fn collect_attention_sorts_by_canonical_status_not_legacy_activity() {
+    fn collect_workspace_row_sorts_by_canonical_status_not_legacy_activity() {
         // Both carry the legacy bell activity AwaitingAnswer (→ Question),
         // but the dashboard's canonical classifier downgraded ws1 to
         // Waiting (e.g. PTY-active question suppression). The sort must
@@ -588,13 +563,13 @@ mod tests {
             mk(1, "suppressed", Status::Waiting, 1),
             mk(2, "question", Status::Question, 500),
         ];
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].name, "question");
         assert_eq!(entries[1].name, "suppressed");
     }
 
     #[test]
-    fn collect_attention_sorts_never_active_last() {
+    fn collect_workspace_row_sorts_never_active_last() {
         let rows = [
             ws_ago(1, "never", None, ActivityState::Awaiting, true, None, None),
             ws_ago(
@@ -608,17 +583,17 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].name, "old");
         assert_eq!(entries[1].name, "never");
     }
 
     #[test]
-    fn collect_attention_excludes_currently_attached() {
+    fn collect_workspace_row_excludes_currently_attached() {
         let evt = events_with_latest("evt", 5_000);
         let rows = [ws(1, "self", Some(evt), ActivityState::Waiting, true, None)];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(
+        let entries = collect_workspace_row(
             &candidates,
             Some(WorkspaceId(1)),
             10_000,
@@ -629,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_attention_uses_awaiting_tool_timestamp_as_anchor() {
+    fn collect_workspace_row_uses_awaiting_tool_timestamp_as_anchor() {
         // awaiting_tool's first-seen ts takes priority over latest event ts
         let evt = events_with_latest("old", 1_000);
         let rows = [ws(
@@ -641,120 +616,8 @@ mod tests {
             Some(("Bash".to_string(), 8_000)),
         )];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].age_anchor_ms, 8_000);
-    }
-
-    #[test]
-    fn format_attention_line_returns_none_when_empty() {
-        assert!(format_attention_line(&[], 0, 80).is_none());
-    }
-
-    #[test]
-    fn format_attention_line_joins_with_separator() {
-        let entries = vec![
-            AttentionEntry {
-                workspace_id: WorkspaceId(1),
-                repo_name: "a".into(),
-                name: "x".into(),
-                age_anchor_ms: 9_000, // 1s before now
-                activity: ActivityState::Awaiting,
-                lifecycle: None,
-            },
-            AttentionEntry {
-                workspace_id: WorkspaceId(2),
-                repo_name: "b".into(),
-                name: "y".into(),
-                age_anchor_ms: 5_000, // 5s before now
-                activity: ActivityState::Awaiting,
-                lifecycle: None,
-            },
-        ];
-        let line = format_attention_line(&entries, 10_000, 80).expect("line");
-        assert_eq!(line, "⚠ a/x (1s) │ ⚠ b/y (5s)");
-    }
-
-    #[test]
-    fn format_attention_line_overflow_adds_plus_more_suffix() {
-        let entries: Vec<AttentionEntry> = (0i64..5)
-            .map(|i| AttentionEntry {
-                workspace_id: WorkspaceId(i),
-                repo_name: format!("repo{i}"),
-                name: format!("ws{i}"),
-                age_anchor_ms: 10_000 - i * 1000,
-                activity: ActivityState::Awaiting,
-                lifecycle: None,
-            })
-            .collect();
-        // Width 35: fits 1 entry ("⚠ repo0/ws0 (1s)", ~18 chars) plus the
-        // "… +N more" overflow suffix; remaining 4 entries become the suffix.
-        let line = format_attention_line(&entries, 10_000, 35).expect("line");
-        assert!(line.contains("… +"), "expected overflow marker: {line}");
-        assert!(line.ends_with("more"), "{line}");
-        assert!(
-            line.chars().count() <= 35,
-            "got {} chars: {line}",
-            line.chars().count()
-        );
-    }
-
-    #[test]
-    fn format_attention_line_extreme_overflow_truncates_first_entry() {
-        // Even one entry doesn't fit — make sure we still render *something*
-        // rather than returning an empty bar.
-        let entries = vec![AttentionEntry {
-            workspace_id: WorkspaceId(1),
-            repo_name: "extremely-long-repo-name".into(),
-            name: "workspace-name".into(),
-            age_anchor_ms: 9_000,
-            activity: ActivityState::Awaiting,
-            lifecycle: None,
-        }];
-        let line = format_attention_line(&entries, 10_000, 10).expect("line");
-        assert!(line.ends_with('…'), "expected ellipsis truncation: {line}");
-        assert!(line.chars().count() <= 10);
-    }
-
-    #[test]
-    fn format_attention_line_uses_question_glyph_for_awaiting_answer() {
-        let entries = vec![AttentionEntry {
-            workspace_id: WorkspaceId(1),
-            repo_name: "demo".into(),
-            name: "alpha".into(),
-            age_anchor_ms: 0,
-            activity: ActivityState::AwaitingAnswer,
-            lifecycle: None,
-        }];
-        let line = format_attention_line(&entries, 5_000, 80).expect("line");
-        assert!(line.starts_with("? demo/alpha"), "got: {line}");
-    }
-
-    #[test]
-    fn format_attention_line_uses_check_glyph_for_complete() {
-        let entries = vec![AttentionEntry {
-            workspace_id: WorkspaceId(1),
-            repo_name: "demo".into(),
-            name: "alpha".into(),
-            age_anchor_ms: 0,
-            activity: ActivityState::Complete,
-            lifecycle: None,
-        }];
-        let line = format_attention_line(&entries, 5_000, 80).expect("line");
-        assert!(line.starts_with("\u{2713} demo/alpha"), "got: {line}");
-    }
-
-    #[test]
-    fn format_attention_line_uses_warning_glyph_for_awaiting_permission() {
-        let entries = vec![AttentionEntry {
-            workspace_id: WorkspaceId(1),
-            repo_name: "demo".into(),
-            name: "alpha".into(),
-            age_anchor_ms: 0,
-            activity: ActivityState::Awaiting,
-            lifecycle: None,
-        }];
-        let line = format_attention_line(&entries, 5_000, 80).expect("line");
-        assert!(line.starts_with("⚠ demo/alpha"), "got: {line}");
     }
 
     #[test]
@@ -768,7 +631,7 @@ mod tests {
                 repo_name: "r".into(),
                 name: "open".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Awaiting,
+                status: Status::Question,
                 lifecycle: Some(BranchLifecycle::PrOpen),
             },
             // Merged PR -> purple (theme.merged).
@@ -777,7 +640,7 @@ mod tests {
                 repo_name: "r".into(),
                 name: "merged".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Complete,
+                status: Status::Complete,
                 lifecycle: Some(BranchLifecycle::PrMerged),
             },
             // No PR -> falls back to the muted path color.
@@ -786,7 +649,7 @@ mod tests {
                 repo_name: "r".into(),
                 name: "nopr".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Awaiting,
+                status: Status::Question,
                 lifecycle: Some(BranchLifecycle::NoPr),
             },
         ];
@@ -823,7 +686,7 @@ mod tests {
                 repo_name: "a".into(),
                 name: "q".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::AwaitingAnswer,
+                status: Status::Question,
                 lifecycle: None,
             },
             AttentionEntry {
@@ -831,7 +694,7 @@ mod tests {
                 repo_name: "b".into(),
                 name: "s".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Stalled,
+                status: Status::Stalled,
                 lifecycle: None,
             },
         ];
@@ -873,7 +736,7 @@ mod tests {
                 repo_name: "a".into(),
                 name: "q".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::AwaitingAnswer,
+                status: Status::Question,
                 lifecycle: None,
             },
             AttentionEntry {
@@ -881,7 +744,7 @@ mod tests {
                 repo_name: "bb".into(),
                 name: "ss".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Stalled,
+                status: Status::Stalled,
                 lifecycle: None,
             },
         ];
@@ -910,7 +773,7 @@ mod tests {
                 repo_name: "a".into(),
                 name: "q".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::AwaitingAnswer,
+                status: Status::Question,
                 lifecycle: None,
             },
             AttentionEntry {
@@ -918,7 +781,7 @@ mod tests {
                 repo_name: "bb".into(),
                 name: "ss".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Stalled,
+                status: Status::Stalled,
                 lifecycle: None,
             },
         ];
@@ -930,5 +793,42 @@ mod tests {
             "only the included entry is clickable"
         );
         assert_eq!(out.segments[0].workspace_id, WorkspaceId(1));
+    }
+
+    #[test]
+    fn styled_line_glyph_follows_canonical_status() {
+        // The glyph is the dashboard's, so a row reads the same in both
+        // surfaces: Waiting draws the ellipsis, Idle the dot.
+        let theme = Theme::wsx();
+        let entries = vec![
+            AttentionEntry {
+                workspace_id: WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "w".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Waiting,
+                lifecycle: None,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(2),
+                repo_name: "a".into(),
+                name: "i".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Idle,
+                lifecycle: None,
+            },
+        ];
+        let line = format_attention_line_styled(&entries, 10_000, 200, &theme)
+            .expect("line")
+            .line;
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("\u{2026} a/w"), "waiting glyph: {text:?}");
+        assert!(text.contains("\u{b7} a/i"), "idle glyph: {text:?}");
+        let idle = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "\u{b7}")
+            .expect("idle glyph span");
+        assert_eq!(idle.style, theme.status_style(Status::Idle));
     }
 }

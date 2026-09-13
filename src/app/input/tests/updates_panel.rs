@@ -89,7 +89,7 @@ async fn updates_panel_modal_down_advances_selection() {
         }
         other => panic!("unexpected modal state: {other:?}"),
     }
-    // Down again clamps at the last index.
+    // Down again wraps to the top, like the dashboard list.
     handle_key_modal(
         &mut app,
         &shared,
@@ -99,11 +99,25 @@ async fn updates_panel_modal_down_advances_selection() {
     .unwrap();
     match app.modal {
         Some(crate::ui::modal::Modal::UpdatesPanel { selected, .. }) => {
-            assert_eq!(selected, 1, "Down past last clamps at max");
+            assert_eq!(selected, 0, "Down past the last row wraps to the first");
         }
         other => panic!("unexpected modal state: {other:?}"),
     }
-    // Up returns to 0.
+    // Up from the top wraps to the bottom.
+    handle_key_modal(
+        &mut app,
+        &shared,
+        KeyEvent::new(crossterm::event::KeyCode::Up, KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+    match app.modal {
+        Some(crate::ui::modal::Modal::UpdatesPanel { selected, .. }) => {
+            assert_eq!(selected, 1, "Up from the first row wraps to the last");
+        }
+        other => panic!("unexpected modal state: {other:?}"),
+    }
+    // And Up again walks back normally.
     handle_key_modal(
         &mut app,
         &shared,
@@ -116,6 +130,35 @@ async fn updates_panel_modal_down_advances_selection() {
             assert_eq!(selected, 0, "Up should retreat to 0");
         }
         other => panic!("unexpected modal state: {other:?}"),
+    }
+}
+
+/// With no rows at all (an empty list, or a filter that hid everything)
+/// the arrows have nowhere to wrap to and leave the cursor at 0.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn updates_panel_arrows_stay_put_when_the_list_is_empty() {
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+        selected: 0,
+        filter: None,
+    });
+    let shared = shared_app();
+    for code in [
+        crossterm::event::KeyCode::Up,
+        crossterm::event::KeyCode::Down,
+    ] {
+        handle_key_modal(&mut app, &shared, key(code))
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                app.modal,
+                Some(crate::ui::modal::Modal::UpdatesPanel { selected: 0, .. })
+            ),
+            "{code:?} on an empty list: {:?}",
+            app.modal
+        );
     }
 }
 

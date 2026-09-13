@@ -63,8 +63,16 @@ pub(super) async fn updates_panel(
         KeyCode::Esc => {
             app.modal = None;
         }
+        // Up/Down wrap at either end, like the dashboard list: the last
+        // row is one keystroke from the first. An empty list has nowhere
+        // to wrap to and leaves the cursor at 0.
         KeyCode::Up | KeyCode::Char('k') => {
-            let new_sel = selected_now.saturating_sub(1);
+            let max = order.len().saturating_sub(1);
+            let new_sel = if selected_now == 0 {
+                max
+            } else {
+                selected_now - 1
+            };
             app.modal = Some(Modal::UpdatesPanel {
                 selected: new_sel,
                 filter: filter.clone(),
@@ -72,7 +80,11 @@ pub(super) async fn updates_panel(
         }
         KeyCode::Down | KeyCode::Char('j') => {
             let max = order.len().saturating_sub(1);
-            let new_sel = (selected_now + 1).min(max);
+            let new_sel = if selected_now >= max {
+                0
+            } else {
+                selected_now + 1
+            };
             app.modal = Some(Modal::UpdatesPanel {
                 selected: new_sel,
                 filter: filter.clone(),

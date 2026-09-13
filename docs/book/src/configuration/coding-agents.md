@@ -65,7 +65,7 @@ If a worktree was used with an older wsx, it may contain a wsx-created `AGENTS.m
 
 **Spawn**: fresh workspaces launch bare `codex`. Non-yolo sessions use Codex's built-in interactive approvals + workspace-write sandbox; `--yolo` workspaces add `--dangerously-bypass-approvals-and-sandbox`.
 
-**Continue**: `codex resume --last`, which Codex filters to the current directory natively — so wsx resumes the worktree's own most-recent session.
+**Continue**: `codex resume <thread-id>` once the instance's thread id has been recorded from its `notify` payload (see [Sessions survive a restart](multi-agent-workspaces.md#sessions-survive-a-restart)); before that, `codex resume --last`, which Codex filters to the current directory natively — the worktree's own most-recent session.
 
 **Activity**: the dashboard detail bar tails the worktree's rollout file under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. RECENT FILES is not yet populated for Codex (file edits are inferred-via-shell and not tracked).
 

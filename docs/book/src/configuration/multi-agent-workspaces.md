@@ -28,11 +28,17 @@ This runs against the **current** workspace — the one whose worktree you're in
 
 ### Sessions survive a restart
 
-Quit wsx and come back, and every agent in the workspace gets its own conversation back — not a blank chat, and not each other's. Claude's own `--continue` can't do that on its own: it resumes the *most recent* conversation in the directory, and once two agents share a worktree that is whichever one spoke last. So wsx tracks each Claude instance's session id itself, via the status hooks it already injects (every hook payload carries the id, and each hook runs with that instance's `$WSX_AGENT_INSTANCE_ID`), and respawns with `--resume <id>`. A `/clear` inside the session moves the recorded id along with it.
+Quit wsx and come back, and every agent in the workspace gets its own conversation back — not a blank chat, and not each other's. A harness's own "continue" flag can't do that: it resumes the *most recent* conversation in the directory, and once two agents share a worktree that is whichever one spoke last. So wsx tracks a session id **per agent instance** and respawns with it. How the id is obtained depends on the harness:
 
-Until an instance has reported an id — a workspace created before this was tracked, or an agent that has not started yet — the old behaviour applies: the primary falls back to `--continue`, an added agent starts fresh with its handoff note. If the recorded session file has since been deleted, the same fallback applies rather than a failed launch.
+| Agent    | Where the id comes from                                                                                   | Respawn                 |
+| -------- | --------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `claude` | Reported by the status hooks wsx injects (every payload carries it; each hook runs with that instance's `$WSX_AGENT_INSTANCE_ID`). A `/clear` moves the recorded id along with it. | `claude --resume <id>`  |
+| `codex`  | The `thread-id` in the `notify` payload wsx already receives after each turn.                             | `codex resume <id>`     |
+| `pi`     | Minted by wsx at the instance's first spawn and passed as `--session-id`, which pi creates-or-resumes. Pi prints a one-line "creating a new session with that id" notice on that first spawn. | `pi --session-id <id>`  |
+| `omp`    | Not available: omp keys `--continue` on the TTY device path, which changes on every restart, and has no create-by-id flag. | added agents start fresh |
+| `hermes` | Not available: the id only exists inside the Hermes process.                                              | added agents start fresh |
 
-Only Claude reports its session id today. Added agents of the other kinds (`pi`, `hermes`, `codex`, `omp`) still start fresh after a restart; their primaries keep resuming as described in [Coding agents](coding-agents.md).
+Until an instance has an id — a workspace created before this was tracked, an agent that has not completed a turn yet (Codex), or an `omp`/`hermes` peer — the old behaviour applies: the primary falls back to its harness's cwd-wide continue, an added agent starts fresh with its handoff note. If the recorded session has since been deleted from disk, the same fallback applies rather than a failed launch.
 
 ### Switching focus between agents
 

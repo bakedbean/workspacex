@@ -2,11 +2,13 @@ When you're attached to a workspace (full-screen claude session), wsx
 still tracks the other workspaces in the background. Two affordances
 surface that:
 
-- A single-row status indicator above the footer, shown only when another
-  workspace needs attention or has produced output in the last 60 seconds.
-  Format: `⚠ <name> awaiting permission: <tool> (<age>)` for attention,
-  `● <name>: <event> (<age>)` for activity. The row collapses to nothing
-  when there's nothing to surface, giving claude the row back.
+- A one-row workspace list in the top bar, after the focused workspace's
+  label. Every other workspace gets an entry, `<glyph> <repo>/<name> (<age>)`,
+  with the same status glyph and color its dashboard row shows. Workspaces
+  that need attention come first; the rest follow in the dashboard's own
+  order under its current sort mode. Click an entry to switch to that
+  workspace. When the row runs out of room it ends in `… +N more`; click
+  that to open the updates panel described next.
 
 - A floating panel via `Ctrl-x u` listing ALL workspaces — a stripped-down
   dashboard. Rows come in the dashboard's own order. Grouped by repo, each

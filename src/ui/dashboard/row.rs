@@ -578,11 +578,16 @@ pub fn pr_chip_spans(
 /// The line-diff cell as spans, always exactly `width` columns: `+N` in the
 /// ok color, `−N` in the err color, padded; blank when there is no diff or
 /// it is empty. Shared by the dashboard row and the workspace-updates panel.
+///
+/// Counts are compacted (`12k`, `2M`) past four digits so the cell holds
+/// its width for every `u32` at the default `DIFF_WIDTH`: the widest
+/// compact pair, `+4294M −4294M`, is 13 columns, and anything short of
+/// that fits in 12 — a cell that grows would push every column after it.
 pub fn diff_spans(diff: Option<DiffStats>, width: usize, theme: &Theme) -> Vec<Span<'static>> {
     match diff {
         Some(d) if d.added > 0 || d.removed > 0 => {
-            let added_text = format!("+{}", d.added);
-            let removed_text = format!("−{}", d.removed);
+            let added_text = format!("+{}", compact_count(d.added));
+            let removed_text = format!("−{}", compact_count(d.removed));
             let content_width = added_text.chars().count() + 1 + removed_text.chars().count();
             let pad = width.saturating_sub(content_width);
             let mut spans = vec![
@@ -609,6 +614,17 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
     let x = widths.agent + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
     let width = truncate(&chip.text(), widths.pr).chars().count();
     Some((x as u16, width as u16))
+}
+
+/// A line count for the diff cell: plain up to four digits, then
+/// thousands (`12k`) and millions (`2M`), truncated rather than rounded so
+/// `9999` never reads as `10k`.
+fn compact_count(n: u32) -> String {
+    match n {
+        0..=9_999 => n.to_string(),
+        10_000..=999_999 => format!("{}k", n / 1_000),
+        _ => format!("{}M", n / 1_000_000),
+    }
 }
 
 const SEG_SEP: &str = " · ";
@@ -2583,6 +2599,38 @@ mod cell_tests {
         assert_eq!(added.style.fg, theme.ok_style().fg);
         let removed = spans.iter().find(|s| s.content == "−3").expect("−3 span");
         assert_eq!(removed.style.fg, theme.err_style().fg);
+    }
+
+    /// Six-figure counts would overflow the 12-cell column as plain
+    /// digits. They compact to `k` / `M` so the cell always holds its
+    /// width and the columns to its right stay aligned.
+    #[test]
+    fn diff_spans_compact_large_counts_to_hold_the_column_width() {
+        let theme = Theme::wsx();
+        for (added, removed, expected) in [
+            (100_000, 100_000, "+100k −100k"),
+            (9_999, 12_345, "+9999 −12k"),
+            (1_500_000, 3, "+1M −3"),
+            (u32::MAX, u32::MAX, "+4294M −4294M"),
+        ] {
+            let spans = diff_spans(Some(DiffStats { added, removed }), DIFF_WIDTH, &theme);
+            assert_eq!(text_of(&spans).trim_end(), expected);
+            assert!(
+                width_of(&spans) <= DIFF_WIDTH.max(expected.chars().count()),
+                "cell must not exceed its column: {:?}",
+                text_of(&spans)
+            );
+        }
+        // At the column's default width every representable value fits.
+        let spans = diff_spans(
+            Some(DiffStats {
+                added: 999_999,
+                removed: 999_999,
+            }),
+            DIFF_WIDTH,
+            &theme,
+        );
+        assert_eq!(width_of(&spans), DIFF_WIDTH, "{:?}", text_of(&spans));
     }
 
     #[test]

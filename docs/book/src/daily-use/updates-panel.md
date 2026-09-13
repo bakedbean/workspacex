@@ -9,12 +9,15 @@ surface that:
   when there's nothing to surface, giving claude the row back.
 
 - A floating panel via `Ctrl-x u` listing ALL workspaces — a stripped-down
-  dashboard. Rows come in the dashboard's own order: grouped by repo or by
-  attention (NEEDS ATTENTION / WORKING / RECENT / IDLE, with `repo/name`
-  rows), sorted within a group by recency or status, whichever the
-  dashboard is set to. Each row shows the workspace's current state and
-  latest event, plus the same PR chip (`⏺ #123 open ✓`) and `+N −N` line
-  diff the dashboard row shows. Unlike the dashboard, nothing is folded or
+  dashboard. Rows come in the dashboard's own order. Grouped by repo, each
+  repo's rows follow the dashboard's sort mode (recency or status). Grouped
+  by attention, the NEEDS ATTENTION / WORKING / RECENT / IDLE sections use
+  the dashboard's fixed per-section order (urgency then age, or age alone),
+  with `repo/name` rows; the sort mode does not apply there, exactly as on
+  the dashboard. Each row shows the workspace's current state and latest
+  event, plus the same PR chip (`⏺ #123 open ✓`) and `+N −N` line diff the
+  dashboard row shows — in a terminal too narrow for both, the diff is
+  dropped first, then the chip. Unlike the dashboard, nothing is folded or
   collapsed: every workspace is listed, and empty repos are skipped. Press
   `Esc` to close — with a filter active, `Esc` clears the filter first and
   closes on the second press. The panel re-renders live, so ages count up

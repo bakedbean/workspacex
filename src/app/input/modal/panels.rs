@@ -65,13 +65,16 @@ pub(super) async fn updates_panel(
         }
         // Up/Down wrap at either end, like the dashboard list: the last
         // row is one keystroke from the first. An empty list has nowhere
-        // to wrap to and leaves the cursor at 0.
+        // to wrap to and lands the cursor on 0. A cursor past the end (the
+        // list shrank under it) is clamped back into range first, so Up
+        // reaches the last real row instead of stepping down from a stale
+        // index.
         KeyCode::Up | KeyCode::Char('k') => {
             let max = order.len().saturating_sub(1);
             let new_sel = if selected_now == 0 {
                 max
             } else {
-                selected_now - 1
+                (selected_now - 1).min(max)
             };
             app.modal = Some(Modal::UpdatesPanel {
                 selected: new_sel,

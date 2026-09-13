@@ -133,6 +133,32 @@ async fn updates_panel_modal_down_advances_selection() {
     }
 }
 
+/// A cursor left past the end of a list that shrank underneath it (a
+/// workspace archived while the panel was open) is pulled back into range
+/// by the next Up rather than stepping down from the stale index.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn updates_panel_up_clamps_a_stale_cursor_into_range() {
+    let store = Store::open_in_memory().unwrap();
+    seed_two_workspaces(&store);
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
+        selected: 5,
+        filter: None,
+    });
+    let shared = shared_app();
+    handle_key_modal(&mut app, &shared, key(crossterm::event::KeyCode::Up))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::UpdatesPanel { selected: 1, .. })
+        ),
+        "Up from a stale index lands on the last real row: {:?}",
+        app.modal
+    );
+}
+
 /// With no rows at all (an empty list, or a filter that hid everything)
 /// the arrows have nowhere to wrap to and leave the cursor at 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -613,44 +639,58 @@ async fn updates_panel_o_cycles_the_dashboard_sort_mode_and_follows_selection() 
     }
 }
 
+/// `G` regroups the panel exactly as it regroups the dashboard, and the
+/// cursor stays on the same workspace through the regroup — its index
+/// changes because the row moved, not the other way round.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn updates_panel_shift_g_toggles_the_dashboard_group_mode() {
+async fn updates_panel_shift_g_toggles_the_dashboard_group_mode_and_follows_selection() {
     use crate::ui::dashboard::layout::GroupMode;
     let store = Store::open_in_memory().unwrap();
-    seed_two_workspaces(&store);
-    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let names = seed_lockstep_fixture(&store);
+    let mut app = App::new(store, PathBuf::from("/tmp/lockstep")).unwrap();
     assert_eq!(app.dashboard.group_mode, GroupMode::Repo);
+    let repo_order = panel_order(&app, None);
+    let mid = names["mid"];
+    let mid_index = repo_order.iter().position(|id| *id == mid).unwrap();
     app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
-        selected: 1,
+        selected: mid_index,
         filter: None,
     });
     let shared = shared_app();
     let press_g = key(crossterm::event::KeyCode::Char('G'));
+
     handle_key_modal(&mut app, &shared, press_g).await.unwrap();
     assert_eq!(app.dashboard.group_mode, GroupMode::Attention);
-    assert!(
-        matches!(
-            app.modal,
-            Some(crate::ui::modal::Modal::UpdatesPanel { selected: 1, .. })
-        ),
-        "the panel stays open on the same workspace: {:?}",
-        app.modal
+    let attention_order = panel_order(&app, None);
+    assert_ne!(
+        attention_order, repo_order,
+        "sanity: regrouping actually reorders this fixture"
     );
+    match app.modal {
+        Some(crate::ui::modal::Modal::UpdatesPanel { selected, .. }) => {
+            assert_eq!(attention_order[selected], mid, "cursor stays on mid");
+            assert_ne!(selected, mid_index, "…at its new row");
+        }
+        ref other => panic!("unexpected modal state: {other:?}"),
+    }
+
     handle_key_modal(&mut app, &shared, press_g).await.unwrap();
     assert_eq!(app.dashboard.group_mode, GroupMode::Repo);
+    match app.modal {
+        Some(crate::ui::modal::Modal::UpdatesPanel { selected, .. }) => {
+            assert_eq!(selected, mid_index, "cursor follows mid back");
+        }
+        ref other => panic!("unexpected modal state: {other:?}"),
+    }
 }
 
-/// The panel's order IS the dashboard's order: the workspace ids the panel
-/// walks equal the workspace targets the dashboard's nav index walks, for a
-/// layout where nothing is folded or filtered.
-#[test]
-fn updates_panel_orders_workspaces_exactly_like_the_dashboard() {
+/// Two repos with swapped persisted order and workspaces whose name
+/// tiebreak differs from insertion order, so the by-repo order is neither
+/// insertion order nor the by-attention order. Returns name → id.
+fn seed_lockstep_fixture(
+    store: &Store,
+) -> std::collections::HashMap<&'static str, crate::data::store::WorkspaceId> {
     use crate::data::store::{NewWorkspace, WorkspaceState};
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    let store = Store::open_in_memory().unwrap();
-    // Two repos, inserted so the persisted sort_order (swapped below) and the
-    // per-repo name tiebreak both differ from insertion order.
     let r1 = store
         .add_repo(std::path::Path::new("/tmp/lockstep/one"), "one", "")
         .unwrap();
@@ -658,6 +698,7 @@ fn updates_panel_orders_workspaces_exactly_like_the_dashboard() {
         .add_repo(std::path::Path::new("/tmp/lockstep/two"), "two", "")
         .unwrap();
     store.swap_repo_sort_order(r1, r2).unwrap();
+    let mut ids = std::collections::HashMap::new();
     for (repo_id, name) in [(r1, "zeta"), (r1, "alpha"), (r2, "mid"), (r2, "beta")] {
         let id = store
             .insert_workspace(&NewWorkspace {
@@ -673,7 +714,20 @@ fn updates_panel_orders_workspaces_exactly_like_the_dashboard() {
         store
             .set_workspace_state(id, WorkspaceState::Ready)
             .unwrap();
+        ids.insert(name, id);
     }
+    ids
+}
+
+/// The panel's order IS the dashboard's order: the workspace ids the panel
+/// walks equal the workspace targets the dashboard's nav index walks, for a
+/// layout where nothing is folded or filtered.
+#[test]
+fn updates_panel_orders_workspaces_exactly_like_the_dashboard() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let store = Store::open_in_memory().unwrap();
+    seed_lockstep_fixture(&store);
     let mut app = App::new(store, PathBuf::from("/tmp/lockstep")).unwrap();
     // Drawing the dashboard is what rebuilds its nav index.
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();

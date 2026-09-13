@@ -31,10 +31,10 @@ This runs against the **current** workspace — the one whose worktree you're in
 When a workspace has more than one agent, the attached view's bottom row (the one with the pinned-command chips) gains a set of **agent pills**, right-justified ahead of the workspace stats, listing each agent with a single-letter switch key:
 
 ```
- ^x  menu   1 pr   2 fb  ────────   ▌claude q   ▎codex w   ▎pi r    opus 4.8 45k/200k ● 2p +12 −3 ⏺ #152 open
+ ^x  menu   1 pr   2 fb  ────────   ● claude q   ○ codex w   ○ pi r    opus 4.8 45k/200k ● 2p +12 −3 ⏺ #152 open
 ```
 
-Press `Ctrl-x` then the key (`q`, `w`, `r`, …) to point the focused pane at that agent's session, or click the pill. The pill whose agent is in the focused pane carries a heavier identity bar. The keys are drawn from a fixed pool — `q w r y i o p s h j` — assigned in display order (primary first). A workspace with more than ten agents renders the rest keyless; they stay clickable whenever the pills are shown. The pills only appear once a second agent exists; a single-agent workspace looks exactly as before. On a terminal too narrow for everything, the model/token stat is dropped first, then the pills as a whole group (never partially). The `Ctrl-x` switch keys keep working with the pills hidden; a keyless agent needs a wider terminal to be clicked.
+Press `Ctrl-x` then the key (`q`, `w`, `r`, …) to point the focused pane at that agent's session, or click the pill. Each pill opens with a dot in the agent's kind colour; the pill whose agent is in the focused pane carries a filled dot (`●`), the others a hollow one (`○`). The keys are drawn from a fixed pool — `q w r y i o p s h j` — assigned in display order (primary first). A workspace with more than ten agents renders the rest keyless; they stay clickable whenever the pills are shown. The pills only appear once a second agent exists; a single-agent workspace looks exactly as before. On a terminal too narrow for everything, the model/token stat is dropped first, then the pills as a whole group (never partially). The `Ctrl-x` switch keys keep working with the pills hidden; a keyless agent needs a wider terminal to be clicked.
 
 Because agents share the worktree, switching focus is just changing which session your keystrokes go to — there's no branch-swapping or checkout involved.
 

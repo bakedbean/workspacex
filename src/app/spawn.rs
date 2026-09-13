@@ -86,9 +86,10 @@ pub(crate) fn resolve_spawn_context(
 /// - Codex: the `thread-id` in its `notify` payload (`StatusFromNotify`).
 /// - Pi: minted by wsx at first spawn (`pin_session_id_for`) and handed to
 ///   pi as `--session-id`.
-/// - omp and Hermes: never — neither exposes a per-instance id wsx can
-///   capture (omp keys `--continue` on the TTY device path, which changes on
-///   every restart; Hermes only has the id inside its own process).
+/// - omp: the session *file path* read from omp's per-terminal breadcrumb
+///   for this instance's own PTY (`app::omp_breadcrumbs`), resumed with
+///   `--resume=<path>`.
+/// - Hermes: never — the id only exists inside the Hermes process.
 ///
 /// The existence check matters: Claude and Codex refuse to start on an
 /// unknown id, which would leave the pane dead instead of merely un-resumed.
@@ -97,14 +98,16 @@ pub(crate) fn recorded_resume_id(
     worktree: &std::path::Path,
 ) -> Option<String> {
     use crate::pty::session::{
-        AgentKind, claude_session_exists, codex_session_exists, pi_session_exists,
+        AgentKind, claude_session_exists, codex_session_exists, omp_session_exists,
+        pi_session_exists,
     };
     let id = instance.agent_session_id.as_deref()?;
     let on_disk = match instance.agent {
         AgentKind::Claude => claude_session_exists(worktree, id),
         AgentKind::Pi => pi_session_exists(worktree, id),
         AgentKind::Codex => codex_session_exists(id),
-        AgentKind::Omp | AgentKind::Hermes => false,
+        AgentKind::Omp => omp_session_exists(id),
+        AgentKind::Hermes => false,
     };
     on_disk.then(|| id.to_string())
 }
@@ -572,6 +575,30 @@ mod added_spawn_tests {
             } => assert_eq!(resume_session_id.as_deref(), Some(id)),
             other => panic!("expected Continue by thread id, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn added_omp_with_recorded_session_file_on_disk_resumes_it() {
+        let (app, _primary, added, _sid, home, _wt, _env) = app_with_claude_session(AgentKind::Omp);
+        let file = home.path().join(".omp/agent/sessions/-w/2026_abc.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "{}").unwrap();
+        let path = file.to_string_lossy().into_owned();
+        app.store
+            .set_instance_agent_session(added.id, &path)
+            .unwrap();
+        let added = app.store.workspace_agents_by_id(added.id).unwrap().unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        match mode {
+            SpawnMode::Continue {
+                resume_session_id, ..
+            } => assert_eq!(resume_session_id.as_deref(), Some(path.as_str())),
+            other => panic!("expected Continue by path, got {other:?}"),
+        }
+        // The file gone: back to fresh rather than a failed launch.
+        std::fs::remove_file(&file).unwrap();
+        let (_wt, mode, _repo) = build_added_spawn_info(&app, &added).expect("spawn info");
+        assert!(matches!(mode, SpawnMode::Fresh { .. }), "got {mode:?}");
     }
 
     #[test]

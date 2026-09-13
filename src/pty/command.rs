@@ -654,11 +654,16 @@ pub fn build_codex_command(
 ///
 /// Maps wsx spawn modes to oh-my-pi CLI flags:
 /// - `Fresh`    → bare `omp`, plus `--model` when `WSX_OMP_MODEL` is set.
-/// - `Continue` → `-c`. omp's `SessionManager.continueRecent` falls back to the
-///   newest session in the **cwd-encoded** session directory when no terminal
-///   breadcrumb matches, and every wsx spawn is a fresh PTY with a fresh
-///   terminal id — so a bare `-c` already resumes this worktree's own session.
-///   No marker file or db query is needed (unlike Hermes).
+/// - `Continue` with `resume_session_id` → `--resume=<path>`. The value is
+///   the session file wsx learned from omp's own terminal breadcrumb
+///   (`app::omp_breadcrumbs`); a value containing `/` makes omp open that
+///   file directly, bypassing breadcrumb and newest-in-cwd lookup both.
+/// - `Continue` otherwise → `-c`. omp's `SessionManager.continueRecent` falls
+///   back to the newest session in the **cwd-encoded** session directory when
+///   no terminal breadcrumb matches, and every wsx spawn is a fresh PTY with a
+///   fresh terminal id — so a bare `-c` resumes this worktree's most recent
+///   session. Exact for a lone omp agent; ambiguous once two share a worktree,
+///   which is what the recorded path fixes.
 ///
 /// Yolo maps to `--approval-mode yolo` rather than the equivalent
 /// `--auto-approve` because it is the same knob as omp's persistent
@@ -699,19 +704,19 @@ pub fn build_omp_command(
         cmd.env(k, v);
     }
 
-    let (doctrine, rename_prompt, custom, add_dirs, add_continue, yolo) = match mode {
+    let (doctrine, rename_prompt, custom, add_dirs, resume, yolo) = match mode {
         SpawnMode::Continue {
             custom_instructions,
             doctrine,
             additional_dirs,
             yolo,
-            resume_session_id: _,
+            resume_session_id,
         } => (
             doctrine.clone(),
             None,
             custom_instructions.clone(),
             additional_dirs.clone(),
-            true,
+            Some(resume_session_id.clone()),
             *yolo,
         ),
         SpawnMode::Fresh {
@@ -738,7 +743,7 @@ pub fn build_omp_command(
                 rp,
                 custom_instructions.clone(),
                 additional_dirs.clone(),
-                false,
+                None,
                 *yolo,
             )
         }
@@ -754,14 +759,25 @@ pub fn build_omp_command(
         cmd.arg(dir);
     }
 
-    if add_continue {
+    match &resume {
         // Resume restores the session's stored model and approval config, so
         // re-asserting `--model` here would fight the session's own choice.
-        cmd.arg("-c");
-    } else if let Some(model) = std::env::var("WSX_OMP_MODEL")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        // `--resume=<value>` in one token: omp splices an `=` value in as the
+        // next argument itself, and a separate token could be mistaken for a
+        // message if the flag were ever made optional-valued.
+        Some(Some(path)) => {
+            cmd.arg(format!("--resume={path}"));
+        }
+        Some(None) => {
+            cmd.arg("-c");
+        }
+        None => {}
+    }
+    if resume.is_none()
+        && let Some(model) = std::env::var("WSX_OMP_MODEL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     {
         // Empty/whitespace reads as unset: a shell expands `export FOO=$UNSET`
         // to "", and `--model ""` leaves omp with no resolvable model.
@@ -1749,6 +1765,33 @@ mod tests {
                 .position(|a| a == "--approval-mode")
                 .unwrap_or_else(|| panic!("expected --approval-mode: {argv:?}"));
             assert_eq!(argv[i + 1], "yolo", "{argv:?}");
+        }
+
+        #[test]
+        fn continue_with_recorded_session_file_resumes_that_path() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_OMP_BIN", "omp");
+            env.set("WSX_OMP_MODEL", "anthropic/claude-sonnet-4-5");
+            let argv = omp_argv(&super::SpawnMode::Continue {
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+                resume_session_id: Some("/home/x/.omp/agent/sessions/-w/2026_abc.jsonl".into()),
+            });
+            assert!(
+                argv.iter()
+                    .any(|a| a == "--resume=/home/x/.omp/agent/sessions/-w/2026_abc.jsonl"),
+                "{argv:?}"
+            );
+            assert!(
+                !argv.iter().any(|a| a == "-c"),
+                "exact path replaces -c: {argv:?}"
+            );
+            assert!(
+                !argv.iter().any(|a| a == "--model"),
+                "a resume keeps the session's own model: {argv:?}"
+            );
         }
 
         #[test]

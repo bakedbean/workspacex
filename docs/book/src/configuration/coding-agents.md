@@ -84,9 +84,12 @@ omp` mean different binaries.
 whatever `tools.approvalMode` you configured; `--yolo` workspaces add
 `--approval-mode yolo`.
 
-**Continue**: `omp -c`. omp resolves `--continue` against the session directory
-for the current cwd, so this resumes the worktree's own most-recent session
-without wsx needing a marker file or a database query.
+**Continue**: `omp --resume=<file>` once wsx has read the instance's session
+file from omp's terminal breadcrumb (see [Sessions survive a
+restart](multi-agent-workspaces.md#sessions-survive-a-restart)); before that,
+`omp -c`, which omp resolves against the session directory for the current
+cwd — the worktree's own most-recent session, exact only while one omp agent
+lives there.
 
 **Instructions**: doctrine, the auto-rename directive, and a workspace's custom
 instructions compose into a single `--append-system-prompt`. Related-repo paths

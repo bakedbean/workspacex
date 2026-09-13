@@ -35,10 +35,10 @@ Quit wsx and come back, and every agent in the workspace gets its own conversati
 | `claude` | Reported by the status hooks wsx injects (every payload carries it; each hook runs with that instance's `$WSX_AGENT_INSTANCE_ID`). A `/clear` moves the recorded id along with it. | `claude --resume <id>`  |
 | `codex`  | The `thread-id` in the `notify` payload wsx already receives after each turn.                             | `codex resume <id>`     |
 | `pi`     | Minted by wsx at the instance's first spawn and passed as `--session-id`, which pi creates-or-resumes. Pi prints a one-line "creating a new session with that id" notice on that first spawn. | `pi --session-id <id>`  |
-| `omp`    | Not available: omp keys `--continue` on the TTY device path, which changes on every restart, and has no create-by-id flag. | added agents start fresh |
+| `omp`    | Read from omp's own per-terminal breadcrumb (`~/.omp/agent/terminal-sessions/<pts-N>`), which names the session file each terminal last opened. wsx created the terminal, so the file maps to exactly one instance; wsx polls it every ~2s while the agent runs, so a `/new` is followed. Not available inside a shared (tmux) workspace, where the agent survives restarts anyway. | `omp --resume=<file>`   |
 | `hermes` | Not available: the id only exists inside the Hermes process.                                              | added agents start fresh |
 
-Until an instance has an id — a workspace created before this was tracked, an agent that has not completed a turn yet (Codex), or an `omp`/`hermes` peer — the old behaviour applies: the primary falls back to its harness's cwd-wide continue, an added agent starts fresh with its handoff note. If the recorded session has since been deleted from disk, the same fallback applies rather than a failed launch.
+Until an instance has an id — a workspace created before this was tracked, an agent that has not completed a turn yet (Codex) or written its session file yet (omp), or a `hermes` peer — the old behaviour applies: the primary falls back to its harness's cwd-wide continue, an added agent starts fresh with its handoff note. If the recorded session has since been deleted from disk, the same fallback applies rather than a failed launch.
 
 ### Switching focus between agents
 

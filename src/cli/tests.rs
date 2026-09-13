@@ -357,6 +357,24 @@ fn dashboard_ordering_settings_are_settable_from_the_cli() {
     }
 }
 
+/// The per-state bell patterns are read by `app::bell` but were never in the
+/// settings allowlist, so `wsx config set notification_bell_question off`
+/// was rejected as an unknown key.
+#[test]
+fn per_state_bell_settings_are_settable_from_the_cli() {
+    for key in [
+        "notification_bell_question",
+        "notification_bell_complete",
+        "notification_bell_permission",
+        "notification_bell_stalled",
+    ] {
+        match parse(&["config", "set", key, "off"]).unwrap() {
+            CliAction::ConfigSet { key: k, .. } => assert_eq!(k, key),
+            other => panic!("expected ConfigSet for {key}, got {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn bare_help_is_a_subcommand_not_a_value() {
     // `help` in the subcommand slot → group help.

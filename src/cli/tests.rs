@@ -357,6 +357,24 @@ fn dashboard_ordering_settings_are_settable_from_the_cli() {
     }
 }
 
+/// The per-state bell patterns are read by `app::bell` but were never in the
+/// settings allowlist, so `wsx config set notification_bell_question off`
+/// was rejected as an unknown key.
+#[test]
+fn per_state_bell_settings_are_settable_from_the_cli() {
+    for key in [
+        "notification_bell_question",
+        "notification_bell_complete",
+        "notification_bell_permission",
+        "notification_bell_stalled",
+    ] {
+        match parse(&["config", "set", key, "off"]).unwrap() {
+            CliAction::ConfigSet { key: k, .. } => assert_eq!(k, key),
+            other => panic!("expected ConfigSet for {key}, got {other:?}"),
+        }
+    }
+}
+
 #[test]
 fn bare_help_is_a_subcommand_not_a_value() {
     // `help` in the subcommand slot → group help.
@@ -499,6 +517,29 @@ fn unknown_setting_key_is_tagged_config_usage() {
 #[test]
 fn accepts_usage_graph_window() {
     assert!(known_setting_key("usage_graph_window"));
+}
+
+/// `app::bell` silently falls back to the state default on an unknown
+/// pattern, so `config set` has to be the place a typo is caught.
+#[test]
+fn bell_pattern_validate_accepts_known_patterns() {
+    for v in ["off", "false", "0", "single", "double", "triple"] {
+        assert_eq!(bell_pattern_validate_and_normalize(v).unwrap(), v);
+    }
+    assert_eq!(
+        bell_pattern_validate_and_normalize("  Double\n").unwrap(),
+        "double"
+    );
+}
+
+#[test]
+fn bell_pattern_validate_rejects_unknown_patterns() {
+    for v in ["quadruple", "on", "1", ""] {
+        assert!(
+            bell_pattern_validate_and_normalize(v).is_err(),
+            "expected {v:?} to be rejected"
+        );
+    }
 }
 
 #[test]

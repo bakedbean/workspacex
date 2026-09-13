@@ -229,6 +229,19 @@ pub(in crate::cli) fn detail_bar_config_validate_and_normalize(raw: &str) -> Res
 
 /// Validate a `usage_graph_window` value: accept only the canonical tokens
 /// (`24h`/`1w`/`1mo`), ignoring surrounding whitespace, and store the trimmed
+/// Validate a `notification_bell_*` pattern and lower-case it. `app::bell`
+/// falls back to the state default on anything it does not recognise, so
+/// this is the only place a typo like `dobule` gets reported.
+pub(in crate::cli) fn bell_pattern_validate_and_normalize(raw: &str) -> Result<String> {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    match trimmed.as_str() {
+        "off" | "false" | "0" | "single" | "double" | "triple" => Ok(trimmed),
+        _ => Err(Error::UserInput(format!(
+            "notification_bell_*: expected one of off, single, double, triple (got {trimmed:?})"
+        ))),
+    }
+}
+
 /// canonical form. Rejects anything else so a CLI typo fails loudly instead of
 /// silently falling back to `24h` at render time.
 pub(in crate::cli) fn usage_window_validate_and_normalize(raw: &str) -> Result<String> {

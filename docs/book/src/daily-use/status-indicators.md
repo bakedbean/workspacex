@@ -61,7 +61,16 @@ wsx watches each workspace for two distinct "user needs to act" signals:
 On either transition wsx considers the workspace to need attention:
 
 - A terminal bell (`\x07`) is written to stdout. Your terminal config decides
-  whether to beep, flash, or ignore.
+  whether to beep, flash, or ignore. wsx also clears the terminal's bell
+  urgency hint (private mode `1042`) while it runs, so on terminals that
+  honour it (Alacritty, xterm) the bell does not ask the window manager for
+  attention. That matters on Hyprland with `misc:focus_on_activate = true`
+  (Omarchy's default), where an urgency request switches the OS workspace to
+  the terminal. On exit wsx puts the mode back only if the terminal reported
+  it on at startup, so xterm (off by default) and a session that turned it
+  off stay that way. Terminals without mode 1042 (kitty, foot, ghostty) keep
+  their own bell-urgency setting; the sequence also does not cross a tmux
+  boundary.
 - A `!` marker appears at the start of the workspace's row on the dashboard.
 
 The marker clears the moment you attach to the workspace (Enter on the row).

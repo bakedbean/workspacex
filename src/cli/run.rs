@@ -323,6 +323,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     detail_bar_config_validate_and_normalize(&value)?
                 } else if key == "usage_graph_window" {
                     usage_window_validate_and_normalize(&value)?
+                } else if key.starts_with("notification_bell_") {
+                    bell_pattern_validate_and_normalize(&value)?
                 } else {
                     value
                 };
@@ -364,6 +366,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     detail_bar_config_validate_and_normalize(&new_value)?
                 } else if key == "usage_graph_window" {
                     usage_window_validate_and_normalize(&new_value)?
+                } else if key.starts_with("notification_bell_") {
+                    bell_pattern_validate_and_normalize(&new_value)?
                 } else {
                     new_value.clone()
                 };

@@ -519,6 +519,29 @@ fn accepts_usage_graph_window() {
     assert!(known_setting_key("usage_graph_window"));
 }
 
+/// `app::bell` silently falls back to the state default on an unknown
+/// pattern, so `config set` has to be the place a typo is caught.
+#[test]
+fn bell_pattern_validate_accepts_known_patterns() {
+    for v in ["off", "false", "0", "single", "double", "triple"] {
+        assert_eq!(bell_pattern_validate_and_normalize(v).unwrap(), v);
+    }
+    assert_eq!(
+        bell_pattern_validate_and_normalize("  Double\n").unwrap(),
+        "double"
+    );
+}
+
+#[test]
+fn bell_pattern_validate_rejects_unknown_patterns() {
+    for v in ["quadruple", "on", "1", ""] {
+        assert!(
+            bell_pattern_validate_and_normalize(v).is_err(),
+            "expected {v:?} to be rejected"
+        );
+    }
+}
+
 #[test]
 fn usage_window_validate_accepts_canonical_tokens() {
     assert_eq!(usage_window_validate_and_normalize("24h").unwrap(), "24h");

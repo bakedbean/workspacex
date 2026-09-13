@@ -21,26 +21,25 @@ use super::*;
 pub(crate) const HARVEST_EVERY_TICKS: u32 = 16;
 
 impl App {
-    /// Record the session file each running, non-tmux omp instance is in,
-    /// per its terminal breadcrumb, when it differs from what is stored.
+    /// Record the session file each running omp instance is in, per the
+    /// breadcrumb of the terminal its agent reads from
+    /// (`Session::agent_terminal`: this PTY, or the tmux pane for a shared
+    /// workspace), when it differs from what is stored. Crumbs older than
+    /// that terminal are ignored as a previous occupant's.
     ///
-    /// tmux-wrapped sessions are skipped: `Session::tty_name` is the attach
-    /// client's terminal there, not the pane omp reads from, so the crumb
-    /// under that name (if any) belongs to someone else. Shared workspaces
-    /// keep the agent alive across wsx restarts anyway.
+    /// Also called once on quit and before a share/unshare respawn, so a
+    /// `/new` performed moments earlier is not lost to the poll interval.
     pub(crate) fn harvest_omp_breadcrumbs(&self) {
         for (inst_id, session) in self.sessions.iter() {
             if session.agent != crate::pty::session::AgentKind::Omp
-                || session.tmux_session.is_some()
                 || !self.instance_is_running(inst_id)
             {
                 continue;
             }
-            let Some(terminal_id) = session
-                .tty_name
-                .as_deref()
-                .and_then(crate::pty::session::omp_terminal_id)
-            else {
+            let Some((tty, terminal_created)) = session.agent_terminal() else {
+                continue;
+            };
+            let Some(terminal_id) = crate::pty::session::omp_terminal_id(&tty) else {
                 continue;
             };
             let Ok(Some(instance)) = self.store.workspace_agents_by_id(inst_id) else {
@@ -53,9 +52,11 @@ impl App {
             else {
                 continue;
             };
-            let Some(file) =
-                crate::pty::session::omp_breadcrumb_session_file(&terminal_id, &ws.worktree_path)
-            else {
+            let Some(file) = crate::pty::session::omp_breadcrumb_session_file(
+                &terminal_id,
+                &ws.worktree_path,
+                terminal_created,
+            ) else {
                 continue;
             };
             let file = file.to_string_lossy().into_owned();
@@ -156,6 +157,43 @@ mod tests {
         app.harvest_omp_breadcrumbs();
         let stored = app.store.workspace_agents_by_id(omp.id).unwrap().unwrap();
         assert_eq!(stored.agent_session_id.as_deref(), Some(file2));
+    }
+
+    #[test]
+    fn harvest_ignores_a_same_worktree_crumb_older_than_the_terminal() {
+        // The exact peer collision: a crumb for this device number, this
+        // worktree, but written before this PTY existed — a peer's leftover.
+        let (app, omp, terminal_id, home, worktree, _env) = fixture();
+        let file = "/home/x/.omp/agent/sessions/-w/2026_peer.jsonl";
+        write_crumb(home.path(), &terminal_id, worktree.path(), file);
+        let crumb = home
+            .path()
+            .join(".omp/agent/terminal-sessions")
+            .join(&terminal_id);
+        let before_spawn =
+            app.sessions.get(omp.id).unwrap().spawned_at_system - std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&crumb)
+            .unwrap()
+            .set_modified(before_spawn)
+            .unwrap();
+        app.harvest_omp_breadcrumbs();
+        let stored = app.store.workspace_agents_by_id(omp.id).unwrap().unwrap();
+        assert_eq!(
+            stored.agent_session_id, None,
+            "a stale crumb is not harvested"
+        );
+        // And it never overwrites a correct stored identity either.
+        app.store
+            .set_instance_agent_session(omp.id, "/home/x/.omp/agent/sessions/-w/2026_mine.jsonl")
+            .unwrap();
+        app.harvest_omp_breadcrumbs();
+        let stored = app.store.workspace_agents_by_id(omp.id).unwrap().unwrap();
+        assert_eq!(
+            stored.agent_session_id.as_deref(),
+            Some("/home/x/.omp/agent/sessions/-w/2026_mine.jsonl")
+        );
     }
 
     #[test]

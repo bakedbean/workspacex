@@ -153,6 +153,13 @@ pub struct Session {
     /// session it names the attach client's terminal, not the agent's pane,
     /// so consumers must skip those.
     pub(crate) tty_name: Option<std::path::PathBuf>,
+    /// Wall-clock twin of `spawned_at`, for comparing against file mtimes
+    /// (an `Instant` cannot be).
+    pub(crate) spawned_at_system: std::time::SystemTime,
+    /// For a tmux-wrapped session: the pane's terminal device and the tmux
+    /// session's creation time, resolved lazily on first need and cached (a
+    /// pane's tty never changes). `None` until resolved.
+    pub(crate) pane_terminal: Mutex<Option<(std::path::PathBuf, std::time::SystemTime)>>,
     /// When set, this session's child is a tmux attach client and the agent
     /// lives in the tmux server under this session name. `kill()`/`Drop` kill
     /// only the client (agent survives — the shared-workspace persistence
@@ -161,6 +168,31 @@ pub struct Session {
 }
 
 impl Session {
+    /// The terminal the agent in this session reads from, and when that
+    /// terminal came into existence: for a direct child, this PTY's device
+    /// and spawn time; for a tmux-wrapped session, the pane's device and the
+    /// tmux session's creation time, resolved through tmux on first call and
+    /// cached. `None` when neither can be determined.
+    ///
+    /// The distinction matters for anything keyed by terminal — omp's
+    /// per-terminal breadcrumb, for one: under tmux, `tty_name` is only the
+    /// attach client's terminal, which the agent never sees.
+    pub(crate) fn agent_terminal(&self) -> Option<(std::path::PathBuf, std::time::SystemTime)> {
+        match &self.tmux_session {
+            None => self
+                .tty_name
+                .clone()
+                .map(|tty| (tty, self.spawned_at_system)),
+            Some(name) => {
+                let mut cached = self.pane_terminal.lock().unwrap();
+                if cached.is_none() {
+                    *cached = crate::pty::tmux::pane_terminal(name);
+                }
+                cached.clone()
+            }
+        }
+    }
+
     /// Whole seconds since this session last produced PTY output, or `None`
     /// when no output has been observed yet (`activity_ms == 0`). Callers that
     /// treat "idle-unknown" the same as "idle 0s" can `.unwrap_or(0)`; callers
@@ -588,6 +620,8 @@ impl Session {
         let tty_name = pair.master.tty_name();
         Session {
             spawned_at: std::time::Instant::now(),
+            spawned_at_system: std::time::SystemTime::now(),
+            pane_terminal: Mutex::new(None),
             tty_name,
             parser: Arc::new(Mutex::new(Parser::new(24, 80, 1000))),
             writer: tx,
@@ -823,6 +857,7 @@ pub fn spawn_command_session(
         }
     })?;
     let spawned_at = std::time::Instant::now();
+    let spawned_at_system = std::time::SystemTime::now();
     drop(pair.slave);
 
     let killer = child.clone_killer();
@@ -901,6 +936,8 @@ pub fn spawn_command_session(
 
     Ok(Session {
         spawned_at,
+        spawned_at_system,
+        pane_terminal: Mutex::new(None),
         tty_name,
         parser,
         writer: tx,

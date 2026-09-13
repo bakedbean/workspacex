@@ -153,6 +153,36 @@ pub fn has_session(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The terminal device of a tmux session's (first) pane and the moment the
+/// session was created — the terminal an agent inside it actually reads
+/// from, and when that terminal came to be. `None` when the session is not
+/// running or tmux is unavailable.
+pub fn pane_terminal(name: &str) -> Option<(std::path::PathBuf, std::time::SystemTime)> {
+    let out = tmux_cmd()
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            &format!("={name}"),
+            "#{pane_tty} #{session_created}",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    parse_pane_terminal(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse `display-message` output of the form `/dev/pts/7 1757700000`.
+fn parse_pane_terminal(line: &str) -> Option<(std::path::PathBuf, std::time::SystemTime)> {
+    let mut parts = line.split_whitespace();
+    let tty = parts.next().filter(|t| t.starts_with("/dev/"))?;
+    let secs: u64 = parts.next()?.parse().ok()?;
+    Some((
+        std::path::PathBuf::from(tty),
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+    ))
+}
+
 /// Exact-match kill. Returns true when a session was actually killed.
 pub fn kill_session(name: &str) -> bool {
     tmux_cmd()
@@ -197,6 +227,22 @@ pub fn spawn_window_size_fixup(name: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_terminal_output_parses_tty_and_epoch() {
+        let (tty, created) = parse_pane_terminal("/dev/pts/7 1757700000\n").unwrap();
+        assert_eq!(tty, std::path::PathBuf::from("/dev/pts/7"));
+        assert_eq!(
+            created,
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1757700000)
+        );
+        assert!(parse_pane_terminal("").is_none());
+        assert!(
+            parse_pane_terminal("pts/7 1\n").is_none(),
+            "must be a device path"
+        );
+        assert!(parse_pane_terminal("/dev/pts/7 soon\n").is_none());
+    }
     use crate::pty::AgentKind;
     use crate::test_support::EnvGuard;
 

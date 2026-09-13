@@ -156,12 +156,24 @@ pub fn omp_terminal_id(tty: &Path) -> Option<String> {
 /// canonicalized) because pts numbers are recycled: a crumb left by some
 /// earlier process on the same device must not be taken for this one.
 ///
+/// The cwd check is not enough on its own: two agents in the *same* worktree
+/// can inherit each other's device numbers across a restart, and a slow
+/// starting omp on a peer's old pts would read as the peer until it wrote its
+/// own crumb. So a crumb older than `terminal_created` — the moment this
+/// terminal came into existence (the PTY's spawn, or the tmux session's
+/// creation) — is ignored too: omp rewrites the file on every session open,
+/// so a crumb this omp wrote is necessarily newer than its terminal.
+///
 /// Returns the session file path as written, whether or not it exists yet —
 /// a `fresh` crumb names a file omp will create on first output. Existence is
 /// the respawn path's concern (`omp_session_exists`).
+/// See the mtime comparison in `omp_breadcrumb_session_file`.
+const STALE_CRUMB_SLACK: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub fn omp_breadcrumb_session_file(
     terminal_id: &str,
     worktree: &Path,
+    terminal_created: std::time::SystemTime,
 ) -> Option<std::path::PathBuf> {
     if terminal_id.is_empty() || terminal_id.contains(['/', '\\']) {
         return None;
@@ -169,6 +181,14 @@ pub fn omp_breadcrumb_session_file(
     let crumb = dirs::home_dir()?
         .join(".omp/agent/terminal-sessions")
         .join(terminal_id);
+    // Slack for clock granularity: file mtimes come from the kernel's coarse
+    // clock and can trail `SystemTime::now()` by a tick, so a crumb written
+    // right after spawn may stamp fractionally "before" it. A previous
+    // occupant's crumb predates the terminal by far more than this.
+    let written = std::fs::metadata(&crumb).ok()?.modified().ok()?;
+    if written + STALE_CRUMB_SLACK < terminal_created {
+        return None;
+    }
     let body = std::fs::read_to_string(crumb).ok()?;
     let mut lines = body.lines();
     let cwd = Path::new(lines.next()?.trim());
@@ -744,23 +764,74 @@ mod tests {
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
+        let epoch = std::time::SystemTime::UNIX_EPOCH;
         assert_eq!(
-            omp_breadcrumb_session_file("pts-7", work.path()).as_deref(),
+            omp_breadcrumb_session_file("pts-7", work.path(), epoch).as_deref(),
             Some(file.as_path())
         );
         assert_eq!(
-            omp_breadcrumb_session_file("pts-8", work.path()).as_deref(),
+            omp_breadcrumb_session_file("pts-8", work.path(), epoch).as_deref(),
             Some(file.as_path()),
             "a fresh crumb still names the file omp will write"
         );
         assert_eq!(
-            omp_breadcrumb_session_file("pts-7", other.path()),
+            omp_breadcrumb_session_file("pts-7", other.path(), epoch),
             None,
             "a recycled pts carrying another directory's crumb is not ours"
         );
-        assert_eq!(omp_breadcrumb_session_file("pts-9", work.path()), None);
-        assert_eq!(omp_breadcrumb_session_file("pts-404", work.path()), None);
-        assert_eq!(omp_breadcrumb_session_file("../etc", work.path()), None);
+        assert_eq!(
+            omp_breadcrumb_session_file("pts-9", work.path(), epoch),
+            None
+        );
+        assert_eq!(
+            omp_breadcrumb_session_file("pts-404", work.path(), epoch),
+            None
+        );
+        assert_eq!(
+            omp_breadcrumb_session_file("../etc", work.path(), epoch),
+            None
+        );
+    }
+
+    #[test]
+    fn omp_breadcrumb_older_than_the_terminal_is_a_stale_peer_crumb() {
+        // Same worktree, same device number, but the crumb predates this
+        // terminal: it was left by whichever agent had the pts before.
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let abs = std::fs::canonicalize(work.path()).unwrap();
+        write_omp_crumb(
+            home.path(),
+            "pts-3",
+            &format!(
+                "{}\n/home/x/.omp/agent/sessions/-w/peer.jsonl\n",
+                abs.display()
+            ),
+        );
+        let crumb = home.path().join(".omp/agent/terminal-sessions/pts-3");
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&crumb)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        let created = old + std::time::Duration::from_secs(60);
+        assert_eq!(
+            omp_breadcrumb_session_file("pts-3", work.path(), created),
+            None
+        );
+        // omp on this terminal rewrites the crumb: now it is ours.
+        std::fs::File::options()
+            .write(true)
+            .open(&crumb)
+            .unwrap()
+            .set_modified(created + std::time::Duration::from_secs(1))
+            .unwrap();
+        assert!(omp_breadcrumb_session_file("pts-3", work.path(), created).is_some());
     }
 
     #[test]

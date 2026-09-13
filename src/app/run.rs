@@ -211,6 +211,9 @@ pub async fn run<B: Backend + std::io::Write>(
             dirty = false;
             last_frame = Some(std::time::Instant::now());
             if g.quit {
+                // Last look at omp's breadcrumbs before the PTYs die: a
+                // `/new` done moments ago must outlive the poll interval.
+                g.harvest_omp_breadcrumbs();
                 break;
             }
         }

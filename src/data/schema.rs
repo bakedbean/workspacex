@@ -163,6 +163,19 @@ impl Store {
             self.add_column_if_missing("scm_cache", "pr_unresolved", "pr_unresolved INTEGER")?;
             self.conn().execute("PRAGMA user_version = 23", [])?;
         }
+        if v < 24 {
+            // The agent harness's own session id for this instance (Claude: the
+            // `session_id` its hooks report). Lets a respawn resume THIS
+            // instance's conversation by id instead of `--continue`, which
+            // cannot tell two agents sharing one worktree apart. NULL until the
+            // harness reports one; never a tmux name (that is `session_ref`).
+            self.add_column_if_missing(
+                "workspace_agents",
+                "agent_session_id",
+                "agent_session_id TEXT",
+            )?;
+            self.conn().execute("PRAGMA user_version = 24", [])?;
+        }
         Ok(())
     }
 

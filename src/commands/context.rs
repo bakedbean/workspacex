@@ -325,6 +325,7 @@ mod tests {
             ordinal,
             is_primary: primary,
             session_ref: None,
+            agent_session_id: None,
             created_at: 0,
         }
     }

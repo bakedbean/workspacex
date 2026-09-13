@@ -537,6 +537,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             super::prepare_hermes_workspace(tmp.path(), &cont);
             let agents = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap_or_default();
@@ -559,6 +560,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             super::prepare_hermes_workspace(tmp.path(), &cont);
             assert!(!tmp.path().join("AGENTS.md").exists());

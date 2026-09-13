@@ -104,6 +104,7 @@ pub(crate) fn build_spawn_info(
             doctrine: doctrine.clone(),
             additional_dirs,
             yolo,
+            resume_session_id: None,
         }
     } else {
         let rename_ctx = if crate::util::names::is_generated_slug(&ws.name) {

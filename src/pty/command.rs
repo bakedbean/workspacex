@@ -24,8 +24,10 @@ use std::path::Path;
 /// `claude` (the default), appends a system-prompt instruction directing
 /// claude to rename the workspace based on the user's first message, plus
 /// pre-authorizes `Bash(wsx workspace rename:*)` so the rename runs without a
-/// permission prompt. When `mode` is `Continue`, passes `--continue` so
-/// claude resumes the most recent persisted session for this worktree.
+/// permission prompt. When `mode` is `Continue` with a `resume_session_id`,
+/// passes `--resume <id>` so claude reopens exactly that conversation;
+/// without one, `--continue`, which resumes the most recent persisted
+/// session for this worktree (ambiguous once two agents share it).
 pub fn build_claude_command(
     cwd: &Path,
     mode: &SpawnMode,
@@ -38,74 +40,75 @@ pub fn build_claude_command(
         cmd.env(k, v);
     }
 
-    let (
-        doctrine,
-        rename_prompt,
-        custom,
-        allow_wsx_rename,
-        add_continue,
-        skip_permissions,
-        add_dirs,
-    ) = match mode {
-        SpawnMode::Continue {
-            custom_instructions,
-            doctrine,
-            additional_dirs,
-            yolo,
-        } => (
-            doctrine.clone(),
-            None,
-            custom_instructions.clone(),
-            false,
-            true,
-            *yolo,
-            additional_dirs.clone(),
-        ),
-        SpawnMode::Fresh {
-            rename_ctx,
-            custom_instructions,
-            doctrine,
-            additional_dirs,
-            yolo,
-        } => {
-            let rename_mode =
-                std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
-            let (rp, allow) = if let Some(ctx) = rename_ctx {
-                if rename_mode == "claude" {
-                    (
-                        Some(render_rename_system_prompt(
-                            &ctx.current_branch,
-                            &ctx.branch_prefix,
-                            &ctx.repo_name,
-                            &ctx.current_slug,
-                        )),
-                        true,
-                    )
-                } else {
-                    (None, false)
-                }
-            } else {
-                (None, false)
-            };
-            (
+    let (doctrine, rename_prompt, custom, allow_wsx_rename, resume, skip_permissions, add_dirs) =
+        match mode {
+            SpawnMode::Continue {
+                custom_instructions,
+                doctrine,
+                additional_dirs,
+                yolo,
+                resume_session_id,
+            } => (
                 doctrine.clone(),
-                rp,
+                None,
                 custom_instructions.clone(),
-                allow,
                 false,
+                Some(resume_session_id.clone()),
                 *yolo,
                 additional_dirs.clone(),
-            )
-        }
-    };
+            ),
+            SpawnMode::Fresh {
+                rename_ctx,
+                custom_instructions,
+                doctrine,
+                additional_dirs,
+                yolo,
+            } => {
+                let rename_mode =
+                    std::env::var("WSX_RENAME_MODE").unwrap_or_else(|_| "claude".to_string());
+                let (rp, allow) = if let Some(ctx) = rename_ctx {
+                    if rename_mode == "claude" {
+                        (
+                            Some(render_rename_system_prompt(
+                                &ctx.current_branch,
+                                &ctx.branch_prefix,
+                                &ctx.repo_name,
+                                &ctx.current_slug,
+                            )),
+                            true,
+                        )
+                    } else {
+                        (None, false)
+                    }
+                } else {
+                    (None, false)
+                };
+                (
+                    doctrine.clone(),
+                    rp,
+                    custom_instructions.clone(),
+                    allow,
+                    None,
+                    *yolo,
+                    additional_dirs.clone(),
+                )
+            }
+        };
 
     for dir in &add_dirs {
         cmd.arg("--add-dir");
         cmd.arg(dir);
     }
 
-    if add_continue {
-        cmd.arg("--continue");
+    match resume {
+        Some(Some(id)) => {
+            cmd.arg("--resume");
+            cmd.arg(id);
+        }
+        Some(None) => {
+            cmd.arg("--continue");
+        }
+        None => {}
     }
 
     if skip_permissions {
@@ -224,6 +227,7 @@ pub fn build_pi_command(
             doctrine,
             additional_dirs: _,
             yolo: _,
+            resume_session_id: _,
         } => (doctrine.clone(), None, custom_instructions.clone(), true),
         SpawnMode::Fresh {
             rename_ctx,
@@ -663,6 +667,7 @@ pub fn build_omp_command(
             doctrine,
             additional_dirs,
             yolo,
+            resume_session_id: _,
         } => (
             doctrine.clone(),
             None,
@@ -830,12 +835,47 @@ mod tests {
     }
 
     #[test]
+    fn continue_with_recorded_session_id_resumes_by_id_not_continue() {
+        let mode = SpawnMode::Continue {
+            custom_instructions: Some("Use ruff".into()),
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+            resume_session_id: Some("656c166a-911b-4375-9db9-007b8456f3e3".into()),
+        };
+        let cwd = std::path::PathBuf::from(".");
+        let cmd = build_claude_command(
+            &cwd,
+            &mode,
+            crate::agent::remote_control::RemoteOpts::disabled(),
+        );
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let idx = argv
+            .iter()
+            .position(|a| a == "--resume")
+            .expect("expected --resume");
+        assert_eq!(argv[idx + 1], "656c166a-911b-4375-9db9-007b8456f3e3");
+        assert!(
+            !argv.iter().any(|a| a == "--continue"),
+            "--resume and --continue are mutually exclusive: {argv:?}"
+        );
+        // Everything else Continue carries still rides along.
+        assert!(argv.iter().any(|a| a == "--append-system-prompt"));
+        assert!(argv.iter().any(|a| a == "--settings"));
+    }
+
+    #[test]
     fn system_prompt_continue_passes_custom_only() {
         let mode = SpawnMode::Continue {
             custom_instructions: Some("Use ruff".into()),
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            resume_session_id: None,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(
@@ -947,6 +987,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: true,
+            resume_session_id: None,
         };
         let cwd = std::path::PathBuf::from(".");
         let cmd = build_claude_command(
@@ -1083,6 +1124,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            resume_session_id: None,
         };
         let cmd = build_claude_command(
             &cwd,
@@ -1335,6 +1377,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             let argv = argv_of(&mut env, &cont_mode);
             assert!(argv.iter().any(|a| a == "--continue"), "argv: {argv:?}");
@@ -1419,6 +1462,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
             assert_eq!(result, "Be terse.");
@@ -1431,6 +1475,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             assert!(super::compose_injected_prompt(&mode).is_none());
         }
@@ -1442,6 +1487,7 @@ mod tests {
                 doctrine: Some("DOCTRINE_MARK".to_string()),
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             let result = super::compose_injected_prompt(&mode).expect("expected Some");
             let dpos = result.find("DOCTRINE_MARK").expect("doctrine present");
@@ -1495,6 +1541,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo,
+                resume_session_id: None,
             }
         }
 
@@ -1811,6 +1858,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: true,
+                resume_session_id: None,
             };
             let cmd = super::build_hermes_command(
                 tmp.path(),
@@ -1830,6 +1878,7 @@ mod tests {
                     doctrine: None,
                     additional_dirs: vec![],
                     yolo: true,
+                    resume_session_id: None,
                 },
             ] {
                 let cmd = super::build_hermes_command(
@@ -1874,6 +1923,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             let cmd = super::build_hermes_command(
                 cwd.path(),
@@ -1914,6 +1964,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             let cmd = super::build_hermes_command(
                 cwd.path(),
@@ -1968,6 +2019,7 @@ mod tests {
                 doctrine: None,
                 additional_dirs: vec![],
                 yolo: false,
+                resume_session_id: None,
             };
             let cmd = super::build_hermes_command(
                 cwd.path(),
@@ -2140,6 +2192,7 @@ mod tests {
             doctrine: Some("DOCTRINE_MARK".to_string()),
             additional_dirs: vec![],
             yolo: false,
+            resume_session_id: None,
         };
         let cmd = build_pi_command(
             &cwd,
@@ -2234,6 +2287,7 @@ mod tests {
             doctrine: None,
             additional_dirs: vec![],
             yolo: false,
+            resume_session_id: None,
         });
         assert!(
             argv.iter().any(|a| a == "resume"),
@@ -2370,6 +2424,7 @@ mod tests {
             doctrine: Some("DOCTRINE_MARK".to_string()),
             additional_dirs: vec![],
             yolo: false,
+            resume_session_id: None,
         });
         assert!(
             !argv

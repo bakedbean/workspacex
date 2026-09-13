@@ -18,6 +18,7 @@ pub use crate::pty::agent_kind::AgentKind;
 // `session_detect`. Re-export the public surface so external callers
 // (`crate::pty::session::has_prior_session_for`, …) and this file's spawn /
 // command builders keep resolving the names unqualified.
+pub use crate::pty::session_detect::claude_session_exists;
 pub use crate::pty::session_detect::{
     has_prior_codex_session, has_prior_hermes_session, has_prior_pi_session, has_prior_session,
     has_prior_session_for, latest_hermes_session_id_default, write_worktree_sessions,
@@ -659,13 +660,19 @@ pub enum SpawnMode {
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
     },
-    /// Resume the most recent prior session in this worktree via `--continue`.
-    /// `yolo` adds `--dangerously-skip-permissions`.
+    /// Resume a prior session in this worktree. With `resume_session_id`
+    /// set, resume exactly that harness session (Claude: `--resume <id>`);
+    /// otherwise the harness's own "most recent in this cwd" (Claude:
+    /// `--continue`). `yolo` adds `--dangerously-skip-permissions`.
     Continue {
         custom_instructions: Option<String>,
         doctrine: Option<String>,
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
+        /// The instance's own recorded session id, when known and still on
+        /// disk (`app::spawn::recorded_resume_id`). Only the Claude builder
+        /// honours it today; the others fall back to their cwd-wide resume.
+        resume_session_id: Option<String>,
     },
 }
 

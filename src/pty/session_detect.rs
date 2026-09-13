@@ -67,6 +67,22 @@ fn claude_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
     Some(dirs::home_dir()?.join(".claude/projects").join(encoded))
 }
 
+/// True if Claude has a persisted session `session_id` for `worktree` —
+/// i.e. `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl` exists. The
+/// guard before `--resume <id>`: Claude refuses to start when the id names
+/// nothing, so a recorded id whose file is gone (deleted, or never flushed)
+/// must fall back to the cwd-wide resume instead. No snapshot gate applies —
+/// the id was reported by this workspace's own instance, so it is "ours" by
+/// construction.
+pub fn claude_session_exists(worktree: &Path, session_id: &str) -> bool {
+    if session_id.is_empty() || session_id.contains(['/', '\\']) {
+        return false;
+    }
+    claude_session_dir(worktree)
+        .map(|d| d.join(format!("{session_id}.jsonl")).is_file())
+        .unwrap_or(false)
+}
+
 /// Pi's session directory for `worktree`, or None if the path can't be
 /// canonicalized. Pi stores sessions at
 /// `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`, where the
@@ -460,6 +476,32 @@ mod tests {
             result,
             "expected to find prior session at {}",
             session_dir.display()
+        );
+    }
+
+    #[test]
+    fn claude_session_exists_checks_the_named_file_only() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let name = seed_claude_session(home.path(), work.path());
+        let id = name.trim_end_matches(".jsonl");
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(claude_session_exists(work.path(), id));
+        assert!(
+            !claude_session_exists(work.path(), "0000-not-there"),
+            "a recorded id whose file is gone must not be resumed"
+        );
+        assert!(!claude_session_exists(work.path(), ""));
+        assert!(
+            !claude_session_exists(work.path(), "../escape"),
+            "ids never carry path separators"
+        );
+        let other = tempfile::TempDir::new().unwrap();
+        assert!(
+            !claude_session_exists(other.path(), id),
+            "sessions are indexed per worktree path"
         );
     }
 

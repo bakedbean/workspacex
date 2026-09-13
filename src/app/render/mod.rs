@@ -13,7 +13,7 @@ pub(crate) mod dashboard;
 pub(crate) mod overlay;
 
 pub(crate) use dashboard::resolve_dashboard_detail_cfg;
-pub(crate) use overlay::translate_activity;
+pub(crate) use overlay::{panel_inputs, translate_activity};
 
 // render — extracted from src/app.rs (see docs/superpowers/specs/2026-05-25-app-rs-refactor-design.md)
 

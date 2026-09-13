@@ -1120,3 +1120,141 @@ fn a_registered_repo_never_shows_the_empty_body_message() {
         );
     }
 }
+
+// ---- ordered_sections: the one ordering both the nav index and the
+// workspace-updates panel are built on ----
+
+#[test]
+fn ordered_sections_by_repo_emits_every_repo_in_sort_order_with_rows_ordered() {
+    let fixtures = fixture::repos();
+    let mut repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    // Reverse the persisted order so the expected output differs from the
+    // input order — an echo of input order must not pass.
+    let n = repos.len() as i64;
+    for (i, repo) in repos.iter_mut().enumerate() {
+        repo.sort_order = (n - 1 - i as i64) * 10;
+    }
+    // One extra repo with no workspaces: by-repo still emits its section
+    // (the dashboard draws its header), the panel is what skips it.
+    let mut empty = fake_repo(99, "empty", "/tmp/empty");
+    empty.sort_order = -1;
+    repos.push(empty);
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos[..fixtures.len()]);
+    let mut repo_refs = repo_refs;
+    repo_refs.push(&repos[repos.len() - 1]);
+
+    let sections = ordered_sections(
+        &repo_refs,
+        &workspaces,
+        GroupMode::Repo,
+        SortMode::Recency,
+        sort::BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+    );
+
+    // Sections come out ascending by sort_order: the empty repo (-1) first,
+    // then the fixtures reversed.
+    let kinds: Vec<SectionKind> = sections.iter().map(|s| s.kind.clone()).collect();
+    let mut expected_repo_ids: Vec<RepoId> = vec![RepoId(99)];
+    expected_repo_ids.extend((1..=fixtures.len() as i64).rev().map(RepoId));
+    assert_eq!(
+        kinds,
+        expected_repo_ids
+            .iter()
+            .map(|id| SectionKind::Repo(*id))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        sections[0].workspace_ids.is_empty(),
+        "empty repo has no rows"
+    );
+
+    // Within each repo the rows are in `order_workspaces` order under the
+    // requested sort mode — the same comparator the renderer uses.
+    for s in &sections[1..] {
+        let SectionKind::Repo(rid) = s.kind else {
+            unreachable!()
+        };
+        let mut rows: Vec<row::RowInputs> = workspaces
+            .iter()
+            .filter(|w| w.repo.id == rid)
+            .map(|w| w.row.clone())
+            .collect();
+        sort::order_workspaces(
+            &mut rows,
+            SortMode::Recency,
+            sort::BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+        );
+        let expected: Vec<WorkspaceId> = rows.iter().map(|r| r.workspace_id).collect();
+        assert_eq!(s.workspace_ids, expected, "rows of repo {rid:?}");
+        assert_eq!(
+            s.counts.total() as usize,
+            expected.len(),
+            "counts cover the section's rows"
+        );
+    }
+}
+
+#[test]
+fn ordered_sections_by_attention_emits_non_empty_sections_in_urgency_order() {
+    use crate::ui::dashboard::status::Status;
+    let repos = [
+        fake_repo(1, "alpha", "/tmp/a"),
+        fake_repo(2, "beta", "/tmp/b"),
+    ];
+    let mk = |repo: &'static Repo, id: i64, status: Status, ago: Option<u64>| {
+        let mut row = base_row();
+        row.status = status;
+        row.ago_secs = ago;
+        row.workspace_id = WorkspaceId(id);
+        row.branch = format!("ws-{id}");
+        WorkspaceItem {
+            repo,
+            workspace_id: WorkspaceId(id),
+            status,
+            row,
+        }
+    };
+    // Leak so the items can borrow with 'static; test-only.
+    let repos: &'static [Repo] = Box::leak(Box::new(repos));
+    // alpha is ALL idle — the dashboard folds it into QUIET REPOS, but the
+    // pure ordering keeps its rows in IDLE; the caller decides what to hide.
+    let workspaces = vec![
+        mk(&repos[0], 10, Status::Idle, Some(500)),
+        mk(&repos[0], 11, Status::Idle, Some(50)),
+        mk(&repos[1], 20, Status::Thinking, Some(5)),
+        mk(&repos[1], 21, Status::Question, Some(60)),
+        mk(&repos[1], 22, Status::Stalled, Some(10)),
+    ];
+    let sections = ordered_sections(
+        &repos.iter().collect::<Vec<_>>(),
+        &workspaces,
+        GroupMode::Attention,
+        SortMode::Recency,
+        sort::BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+    );
+    let kinds: Vec<SectionKind> = sections.iter().map(|s| s.kind.clone()).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            SectionKind::Attention(AttentionSection::NeedsAttention),
+            SectionKind::Attention(AttentionSection::Working),
+            SectionKind::Attention(AttentionSection::Idle),
+        ],
+        "RECENT is empty and so is skipped"
+    );
+    // NEEDS ATTENTION: priority desc (stalled outranks question).
+    assert_eq!(
+        sections[0].workspace_ids,
+        vec![WorkspaceId(22), WorkspaceId(21)]
+    );
+    assert_eq!(sections[1].workspace_ids, vec![WorkspaceId(20)]);
+    // IDLE: most recent first, alpha's rows kept.
+    assert_eq!(
+        sections[2].workspace_ids,
+        vec![WorkspaceId(11), WorkspaceId(10)]
+    );
+}

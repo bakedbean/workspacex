@@ -108,6 +108,15 @@ impl DashboardState {
         }
     }
 
+    /// Flip between repo and attention grouping. Shared by the dashboard's
+    /// `G` and the workspace-updates panel's, which mirrors it.
+    pub fn toggle_group_mode(&mut self) {
+        self.group_mode = match self.group_mode {
+            GroupMode::Repo => GroupMode::Attention,
+            GroupMode::Attention => GroupMode::Repo,
+        };
+    }
+
     /// Move to the next sort mode and remember it, so the choice survives a
     /// restart the way the theme does.
     pub fn cycle_sort_mode(&mut self, store: &crate::data::store::Store) {
@@ -419,111 +428,204 @@ pub fn visible_targets(
     state: &DashboardState,
 ) -> Vec<SelectionTarget> {
     let filter = state.filter.as_deref().filter(|f| !f.is_empty());
+    let shown: Vec<WorkspaceItem<'_>> = inputs
+        .workspaces
+        .iter()
+        .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+        .cloned()
+        .collect();
     let mut out: Vec<SelectionTarget> = Vec::new();
     match state.group_mode {
         GroupMode::Repo => {
-            // Mirror render_by_repo's ordering: per-repo filter + sort,
-            // then persisted sort_order ordering across repos.
-            #[derive(Clone)]
-            struct Pending {
-                repo_id: crate::data::store::RepoId,
-                counts: StatusCounts,
-                sort_order: i64,
-                workspace_ids: Vec<crate::data::store::WorkspaceId>,
-            }
-            let mut pending: Vec<Pending> = inputs
-                .repos
-                .iter()
-                .map(|r| {
-                    let mut rows: Vec<NavRow> = inputs
-                        .workspaces
-                        .iter()
-                        .filter(|w| w.repo.id == r.id)
-                        .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
-                        .map(NavRow::from)
-                        .collect();
-                    order_workspaces(&mut rows, state.sort_mode, state.blocked_pin_max_age_secs);
-                    let counts = StatusCounts::from_iter(rows.iter().map(|r| r.status));
-                    Pending {
-                        repo_id: r.id,
-                        counts,
-                        sort_order: r.sort_order,
-                        workspace_ids: rows.into_iter().map(|r| r.workspace_id).collect(),
-                    }
-                })
-                .collect();
-            // Mirror by_repo::order_repos exactly — same (sort_order, id) key —
-            // so nav and render stay in lockstep even if sort_order values collide.
-            pending.sort_by_key(|p| (p.sort_order, p.repo_id.0));
-            for p in &pending {
-                out.push(SelectionTarget::Repo(p.repo_id));
-                let expanded = match state.folded.get(&(p.repo_id.0 as u64)).copied() {
+            let sections = ordered_sections(
+                &inputs.repos,
+                &shown,
+                GroupMode::Repo,
+                state.sort_mode,
+                state.blocked_pin_max_age_secs,
+            );
+            for s in &sections {
+                let SectionKind::Repo(repo_id) = s.kind else {
+                    continue;
+                };
+                out.push(SelectionTarget::Repo(repo_id));
+                let expanded = match state.folded.get(&(repo_id.0 as u64)).copied() {
                     Some(explicit) => !explicit,
-                    None => !default_fold(p.counts),
+                    None => !default_fold(s.counts),
                 };
                 if expanded {
-                    for wid in &p.workspace_ids {
-                        out.push(SelectionTarget::Workspace(*wid));
-                    }
+                    out.extend(
+                        s.workspace_ids
+                            .iter()
+                            .map(|w| SelectionTarget::Workspace(*w)),
+                    );
                 }
             }
         }
         GroupMode::Attention => {
-            // Mirror render_by_attention: filter, drop idle rows that
-            // appear under QUIET REPOS, then partition (which applies
-            // the per-section ordering).
-            let rows: Vec<FlatRow> = inputs
-                .workspaces
+            // Mirror render_by_attention: drop idle rows that appear under
+            // QUIET REPOS (they have no per-repo selection model), then
+            // order what's left.
+            let quiet_names = quiet_repo_names(inputs, filter);
+            let shown: Vec<WorkspaceItem<'_>> = shown
+                .into_iter()
+                .filter(|w| {
+                    !matches!(w.status, Status::Idle) || !quiet_names.contains(&w.repo.name)
+                })
+                .collect();
+            for s in ordered_sections(
+                &inputs.repos,
+                &shown,
+                GroupMode::Attention,
+                state.sort_mode,
+                state.blocked_pin_max_age_secs,
+            ) {
+                out.extend(
+                    s.workspace_ids
+                        .iter()
+                        .map(|w| SelectionTarget::Workspace(*w)),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// The repos `render_by_attention` lists under QUIET REPOS for `filter`:
+/// every repo with no (matching) workspaces — unless a filter is active and
+/// misses the repo's name — plus every repo whose matching workspaces are
+/// all idle.
+fn quiet_repo_names(
+    inputs: &DashboardInputs<'_>,
+    filter: Option<&str>,
+) -> std::collections::HashSet<String> {
+    let mut quiet_names: std::collections::HashSet<String> = Default::default();
+    for r in &inputs.repos {
+        let repo_rows: Vec<&WorkspaceItem<'_>> = inputs
+            .workspaces
+            .iter()
+            .filter(|w| w.repo.id == r.id)
+            .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+            .collect();
+        let count = repo_rows.len();
+        let all_idle =
+            !repo_rows.is_empty() && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
+        let repo_matches_filter = filter
+            .map(|f| r.name.to_lowercase().contains(&f.to_lowercase()))
+            .unwrap_or(true);
+        let include_empty = count == 0 && (filter.is_none() || repo_matches_filter);
+        if include_empty || all_idle {
+            quiet_names.insert(r.name.clone());
+        }
+    }
+    quiet_names
+}
+
+/// One of the by-attention view's four row sections, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttentionSection {
+    NeedsAttention,
+    Working,
+    Recent,
+    Idle,
+}
+
+impl AttentionSection {
+    /// The section's on-screen label, as the by-attention header draws it.
+    pub fn label(self) -> &'static str {
+        match self {
+            AttentionSection::NeedsAttention => "◆ NEEDS ATTENTION",
+            AttentionSection::Working => "● WORKING",
+            AttentionSection::Recent => "✓ RECENT",
+            AttentionSection::Idle => "  IDLE",
+        }
+    }
+}
+
+/// What a section of the ordered list is headed by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SectionKind {
+    /// By-repo grouping: one section per repo, empty repos included.
+    Repo(crate::data::store::RepoId),
+    /// By-attention grouping: only non-empty sections are emitted.
+    Attention(AttentionSection),
+}
+
+/// A run of workspace rows under one header, in display order.
+#[derive(Debug, Clone)]
+pub struct OrderedSection {
+    pub kind: SectionKind,
+    /// Status tally of the rows in this section — what `default_fold`
+    /// reads for a repo section.
+    pub counts: StatusCounts,
+    pub workspace_ids: Vec<crate::data::store::WorkspaceId>,
+}
+
+/// The dashboard's workspace ordering, as sections of rows.
+///
+/// By-repo: one section per repo ascending by `(sort_order, id)` (the same
+/// key `by_repo::order_repos` uses), rows inside each ordered by
+/// [`order_workspaces`] under `sort_mode`. By-attention: the four urgency
+/// sections in display order, rows inside each ordered by
+/// [`by_attention::partition`]; empty sections are omitted.
+///
+/// Pure with respect to visibility: it neither filters nor folds nor
+/// collapses quiet repos. `visible_targets` layers the dashboard's rules on
+/// top; the workspace-updates panel layers its own. Both therefore walk one
+/// ordering and cannot drift from each other or from the renderer.
+pub fn ordered_sections(
+    repos: &[&Repo],
+    workspaces: &[WorkspaceItem<'_>],
+    group_mode: GroupMode,
+    sort_mode: SortMode,
+    blocked_pin_max_age_secs: u64,
+) -> Vec<OrderedSection> {
+    match group_mode {
+        GroupMode::Repo => {
+            let mut repos: Vec<&Repo> = repos.to_vec();
+            repos.sort_by_key(|r| (r.sort_order, r.id.0));
+            repos
+                .into_iter()
+                .map(|r| {
+                    let mut rows: Vec<NavRow> = workspaces
+                        .iter()
+                        .filter(|w| w.repo.id == r.id)
+                        .map(NavRow::from)
+                        .collect();
+                    order_workspaces(&mut rows, sort_mode, blocked_pin_max_age_secs);
+                    OrderedSection {
+                        kind: SectionKind::Repo(r.id),
+                        counts: StatusCounts::from_iter(rows.iter().map(|r| r.status)),
+                        workspace_ids: rows.into_iter().map(|r| r.workspace_id).collect(),
+                    }
+                })
+                .collect()
+        }
+        GroupMode::Attention => {
+            let rows: Vec<FlatRow> = workspaces
                 .iter()
-                .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
                 .map(|w| FlatRow {
                     repo_name: w.repo.name.clone(),
                     row: w.row.clone(),
                 })
                 .collect();
-            // Build the same quiet-repo set the renderer uses so we drop
-            // the right idle rows.
-            let mut quiet_names: std::collections::HashSet<String> = Default::default();
-            for r in &inputs.repos {
-                let repo_rows: Vec<&WorkspaceItem<'_>> = inputs
-                    .workspaces
-                    .iter()
-                    .filter(|w| w.repo.id == r.id)
-                    .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
-                    .collect();
-                let count = repo_rows.len();
-                let all_idle = !repo_rows.is_empty()
-                    && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
-                let repo_matches_filter = filter
-                    .map(|f| r.name.to_lowercase().contains(&f.to_lowercase()))
-                    .unwrap_or(true);
-                let include_empty = count == 0 && (filter.is_none() || repo_matches_filter);
-                if include_empty || all_idle {
-                    quiet_names.insert(r.name.clone());
-                }
-            }
-            let rows: Vec<FlatRow> = rows
-                .into_iter()
-                .filter(|r| {
-                    !matches!(r.row.status, Status::Idle) || !quiet_names.contains(&r.repo_name)
-                })
-                .collect();
-            // We don't need the quiet_repos for selection (skipped),
-            // but partition wants the type; pass an empty Vec.
             let data = by_attention::partition(rows, Vec::new());
-            for section in [
-                &data.needs_attention,
-                &data.working,
-                &data.recent,
-                &data.idle,
-            ] {
-                for r in section {
-                    out.push(SelectionTarget::Workspace(r.row.workspace_id));
-                }
-            }
+            [
+                (AttentionSection::NeedsAttention, &data.needs_attention),
+                (AttentionSection::Working, &data.working),
+                (AttentionSection::Recent, &data.recent),
+                (AttentionSection::Idle, &data.idle),
+            ]
+            .into_iter()
+            .filter(|(_, rows)| !rows.is_empty())
+            .map(|(section, rows)| OrderedSection {
+                kind: SectionKind::Attention(section),
+                counts: StatusCounts::from_iter(rows.iter().map(|r| r.row.status)),
+                workspace_ids: rows.iter().map(|r| r.row.workspace_id).collect(),
+            })
+            .collect()
         }
     }
-    out
 }
 
 /// Resolve the durable selection against a freshly-rebuilt `selectable` list.

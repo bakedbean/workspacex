@@ -8,7 +8,6 @@ use crate::app::{
 use crate::error::Result;
 use crate::ui::View;
 use crate::ui::modal::Modal;
-use crate::ui::modal::UpdatesSort;
 use crate::ui::split::SplitDirection;
 use crossterm::event::{KeyCode, KeyModifiers};
 // Test-only imports: the moved test modules access `draw_for_test`,
@@ -20,13 +19,12 @@ pub(super) async fn updates_panel(
     _shared: &SharedApp,
     k: crossterm::event::KeyEvent,
     selected: usize,
-    sort: UpdatesSort,
     filter: Option<String>,
 ) -> Result<()> {
     let selected_now = selected;
     // Build the same ordered workspace list the renderer uses, so
     // arrow keys and Enter operate on the same indices.
-    let order = panel_order(app, sort, filter.as_deref());
+    let order = panel_order(app, filter.as_deref());
     // Filter-input mode: while the buffer is live, printable keys
     // edit it rather than firing j/k/o/l/v/s, and Esc clears the
     // filter instead of closing the panel. Arrows and Enter fall
@@ -53,10 +51,9 @@ pub(super) async fn updates_panel(
         };
         if let Some(new_filter) = edited {
             let selected_id = order.get(selected_now).copied();
-            let new_order = panel_order(app, sort, new_filter.as_deref());
+            let new_order = panel_order(app, new_filter.as_deref());
             app.modal = Some(Modal::UpdatesPanel {
                 selected: reselect(selected_id, &new_order, selected_now),
-                sort,
                 filter: new_filter,
             });
             return Ok(());
@@ -66,34 +63,52 @@ pub(super) async fn updates_panel(
         KeyCode::Esc => {
             app.modal = None;
         }
+        // Up/Down wrap at either end, like the dashboard list: the last
+        // row is one keystroke from the first. An empty list has nowhere
+        // to wrap to and lands the cursor on 0. A cursor past the end (the
+        // list shrank under it) is clamped back into range first, so Up
+        // reaches the last real row instead of stepping down from a stale
+        // index.
         KeyCode::Up | KeyCode::Char('k') => {
-            let new_sel = selected_now.saturating_sub(1);
+            let max = order.len().saturating_sub(1);
+            let new_sel = if selected_now == 0 {
+                max
+            } else {
+                (selected_now - 1).min(max)
+            };
             app.modal = Some(Modal::UpdatesPanel {
                 selected: new_sel,
-                sort,
                 filter: filter.clone(),
             });
         }
         KeyCode::Down | KeyCode::Char('j') => {
             let max = order.len().saturating_sub(1);
-            let new_sel = (selected_now + 1).min(max);
+            let new_sel = if selected_now >= max {
+                0
+            } else {
+                selected_now + 1
+            };
             app.modal = Some(Modal::UpdatesPanel {
                 selected: new_sel,
-                sort,
                 filter: filter.clone(),
             });
         }
-        // 'o' (order) cycles the sort mode. The cursor follows the
-        // selected workspace to its new row rather than staying on
-        // the same index.
-        KeyCode::Char('o') => {
+        // `o` and `G` drive the dashboard's own sort and group modes — the
+        // panel lists workspaces in the dashboard's order, so the keys that
+        // change that order are the dashboard's keys, with the same
+        // persistence. The cursor follows the selected workspace to its new
+        // row rather than staying on the same index.
+        KeyCode::Char('o') | KeyCode::Char('G') => {
             let selected_id = order.get(selected_now).copied();
-            let new_sort = sort.cycle();
-            let new_order = panel_order(app, new_sort, filter.as_deref());
+            if k.code == KeyCode::Char('o') {
+                app.dashboard.cycle_sort_mode(&app.store);
+            } else {
+                app.dashboard.toggle_group_mode();
+            }
+            let new_order = panel_order(app, filter.as_deref());
             let new_sel = reselect(selected_id, &new_order, selected_now);
             app.modal = Some(Modal::UpdatesPanel {
                 selected: new_sel,
-                sort: new_sort,
                 filter: filter.clone(),
             });
         }
@@ -102,7 +117,6 @@ pub(super) async fn updates_panel(
         KeyCode::Char('/') => {
             app.modal = Some(Modal::UpdatesPanel {
                 selected: selected_now,
-                sort,
                 filter: Some(String::new()),
             });
         }

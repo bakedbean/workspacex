@@ -106,7 +106,6 @@ pub(in crate::app::input) async fn dispatch_leader_action(
         KeyCode::Char('u') => {
             app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
                 selected: 0,
-                sort: crate::ui::modal::UpdatesSort::default(),
                 filter: None,
             });
             Ok(())

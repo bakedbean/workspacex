@@ -33,7 +33,7 @@ pub const MIN_PR_WIDTH: usize = 8;
 pub const MAX_BRANCH_WIDTH: usize = 80;
 pub const MAX_PR_WIDTH: usize = 24;
 const PROCS_WIDTH: usize = 6;
-const DIFF_WIDTH: usize = 12;
+pub const DIFF_WIDTH: usize = 12;
 const AGE_WIDTH: usize = 10;
 const GUTTER_WIDTH: usize = 1;
 const ELBOW_WIDTH: usize = 3;
@@ -420,37 +420,14 @@ pub fn render(
     // 5: PR chip — the same glyph/label/color pairing as the detail-bar
     // chip (`⏺ #123 open`) so the row and the bar can't drift. Blank when
     // the branch has no PR or the lifecycle hasn't been fetched yet.
-    match pr_chip(inputs, pr_width) {
-        Some(chip) => {
-            let chip_style = theme
-                .lifecycle_style(inputs.lifecycle)
-                .unwrap_or_else(|| theme.dim_style());
-            // The verdict mark is its own span so it can carry the verdict's
-            // traffic-light color rather than the lifecycle's. It's painted
-            // first-come: the lifecycle half is truncated to whatever the
-            // column leaves after reserving the mark's columns, so the
-            // mark can't be clipped off the end.
-            match chip.mark() {
-                Some((mark, d)) => {
-                    let head_width = pr_width.saturating_sub(mark.chars().count() + 1);
-                    spans.push(Span::styled(
-                        truncate(&chip.lifecycle_text, head_width),
-                        chip_style,
-                    ));
-                    let painted = truncate(&chip.lifecycle_text, head_width).chars().count();
-                    spans.push(Span::raw(" ".to_string()));
-                    let used = painted + 1 + mark.chars().count();
-                    spans.push(Span::styled(mark, theme.review_style(d)));
-                    spans.push(Span::raw(" ".repeat(pr_width.saturating_sub(used))));
-                }
-                None => spans.push(Span::styled(
-                    truncate_pad(&chip.lifecycle_text, pr_width),
-                    chip_style,
-                )),
-            }
-        }
-        None => spans.push(Span::raw(" ".repeat(pr_width))),
-    }
+    spans.extend(pr_chip_spans(
+        inputs.lifecycle,
+        inputs.pr_number,
+        inputs.review,
+        inputs.unresolved,
+        pr_width,
+        theme,
+    ));
 
     // 6: procs
     let procs_cell = if inputs.procs > 0 {
@@ -467,23 +444,7 @@ pub fn render(
     spans.push(Span::styled(procs_padded, procs_style));
 
     // 7: diff
-    match inputs.diff {
-        Some(d) if d.added > 0 || d.removed > 0 => {
-            let added_text = format!("+{}", d.added);
-            let removed_text = format!("−{}", d.removed);
-            let content_width = added_text.chars().count() + 1 + removed_text.chars().count();
-            let pad = DIFF_WIDTH.saturating_sub(content_width);
-            spans.push(Span::styled(added_text, theme.ok_style()));
-            spans.push(Span::styled(" ".to_string(), theme.dim_style()));
-            spans.push(Span::styled(removed_text, theme.err_style()));
-            if pad > 0 {
-                spans.push(Span::styled(" ".repeat(pad), theme.dim_style()));
-            }
-        }
-        _ => {
-            spans.push(Span::styled(" ".repeat(DIFF_WIDTH), theme.dim_style()));
-        }
-    }
+    spans.extend(diff_spans(inputs.diff, DIFF_WIDTH, theme));
 
     // 8: message (flex)
     let left_consumed = widths.agent
@@ -569,6 +530,80 @@ fn pr_chip(inputs: &RowInputs, pr_width: usize) -> Option<crate::ui::theme::PrCh
     )
 }
 
+/// The PR-chip cell as spans, always exactly `pr_width` columns wide:
+/// `⏺ #123 open` in the lifecycle color, then the review mark (`✓`, `✗3`)
+/// in its own verdict color, then padding. Blank when there is no PR or the
+/// lifecycle is unknown. Shared by the dashboard row and the
+/// workspace-updates panel so the chip cannot drift between the two.
+pub fn pr_chip_spans(
+    lifecycle: Option<BranchLifecycle>,
+    pr_number: Option<u32>,
+    review: Option<ReviewDecision>,
+    unresolved: Option<u32>,
+    pr_width: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let chip = lifecycle
+        .and_then(|lc| crate::ui::theme::pr_chip(lc, pr_number, review, unresolved, pr_width));
+    let Some(chip) = chip else {
+        return vec![Span::raw(" ".repeat(pr_width))];
+    };
+    let chip_style = theme
+        .lifecycle_style(lifecycle)
+        .unwrap_or_else(|| theme.dim_style());
+    // The verdict mark is its own span so it can carry the verdict's
+    // traffic-light color rather than the lifecycle's. It's painted
+    // first-come: the lifecycle half is truncated to whatever the column
+    // leaves after reserving the mark's columns, so the mark can't be
+    // clipped off the end.
+    match chip.mark() {
+        Some((mark, d)) => {
+            let head_width = pr_width.saturating_sub(mark.chars().count() + 1);
+            let head = truncate(&chip.lifecycle_text, head_width);
+            let used = head.chars().count() + 1 + mark.chars().count();
+            vec![
+                Span::styled(head, chip_style),
+                Span::raw(" ".to_string()),
+                Span::styled(mark, theme.review_style(d)),
+                Span::raw(" ".repeat(pr_width.saturating_sub(used))),
+            ]
+        }
+        None => vec![Span::styled(
+            truncate_pad(&chip.lifecycle_text, pr_width),
+            chip_style,
+        )],
+    }
+}
+
+/// The line-diff cell as spans, always exactly `width` columns: `+N` in the
+/// ok color, `−N` in the err color, padded; blank when there is no diff or
+/// it is empty. Shared by the dashboard row and the workspace-updates panel.
+///
+/// Counts are compacted (`12k`, `2M`) past four digits so the cell holds
+/// its width for every `u32` at the default `DIFF_WIDTH`: the widest
+/// compact pair, `+4294M −4294M`, is 13 columns, and anything short of
+/// that fits in 12 — a cell that grows would push every column after it.
+pub fn diff_spans(diff: Option<DiffStats>, width: usize, theme: &Theme) -> Vec<Span<'static>> {
+    match diff {
+        Some(d) if d.added > 0 || d.removed > 0 => {
+            let added_text = format!("+{}", compact_count(d.added));
+            let removed_text = format!("−{}", compact_count(d.removed));
+            let content_width = added_text.chars().count() + 1 + removed_text.chars().count();
+            let pad = width.saturating_sub(content_width);
+            let mut spans = vec![
+                Span::styled(added_text, theme.ok_style()),
+                Span::styled(" ".to_string(), theme.dim_style()),
+                Span::styled(removed_text, theme.err_style()),
+            ];
+            if pad > 0 {
+                spans.push(Span::styled(" ".repeat(pad), theme.dim_style()));
+            }
+            spans
+        }
+        _ => vec![Span::styled(" ".repeat(width), theme.dim_style())],
+    }
+}
+
 /// Char-offset and char-width of the clickable PR chip within a workspace
 /// row, or `None` when the chip cell is blank. Offsets are relative to the
 /// row's left edge; the caller adds the list area origin (and the row's y)
@@ -579,6 +614,17 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
     let x = widths.agent + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
     let width = truncate(&chip.text(), widths.pr).chars().count();
     Some((x as u16, width as u16))
+}
+
+/// A line count for the diff cell: plain up to four digits, then
+/// thousands (`12k`) and millions (`2M`), truncated rather than rounded so
+/// `9999` never reads as `10k`.
+fn compact_count(n: u32) -> String {
+    match n {
+        0..=9_999 => n.to_string(),
+        10_000..=999_999 => format!("{}k", n / 1_000),
+        _ => format!("{}M", n / 1_000_000),
+    }
 }
 
 const SEG_SEP: &str = " · ";
@@ -2468,5 +2514,138 @@ mod tests {
             theme.err_style().fg,
             "archiving a workspace spins red"
         );
+    }
+}
+
+#[cfg(test)]
+mod cell_tests {
+    //! The PR-chip and diff cells are shared with the workspace-updates
+    //! panel, so their contract is pinned here independently of `render`.
+    use super::*;
+    use crate::git::forge::{BranchLifecycle, ReviewDecision};
+
+    fn width_of(spans: &[Span<'_>]) -> usize {
+        spans.iter().map(|s| s.content.chars().count()).sum()
+    }
+
+    fn text_of(spans: &[Span<'_>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn pr_chip_spans_fill_the_column_exactly() {
+        let theme = Theme::wsx();
+        let with_mark = pr_chip_spans(
+            Some(BranchLifecycle::PrOpen),
+            Some(42),
+            Some(ReviewDecision::Approved),
+            None,
+            DEFAULT_PR_WIDTH,
+            &theme,
+        );
+        assert_eq!(width_of(&with_mark), DEFAULT_PR_WIDTH);
+        assert!(text_of(&with_mark).contains("#42 open"));
+        let bare = pr_chip_spans(
+            Some(BranchLifecycle::PrMerged),
+            Some(7),
+            None,
+            None,
+            12,
+            &theme,
+        );
+        assert_eq!(width_of(&bare), 12);
+        let blank = pr_chip_spans(None, None, None, None, 9, &theme);
+        assert_eq!(width_of(&blank), 9);
+        assert_eq!(text_of(&blank).trim(), "");
+    }
+
+    #[test]
+    fn pr_chip_spans_paint_lifecycle_and_verdict_separately() {
+        let theme = Theme::wsx();
+        let spans = pr_chip_spans(
+            Some(BranchLifecycle::PrOpen),
+            Some(42),
+            Some(ReviewDecision::ChangesRequested),
+            Some(3),
+            DEFAULT_PR_WIDTH,
+            &theme,
+        );
+        let head = spans.first().expect("lifecycle span");
+        assert_eq!(head.style.fg, theme.ok_style().fg, "open PR is ok-colored");
+        let mark = spans
+            .iter()
+            .find(|s| s.content.contains('3'))
+            .expect("unresolved count rides on the mark");
+        assert_eq!(
+            mark.style.fg,
+            theme.err_style().fg,
+            "changes requested is err-colored"
+        );
+    }
+
+    #[test]
+    fn diff_spans_color_additions_ok_and_removals_err_and_fill_the_column() {
+        let theme = Theme::wsx();
+        let spans = diff_spans(
+            Some(DiffStats {
+                added: 12,
+                removed: 3,
+            }),
+            DIFF_WIDTH,
+            &theme,
+        );
+        assert_eq!(width_of(&spans), DIFF_WIDTH);
+        let added = spans.iter().find(|s| s.content == "+12").expect("+12 span");
+        assert_eq!(added.style.fg, theme.ok_style().fg);
+        let removed = spans.iter().find(|s| s.content == "−3").expect("−3 span");
+        assert_eq!(removed.style.fg, theme.err_style().fg);
+    }
+
+    /// Six-figure counts would overflow the 12-cell column as plain
+    /// digits. They compact to `k` / `M` so the cell always holds its
+    /// width and the columns to its right stay aligned.
+    #[test]
+    fn diff_spans_compact_large_counts_to_hold_the_column_width() {
+        let theme = Theme::wsx();
+        for (added, removed, expected) in [
+            (100_000, 100_000, "+100k −100k"),
+            (9_999, 12_345, "+9999 −12k"),
+            (1_500_000, 3, "+1M −3"),
+            (u32::MAX, u32::MAX, "+4294M −4294M"),
+        ] {
+            let spans = diff_spans(Some(DiffStats { added, removed }), DIFF_WIDTH, &theme);
+            assert_eq!(text_of(&spans).trim_end(), expected);
+            assert!(
+                width_of(&spans) <= DIFF_WIDTH.max(expected.chars().count()),
+                "cell must not exceed its column: {:?}",
+                text_of(&spans)
+            );
+        }
+        // At the column's default width every representable value fits.
+        let spans = diff_spans(
+            Some(DiffStats {
+                added: 999_999,
+                removed: 999_999,
+            }),
+            DIFF_WIDTH,
+            &theme,
+        );
+        assert_eq!(width_of(&spans), DIFF_WIDTH, "{:?}", text_of(&spans));
+    }
+
+    #[test]
+    fn diff_spans_are_blank_when_absent_or_zero() {
+        let theme = Theme::wsx();
+        for diff in [
+            None,
+            Some(DiffStats {
+                added: 0,
+                removed: 0,
+            }),
+        ] {
+            let spans = diff_spans(diff, DIFF_WIDTH, &theme);
+            assert_eq!(width_of(&spans), DIFF_WIDTH);
+            assert_eq!(text_of(&spans).trim(), "");
+        }
     }
 }

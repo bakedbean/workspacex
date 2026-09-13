@@ -11,35 +11,11 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
         return;
     };
     match m {
-        crate::ui::modal::Modal::UpdatesPanel {
-            selected,
-            sort,
-            filter,
-        } => {
+        crate::ui::modal::Modal::UpdatesPanel { selected, filter } => {
             let now_ms = crate::util::time::now_ms();
-            let awaiting = app.awaiting_permission_map();
-            let activity_translated: std::collections::HashMap<
-                crate::data::store::WorkspaceId,
-                crate::ui::updates_bar::ActivityState,
-            > = app
-                .workspace_activity
-                .iter()
-                .map(|(k, v)| (*k, translate_activity(*v)))
-                .collect();
-            let statuses = app.classified_statuses();
-            let inputs = crate::ui::modal::PanelInputs {
-                repos: &app.repos,
-                workspaces: &app.workspaces,
-                events: &app.workspace_events,
-                activity: &activity_translated,
-                needs_attention: &app.workspace_needs_attention,
-                awaiting: &awaiting,
-                statuses: &statuses,
-                lifecycles: &app.pr_lifecycle,
-            };
+            let inputs = panel_inputs(app, now_ms);
             let view = crate::ui::modal::PanelView {
                 selected: *selected,
-                sort: *sort,
                 filter: filter.as_deref(),
             };
             crate::ui::modal::render_updates_panel(f, area, &inputs, &view, now_ms, &app.theme);
@@ -151,6 +127,30 @@ pub(super) fn draw_anchored_pickers(
         app.name_color_swatch_rects = crate::ui::modal::render_name_color_picker(
             f, area, &filter, selected, current, &app.theme,
         );
+    }
+}
+
+/// Gather the workspace-updates panel's inputs from live app state. The
+/// renderer and the panel's key handler both go through here, so the
+/// ordering the rows are drawn in is the ordering `selected` indexes.
+pub(crate) fn panel_inputs(app: &App, now_ms: i64) -> crate::ui::modal::PanelInputs<'_> {
+    let nerd_fonts = nerd_fonts_enabled(&app.store);
+    crate::ui::modal::PanelInputs {
+        repos: app.repos.iter().collect(),
+        items: super::dashboard::build_workspace_items(app, &app.repos, now_ms, nerd_fonts),
+        workspaces: &app.workspaces,
+        events: &app.workspace_events,
+        activity: app
+            .workspace_activity
+            .iter()
+            .map(|(k, v)| (*k, translate_activity(*v)))
+            .collect(),
+        needs_attention: &app.workspace_needs_attention,
+        awaiting: app.awaiting_permission_map(),
+        group_mode: app.dashboard.group_mode,
+        sort_mode: app.dashboard.sort_mode,
+        blocked_pin_max_age_secs: app.dashboard.blocked_pin_max_age_secs,
+        pr_width: super::dashboard::read_column_widths(&app.store).pr,
     }
 }
 

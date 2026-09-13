@@ -47,21 +47,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
 
     // Build per-workspace inputs in V5 shape.
     let now_ms = crate::util::time::now_ms();
-    let mut workspaces: Vec<dashboard::WorkspaceItem<'_>> = Vec::new();
-    for repo in &app.repos {
-        for (rid, ws) in &app.workspaces {
-            if *rid != repo.id {
-                continue;
-            }
-            let row = build_row_inputs(app, ws, now_ms, nerd_fonts);
-            workspaces.push(dashboard::WorkspaceItem {
-                repo,
-                workspace_id: ws.id,
-                status: row.status,
-                row,
-            });
-        }
-    }
+    let workspaces = build_workspace_items(app, &app.repos, now_ms, nerd_fonts);
 
     // Aggregate the retained hourly buckets into a fixed 24-bar,
     // time-aligned sparkline for the configured window.
@@ -269,6 +255,37 @@ pub(crate) fn workspace_age_secs(
     } else {
         Some(((now_ms - last_ms).max(0) / 1000) as u64)
     }
+}
+
+/// Every workspace as a dashboard item, in repo order. The dashboard list
+/// and the workspace-updates panel both draw from this, so a row's status,
+/// age, PR state and diff can't differ between the two.
+///
+/// `repos` is `app.repos` passed separately so the items borrow only the
+/// repo list: `draw_dashboard` goes on to write other `App` fields while
+/// holding them.
+pub(crate) fn build_workspace_items<'a>(
+    app: &App,
+    repos: &'a [crate::data::store::Repo],
+    now_ms: i64,
+    nerd_fonts: bool,
+) -> Vec<crate::ui::dashboard::WorkspaceItem<'a>> {
+    let mut workspaces = Vec::new();
+    for repo in repos {
+        for (rid, ws) in &app.workspaces {
+            if *rid != repo.id {
+                continue;
+            }
+            let row = build_row_inputs(app, ws, now_ms, nerd_fonts);
+            workspaces.push(crate::ui::dashboard::WorkspaceItem {
+                repo,
+                workspace_id: ws.id,
+                status: row.status,
+                row,
+            });
+        }
+    }
+    workspaces
 }
 
 pub(super) fn build_row_inputs(

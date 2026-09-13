@@ -46,7 +46,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x Shift-D` | Save the current split layout for this workspace, then detach to the dashboard. Restored on next attach.    |
 | `Ctrl-x Esc`     | Dismiss the navigation overlay without detaching (stay in the attached view).                               |
 | `Ctrl-x ←/→/↑/↓` | Move focus between split panes in that direction (vim's `Ctrl-w` motions).                                  |
-| `Ctrl-x u`       | Open the floating updates panel (shows other workspaces' state; `v`/`s` open in a split, `o` cycles the sort, `/` filters the list) |
+| `Ctrl-x u`       | Open the floating updates panel (a stripped-down dashboard in the dashboard's order; `v`/`s` open in a split, `o` / `G` cycle the dashboard's sort and grouping, `/` filters the list) |
 | `Ctrl-x a`       | Open the agents panel to add/remove agents in this workspace (see [Multi-agent workspaces](../configuration/multi-agent-workspaces.md)) |
 | `Ctrl-x e`       | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard)                    |
 | `Ctrl-x t`       | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`)                                    |

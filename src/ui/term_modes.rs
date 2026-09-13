@@ -15,12 +15,41 @@
 //! `ESC[200~ … ESC[201~` and delivers them as individual key presses instead;
 //! in the attached view each pasted newline is then forwarded to the agent's
 //! PTY as Enter, so a multi-paragraph paste submits a partial prompt.
+//!
+//! One mode here is turned OFF rather than on: bell urgency hints (private
+//! mode 1042). wsx rings the terminal bell when a workspace needs attention.
+//! Alacritty and xterm answer BEL on an unfocused window by asking the window
+//! manager for attention; on Wayland that is an xdg-activation request, and
+//! Hyprland with `misc:focus_on_activate = true` (Omarchy's default) honours
+//! it by switching the OS workspace to the terminal. Clearing 1042 keeps the
+//! audible and visual bell while suppressing that side effect. Terminals
+//! that don't implement 1042 ignore it.
 
 use crate::error::Result;
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
 };
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+
+/// `DECRST 1042`: stop the terminal from raising a window-manager urgency
+/// hint on BEL. Honoured by Alacritty and xterm; a no-op elsewhere.
+struct DisableBellUrgencyHints;
+
+impl crossterm::Command for DisableBellUrgencyHints {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        f.write_str("\x1b[?1042l")
+    }
+}
+
+/// `DECSET 1042`: restore the terminal's default of raising an urgency hint
+/// on BEL, for the shell (and anything it runs) after wsx exits.
+struct EnableBellUrgencyHints;
+
+impl crossterm::Command for EnableBellUrgencyHints {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        f.write_str("\x1b[?1042h")
+    }
+}
 
 /// Assert every terminal mode the TUI depends on. Used both at startup and
 /// when resuming after an external program had the terminal.
@@ -32,7 +61,8 @@ pub fn enter_tui_modes<W: std::io::Write>(w: &mut W) -> Result<()> {
         w,
         EnterAlternateScreen,
         EnableMouseCapture,
-        EnableBracketedPaste
+        EnableBracketedPaste,
+        DisableBellUrgencyHints
     )?;
     Ok(())
 }
@@ -43,6 +73,7 @@ pub fn enter_tui_modes<W: std::io::Write>(w: &mut W) -> Result<()> {
 pub fn leave_tui_modes<W: std::io::Write>(w: &mut W) -> Result<()> {
     crossterm::execute!(
         w,
+        EnableBellUrgencyHints,
         DisableBracketedPaste,
         DisableMouseCapture,
         LeaveAlternateScreen
@@ -60,6 +91,8 @@ mod tests {
     const BRACKETED_PASTE_OFF: &[u8] = b"\x1b[?2004l";
     const MOUSE_ON: &[u8] = b"\x1b[?1002h";
     const MOUSE_OFF: &[u8] = b"\x1b[?1002l";
+    const URGENCY_HINTS_ON: &[u8] = b"\x1b[?1042h";
+    const URGENCY_HINTS_OFF: &[u8] = b"\x1b[?1042l";
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         haystack.windows(needle.len()).any(|w| w == needle)
@@ -95,13 +128,51 @@ mod tests {
         assert!(contains(&out, ALT_SCREEN_ON));
     }
 
+    /// The bell must stay a bell. Alacritty (and xterm) turn BEL into a
+    /// window-manager urgency request while the window is unfocused, and on
+    /// Wayland that request is xdg-activation, which Hyprland with
+    /// `misc:focus_on_activate = true` (Omarchy's default) answers by
+    /// switching the OS workspace to the terminal. Private mode 1042 is the
+    /// terminal's opt-out: the audible/visual bell still fires, only the
+    /// urgency side effect is suppressed.
+    #[test]
+    fn enter_tui_modes_disables_bell_urgency_hints() {
+        let mut out = Vec::new();
+        enter_tui_modes(&mut out).unwrap();
+        assert!(
+            contains(&out, URGENCY_HINTS_OFF),
+            "expected {URGENCY_HINTS_OFF:?} in {out:?}"
+        );
+    }
+
     #[test]
     fn leave_tui_modes_releases_every_mode_enter_asserted() {
         let mut out = Vec::new();
         leave_tui_modes(&mut out).unwrap();
         assert!(contains(&out, BRACKETED_PASTE_OFF));
         assert!(contains(&out, MOUSE_OFF));
+        assert!(contains(&out, URGENCY_HINTS_ON));
         assert!(contains(&out, ALT_SCREEN_OFF));
+    }
+
+    /// Urgency hints are the terminal's default; the shell we hand back
+    /// (and any program run from it) expects them on.
+    #[test]
+    fn leave_tui_modes_restores_urgency_hints_before_leaving_alt_screen() {
+        let mut out = Vec::new();
+        leave_tui_modes(&mut out).unwrap();
+        let alt = out
+            .windows(ALT_SCREEN_OFF.len())
+            .position(|w| w == ALT_SCREEN_OFF)
+            .unwrap();
+        let urgency = out
+            .windows(URGENCY_HINTS_ON.len())
+            .position(|w| w == URGENCY_HINTS_ON)
+            .unwrap();
+        assert!(
+            urgency < alt,
+            "urgency restore must precede leaving alt screen"
+        );
     }
 
     /// The alternate screen must be left last: releasing paste/mouse after the

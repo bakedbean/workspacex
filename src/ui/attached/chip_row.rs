@@ -176,7 +176,7 @@ pub fn layout_chip_row(area: Rect, pinned: &[PinnedCommand]) -> Vec<Rect> {
 /// they are painted left to right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockElement {
-    /// The agent pills (`▎claude q   ▎codex w`); only present with 2+ agents.
+    /// The agent pills (`● claude q   ○ codex w`); only present with 2+ agents.
     Agents,
     /// `{model} {n}/{w}` token usage.
     ModelTokens,
@@ -253,7 +253,7 @@ pub(crate) struct ChipRowOutput {
 
 /// Render the pinned-command chip row, returning each chip's clickable rect.
 ///
-/// A right-justified info block — the agent pills (`▎claude q   ▎codex w`,
+/// A right-justified info block — the agent pills (`● claude q   ○ codex w`,
 /// only when the workspace has more than one agent), the model + token usage
 /// (`{model} {n}/{w}`), the running-process count (`● Np`), the `diff` count
 /// (`+A −R`), then the PR chip (`{glyph} #{n} {label}`, mirroring the
@@ -268,7 +268,7 @@ pub(crate) struct ChipRowOutput {
 /// block drops when the pinned chips leave no room for it.
 ///
 /// `active_agent` is the instance in the focused pane; its pill gets the
-/// heavier identity bar.
+/// filled identity dot.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_chip_row(
     f: &mut Frame,
@@ -1189,7 +1189,7 @@ mod tests {
         // The agent pills open the flush-right block: left of the model +
         // tokens stat, separated from it by the pills' own 3-col gap, with no
         // `agents:` label. Each returned click rect covers exactly the painted
-        // pill (bar + label + key pill), and the active agent's bar is heavier.
+        // pill (dot + label + key pill), and the active agent's dot is filled.
         let theme = Theme::wsx();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 1)).unwrap();
@@ -1221,8 +1221,8 @@ mod tests {
         let (id1, r1) = rects[1];
         assert_eq!(id0, AgentInstanceId(1));
         assert_eq!(id1, AgentInstanceId(2));
-        assert_eq!(painted(buf, r0.x, r0.width), "▌claude  q ");
-        assert_eq!(painted(buf, r1.x, r1.width), "▎codex  w ");
+        assert_eq!(painted(buf, r0.x, r0.width), "● claude  q ");
+        assert_eq!(painted(buf, r1.x, r1.width), "○ codex  w ");
         assert_eq!(r1.x, r0.x + r0.width + 3, "3-col gap between pills");
         // The model stat starts a 3-col gap after the last pill.
         // Byte offset → character column: the row holds multi-cell glyphs.
@@ -1280,7 +1280,7 @@ mod tests {
         let row = row0(buf, 70);
         assert!(!row.contains("opus"), "model stat dropped first: {row:?}");
         assert_eq!(rects.len(), 2, "pills survive: {row:?}");
-        assert_eq!(painted(buf, rects[0].1.x, rects[0].1.width), "▎claude  q ");
+        assert_eq!(painted(buf, rects[0].1.x, rects[0].1.width), "○ claude  q ");
         assert!(procs_rect.is_some(), "procs count kept");
         assert!(row.ends_with("● 2p +12 −3 ⏺ #152 open"), "{row:?}");
     }
@@ -1356,7 +1356,7 @@ mod tests {
     fn render_chip_row_paints_keyless_pills_past_the_switch_key_pool() {
         // Eleven agents: the pool hands out ten keys, so the eleventh pill is
         // keyless — no ` key ` pill — yet still painted, with a click rect
-        // covering exactly its bar + `label `.
+        // covering exactly its dot + `label `.
         let keys = crate::ui::attached::agent_switch_keys(11);
         let roster: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = (1..=11)
             .map(|i| {
@@ -1391,18 +1391,18 @@ mod tests {
         assert_eq!(rects.len(), 11, "one rect per agent, keyless included");
         let (id, r) = rects[10];
         assert_eq!(id, AgentInstanceId(11));
-        assert_eq!(painted(buf, r.x, r.width), "▎claude#11 ");
+        assert_eq!(painted(buf, r.x, r.width), "○ claude#11 ");
         assert_eq!(r.x + r.width, 200, "last pill is flush right");
     }
 
     #[test]
     fn render_chip_row_keeps_sole_pill_group_at_exact_fit_and_drops_it_one_short() {
         // With the pills as the block's only element: ` 1 pr ` (6) + the
-        // 2-cell rule gap + the 24-col group = 32 fits exactly; one column
+        // 2-cell rule gap + the 26-col group = 34 fits exactly; one column
         // short drops the whole group (rects empty, nothing painted).
         let theme = Theme::wsx();
         let pinned = cmds(&[("pr", "/pr")]);
-        for (width, kept) in [(32u16, true), (31u16, false)] {
+        for (width, kept) in [(34u16, true), (33u16, false)] {
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 1)).unwrap();
             let mut rects = Vec::new();
@@ -1426,7 +1426,7 @@ mod tests {
                 .unwrap();
             let row = row0(terminal.backend().buffer(), width);
             if kept {
-                assert_eq!(row, " 1  pr  ▎claude  q    ▎codex  w ", "width {width}");
+                assert_eq!(row, " 1  pr  ○ claude  q    ○ codex  w ", "width {width}");
                 assert_eq!(rects.len(), 2, "width {width}");
             } else {
                 assert!(rects.is_empty(), "width {width}: {row:?}");

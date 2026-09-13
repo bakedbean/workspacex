@@ -188,7 +188,7 @@ async fn click_agent_pill_switches_focused_pane() {
         .map(|x| buf[(x, rect.y)].symbol().to_string())
         .collect();
     assert!(
-        painted.starts_with("▎codex"),
+        painted.starts_with("○ codex"),
         "pill painted at its click rect: {painted:?}"
     );
 

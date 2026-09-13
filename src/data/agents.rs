@@ -17,9 +17,11 @@ pub struct AgentInstance {
     pub ordinal: i64,
     pub is_primary: bool,
     pub session_ref: Option<String>,
-    /// The harness's own session id for this instance, as last reported by
-    /// its hooks (Claude only so far). Used to `--resume` exactly this
-    /// instance's conversation on respawn; `None` until reported.
+    /// The harness's own session identity for this instance, used to resume
+    /// exactly this instance's conversation on respawn: a session id
+    /// (Claude: from hooks; Codex: from notify; pi: minted by wsx) or a
+    /// session file path (omp: from its terminal breadcrumb). `None` until
+    /// known; never set for Hermes. See `app::spawn::recorded_resume_id`.
     pub agent_session_id: Option<String>,
     pub created_at: i64,
 }

@@ -194,7 +194,23 @@ pub fn omp_session_exists(session_file: &str) -> bool {
 /// A harness-reported id we are willing to splice into a file name or an
 /// argv: non-empty, no path separators. Ids are opaque otherwise.
 fn plausible_session_id(id: &str) -> bool {
-    !id.is_empty() && !id.contains(['/', '\\'])
+    !id.is_empty() && !id.starts_with('-') && !id.contains(['/', '\\'])
+}
+
+/// The id shape pi's `--session-id` accepts (its `assertValidSessionId`):
+/// alphanumeric, `-`, `_`, `.`, starting and ending alphanumeric. A stored
+/// pin that fails this would make pi exit at startup, so the spawn path
+/// mints a fresh one instead of reusing it.
+pub fn pi_session_id_is_valid(id: &str) -> bool {
+    let first_last_ok = id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+    first_last_ok
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 /// Pi's session directory for `worktree`, or None if the path can't be
@@ -664,6 +680,21 @@ mod tests {
         assert!(!codex_session_exists("../x"));
         std::fs::remove_dir_all(home.path().join(".codex")).unwrap();
         assert!(!codex_session_exists(id), "no sessions root at all");
+    }
+
+    #[test]
+    fn ids_that_look_like_options_are_rejected() {
+        assert!(!claude_session_exists(Path::new("/tmp"), "-r"));
+        assert!(!codex_session_exists("--last"));
+        assert!(!pi_session_exists(Path::new("/tmp"), "-x"));
+        assert!(pi_session_id_is_valid("0123456789abcdef0123456789abcdef"));
+        assert!(pi_session_id_is_valid(
+            "019e5f7e-7dfd-7136-b2f0-511f75057dc5"
+        ));
+        assert!(!pi_session_id_is_valid("-abc"));
+        assert!(!pi_session_id_is_valid("abc."));
+        assert!(!pi_session_id_is_valid("a b"));
+        assert!(!pi_session_id_is_valid(""));
     }
 
     #[test]

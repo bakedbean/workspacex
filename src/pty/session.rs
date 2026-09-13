@@ -20,7 +20,7 @@ pub use crate::pty::agent_kind::AgentKind;
 // command builders keep resolving the names unqualified.
 pub use crate::pty::session_detect::{
     claude_session_exists, codex_session_exists, omp_breadcrumb_session_file, omp_session_exists,
-    omp_terminal_id, pi_session_exists,
+    omp_terminal_id, pi_session_exists, pi_session_id_is_valid,
 };
 pub use crate::pty::session_detect::{
     has_prior_codex_session, has_prior_hermes_session, has_prior_pi_session, has_prior_session,
@@ -691,9 +691,10 @@ pub enum SpawnMode {
         doctrine: Option<String>,
         additional_dirs: Vec<std::path::PathBuf>,
         yolo: bool,
-        /// The instance's own recorded session id, when known and still on
-        /// disk (`app::spawn::recorded_resume_id`). Only the Claude builder
-        /// honours it today; the others fall back to their cwd-wide resume.
+        /// The instance's own recorded session, when known and still on
+        /// disk (`app::spawn::recorded_resume_id`): a session id for Claude,
+        /// Codex and pi, a session file path for omp. Hermes has none and
+        /// keeps its cwd-wide resume.
         resume_session_id: Option<String>,
     },
 }

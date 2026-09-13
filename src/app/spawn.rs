@@ -129,7 +129,13 @@ pub(crate) fn pin_session_id_for(
         return None;
     }
     if let Some(id) = &instance.agent_session_id {
-        return Some(id.clone());
+        if crate::pty::session::pi_session_id_is_valid(id) {
+            return Some(id.clone());
+        }
+        tracing::warn!(
+            id,
+            "stored pi session id is not a valid pi id; minting a new one"
+        );
     }
     let id = format!("{:032x}", rand::random::<u128>());
     if let Err(e) = app.store.set_instance_agent_session(instance.id, &id) {
@@ -165,9 +171,14 @@ pub(crate) fn build_spawn_info(
     // An exact recorded session wins over the cwd-wide `has_prior_session_for`
     // probe: once a peer shares this worktree, "most recent session here" may
     // be the peer's, and the snapshot gate is moot for an id this workspace's
-    // own instance reported. A pinned-but-unmaterialized pi id likewise
-    // skips the probe: the instance never had a session, so a stray one in
-    // the cwd is not its own.
+    // own instance reported.
+    //
+    // A recorded session that is NOT on disk also skips the probe, and spawns
+    // fresh: the instance's own conversation is gone (deleted, never written —
+    // a pinned pi id, an omp `/new` boundary not yet persisted), so the cwd's
+    // most recent session is by definition someone else's. Falling through to
+    // `--continue` here is how a primary would reopen a peer's transcript, or
+    // omp's pre-`/new` history that omp itself refuses to resurrect.
     let primary = app
         .store
         .primary_instance_id(ws_id)
@@ -177,12 +188,12 @@ pub(crate) fn build_spawn_info(
     let resume_session_id = primary
         .as_ref()
         .and_then(|inst| recorded_resume_id(inst, &worktree));
-    let pinned_unmaterialized = resume_session_id.is_none()
-        && primary.as_ref().is_some_and(|inst| {
-            inst.agent == crate::pty::session::AgentKind::Pi && inst.agent_session_id.is_some()
-        });
+    let recorded_but_missing = resume_session_id.is_none()
+        && primary
+            .as_ref()
+            .is_some_and(|inst| inst.agent_session_id.is_some());
     let mode = if resume_session_id.is_some()
-        || (!pinned_unmaterialized && crate::pty::session::has_prior_session_for(&worktree, agent))
+        || (!recorded_but_missing && crate::pty::session::has_prior_session_for(&worktree, agent))
     {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
@@ -668,6 +679,39 @@ mod added_spawn_tests {
                 resume_session_id, ..
             } => assert_eq!(resume_session_id.as_deref(), Some(sid.as_str())),
             other => panic!("expected Continue by id, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn primary_with_a_recorded_but_missing_session_spawns_fresh_not_continue() {
+        // The primary's own session is gone but another session exists in the
+        // cwd (the seeded one): `--continue` would reopen that stranger.
+        for kind in [AgentKind::Claude, AgentKind::Codex, AgentKind::Omp] {
+            let (app, primary, _added, _sid, _home, _wt, _env) =
+                app_with_claude_session(AgentKind::Hermes);
+            app.store
+                .conn()
+                .execute(
+                    "UPDATE workspace_agents SET agent = ?1, agent_session_id = '/nowhere/gone.jsonl' WHERE id = ?2",
+                    rusqlite::params![kind.store_value(), primary.id.0],
+                )
+                .unwrap();
+            let ws_id = primary.workspace_id;
+            app.store
+                .conn()
+                .execute(
+                    "UPDATE workspaces SET agent = ?1 WHERE id = ?2",
+                    rusqlite::params![kind.store_value(), ws_id.0],
+                )
+                .unwrap();
+            let mut app = app;
+            app.refresh().unwrap();
+            let (_id, _wt, mode, _repo, _agent) =
+                build_spawn_info(&app, ws_id).expect("spawn info");
+            assert!(
+                matches!(mode, SpawnMode::Fresh { .. }),
+                "{kind:?}: expected Fresh, got {mode:?}"
+            );
         }
     }
 

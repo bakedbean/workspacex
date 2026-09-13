@@ -817,3 +817,41 @@ async fn attached_chip_click_preserves_dashboard_draft_and_focus() {
         "attached-view chip click must not overwrite the dashboard pane focus"
     );
 }
+
+/// A click on the attention row's `… +N more` tail opens the updates
+/// panel, exactly like `Ctrl-x u`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn click_more_tail_opens_updates_panel() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let _ws_id = spawn_attached_workspace(&mut app);
+
+    app.attention_more_rect = Some(ratatui::layout::Rect {
+        x: 40,
+        y: 0,
+        width: 10,
+        height: 1,
+    });
+
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 42,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+    handle_mouse(&mut app, click).await;
+
+    assert!(
+        matches!(
+            app.modal,
+            Some(Modal::UpdatesPanel {
+                selected: 0,
+                filter: None,
+                ..
+            })
+        ),
+        "more-tail click must open the updates panel; got {:?}",
+        app.modal
+    );
+}

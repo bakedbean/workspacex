@@ -290,7 +290,9 @@ pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
 /// draw it) so the two never disagree.
 pub fn info_line_prefix_width(label: &str, agent: Option<AgentKind>) -> u16 {
     let bar = if agent.is_some() { 2 } else { 0 }; // "▎" + " "
-    bar + label.chars().count() as u16 + 3 // 3-col gap before attention
+    // Cells, not chars: a double-width glyph in a workspace name would
+    // otherwise shift every attention click rect one column left.
+    bar + Span::raw(label).width() as u16 + 3 // 3-col gap before attention
 }
 
 /// Build the info line: optional agent identity bar, the focused workspace
@@ -452,6 +454,15 @@ mod tests {
         // Row 1 is the full-width separator rule.
         let row1: String = (0..w).map(|x| buf[(x, 1)].symbol().to_string()).collect();
         assert_eq!(row1, "─".repeat(w as usize), "separator spans the width");
+    }
+
+    #[test]
+    fn info_line_prefix_width_counts_cells_not_chars() {
+        // "日本" is 2 chars but 4 cells; the attention click rects are
+        // offset by this width, so it must be measured in cells.
+        let wide = info_line_prefix_width("r/日本", Some(AgentKind::Claude));
+        let narrow = info_line_prefix_width("r/ab", Some(AgentKind::Claude));
+        assert_eq!(wide, narrow + 2);
     }
 
     #[test]

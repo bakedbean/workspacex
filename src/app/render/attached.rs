@@ -169,6 +169,19 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
                 .collect()
         })
         .unwrap_or_default();
+    let attention_more_rect =
+        attention
+            .as_ref()
+            .and_then(|a| a.more)
+            .map(|m| ratatui::layout::Rect {
+                x: info_area
+                    .x
+                    .saturating_add(prefix_w as u16)
+                    .saturating_add(m.start_col),
+                y: info_area.y,
+                width: m.width,
+                height: 1,
+            });
     let attention_line = attention.map(|a| a.line);
 
     let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
@@ -249,6 +262,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.pr_link_rect = out.pr_link_rect.map(|r| (focused_id, r));
     app.procs_link_rect = out.procs_link_rect.map(|r| (focused_id, r));
     app.attention_rects = attention_rects;
+    app.attention_more_rect = attention_more_rect;
     app.attached_pane_rects = out.pane_rects;
     app.agent_chip_rects = out.agent_chip_rects;
     app.footer_hint_rects = out.footer_hint_rects;

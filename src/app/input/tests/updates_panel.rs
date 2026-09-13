@@ -1597,6 +1597,20 @@ async fn attached_view_shows_status_row_for_other_workspace_needing_attention() 
     store
         .set_workspace_state(other_id, WorkspaceState::Ready)
         .unwrap();
+    let quiet_id = store
+        .insert_workspace(&NewWorkspace {
+            repo_id,
+            name: "quiet-one",
+            branch: "repo/quiet-one",
+            worktree_path: std::path::Path::new("/tmp/wsx-test/quiet"),
+            yolo: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            shared: false,
+        })
+        .unwrap();
+    store
+        .set_workspace_state(quiet_id, WorkspaceState::Ready)
+        .unwrap();
 
     let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
     let mode = crate::pty::session::SpawnMode::Fresh {
@@ -1621,14 +1635,19 @@ async fn attached_view_shows_status_row_for_other_workspace_needing_attention() 
         )
         .unwrap();
     app.view = crate::ui::View::Attached(AttachedState::single(test_target(&app, attached_id)));
-    // The new status row exclusively surfaces workspaces with
-    // `needs_attention` set — recent activity alone no longer qualifies.
-    // In production both flags are set together when `alert_decision`
-    // fires; mirror that here so the V5 status glyph (`!` for stalled)
-    // is what the styled line renders.
+    // The status row lists every other workspace, flagged ones first.
+    // The glyph is the canonical dashboard status, so give the flagged
+    // workspace events that classify as Stalled: a tool_use stop with
+    // nothing pending and a log that went quiet over a minute ago.
     app.workspace_needs_attention.insert(other_id);
-    app.workspace_activity
-        .insert(other_id, crate::app::ActivityState::Stalled);
+    app.workspace_events.insert(
+        other_id,
+        crate::activity::events::WorkspaceEvents {
+            last_stop_reason: Some(crate::activity::events::StopReason::ToolUse),
+            last_log_activity_ms: crate::util::time::now_ms() - 120_000,
+            ..Default::default()
+        },
+    );
 
     let backend = TestBackend::new(80, 24);
     let mut term = Terminal::new(backend).unwrap();
@@ -1649,6 +1668,46 @@ async fn attached_view_shows_status_row_for_other_workspace_needing_attention() 
     assert!(
         rendered.contains("! repo/the-other"),
         "expected V5 stalled glyph next to workspace name on status row:\n{rendered}"
+    );
+    // The unflagged workspace is listed too, demoted behind the flagged one,
+    // with the idle dot its dashboard row would show.
+    let flagged_at = rendered.find("repo/the-other").unwrap();
+    let quiet_at = rendered
+        .find("\u{b7} repo/quiet-one")
+        .unwrap_or_else(|| panic!("expected idle entry for the unflagged workspace:\n{rendered}"));
+    assert!(
+        flagged_at < quiet_at,
+        "flagged workspace must precede the unflagged one:\n{rendered}"
+    );
+    assert!(
+        app.attention_more_rect.is_none(),
+        "no overflow tail when every entry fits"
+    );
+
+    // Narrow the terminal so only one entry fits: the rest fold into a
+    // `… +N more` tail whose click rect the render pass publishes.
+    let backend = TestBackend::new(60, 24);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+    let buf = term.backend().buffer();
+    let top: String = (0..buf.area.width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(
+        top.contains("+1 more"),
+        "expected overflow tail on top row:\n{top}"
+    );
+    let rect = app
+        .attention_more_rect
+        .expect("render must publish the more-tail click rect");
+    assert_eq!(rect.y, 0);
+    let covered: String = top
+        .chars()
+        .skip(rect.x as usize)
+        .take(rect.width as usize)
+        .collect();
+    assert_eq!(
+        covered.trim(),
+        "… +1 more",
+        "rect {rect:?} must cover exactly the tail text:\n{top}"
     );
 }
 

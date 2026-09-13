@@ -216,6 +216,18 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 if let Err(e) = attach_workspace(app, ws_id) {
                     tracing::warn!(error = %e, "failed to attach from attention click");
                 }
+            } else if app.attention_more_rect.is_some_and(|r| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                // Clicking the `… +N more` tail opens the updates panel,
+                // identical to `Ctrl-x u`.
+                app.modal = Some(Modal::UpdatesPanel {
+                    selected: 0,
+                    filter: None,
+                });
             } else if let Some((inst, _)) = app.agent_chip_rects.iter().copied().find(|(_, r)| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

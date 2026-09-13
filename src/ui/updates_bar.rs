@@ -1,10 +1,10 @@
-//! Content selection for the attached-view "other workspaces" status row.
+//! Content selection for the attached-view top-bar workspace row.
 //!
-//! Pure module: takes pre-computed slices of App state, returns an inline
-//! list of attention-needing workspaces. The caller (typically
-//! `attached::render`) handles drawing. The activity-fallback path that
-//! previously surfaced "most recent event" was removed — issue #18 makes
-//! the status row exclusively about workspaces that need user action.
+//! Pure module: takes pre-computed slices of App state, returns the row's
+//! entries — every workspace but the attached one, those needing attention
+//! first, the rest in dashboard order — and lays them out as a styled line
+//! with click geometry. The caller (`app::render::attached`) handles
+//! drawing.
 
 use crate::activity::events::WorkspaceEvents;
 use crate::data::store::WorkspaceId;
@@ -72,11 +72,9 @@ pub struct AttentionEntry {
     /// Anchor epoch-ms for the "(5m)" age display. The most recent of:
     /// pending tool_use timestamp, latest event timestamp, or `now`.
     pub age_anchor_ms: i64,
-    /// The activity state that triggered this entry. Drives the
-    /// status-row glyph (?/✓/⚠) so the user can tell at a glance
-    /// whether a workspace is waiting for an answer, finished a
-    /// task, or hit a permission prompt.
-    pub activity: ActivityState,
+    /// The workspace's dashboard status. Drives the row glyph and its
+    /// color, so an entry reads exactly like its dashboard row.
+    pub status: Status,
     /// PR lifecycle for this workspace, used to color the `repo/name`
     /// text with the same hues the dashboard uses (green=open,
     /// purple=merged, …). `None` (or a colorless lifecycle like NoPr)
@@ -93,6 +91,17 @@ pub struct AttentionLine {
     /// One segment per *rendered* entry (the `included` ones, not the
     /// `… +N more` overflow). Columns are 0-based from the line's left edge.
     pub segments: Vec<AttentionSegment>,
+    /// The `… +N more` overflow tail, when entries were folded into it.
+    /// Clickable: opens the updates panel.
+    pub more: Option<AttentionMore>,
+}
+
+/// The clickable extent of the `… +N more` tail: column offset + width, in
+/// cells, 0-based from the line's left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttentionMore {
+    pub start_col: u16,
+    pub width: u16,
 }
 
 /// The clickable extent of one attention entry: which workspace it points to
@@ -111,31 +120,21 @@ pub fn glyph_for_activity(a: ActivityState) -> char {
         ActivityState::AwaitingAnswer => '?',
         ActivityState::Complete => '\u{2713}', // ✓ CHECK MARK
         ActivityState::Awaiting | ActivityState::Stalled => '⚠',
-        // Defensive default — non-alertable states shouldn't appear
-        // in the status row (collect_attention filters by
-        // needs_attention) but be safe.
+        // Defensive default for the non-alertable states.
         _ => '⚠',
     }
 }
 
-/// Map the legacy `ActivityState` (used by the alert/bell pipeline) into
-/// the V5 dashboard `Status` vocabulary so the attention line can pick
-/// per-status colors that match the dashboard.
-fn status_for_activity(a: ActivityState) -> Status {
-    match a {
-        ActivityState::AwaitingAnswer => Status::Question,
-        ActivityState::Stalled => Status::Stalled,
-        ActivityState::Awaiting => Status::Question,
-        ActivityState::Complete => Status::Complete,
-        ActivityState::Active => Status::Thinking,
-        ActivityState::Waiting => Status::Waiting,
-        ActivityState::Idle | ActivityState::Off => Status::Idle,
-    }
+/// Display width of `s` in terminal cells (double-width CJK counts 2,
+/// combining marks 0), so entry geometry matches what ratatui draws.
+fn cell_width(s: &str) -> usize {
+    Span::raw(s).width()
 }
 
-/// V5-styled variant of `format_attention_line`. Produces a `Line` whose
-/// per-entry glyph is colored by the workspace's V5 `Status`, repo/name
-/// in `path`, age in `dim`, separators in `dim`.
+/// Produce the top-bar row as a styled `Line`: per-entry glyph colored by
+/// the workspace's dashboard status, repo/name in the lifecycle hue, age in
+/// `dim`, separators in `dim`, plus the clickable geometry of each entry
+/// and of the `… +N more` tail.
 pub fn format_attention_line_styled(
     entries: &[AttentionEntry],
     now_ms: i64,
@@ -145,21 +144,26 @@ pub fn format_attention_line_styled(
     if entries.is_empty() {
         return None;
     }
-    // Compute the visual width of one entry: "<glyph> <repo>/<name> (<age>)".
-    let widths: Vec<usize> = entries
+    let ages: Vec<String> = entries
         .iter()
-        .map(|e| {
-            let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
-            1 + 1
-                + e.repo_name.chars().count()
-                + 1
-                + e.name.chars().count()
-                + 2
-                + age.chars().count()
-                + 1
-        })
+        .map(|e| format_age(now_ms.saturating_sub(e.age_anchor_ms)))
+        .collect();
+    let names: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}/{}", e.repo_name, e.name))
+        .collect();
+    // Visual width of one entry: "<glyph> <repo>/<name> (<age>)".
+    let entry_width = |name: &str, age: &str| 1 + 1 + cell_width(name) + 2 + cell_width(age) + 1;
+    let mut widths: Vec<usize> = names
+        .iter()
+        .zip(&ages)
+        .map(|(n, a)| entry_width(n, a))
         .collect();
     let sep_w = 3; // " │ "
+    let more_text = |remaining: usize| format!(" … +{remaining} more");
+    // Greedy fit, then give back entries from the tail until the overflow
+    // marker also fits: a clipped `… +N more` would be unreadable and,
+    // since it is a click target, unreachable.
     let mut included = 0usize;
     let mut total = 0usize;
     for (i, w) in widths.iter().enumerate() {
@@ -170,13 +174,34 @@ pub fn format_attention_line_styled(
         total += s + w;
         included += 1;
     }
+    while included > 1 && included < entries.len() {
+        let tail_w = cell_width(&more_text(entries.len() - included));
+        if total + tail_w <= max_width {
+            break;
+        }
+        included -= 1;
+        total -= widths[included] + sep_w;
+    }
+    // Always render at least one entry. When that entry alone crowds out
+    // the tail, shorten its name with an ellipsis so the tail stays on
+    // screen; a lone entry with nothing behind it just clips.
+    included = included.max(1);
+    let mut first_name = names[0].clone();
+    if included < entries.len() {
+        let tail_w = cell_width(&more_text(entries.len() - included));
+        let budget = max_width.saturating_sub(tail_w);
+        if widths[0] > budget {
+            let fixed = widths[0] - cell_width(&names[0]);
+            let name_budget = budget.saturating_sub(fixed);
+            let mut kept: String = names[0].clone();
+            while cell_width(&kept) + 1 > name_budget && kept.pop().is_some() {}
+            kept.push('…');
+            first_name = kept;
+            widths[0] = entry_width(&first_name, &ages[0]);
+        }
+    }
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut segments: Vec<AttentionSegment> = Vec::new();
-    // Always render at least one entry; if the first doesn't fit we emit
-    // it as-is and rely on ratatui's clipping.
-    if included == 0 {
-        included = 1;
-    }
     let mut col: usize = 0;
     for (i, e) in entries.iter().take(included).enumerate() {
         if i > 0 {
@@ -184,9 +209,8 @@ pub fn format_attention_line_styled(
             col += sep_w;
         }
         let entry_start = col;
-        let status = status_for_activity(e.activity);
-        let glyph = status.glyph().to_string();
-        spans.push(Span::styled(glyph, theme.status_style(status)));
+        let glyph = e.status.glyph().to_string();
+        spans.push(Span::styled(glyph, theme.status_style(e.status)));
         spans.push(Span::raw(" ".to_string()));
         // Color the name by PR lifecycle to match the dashboard (green
         // open, purple merged, …). Colorless lifecycles (NoPr/PrDraft)
@@ -194,12 +218,13 @@ pub fn format_attention_line_styled(
         let name_style = theme
             .lifecycle_style(e.lifecycle)
             .unwrap_or_else(|| ratatui::style::Style::default().fg(theme.path));
-        spans.push(Span::styled(
-            format!("{}/{}", e.repo_name, e.name),
-            name_style,
-        ));
-        let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
-        spans.push(Span::styled(format!(" ({age})"), theme.dim_style()));
+        let name = if i == 0 {
+            first_name.clone()
+        } else {
+            names[i].clone()
+        };
+        spans.push(Span::styled(name, name_style));
+        spans.push(Span::styled(format!(" ({})", ages[i]), theme.dim_style()));
         col += widths[i];
         segments.push(AttentionSegment {
             workspace_id: e.workspace_id,
@@ -208,15 +233,19 @@ pub fn format_attention_line_styled(
         });
     }
     let remaining = entries.len().saturating_sub(included);
+    let mut more = None;
     if remaining > 0 {
-        spans.push(Span::styled(
-            format!(" … +{remaining} more"),
-            theme.dim_style(),
-        ));
+        let text = more_text(remaining);
+        more = Some(AttentionMore {
+            start_col: col as u16,
+            width: cell_width(&text) as u16,
+        });
+        spans.push(Span::styled(text, theme.dim_style()));
     }
     Some(AttentionLine {
         line: Line::from(spans),
         segments,
+        more,
     })
 }
 
@@ -232,27 +261,29 @@ impl SortRow for WorkspaceUpdateInfo<'_> {
     }
 }
 
-/// Collect every workspace whose `needs_attention` flag is set, excluding
-/// the currently-attached one. Ordered by the dashboard's own workspace
-/// comparator under the dashboard's current sort mode, so the row reads
-/// the same way the by-repo list does: in the default recency mode a
-/// freshly blocked workspace is pinned first and everything else sits in
-/// its recency bucket, while status mode ranks by status priority. Callers
-/// pass `DashboardState::sort_mode` and `blocked_pin_max_age_secs`.
-pub fn collect_attention(
+/// Collect every workspace except the currently-attached one, as the
+/// attached view's top-bar row. Workspaces whose `needs_attention` flag is
+/// set are promoted ahead of the rest; inside each group the dashboard's
+/// own comparator decides under the dashboard's current sort mode, so the
+/// row reads the same way the by-repo list does. Callers pass
+/// `DashboardState::sort_mode` and `blocked_pin_max_age_secs`.
+pub fn collect_workspace_row(
     candidates: &[WorkspaceUpdateInfo],
     attached_workspace: Option<WorkspaceId>,
     now_ms: i64,
     sort_mode: SortMode,
     pin_max_age_secs: u64,
 ) -> Vec<AttentionEntry> {
-    let mut filtered: Vec<&WorkspaceUpdateInfo> = candidates
-        .iter()
-        .filter(|c| c.needs_attention && Some(c.id) != attached_workspace)
-        .collect();
-    order_workspaces(&mut filtered, sort_mode, pin_max_age_secs);
-    filtered
+    let (mut flagged, mut rest): (Vec<&WorkspaceUpdateInfo>, Vec<&WorkspaceUpdateInfo>) =
+        candidates
+            .iter()
+            .filter(|c| Some(c.id) != attached_workspace)
+            .partition(|c| c.needs_attention);
+    order_workspaces(&mut flagged, sort_mode, pin_max_age_secs);
+    order_workspaces(&mut rest, sort_mode, pin_max_age_secs);
+    flagged
         .into_iter()
+        .chain(rest)
         .map(|c| {
             let age_anchor_ms = c
                 .awaiting_tool
@@ -268,69 +299,11 @@ pub fn collect_attention(
                 repo_name: c.repo_name.to_string(),
                 name: c.name.to_string(),
                 age_anchor_ms,
-                activity: c.activity,
+                status: c.status,
                 lifecycle: c.lifecycle,
             }
         })
         .collect()
-}
-
-/// Render the inline status-row line:
-/// `repo/foo (5m) │ repo/bar (1h) │ repo/baz (15m)`
-///
-/// When the natural concatenation exceeds `max_width`, drop entries from
-/// the right and append `… +N more`. Returns `None` when `entries` is
-/// empty so the caller can collapse the status area entirely.
-pub fn format_attention_line(
-    entries: &[AttentionEntry],
-    now_ms: i64,
-    max_width: usize,
-) -> Option<String> {
-    if entries.is_empty() {
-        return None;
-    }
-    let parts: Vec<String> = entries
-        .iter()
-        .map(|e| {
-            let age = format_age(now_ms.saturating_sub(e.age_anchor_ms));
-            let g = glyph_for_activity(e.activity);
-            format!("{} {}/{} ({})", g, e.repo_name, e.name, age)
-        })
-        .collect();
-    let sep = " │ ";
-    // Greedy fit: include as many full entries as fit, then summarize the
-    // remainder with "… +N more".
-    let mut included = 0usize;
-    let mut total = 0usize;
-    for (i, p) in parts.iter().enumerate() {
-        let sep_w = if i == 0 { 0 } else { sep.chars().count() };
-        let candidate = total + sep_w + p.chars().count();
-        if candidate > max_width {
-            break;
-        }
-        total = candidate;
-        included += 1;
-    }
-    if included == 0 {
-        // Even the first entry doesn't fit — show it truncated so we never
-        // render an empty bar when there ARE pending alerts.
-        let mut truncated: String = parts[0].chars().take(max_width.saturating_sub(1)).collect();
-        truncated.push('…');
-        return Some(truncated);
-    }
-    let mut out = parts[..included].join(sep);
-    let remaining = parts.len() - included;
-    if remaining > 0 {
-        let suffix = format!(" … +{remaining} more");
-        let suffix_w = suffix.chars().count();
-        // Trim included entries from the tail until the suffix fits.
-        while included > 0 && out.chars().count() + suffix_w > max_width {
-            included -= 1;
-            out = parts[..included].join(sep);
-        }
-        out.push_str(&suffix);
-    }
-    Some(out)
 }
 
 // Moved to `crate::util::time` so non-TUI callers (the macOS menubar) can use it
@@ -344,6 +317,19 @@ mod tests {
     use crate::activity::events::{EventKind, EventSnapshot, WorkspaceEvents};
     use crate::data::store::WorkspaceId;
     use crate::ui::dashboard::sort::BLOCKED_PIN_MAX_AGE_DEFAULT_SECS as PIN;
+
+    /// Test fixture: derive a canonical status from the legacy activity.
+    fn status_for_activity(a: ActivityState) -> Status {
+        match a {
+            ActivityState::AwaitingAnswer => Status::Question,
+            ActivityState::Stalled => Status::Stalled,
+            ActivityState::Awaiting => Status::Question,
+            ActivityState::Complete => Status::Complete,
+            ActivityState::Active => Status::Thinking,
+            ActivityState::Waiting => Status::Waiting,
+            ActivityState::Idle | ActivityState::Off => Status::Idle,
+        }
+    }
 
     type WsOwned = (
         WorkspaceId,
@@ -440,16 +426,52 @@ mod tests {
     }
 
     #[test]
-    fn collect_attention_returns_empty_when_none_need_attention() {
+    fn collect_workspace_row_lists_unflagged_workspaces() {
+        // The row is a workspace list, not an alert list: a workspace with
+        // no attention flag still gets an entry.
         let evt = events_with_latest("recent", 5_000);
         let rows = [ws(1, "busy", Some(evt), ActivityState::Idle, false, None)];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
-        assert!(entries.is_empty());
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "busy");
+        assert_eq!(entries[0].status, Status::Idle);
     }
 
     #[test]
-    fn collect_attention_sorts_most_recently_interacted_first() {
+    fn collect_workspace_row_promotes_flagged_before_dashboard_order() {
+        // Flagged workspaces come first regardless of the dashboard
+        // comparator; inside each group the comparator decides (recency
+        // mode here, so the fresher unflagged row precedes the older one).
+        let rows = [
+            ws_ago(
+                1,
+                "older",
+                None,
+                ActivityState::Idle,
+                false,
+                None,
+                Some(600),
+            ),
+            ws_ago(2, "fresh", None, ActivityState::Idle, false, None, Some(5)),
+            ws_ago(
+                3,
+                "flagged-stale",
+                None,
+                ActivityState::Complete,
+                true,
+                None,
+                Some(9_000),
+            ),
+        ];
+        let candidates = to_candidates(&rows);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["flagged-stale", "fresh", "older"]);
+    }
+
+    #[test]
+    fn collect_workspace_row_sorts_most_recently_interacted_first() {
         // Same status priority — order falls to the dashboard's ago_secs
         // recency signal (smaller = more recent = first), NOT the event
         // timestamps (which here would give the opposite order).
@@ -476,14 +498,14 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "fresh");
         assert_eq!(entries[1].name, "stale");
     }
 
     #[test]
-    fn collect_attention_status_mode_sorts_priority_before_recency() {
+    fn collect_workspace_row_status_mode_sorts_priority_before_recency() {
         // The dashboard's `sort: status` mode: Stalled (5) outranks
         // AwaitingAnswer/Question (4) outranks Waiting (3), even when
         // lower-priority entries are more recent.
@@ -517,13 +539,13 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Status, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Status, PIN);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["stalled", "question", "waiting"]);
     }
 
     #[test]
-    fn collect_attention_recency_mode_orders_like_the_dashboard() {
+    fn collect_workspace_row_recency_mode_orders_like_the_dashboard() {
         // The dashboard's default `sort: recency` mode: a freshly blocked
         // row is pinned on top, everything else sits in its recency
         // bucket, and a block older than the pin window sorts on age like
@@ -560,13 +582,13 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["fresh-question", "fresh-waiting", "stale-stalled"]);
     }
 
     #[test]
-    fn collect_attention_sorts_by_canonical_status_not_legacy_activity() {
+    fn collect_workspace_row_sorts_by_canonical_status_not_legacy_activity() {
         // Both carry the legacy bell activity AwaitingAnswer (→ Question),
         // but the dashboard's canonical classifier downgraded ws1 to
         // Waiting (e.g. PTY-active question suppression). The sort must
@@ -588,13 +610,13 @@ mod tests {
             mk(1, "suppressed", Status::Waiting, 1),
             mk(2, "question", Status::Question, 500),
         ];
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].name, "question");
         assert_eq!(entries[1].name, "suppressed");
     }
 
     #[test]
-    fn collect_attention_sorts_never_active_last() {
+    fn collect_workspace_row_sorts_never_active_last() {
         let rows = [
             ws_ago(1, "never", None, ActivityState::Awaiting, true, None, None),
             ws_ago(
@@ -608,17 +630,17 @@ mod tests {
             ),
         ];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].name, "old");
         assert_eq!(entries[1].name, "never");
     }
 
     #[test]
-    fn collect_attention_excludes_currently_attached() {
+    fn collect_workspace_row_excludes_currently_attached() {
         let evt = events_with_latest("evt", 5_000);
         let rows = [ws(1, "self", Some(evt), ActivityState::Waiting, true, None)];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(
+        let entries = collect_workspace_row(
             &candidates,
             Some(WorkspaceId(1)),
             10_000,
@@ -629,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_attention_uses_awaiting_tool_timestamp_as_anchor() {
+    fn collect_workspace_row_uses_awaiting_tool_timestamp_as_anchor() {
         // awaiting_tool's first-seen ts takes priority over latest event ts
         let evt = events_with_latest("old", 1_000);
         let rows = [ws(
@@ -641,120 +663,8 @@ mod tests {
             Some(("Bash".to_string(), 8_000)),
         )];
         let candidates = to_candidates(&rows);
-        let entries = collect_attention(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
         assert_eq!(entries[0].age_anchor_ms, 8_000);
-    }
-
-    #[test]
-    fn format_attention_line_returns_none_when_empty() {
-        assert!(format_attention_line(&[], 0, 80).is_none());
-    }
-
-    #[test]
-    fn format_attention_line_joins_with_separator() {
-        let entries = vec![
-            AttentionEntry {
-                workspace_id: WorkspaceId(1),
-                repo_name: "a".into(),
-                name: "x".into(),
-                age_anchor_ms: 9_000, // 1s before now
-                activity: ActivityState::Awaiting,
-                lifecycle: None,
-            },
-            AttentionEntry {
-                workspace_id: WorkspaceId(2),
-                repo_name: "b".into(),
-                name: "y".into(),
-                age_anchor_ms: 5_000, // 5s before now
-                activity: ActivityState::Awaiting,
-                lifecycle: None,
-            },
-        ];
-        let line = format_attention_line(&entries, 10_000, 80).expect("line");
-        assert_eq!(line, "⚠ a/x (1s) │ ⚠ b/y (5s)");
-    }
-
-    #[test]
-    fn format_attention_line_overflow_adds_plus_more_suffix() {
-        let entries: Vec<AttentionEntry> = (0i64..5)
-            .map(|i| AttentionEntry {
-                workspace_id: WorkspaceId(i),
-                repo_name: format!("repo{i}"),
-                name: format!("ws{i}"),
-                age_anchor_ms: 10_000 - i * 1000,
-                activity: ActivityState::Awaiting,
-                lifecycle: None,
-            })
-            .collect();
-        // Width 35: fits 1 entry ("⚠ repo0/ws0 (1s)", ~18 chars) plus the
-        // "… +N more" overflow suffix; remaining 4 entries become the suffix.
-        let line = format_attention_line(&entries, 10_000, 35).expect("line");
-        assert!(line.contains("… +"), "expected overflow marker: {line}");
-        assert!(line.ends_with("more"), "{line}");
-        assert!(
-            line.chars().count() <= 35,
-            "got {} chars: {line}",
-            line.chars().count()
-        );
-    }
-
-    #[test]
-    fn format_attention_line_extreme_overflow_truncates_first_entry() {
-        // Even one entry doesn't fit — make sure we still render *something*
-        // rather than returning an empty bar.
-        let entries = vec![AttentionEntry {
-            workspace_id: WorkspaceId(1),
-            repo_name: "extremely-long-repo-name".into(),
-            name: "workspace-name".into(),
-            age_anchor_ms: 9_000,
-            activity: ActivityState::Awaiting,
-            lifecycle: None,
-        }];
-        let line = format_attention_line(&entries, 10_000, 10).expect("line");
-        assert!(line.ends_with('…'), "expected ellipsis truncation: {line}");
-        assert!(line.chars().count() <= 10);
-    }
-
-    #[test]
-    fn format_attention_line_uses_question_glyph_for_awaiting_answer() {
-        let entries = vec![AttentionEntry {
-            workspace_id: WorkspaceId(1),
-            repo_name: "demo".into(),
-            name: "alpha".into(),
-            age_anchor_ms: 0,
-            activity: ActivityState::AwaitingAnswer,
-            lifecycle: None,
-        }];
-        let line = format_attention_line(&entries, 5_000, 80).expect("line");
-        assert!(line.starts_with("? demo/alpha"), "got: {line}");
-    }
-
-    #[test]
-    fn format_attention_line_uses_check_glyph_for_complete() {
-        let entries = vec![AttentionEntry {
-            workspace_id: WorkspaceId(1),
-            repo_name: "demo".into(),
-            name: "alpha".into(),
-            age_anchor_ms: 0,
-            activity: ActivityState::Complete,
-            lifecycle: None,
-        }];
-        let line = format_attention_line(&entries, 5_000, 80).expect("line");
-        assert!(line.starts_with("\u{2713} demo/alpha"), "got: {line}");
-    }
-
-    #[test]
-    fn format_attention_line_uses_warning_glyph_for_awaiting_permission() {
-        let entries = vec![AttentionEntry {
-            workspace_id: WorkspaceId(1),
-            repo_name: "demo".into(),
-            name: "alpha".into(),
-            age_anchor_ms: 0,
-            activity: ActivityState::Awaiting,
-            lifecycle: None,
-        }];
-        let line = format_attention_line(&entries, 5_000, 80).expect("line");
-        assert!(line.starts_with("⚠ demo/alpha"), "got: {line}");
     }
 
     #[test]
@@ -768,7 +678,7 @@ mod tests {
                 repo_name: "r".into(),
                 name: "open".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Awaiting,
+                status: Status::Question,
                 lifecycle: Some(BranchLifecycle::PrOpen),
             },
             // Merged PR -> purple (theme.merged).
@@ -777,7 +687,7 @@ mod tests {
                 repo_name: "r".into(),
                 name: "merged".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Complete,
+                status: Status::Complete,
                 lifecycle: Some(BranchLifecycle::PrMerged),
             },
             // No PR -> falls back to the muted path color.
@@ -786,7 +696,7 @@ mod tests {
                 repo_name: "r".into(),
                 name: "nopr".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Awaiting,
+                status: Status::Question,
                 lifecycle: Some(BranchLifecycle::NoPr),
             },
         ];
@@ -823,7 +733,7 @@ mod tests {
                 repo_name: "a".into(),
                 name: "q".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::AwaitingAnswer,
+                status: Status::Question,
                 lifecycle: None,
             },
             AttentionEntry {
@@ -831,7 +741,7 @@ mod tests {
                 repo_name: "b".into(),
                 name: "s".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Stalled,
+                status: Status::Stalled,
                 lifecycle: None,
             },
         ];
@@ -873,7 +783,7 @@ mod tests {
                 repo_name: "a".into(),
                 name: "q".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::AwaitingAnswer,
+                status: Status::Question,
                 lifecycle: None,
             },
             AttentionEntry {
@@ -881,7 +791,7 @@ mod tests {
                 repo_name: "bb".into(),
                 name: "ss".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Stalled,
+                status: Status::Stalled,
                 lifecycle: None,
             },
         ];
@@ -910,7 +820,7 @@ mod tests {
                 repo_name: "a".into(),
                 name: "q".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::AwaitingAnswer,
+                status: Status::Question,
                 lifecycle: None,
             },
             AttentionEntry {
@@ -918,7 +828,7 @@ mod tests {
                 repo_name: "bb".into(),
                 name: "ss".into(),
                 age_anchor_ms: 9_000,
-                activity: ActivityState::Stalled,
+                status: Status::Stalled,
                 lifecycle: None,
             },
         ];
@@ -930,5 +840,190 @@ mod tests {
             "only the included entry is clickable"
         );
         assert_eq!(out.segments[0].workspace_id, WorkspaceId(1));
+    }
+
+    #[test]
+    fn styled_line_glyph_follows_canonical_status() {
+        // The glyph is the dashboard's, so a row reads the same in both
+        // surfaces: Waiting draws the ellipsis, Idle the dot.
+        let theme = Theme::wsx();
+        let entries = vec![
+            AttentionEntry {
+                workspace_id: WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "w".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Waiting,
+                lifecycle: None,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(2),
+                repo_name: "a".into(),
+                name: "i".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Idle,
+                lifecycle: None,
+            },
+        ];
+        let line = format_attention_line_styled(&entries, 10_000, 200, &theme)
+            .expect("line")
+            .line;
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.contains("\u{2026} a/w"), "waiting glyph: {text:?}");
+        assert!(text.contains("\u{b7} a/i"), "idle glyph: {text:?}");
+        let idle = line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "\u{b7}")
+            .expect("idle glyph span");
+        assert_eq!(idle.style, theme.status_style(Status::Idle));
+    }
+
+    fn three_entries() -> Vec<AttentionEntry> {
+        // Widths: "? a/q (1s)" = 10, "! bb/ss (1s)" = 12, twice.
+        vec![
+            AttentionEntry {
+                workspace_id: WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "q".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Question,
+                lifecycle: None,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(2),
+                repo_name: "bb".into(),
+                name: "ss".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Stalled,
+                lifecycle: None,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(3),
+                repo_name: "bb".into(),
+                name: "ss".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Stalled,
+                lifecycle: None,
+            },
+        ]
+    }
+
+    fn line_width(line: &Line<'_>) -> usize {
+        line.width()
+    }
+
+    #[test]
+    fn styled_line_reports_more_tail_extent() {
+        // Budget 36: entries 0+1 take 25 cols, entry 2 would need 40, so
+        // it folds into " … +1 more" (10 cols) starting at col 25.
+        let theme = Theme::wsx();
+        let out = format_attention_line_styled(&three_entries(), 10_000, 36, &theme).expect("line");
+        assert_eq!(out.segments.len(), 2);
+        assert_eq!(
+            out.more,
+            Some(AttentionMore {
+                start_col: 25,
+                width: 10
+            })
+        );
+        assert!(line_width(&out.line) <= 36, "{}", line_width(&out.line));
+    }
+
+    #[test]
+    fn styled_line_reserves_room_for_more_tail() {
+        // Budget 30: entries 0+1 fit on their own (25) but not with the
+        // tail (35), so entry 1 folds into the tail too: 10 + " … +2 more".
+        let theme = Theme::wsx();
+        let out = format_attention_line_styled(&three_entries(), 10_000, 30, &theme).expect("line");
+        assert_eq!(out.segments.len(), 1, "entry 1 must yield to the tail");
+        assert_eq!(
+            out.more,
+            Some(AttentionMore {
+                start_col: 10,
+                width: 10
+            })
+        );
+        assert!(line_width(&out.line) <= 30, "{}", line_width(&out.line));
+        let text: String = out.line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.ends_with("+2 more"), "{text:?}");
+    }
+
+    #[test]
+    fn styled_line_has_no_more_tail_when_everything_fits() {
+        let theme = Theme::wsx();
+        let out =
+            format_attention_line_styled(&three_entries(), 10_000, 200, &theme).expect("line");
+        assert_eq!(out.segments.len(), 3);
+        assert_eq!(out.more, None);
+    }
+
+    fn entry(id: i64, repo: &str, name: &str) -> AttentionEntry {
+        AttentionEntry {
+            workspace_id: WorkspaceId(id),
+            repo_name: repo.into(),
+            name: name.into(),
+            age_anchor_ms: 9_000,
+            status: Status::Question,
+            lifecycle: None,
+        }
+    }
+
+    #[test]
+    fn styled_line_truncates_long_first_entry_to_keep_tail_visible() {
+        // A first entry wider than the budget used to push the tail off
+        // screen. Its name now yields (with an ellipsis) so the tail fits.
+        let theme = Theme::wsx();
+        let entries = vec![entry(1, "repo", &"n".repeat(40)), entry(2, "repo", "b")];
+        let out = format_attention_line_styled(&entries, 10_000, 30, &theme).expect("line");
+        let text: String = out.line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(line_width(&out.line) <= 30, "{text:?}");
+        assert!(text.ends_with("+1 more"), "{text:?}");
+        assert!(text.contains("repo/nnn"), "name keeps its head: {text:?}");
+        assert!(text.contains("…") && text.contains(" (1s)"), "{text:?}");
+        assert_eq!(out.segments.len(), 1);
+        assert_eq!(
+            out.segments[0].width as usize + out.more.unwrap().width as usize,
+            line_width(&out.line),
+            "segment + tail must tile the line exactly"
+        );
+    }
+
+    #[test]
+    fn styled_line_survives_zero_width_budget() {
+        let theme = Theme::wsx();
+        let out = format_attention_line_styled(&three_entries(), 10_000, 0, &theme).expect("line");
+        assert_eq!(out.segments.len(), 1, "always renders the first entry");
+    }
+
+    #[test]
+    fn styled_line_measures_widths_in_terminal_cells() {
+        // "日本" is two double-width glyphs: 4 cells, 2 chars. Segment
+        // geometry must use cells or the click rects drift.
+        let theme = Theme::wsx();
+        let entries = vec![entry(1, "a", "日本"), entry(2, "a", "q")];
+        let out = format_attention_line_styled(&entries, 10_000, 200, &theme).expect("line");
+        // "? a/日本 (1s)" = 1+1 + 1+1 + 4 + 2+2+1 = 13 cells.
+        assert_eq!(out.segments[0].width, 13);
+        assert_eq!(out.segments[1].start_col, 16);
+    }
+
+    #[test]
+    fn styled_line_tail_width_tracks_multi_digit_remainder() {
+        // Giving an entry back can push the remainder from 9 to 10 and
+        // widen the tail by a column; the fit must use the final width.
+        let theme = Theme::wsx();
+        let entries: Vec<AttentionEntry> = (1..=12).map(|i| entry(i, "a", "q")).collect();
+        for budget in [33usize, 34, 42] {
+            let out = format_attention_line_styled(&entries, 10_000, budget, &theme).expect("line");
+            let text: String = out.line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(line_width(&out.line) <= budget, "budget {budget}: {text:?}");
+            let more = out.more.expect("overflow");
+            assert_eq!(
+                more.start_col as usize + more.width as usize,
+                line_width(&out.line),
+                "budget {budget}: tail extent must end the line: {text:?}"
+            );
+        }
     }
 }

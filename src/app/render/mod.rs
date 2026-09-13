@@ -86,7 +86,7 @@ pub(super) fn compute_attention_line(
             }
         })
         .collect();
-    let entries = crate::ui::updates_bar::collect_attention(
+    let entries = crate::ui::updates_bar::collect_workspace_row(
         &candidates,
         attached_id,
         now_ms,
@@ -102,6 +102,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // dashboard detail branch overwrite these with live values when chips render.
     app.chip_rects.clear();
     app.attention_rects.clear();
+    app.attention_more_rect = None;
     app.pinned_commands_cache.clear();
     // Clear detail-bar container rects each frame; the workspace-selected
     // branch overwrites this with live values when the detail bar renders.

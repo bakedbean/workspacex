@@ -26,6 +26,14 @@ wsx agent add <kind>     # kind = claude | pi | hermes | codex | omp
 
 This runs against the **current** workspace — the one whose worktree you're in, or the one named by `$WSX_WORKSPACE_ID` (see [identity](#agent-identity-and-labels) below). It prints the new agent's label, e.g. `added claude#2`.
 
+### Sessions survive a restart
+
+Quit wsx and come back, and every agent in the workspace gets its own conversation back — not a blank chat, and not each other's. Claude's own `--continue` can't do that on its own: it resumes the *most recent* conversation in the directory, and once two agents share a worktree that is whichever one spoke last. So wsx tracks each Claude instance's session id itself, via the status hooks it already injects (every hook payload carries the id, and each hook runs with that instance's `$WSX_AGENT_INSTANCE_ID`), and respawns with `--resume <id>`. A `/clear` inside the session moves the recorded id along with it.
+
+Until an instance has reported an id — a workspace created before this was tracked, or an agent that has not started yet — the old behaviour applies: the primary falls back to `--continue`, an added agent starts fresh with its handoff note. If the recorded session file has since been deleted, the same fallback applies rather than a failed launch.
+
+Only Claude reports its session id today. Added agents of the other kinds (`pi`, `hermes`, `codex`, `omp`) still start fresh after a restart; their primaries keep resuming as described in [Coding agents](coding-agents.md).
+
 ### Switching focus between agents
 
 When a workspace has more than one agent, the attached view's bottom row (the one with the pinned-command chips) gains a set of **agent pills**, right-justified ahead of the workspace stats, listing each agent with a single-letter switch key:

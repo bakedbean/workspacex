@@ -695,7 +695,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     // `app::spawn::recorded_resume_id`). Attributed by the
                     // instance id the hook inherited from its agent's env.
                     if let Some(sid) = integration.session_id_from_event(&json) {
-                        if let Some(inst) = resolve_current_instance(&store, ws.id) {
+                        if let Some(inst) = resolve_current_instance(&store, ws.id, kind) {
                             let _ = store.set_instance_agent_session(inst, &sid);
                         }
                     }
@@ -723,7 +723,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         // Same per-instance session capture as `from-hook`
                         // (Codex: the thread id, for `codex resume <id>`).
                         if let Some(sid) = integration.session_id_from_event(&json) {
-                            if let Some(inst) = resolve_current_instance(&store, ws.id) {
+                            if let Some(inst) = resolve_current_instance(&store, ws.id, kind) {
                                 let _ = store.set_instance_agent_session(inst, &sid);
                             }
                         }

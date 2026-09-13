@@ -9,6 +9,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod pi;
 
 use crate::data::store::ReportedState;
 use crate::pty::session::AgentKind;
@@ -59,10 +60,12 @@ impl StatusIntegration for NoopStatus {
 
 static CLAUDE: claude::ClaudeStatus = claude::ClaudeStatus;
 static CODEX: codex::CodexStatus = codex::CodexStatus;
+static PI: pi::PiStatus = pi::PiStatus;
 static NOOP: NoopStatus = NoopStatus;
 
 /// The status integration for an agent kind. Claude (hooks) and Codex (notify)
-/// have implementations; Pi, Hermes and omp are no-ops.
+/// report status; pi reports only its session identity (via the wsx
+/// extension); Hermes and omp are no-ops.
 ///
 /// omp is a no-op by necessity rather than by deferral: its hook capability is
 /// pre/post *tool* hooks only (`{type: "pre"|"post", tool}`), with no
@@ -74,7 +77,8 @@ pub fn for_agent(agent: AgentKind) -> &'static dyn StatusIntegration {
     match agent {
         AgentKind::Claude => &CLAUDE,
         AgentKind::Codex => &CODEX,
-        _ => &NOOP,
+        AgentKind::Pi => &PI,
+        AgentKind::Hermes | AgentKind::Omp => &NOOP,
     }
 }
 

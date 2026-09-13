@@ -71,9 +71,8 @@ fn claude_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
 /// i.e. `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl` exists. The
 /// guard before `--resume <id>`: Claude refuses to start when the id names
 /// nothing, so a recorded id whose file is gone (deleted, or never flushed)
-/// must fall back to the cwd-wide resume instead. No snapshot gate applies —
-/// the id was reported by this workspace's own instance, so it is "ours" by
-/// construction.
+/// spawns fresh instead (`app::spawn`). No snapshot gate applies — the id was
+/// reported by this workspace's own instance, so it is "ours" by construction.
 pub fn claude_session_exists(worktree: &Path, session_id: &str) -> bool {
     if !plausible_session_id(session_id) {
         return false;
@@ -128,7 +127,9 @@ pub fn pi_session_files(worktree: &Path) -> Vec<PiSessionFile> {
             let path = e.path();
             let name = path.file_name()?.to_str()?;
             let stem = name.strip_suffix(".jsonl")?;
-            let (_, id) = stem.rsplit_once('_')?;
+            // `<timestamp>_<id>`: the timestamp never contains `_`, an id
+            // might (user-chosen `--session-id`), so split at the first.
+            let (_, id) = stem.split_once('_')?;
             if !pi_session_id_is_valid(id) {
                 return None;
             }
@@ -142,64 +143,20 @@ pub fn pi_session_files(worktree: &Path) -> Vec<PiSessionFile> {
         .collect()
 }
 
-/// The id of the session `path` was branched from, per its header line's
-/// `parentSession` (a path pi records on `/new` and forks). `None` for a
-/// root session or an unreadable header.
-pub fn pi_parent_session_id(path: &Path) -> Option<String> {
-    use std::io::BufRead;
-    let file = std::fs::File::open(path).ok()?;
-    let mut first = String::new();
-    std::io::BufReader::new(file).read_line(&mut first).ok()?;
-    let header: serde_json::Value = serde_json::from_str(first.trim()).ok()?;
-    let parent = header.get("parentSession")?.as_str()?;
-    let stem = Path::new(parent)
-        .file_name()?
-        .to_str()?
-        .strip_suffix(".jsonl")?;
-    stem.rsplit_once('_').map(|(_, id)| id.to_string())
-}
-
-/// The session a pi instance pinned to `recorded` is in *now*: the newest
-/// file whose `parentSession` chain leads back to `recorded` (or `recorded`
-/// itself). pi has no hook to report a `/new`, but it records the previous
-/// session as the new one's parent, so the lineage is on disk. A session the
-/// user `/resume`d that is unrelated to the pin is not followed — there is
-/// no evidence it is this instance's rather than a peer's.
-pub fn pi_current_session_id(worktree: &Path, recorded: &str) -> Option<String> {
-    let files = pi_session_files(worktree);
-    let parents: std::collections::HashMap<String, Option<String>> = files
-        .iter()
-        .map(|f| (f.id.clone(), pi_parent_session_id(&f.path)))
-        .collect();
-    let descends_from_recorded = |start: &str| {
-        let mut id = start.to_string();
-        // Bounded walk: a parent cycle can't happen on disk, but never trust
-        // a file format with an unbounded loop.
-        for _ in 0..64 {
-            if id == recorded {
-                return true;
-            }
-            match parents.get(&id).and_then(|p| p.clone()) {
-                Some(parent) => id = parent,
-                None => return false,
-            }
-        }
-        false
-    };
-    files
-        .iter()
-        .filter(|f| descends_from_recorded(&f.id))
-        .max_by(|a, b| a.modified.cmp(&b.modified).then_with(|| a.id.cmp(&b.id)))
-        .map(|f| f.id.clone())
-}
-
 /// The newest pi session in `worktree` not in `exclude` — for adopting a
 /// pre-existing conversation as a primary's identity (it was the only pi
 /// agent there before per-instance ids existed). `exclude` carries the ids
-/// other instances already own so a peer's session is never adopted.
+/// other instances already own so a peer's session is never adopted, and
+/// sessions named in the worktree snapshot (a previous occupant of a
+/// recycled path, see `write_worktree_sessions`) are never candidates.
 pub fn newest_pi_session_id(worktree: &Path, exclude: &[String]) -> Option<String> {
+    let snapshot = read_worktree_sessions(worktree);
     pi_session_files(worktree)
         .into_iter()
+        .filter(|f| {
+            let name = f.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            snapshot.as_ref().is_none_or(|s| !s.has_pi(name))
+        })
         .filter(|f| !exclude.iter().any(|x| x == &f.id))
         .max_by(|a, b| a.modified.cmp(&b.modified).then_with(|| a.id.cmp(&b.id)))
         .map(|f| f.id)
@@ -265,38 +222,37 @@ pub fn omp_terminal_id(tty: &Path) -> Option<String> {
 /// The cwd check is not enough on its own: two agents in the *same* worktree
 /// can inherit each other's device numbers across a restart, and a slow
 /// starting omp on a peer's old pts would read as the peer until it wrote its
-/// own crumb. So a crumb older than `terminal_created` — the moment this
-/// terminal came into existence (the PTY's spawn, or the tmux session's
-/// creation) — is ignored too: omp rewrites the file on every session open,
-/// so a crumb this omp wrote is necessarily newer than its terminal.
+/// own crumb. `evidence` says how to tell this terminal's crumb from a
+/// previous occupant's:
+///
+/// - [`CrumbEvidence::Baseline`]: what the crumb looked like the instant the
+///   terminal was created (`omp_crumb_snapshot`, taken by `spawn_session`
+///   before the child runs). A crumb identical to the baseline is the old
+///   occupant's no matter how recent; anything else was written by this omp,
+///   which rewrites the file on every session open. Exact, no clock involved.
+/// - [`CrumbEvidence::NotBefore`]: for a terminal wsx did not create (a tmux
+///   pane), the tmux session's creation time; a crumb older than that, with
+///   a second of slack for coarse file clocks, is the old occupant's.
 ///
 /// Returns the session file path as written, whether or not it exists yet —
 /// a `fresh` crumb names a file omp will create on first output. Existence is
 /// the respawn path's concern (`omp_session_exists`).
-/// See the mtime comparison in `omp_breadcrumb_session_file`.
-const STALE_CRUMB_SLACK: std::time::Duration = std::time::Duration::from_secs(2);
-
 pub fn omp_breadcrumb_session_file(
     terminal_id: &str,
     worktree: &Path,
-    terminal_created: std::time::SystemTime,
+    evidence: CrumbEvidence<'_>,
 ) -> Option<std::path::PathBuf> {
-    if terminal_id.is_empty() || terminal_id.contains(['/', '\\']) {
-        return None;
+    let current = omp_crumb_snapshot(terminal_id)?;
+    match evidence {
+        CrumbEvidence::Baseline(Some(base)) if *base == current => return None,
+        CrumbEvidence::Baseline(_) => {}
+        CrumbEvidence::NotBefore(created) => {
+            if current.modified + STALE_CRUMB_SLACK < created {
+                return None;
+            }
+        }
     }
-    let crumb = dirs::home_dir()?
-        .join(".omp/agent/terminal-sessions")
-        .join(terminal_id);
-    // Slack for clock granularity: file mtimes come from the kernel's coarse
-    // clock and can trail `SystemTime::now()` by a tick, so a crumb written
-    // right after spawn may stamp fractionally "before" it. A previous
-    // occupant's crumb predates the terminal by far more than this.
-    let written = std::fs::metadata(&crumb).ok()?.modified().ok()?;
-    if written + STALE_CRUMB_SLACK < terminal_created {
-        return None;
-    }
-    let body = std::fs::read_to_string(crumb).ok()?;
-    let mut lines = body.lines();
+    let mut lines = current.body.lines();
     let cwd = Path::new(lines.next()?.trim());
     let file = lines.next()?.trim();
     if file.is_empty() {
@@ -308,6 +264,44 @@ pub fn omp_breadcrumb_session_file(
         _ => false,
     };
     same_dir.then(|| std::path::PathBuf::from(file))
+}
+
+/// How `omp_breadcrumb_session_file` separates this terminal's crumb from a
+/// previous occupant's. See there.
+#[derive(Debug, Clone, Copy)]
+pub enum CrumbEvidence<'a> {
+    /// The crumb as it was when the terminal was created; `None` = absent.
+    Baseline(Option<&'a OmpCrumbSnapshot>),
+    /// The terminal's creation time; older crumbs are not this terminal's.
+    NotBefore(std::time::SystemTime),
+}
+
+/// Slack for `CrumbEvidence::NotBefore`: file mtimes come from the kernel's
+/// coarse clock and some filesystems truncate to whole seconds, so a crumb
+/// written right after creation may stamp fractionally before it.
+const STALE_CRUMB_SLACK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// An omp terminal breadcrumb as read at one moment: its mtime and body.
+/// Two snapshots compare equal only if the file was not rewritten between
+/// them (a rewrite with identical content still bumps the mtime).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OmpCrumbSnapshot {
+    pub modified: std::time::SystemTime,
+    pub body: String,
+}
+
+/// omp's breadcrumb for `terminal_id` right now, or `None` if there is none
+/// (or the id is not a plausible file name).
+pub fn omp_crumb_snapshot(terminal_id: &str) -> Option<OmpCrumbSnapshot> {
+    if terminal_id.is_empty() || terminal_id.contains(['/', '\\']) {
+        return None;
+    }
+    let crumb = dirs::home_dir()?
+        .join(".omp/agent/terminal-sessions")
+        .join(terminal_id);
+    let modified = std::fs::metadata(&crumb).ok()?.modified().ok()?;
+    let body = std::fs::read_to_string(crumb).ok()?;
+    Some(OmpCrumbSnapshot { modified, body })
 }
 
 /// True if `session_file` — the absolute path an omp breadcrumb named — is
@@ -785,34 +779,17 @@ mod tests {
         assert!(!pi_session_exists(work.path(), ""));
     }
 
-    /// Write a pi session file with the given id, optional parent id, and
-    /// mtime `secs` after the epoch.
-    fn seed_pi_session(
-        home: &std::path::Path,
-        worktree: &std::path::Path,
-        id: &str,
-        parent: Option<&str>,
-        secs: u64,
-    ) {
+    /// Write a pi session file with the given id and mtime `secs` after the
+    /// epoch.
+    fn seed_pi_session(home: &std::path::Path, worktree: &std::path::Path, id: &str, secs: u64) {
         let abs = std::fs::canonicalize(worktree).unwrap();
         let encoded = abs.to_string_lossy().replace('/', "-");
         let dir = home
             .join(".pi/agent/sessions")
             .join(format!("--{encoded}--"));
         std::fs::create_dir_all(&dir).unwrap();
-        let header = match parent {
-            Some(p) => format!(
-                r#"{{"type":"session","version":3,"id":"{id}","cwd":"{}","parentSession":"{}"}}"#,
-                abs.display(),
-                dir.join(format!("2026-01-01T00-00-00_{p}.jsonl")).display()
-            ),
-            None => format!(
-                r#"{{"type":"session","version":3,"id":"{id}","cwd":"{}"}}"#,
-                abs.display()
-            ),
-        };
         let path = dir.join(format!("2026-01-01T00-00-{secs:02}_{id}.jsonl"));
-        std::fs::write(&path, format!("{header}\n")).unwrap();
+        std::fs::write(&path, "{}\n").unwrap();
         std::fs::File::options()
             .write(true)
             .open(&path)
@@ -822,35 +799,30 @@ mod tests {
     }
 
     #[test]
-    fn pi_current_session_follows_the_new_chain_but_not_a_stranger() {
+    fn newest_pi_session_skips_ids_other_instances_own() {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
-        // pinned -> a (/new) -> b (/new); c is an unrelated, newer session.
-        seed_pi_session(home.path(), work.path(), "pinned0000", None, 10);
-        seed_pi_session(home.path(), work.path(), "aaaa0000", Some("pinned0000"), 20);
-        seed_pi_session(home.path(), work.path(), "bbbb0000", Some("aaaa0000"), 30);
-        seed_pi_session(home.path(), work.path(), "cccc0000", None, 40);
+        seed_pi_session(home.path(), work.path(), "older0000", 10);
+        seed_pi_session(home.path(), work.path(), "peers0000", 40);
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
         assert_eq!(
-            pi_current_session_id(work.path(), "pinned0000").as_deref(),
-            Some("bbbb0000")
-        );
-        assert_eq!(
-            pi_current_session_id(work.path(), "cccc0000").as_deref(),
-            Some("cccc0000"),
-            "a root session is its own current"
-        );
-        assert_eq!(pi_current_session_id(work.path(), "nope"), None);
-        assert_eq!(
-            newest_pi_session_id(work.path(), &["cccc0000".to_string()]).as_deref(),
-            Some("bbbb0000"),
-            "adoption skips ids other instances own"
+            newest_pi_session_id(work.path(), &["peers0000".to_string()]).as_deref(),
+            Some("older0000")
         );
         assert_eq!(
             newest_pi_session_id(work.path(), &[]).as_deref(),
-            Some("cccc0000")
+            Some("peers0000")
+        );
+        let none = tempfile::TempDir::new().unwrap();
+        assert_eq!(newest_pi_session_id(none.path(), &[]), None);
+        // A previous occupant's session, named in the worktree snapshot, is
+        // never adopted — even when it is the newest.
+        snapshot(work.path(), &["pi:2026-01-01T00-00-40_peers0000.jsonl"]);
+        assert_eq!(
+            newest_pi_session_id(work.path(), &[]).as_deref(),
+            Some("older0000")
         );
     }
 
@@ -939,33 +911,80 @@ mod tests {
 
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
-        let epoch = std::time::SystemTime::UNIX_EPOCH;
+        let any = CrumbEvidence::Baseline(None);
         assert_eq!(
-            omp_breadcrumb_session_file("pts-7", work.path(), epoch).as_deref(),
+            omp_breadcrumb_session_file("pts-7", work.path(), any).as_deref(),
             Some(file.as_path())
         );
         assert_eq!(
-            omp_breadcrumb_session_file("pts-8", work.path(), epoch).as_deref(),
+            omp_breadcrumb_session_file("pts-8", work.path(), any).as_deref(),
             Some(file.as_path()),
             "a fresh crumb still names the file omp will write"
         );
         assert_eq!(
-            omp_breadcrumb_session_file("pts-7", other.path(), epoch),
+            omp_breadcrumb_session_file("pts-7", other.path(), any),
             None,
             "a recycled pts carrying another directory's crumb is not ours"
         );
+        assert_eq!(omp_breadcrumb_session_file("pts-9", work.path(), any), None);
         assert_eq!(
-            omp_breadcrumb_session_file("pts-9", work.path(), epoch),
+            omp_breadcrumb_session_file("pts-404", work.path(), any),
             None
         );
         assert_eq!(
-            omp_breadcrumb_session_file("pts-404", work.path(), epoch),
+            omp_breadcrumb_session_file("../etc", work.path(), any),
             None
+        );
+    }
+
+    #[test]
+    fn omp_breadcrumb_identical_to_the_creation_baseline_is_a_previous_occupants() {
+        // Same worktree, same device number, crumb written a moment before
+        // this terminal existed — the case a time window cannot settle.
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let abs = std::fs::canonicalize(work.path()).unwrap();
+        write_omp_crumb(
+            home.path(),
+            "pts-3",
+            &format!(
+                "{}\n/home/x/.omp/agent/sessions/-w/peer.jsonl\n",
+                abs.display()
+            ),
+        );
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        let baseline = omp_crumb_snapshot("pts-3").expect("crumb present at creation");
+        assert_eq!(
+            omp_breadcrumb_session_file(
+                "pts-3",
+                work.path(),
+                CrumbEvidence::Baseline(Some(&baseline))
+            ),
+            None,
+            "unchanged since the terminal was created: not ours"
+        );
+        // This omp opens its own session: the crumb is rewritten.
+        write_omp_crumb(
+            home.path(),
+            "pts-3",
+            &format!(
+                "{}\n/home/x/.omp/agent/sessions/-w/mine.jsonl\n",
+                abs.display()
+            ),
+        );
+        let got = omp_breadcrumb_session_file(
+            "pts-3",
+            work.path(),
+            CrumbEvidence::Baseline(Some(&baseline)),
         );
         assert_eq!(
-            omp_breadcrumb_session_file("../etc", work.path(), epoch),
-            None
+            got.as_deref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str()),
+            Some("mine.jsonl")
         );
+        assert_eq!(omp_crumb_snapshot("pts-nope"), None);
     }
 
     #[test]
@@ -995,8 +1014,9 @@ mod tests {
         let mut env = EnvGuard::new();
         env.set("HOME", home.path());
         let created = old + std::time::Duration::from_secs(60);
+        let not_before = CrumbEvidence::NotBefore(created);
         assert_eq!(
-            omp_breadcrumb_session_file("pts-3", work.path(), created),
+            omp_breadcrumb_session_file("pts-3", work.path(), not_before),
             None
         );
         // omp on this terminal rewrites the crumb: now it is ours.
@@ -1006,7 +1026,15 @@ mod tests {
             .unwrap()
             .set_modified(created + std::time::Duration::from_secs(1))
             .unwrap();
-        assert!(omp_breadcrumb_session_file("pts-3", work.path(), created).is_some());
+        assert!(omp_breadcrumb_session_file("pts-3", work.path(), not_before).is_some());
+        // Inside the slack (coarse clock) still counts as ours.
+        std::fs::File::options()
+            .write(true)
+            .open(&crumb)
+            .unwrap()
+            .set_modified(created - std::time::Duration::from_millis(500))
+            .unwrap();
+        assert!(omp_breadcrumb_session_file("pts-3", work.path(), not_before).is_some());
     }
 
     #[test]

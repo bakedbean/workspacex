@@ -21,9 +21,9 @@ pub use crate::pty::agent_kind::AgentKind;
 #[cfg(test)]
 pub use crate::pty::session_detect::pi_session_dir_for_test;
 pub use crate::pty::session_detect::{
-    claude_session_exists, codex_session_exists, newest_pi_session_id, omp_breadcrumb_session_file,
-    omp_session_exists, omp_terminal_id, pi_current_session_id, pi_session_exists,
-    pi_session_id_is_valid,
+    CrumbEvidence, OmpCrumbSnapshot, claude_session_exists, codex_session_exists,
+    newest_pi_session_id, omp_breadcrumb_session_file, omp_crumb_snapshot, omp_session_exists,
+    omp_terminal_id, pi_session_exists, pi_session_id_is_valid,
 };
 pub use crate::pty::session_detect::{
     has_prior_codex_session, has_prior_hermes_session, has_prior_pi_session, has_prior_session,
@@ -153,9 +153,14 @@ pub struct Session {
     /// platform reports one. This is the terminal the agent sees as its
     /// stdin, so it is also the key under which omp files its per-terminal
     /// session breadcrumb — see `app::session_harvest`. For a tmux-wrapped
-    /// session it names the attach client's terminal, not the agent's pane,
-    /// so consumers must skip those.
+    /// session it names the attach client's terminal, not the agent's pane;
+    /// `agent_terminal` resolves the pane instead, so go through that.
     pub(crate) tty_name: Option<std::path::PathBuf>,
+    /// For a direct omp session: what its terminal's breadcrumb looked like
+    /// the instant the PTY was created, before omp could have written one.
+    /// `None` when no crumb existed then (or for other kinds). A crumb that
+    /// still matches this is a previous occupant's, however recent.
+    pub(crate) crumb_baseline: Mutex<Option<OmpCrumbSnapshot>>,
     /// Wall-clock twin of `spawned_at`, for comparing against file mtimes
     /// (an `Instant` cannot be).
     pub(crate) spawned_at_system: std::time::SystemTime,
@@ -625,6 +630,7 @@ impl Session {
             spawned_at: std::time::Instant::now(),
             spawned_at_system: std::time::SystemTime::now(),
             pane_terminal: Mutex::new(None),
+            crumb_baseline: Mutex::new(None),
             tty_name,
             parser: Arc::new(Mutex::new(Parser::new(24, 80, 1000))),
             writer: tx,
@@ -785,7 +791,10 @@ pub fn spawn_session(
 ) -> Result<Session> {
     let mut child_cmd = match agent {
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
-        AgentKind::Pi => build_pi_command(cwd, &mode, remote),
+        AgentKind::Pi => {
+            let ext = crate::agent::pi_extension::ensure_extension_default();
+            build_pi_command(cwd, &mode, remote, ext.as_deref())
+        }
         AgentKind::Hermes => {
             prepare_hermes_workspace(cwd, &mode);
             build_hermes_command(cwd, &mode, remote)
@@ -861,6 +870,16 @@ pub fn spawn_command_session(
     })?;
     let spawned_at = std::time::Instant::now();
     let spawned_at_system = std::time::SystemTime::now();
+    let tty_name = pair.master.tty_name();
+    // Snapshot omp's breadcrumb for this device NOW, before the child has
+    // run: anything still matching it later is a previous occupant's, and
+    // anything different was written by this omp (see `app::session_harvest`).
+    let crumb_baseline = match (agent, tmux, tty_name.as_deref()) {
+        (AgentKind::Omp, None, Some(tty)) => {
+            omp_terminal_id(tty).and_then(|id| omp_crumb_snapshot(&id))
+        }
+        _ => None,
+    };
     drop(pair.slave);
 
     let killer = child.clone_killer();
@@ -935,12 +954,12 @@ pub fn spawn_command_session(
     });
 
     let prompt = Arc::new(Mutex::new(PromptCapture::default()));
-    let tty_name = pair.master.tty_name();
 
     Ok(Session {
         spawned_at,
         spawned_at_system,
         pane_terminal: Mutex::new(None),
+        crumb_baseline: Mutex::new(crumb_baseline),
         tty_name,
         parser,
         writer: tx,

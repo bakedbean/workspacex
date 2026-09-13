@@ -48,18 +48,22 @@ pub(in crate::cli) fn resolve_current_workspace(
 
 /// The agent instance the current `wsx` invocation runs inside, if any:
 /// `WSX_AGENT_INSTANCE_ID` (set when wsx spawns an agent, inherited by the
-/// agent's hooks) parsed and checked to belong to `ws`. `None` when unset,
-/// unparseable, unknown, or attached to a different workspace — the caller
+/// agent's hooks) parsed and checked to belong to `ws` and be of `kind`.
+/// `None` when unset, unparseable, unknown, of another kind, or attached to
+/// a different workspace — the caller
 /// then has no instance to attribute anything to and must not guess (the
 /// primary would be the wrong answer for a peer's hook).
 pub(in crate::cli) fn resolve_current_instance(
     store: &crate::data::store::Store,
     ws: crate::data::store::WorkspaceId,
+    kind: crate::pty::session::AgentKind,
 ) -> Option<crate::data::store::AgentInstanceId> {
     let raw = std::env::var("WSX_AGENT_INSTANCE_ID").ok()?;
     let id = crate::data::store::AgentInstanceId(raw.trim().parse::<i64>().ok()?);
     let inst = store.workspace_agents_by_id(id).ok().flatten()?;
-    (inst.workspace_id == ws).then_some(id)
+    // `kind` is the harness the hook says it speaks for; a late event from a
+    // harness the instance was switched away from must not relabel it.
+    (inst.workspace_id == ws && inst.agent == kind).then_some(id)
 }
 
 /// Effective yolo + agent for a new workspace: explicit flags win, then the

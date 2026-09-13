@@ -231,8 +231,13 @@ pub(crate) fn build_spawn_info(
         && primary
             .as_ref()
             .is_some_and(|inst| inst.agent_session_id.is_some());
+    // pi never takes the cwd-wide `--continue`: every pi instance is pinned
+    // or adopted by id, and when neither yields an eligible session (only
+    // peers' sessions on disk, say) the honest answer is a fresh pin — not
+    // whichever pi in the worktree spoke last.
+    let cwd_wide_allowed = !recorded_but_missing && agent != crate::pty::session::AgentKind::Pi;
     let mode = if resume_session_id.is_some()
-        || (!recorded_but_missing && crate::pty::session::has_prior_session_for(&worktree, agent))
+        || (cwd_wide_allowed && crate::pty::session::has_prior_session_for(&worktree, agent))
     {
         crate::pty::session::SpawnMode::Continue {
             custom_instructions: custom,
@@ -759,6 +764,49 @@ mod added_spawn_tests {
             Some("legacy0000000000000000000000000"),
             "adoption is persisted"
         );
+    }
+
+    #[test]
+    fn legacy_pi_primary_with_only_peer_sessions_spawns_fresh_pinned() {
+        // Nothing eligible to adopt: the only session on disk is the peer's.
+        // The old cwd-wide --continue would have reopened exactly that peer.
+        let (app, primary, added, _sid, home, wt, _env) = app_with_claude_session(AgentKind::Pi);
+        let ws = app.workspaces.first().unwrap().1.clone();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspace_agents SET agent = 'pi', ordinal = 0 WHERE id = ?1",
+                [primary.id.0],
+            )
+            .unwrap();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET agent = 'pi' WHERE id = ?1",
+                [ws.id.0],
+            )
+            .unwrap();
+        let mut app = app;
+        app.refresh().unwrap();
+        seed_pi_file(home.path(), wt.path(), "peer000000000000000000000000000");
+        app.store
+            .set_instance_agent_session(added.id, "peer000000000000000000000000000")
+            .unwrap();
+
+        let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws.id).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => {
+                let pin = pin_session_id.expect("a new pin");
+                assert_ne!(pin, "peer000000000000000000000000000");
+                let stored = app
+                    .store
+                    .workspace_agents_by_id(primary.id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stored.agent_session_id.as_deref(), Some(pin.as_str()));
+            }
+            other => panic!("expected Fresh with a new pin, got {other:?}"),
+        }
     }
 
     #[test]

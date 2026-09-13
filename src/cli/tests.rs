@@ -1927,22 +1927,37 @@ fn resolve_current_instance_requires_env_id_in_the_same_workspace() {
     let mut env = EnvGuard::new();
 
     env.remove("WSX_AGENT_INSTANCE_ID");
-    assert_eq!(resolve::resolve_current_instance(&store, ws_a), None);
+    assert_eq!(
+        resolve::resolve_current_instance(&store, ws_a, AgentKind::Claude),
+        None
+    );
 
     env.set("WSX_AGENT_INSTANCE_ID", peer.id.0.to_string());
     assert_eq!(
-        resolve::resolve_current_instance(&store, ws_a),
+        resolve::resolve_current_instance(&store, ws_a, AgentKind::Claude),
         Some(peer.id),
         "a peer's hook attributes to the peer, never the primary"
     );
     assert_eq!(
-        resolve::resolve_current_instance(&store, ws_b),
+        resolve::resolve_current_instance(&store, ws_b, AgentKind::Claude),
         None,
         "an instance attached elsewhere is not this workspace's"
     );
 
+    assert_eq!(
+        resolve::resolve_current_instance(&store, ws_a, AgentKind::Codex),
+        None,
+        "a hook speaking for another harness is not this instance's"
+    );
+
     env.set("WSX_AGENT_INSTANCE_ID", "garbage");
-    assert_eq!(resolve::resolve_current_instance(&store, ws_a), None);
+    assert_eq!(
+        resolve::resolve_current_instance(&store, ws_a, AgentKind::Claude),
+        None
+    );
     env.set("WSX_AGENT_INSTANCE_ID", "999999");
-    assert_eq!(resolve::resolve_current_instance(&store, ws_a), None);
+    assert_eq!(
+        resolve::resolve_current_instance(&store, ws_a, AgentKind::Claude),
+        None
+    );
 }

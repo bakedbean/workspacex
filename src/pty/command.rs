@@ -201,6 +201,8 @@ fn render_rename_system_prompt(
 /// points to) inside `cwd`. Inherits the current process env.
 ///
 /// Maps wsx spawn modes to pi CLI flags:
+/// - `session_extension` (any mode) → `-e <file>` plus `$WSX_BIN`, so pi
+///   reports its session id back (see `agent::pi_extension`)
 /// - `Fresh` with `rename_ctx` → system prompt for auto-rename
 /// - `Fresh` with `pin_session_id` → `--session-id <id>`; pi creates the
 ///   session under that id (printing a one-line "creating a new session with
@@ -218,6 +220,7 @@ pub fn build_pi_command(
     cwd: &Path,
     mode: &SpawnMode,
     _remote: crate::agent::remote_control::RemoteOpts,
+    session_extension: Option<&Path>,
 ) -> CommandBuilder {
     let bin = std::env::var("WSX_PI_BIN").unwrap_or_else(|_| "pi".to_string());
     let mut cmd = CommandBuilder::new(bin);
@@ -228,6 +231,15 @@ pub fn build_pi_command(
     // Suppress pi's startup npm chatter and update checks.
     cmd.env("PI_OFFLINE", "1");
     cmd.env("npm_config_loglevel", "error");
+
+    // Session identity reporting: the wsx extension (`agent::pi_extension`)
+    // calls back into this very binary on every session start.
+    if let Some(ext) = session_extension {
+        cmd.arg("-e");
+        cmd.arg(ext);
+        let wsx_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
+        cmd.env(crate::agent::pi_extension::WSX_BIN_ENV, wsx_bin);
+    }
 
     let (doctrine, rename_prompt, custom, resume, session_id) = match mode {
         SpawnMode::Continue {
@@ -1365,11 +1377,51 @@ mod tests {
             Path::new("."),
             mode,
             crate::agent::remote_control::RemoteOpts::disabled(),
+            None,
         );
         cmd.get_argv()
             .iter()
             .map(|s| s.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn pi_loads_the_session_extension_and_passes_the_wsx_binary() {
+        let ext = std::path::PathBuf::from("/state/wsx/pi-session-report.ts");
+        let cmd = build_pi_command(
+            Path::new("."),
+            &SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+                pin_session_id: None,
+            },
+            crate::agent::remote_control::RemoteOpts::disabled(),
+            Some(&ext),
+        );
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        let i = argv.iter().position(|a| a == "-e").expect("-e");
+        assert_eq!(argv[i + 1], ext.to_string_lossy());
+        let has_bin = cmd
+            .iter_extra_env_as_str()
+            .any(|(k, v)| k == crate::agent::pi_extension::WSX_BIN_ENV && !v.is_empty());
+        assert!(has_bin, "WSX_BIN must reach the extension");
+        // Without an extension neither appears.
+        let argv = pi_argv(&SpawnMode::Fresh {
+            rename_ctx: None,
+            custom_instructions: None,
+            doctrine: None,
+            additional_dirs: vec![],
+            yolo: false,
+            pin_session_id: None,
+        });
+        assert!(!argv.iter().any(|a| a == "-e"));
     }
 
     #[test]
@@ -1457,6 +1509,7 @@ mod tests {
                 &cwd,
                 mode,
                 crate::agent::remote_control::RemoteOpts::disabled(),
+                None,
             );
             cmd.get_argv()
                 .iter()
@@ -2378,6 +2431,7 @@ mod tests {
             &cwd,
             &mode,
             crate::agent::remote_control::RemoteOpts::disabled(),
+            None,
         );
         let argv = cmd.get_argv();
         let idx = argv

@@ -685,12 +685,25 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         Some(a) => crate::pty::session::AgentKind::from_str_or_default(Some(a)),
                         None => ws.agent,
                     };
-                    if let Some(state) = crate::agent::status::for_agent(kind).parse_event(&json) {
+                    let integration = crate::agent::status::for_agent(kind);
+                    if let Some(state) = integration.parse_event(&json) {
                         let _ = store.apply_hook_status(ws.id, state, "hook");
+                    }
+                    // Remember which harness session this instance is in, so a
+                    // respawn resumes that conversation rather than whichever
+                    // one in the worktree was most recent (see
+                    // `app::spawn::recorded_resume_id`). Attributed by the
+                    // instance id the hook inherited from its agent's env.
+                    if let Some(sid) = integration.session_id_from_event(&json) {
+                        if let Some(inst) = resolve_current_instance(&store, ws.id) {
+                            let _ = store.set_instance_agent_session(inst, &sid);
+                        }
                     }
                 }
             }
             // Always succeed: a status hook must never block or fail the turn.
+            // Nothing is printed: a `SessionStart` hook's stdout would be
+            // injected into the agent's conversation as context.
         }
         CliAction::StatusFromNotify { agent, payload } => {
             // Codex `notify` passes JSON as the final argv (not stdin). Tolerate

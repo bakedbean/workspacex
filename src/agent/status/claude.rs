@@ -67,6 +67,22 @@ impl StatusIntegration for ClaudeStatus {
         }
     }
 
+    /// Every Claude hook payload carries `session_id`, but only the
+    /// main-conversation lifecycle events are trusted here: `SessionStart`
+    /// (fires on startup, `--resume`, `/clear` and compaction — so the id is
+    /// captured before the user types, and re-captured when `/clear` moves
+    /// the instance to a new conversation), `UserPromptSubmit` and `Stop`.
+    /// `PreToolUse`/`Notification` also fire inside subagents and are left
+    /// out so a subagent's payload can never relabel its parent.
+    fn session_id_from_event(&self, json: &serde_json::Value) -> Option<String> {
+        let event = json.get("hook_event_name")?.as_str()?;
+        if !matches!(event, "SessionStart" | "UserPromptSubmit" | "Stop") {
+            return None;
+        }
+        let id = json.get("session_id")?.as_str()?.trim();
+        (!id.is_empty()).then(|| id.to_string())
+    }
+
     fn spawn_wiring(&self, wsx_bin: &Path, fast_mode: bool) -> Option<SpawnWiring> {
         Some(SpawnWiring {
             args: vec!["--settings".to_string(), settings_json(fast_mode, wsx_bin)],
@@ -77,6 +93,10 @@ impl StatusIntegration for ClaudeStatus {
 /// Build the `--settings` JSON string for a Claude spawn. Always includes the
 /// status hooks (each calling `wsx status from-hook --agent claude`); includes
 /// `"fastMode": true` only when `fast_mode` is set.
+///
+/// `SessionStart` is wired purely for session-id capture (it maps to no
+/// status); it must stay silent on stdout, since Claude injects a
+/// `SessionStart` hook's stdout into the conversation as context.
 fn settings_json(fast_mode: bool, wsx_bin: &Path) -> String {
     let cmd = format!("{} status from-hook --agent claude", shell_quote(wsx_bin));
     let entry = |ev: &str| {
@@ -85,11 +105,16 @@ fn settings_json(fast_mode: bool, wsx_bin: &Path) -> String {
             serde_json::json!([{ "hooks": [{ "type": "command", "command": cmd }] }]),
         )
     };
-    let hooks: serde_json::Map<String, serde_json::Value> =
-        ["UserPromptSubmit", "PreToolUse", "Notification", "Stop"]
-            .into_iter()
-            .map(entry)
-            .collect();
+    let hooks: serde_json::Map<String, serde_json::Value> = [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "Notification",
+        "Stop",
+    ]
+    .into_iter()
+    .map(entry)
+    .collect();
 
     let mut root = serde_json::Map::new();
     if fast_mode {
@@ -228,6 +253,43 @@ mod tests {
             .unwrap();
         assert!(cmd.contains("/usr/local/bin/wsx"));
         assert!(cmd.ends_with("status from-hook --agent claude"));
+    }
+
+    #[test]
+    fn spawn_wiring_hooks_session_start_for_id_capture() {
+        let w = ClaudeStatus
+            .spawn_wiring(Path::new("/usr/local/bin/wsx"), false)
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&w.args[1]).unwrap();
+        let cmd = v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(cmd.ends_with("status from-hook --agent claude"));
+    }
+
+    #[test]
+    fn session_id_captured_from_main_lifecycle_events_only() {
+        let sid = |ev: &str| {
+            ClaudeStatus.session_id_from_event(
+                &serde_json::json!({"hook_event_name": ev, "session_id": "abc-123"}),
+            )
+        };
+        for ev in ["SessionStart", "UserPromptSubmit", "Stop"] {
+            assert_eq!(sid(ev).as_deref(), Some("abc-123"), "{ev}");
+        }
+        for ev in ["PreToolUse", "Notification", "SubagentStop", "PostToolUse"] {
+            assert_eq!(sid(ev), None, "{ev} may come from a subagent");
+        }
+        assert_eq!(
+            ClaudeStatus.session_id_from_event(
+                &serde_json::json!({"hook_event_name": "Stop", "session_id": "  "})
+            ),
+            None
+        );
+        assert_eq!(
+            ClaudeStatus.session_id_from_event(&serde_json::json!({"hook_event_name": "Stop"})),
+            None
+        );
     }
 
     #[test]

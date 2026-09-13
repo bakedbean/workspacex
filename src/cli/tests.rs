@@ -1894,3 +1894,55 @@ fn menubar_group_help_renders() {
     assert!(h.contains("plugin"));
     assert!(h.contains("copy-path"));
 }
+
+#[test]
+fn resolve_current_instance_requires_env_id_in_the_same_workspace() {
+    use crate::data::store::{NewWorkspace, Store};
+    use crate::pty::session::AgentKind;
+    use crate::test_support::EnvGuard;
+
+    let store = Store::open_in_memory().unwrap();
+    let repo = store
+        .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+        .unwrap();
+    let mk = |name: &str| {
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name,
+                branch: &format!("wsx/{name}"),
+                worktree_path: std::path::Path::new("/tmp/r").join(name).as_path(),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
+        ws
+    };
+    let ws_a = mk("a");
+    let ws_b = mk("b");
+    let peer = store.add_workspace_agent(ws_a, AgentKind::Claude).unwrap();
+
+    let mut env = EnvGuard::new();
+
+    env.remove("WSX_AGENT_INSTANCE_ID");
+    assert_eq!(resolve::resolve_current_instance(&store, ws_a), None);
+
+    env.set("WSX_AGENT_INSTANCE_ID", peer.id.0.to_string());
+    assert_eq!(
+        resolve::resolve_current_instance(&store, ws_a),
+        Some(peer.id),
+        "a peer's hook attributes to the peer, never the primary"
+    );
+    assert_eq!(
+        resolve::resolve_current_instance(&store, ws_b),
+        None,
+        "an instance attached elsewhere is not this workspace's"
+    );
+
+    env.set("WSX_AGENT_INSTANCE_ID", "garbage");
+    assert_eq!(resolve::resolve_current_instance(&store, ws_a), None);
+    env.set("WSX_AGENT_INSTANCE_ID", "999999");
+    assert_eq!(resolve::resolve_current_instance(&store, ws_a), None);
+}

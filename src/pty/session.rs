@@ -18,7 +18,9 @@ pub use crate::pty::agent_kind::AgentKind;
 // `session_detect`. Re-export the public surface so external callers
 // (`crate::pty::session::has_prior_session_for`, …) and this file's spawn /
 // command builders keep resolving the names unqualified.
-pub use crate::pty::session_detect::claude_session_exists;
+pub use crate::pty::session_detect::{
+    claude_session_exists, codex_session_exists, pi_session_exists,
+};
 pub use crate::pty::session_detect::{
     has_prior_codex_session, has_prior_hermes_session, has_prior_pi_session, has_prior_session,
     has_prior_session_for, latest_hermes_session_id_default, write_worktree_sessions,

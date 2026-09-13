@@ -716,10 +716,16 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                             Some(a) => crate::pty::session::AgentKind::from_str_or_default(Some(a)),
                             None => ws.agent,
                         };
-                        if let Some(state) =
-                            crate::agent::status::for_agent(kind).parse_event(&json)
-                        {
+                        let integration = crate::agent::status::for_agent(kind);
+                        if let Some(state) = integration.parse_event(&json) {
                             let _ = store.apply_hook_status(ws.id, state, "notify");
+                        }
+                        // Same per-instance session capture as `from-hook`
+                        // (Codex: the thread id, for `codex resume <id>`).
+                        if let Some(sid) = integration.session_id_from_event(&json) {
+                            if let Some(inst) = resolve_current_instance(&store, ws.id) {
+                                let _ = store.set_instance_agent_session(inst, &sid);
+                            }
                         }
                     }
                 }

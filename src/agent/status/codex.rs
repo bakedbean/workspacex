@@ -34,6 +34,18 @@ impl StatusIntegration for CodexStatus {
         })
     }
 
+    /// The notify payload carries the thread id of the conversation that just
+    /// finished a turn — exactly the argument `codex resume <id>` wants. Only
+    /// `agent-turn-complete` is emitted, and it is never fired for subagents,
+    /// so every payload names the instance's own main thread.
+    fn session_id_from_event(&self, json: &serde_json::Value) -> Option<String> {
+        if json.get("type").and_then(|v| v.as_str()) != Some("agent-turn-complete") {
+            return None;
+        }
+        let id = json.get("thread-id")?.as_str()?.trim();
+        (!id.is_empty()).then(|| id.to_string())
+    }
+
     // `_fast_mode` is unused: Codex has no fast-mode equivalent (that flag is a
     // Claude `--settings` concept). The `-c notify` wiring is the same regardless.
     fn spawn_wiring(&self, wsx_bin: &Path, _fast_mode: bool) -> Option<SpawnWiring> {
@@ -61,6 +73,28 @@ fn toml_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thread_id_captured_from_turn_complete_only() {
+        let sid = |json: serde_json::Value| CodexStatus.session_id_from_event(&json);
+        assert_eq!(
+            sid(serde_json::json!({"type": "agent-turn-complete", "thread-id": "01a0-abc", "turn-id": "t1"}))
+                .as_deref(),
+            Some("01a0-abc")
+        );
+        assert_eq!(
+            sid(serde_json::json!({"type": "something-else", "thread-id": "01a0-abc"})),
+            None
+        );
+        assert_eq!(
+            sid(serde_json::json!({"type": "agent-turn-complete"})),
+            None
+        );
+        assert_eq!(
+            sid(serde_json::json!({"type": "agent-turn-complete", "thread-id": " "})),
+            None
+        );
+    }
 
     fn ev(json: serde_json::Value) -> Option<ReportedState> {
         CodexStatus.parse_event(&json)

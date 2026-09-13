@@ -75,12 +75,68 @@ fn claude_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
 /// the id was reported by this workspace's own instance, so it is "ours" by
 /// construction.
 pub fn claude_session_exists(worktree: &Path, session_id: &str) -> bool {
-    if session_id.is_empty() || session_id.contains(['/', '\\']) {
+    if !plausible_session_id(session_id) {
         return false;
     }
     claude_session_dir(worktree)
         .map(|d| d.join(format!("{session_id}.jsonl")).is_file())
         .unwrap_or(false)
+}
+
+/// True if pi has a persisted session `session_id` for `worktree` — a
+/// `<timestamp>_<session_id>.jsonl` in its cwd-keyed session directory. Pi's
+/// `--session-id` creates the session when this is false, so the check only
+/// decides Fresh-vs-Continue for the spawn (handoff note, model flags), not
+/// whether the flag is safe to pass.
+pub fn pi_session_exists(worktree: &Path, session_id: &str) -> bool {
+    if !plausible_session_id(session_id) {
+        return false;
+    }
+    let Some(dir) = pi_session_dir(worktree) else {
+        return false;
+    };
+    let suffix = format!("_{session_id}.jsonl");
+    jsonl_names(&dir).iter().any(|name| name.ends_with(&suffix))
+}
+
+/// True if Codex has a rollout for thread `session_id` on disk — a
+/// `rollout-<timestamp>-<session_id>.jsonl` anywhere under
+/// `~/.codex/sessions/YYYY/MM/DD/`. Codex indexes threads globally (not per
+/// cwd), so no worktree argument: `codex resume <id>` reopens the thread with
+/// its own recorded cwd. The guard matters for the same reason as Claude's:
+/// `codex resume` on an unknown id fails the launch.
+pub fn codex_session_exists(session_id: &str) -> bool {
+    if !plausible_session_id(session_id) {
+        return false;
+    }
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let root = home.join(".codex/sessions");
+    let suffix = format!("-{session_id}.jsonl");
+    // The tree is a fixed three levels deep; walk it without a dependency.
+    fn walk(dir: &Path, depth: u8, suffix: &str) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        entries.flatten().any(|e| {
+            let path = e.path();
+            if path.is_dir() {
+                depth > 0 && walk(&path, depth - 1, suffix)
+            } else {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(suffix))
+            }
+        })
+    }
+    walk(&root, 3, &suffix)
+}
+
+/// A harness-reported id we are willing to splice into a file name or an
+/// argv: non-empty, no path separators. Ids are opaque otherwise.
+fn plausible_session_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains(['/', '\\'])
 }
 
 /// Pi's session directory for `worktree`, or None if the path can't be
@@ -503,6 +559,53 @@ mod tests {
             !claude_session_exists(other.path(), id),
             "sessions are indexed per worktree path"
         );
+    }
+
+    #[test]
+    fn pi_session_exists_matches_the_id_suffix_of_a_timestamped_file() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let abs = std::fs::canonicalize(work.path()).unwrap();
+        let encoded = abs.to_string_lossy().replace('/', "-");
+        let dir = home
+            .path()
+            .join(".pi/agent/sessions")
+            .join(format!("--{encoded}--"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("2026-09-13T10-00-00_abc123def456.jsonl"), "{}").unwrap();
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(pi_session_exists(work.path(), "abc123def456"));
+        assert!(
+            !pi_session_exists(work.path(), "abc123"),
+            "prefixes don't match"
+        );
+        assert!(!pi_session_exists(work.path(), "zzz"));
+        assert!(!pi_session_exists(work.path(), ""));
+    }
+
+    #[test]
+    fn codex_session_exists_finds_the_rollout_by_thread_id() {
+        let home = tempfile::TempDir::new().unwrap();
+        let dir = home.path().join(".codex/sessions/2026/09/13");
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = "01a080db-c2a2-7e92-a90a-d267ae83eb3d";
+        std::fs::write(
+            dir.join(format!("rollout-2026-09-13T07-51-21-{id}.jsonl")),
+            "{}",
+        )
+        .unwrap();
+
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(codex_session_exists(id));
+        assert!(!codex_session_exists(
+            "01a080db-c2a2-7e92-a90a-000000000000"
+        ));
+        assert!(!codex_session_exists("../x"));
+        std::fs::remove_dir_all(home.path().join(".codex")).unwrap();
+        assert!(!codex_session_exists(id), "no sessions root at all");
     }
 
     #[test]

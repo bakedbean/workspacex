@@ -91,6 +91,17 @@ pub struct AttentionLine {
     /// One segment per *rendered* entry (the `included` ones, not the
     /// `… +N more` overflow). Columns are 0-based from the line's left edge.
     pub segments: Vec<AttentionSegment>,
+    /// The `… +N more` overflow tail, when entries were folded into it.
+    /// Clickable: opens the updates panel.
+    pub more: Option<AttentionMore>,
+}
+
+/// The clickable extent of the `… +N more` tail: column offset + width, in
+/// cells, 0-based from the line's left edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttentionMore {
+    pub start_col: u16,
+    pub width: u16,
 }
 
 /// The clickable extent of one attention entry: which workspace it points to
@@ -143,6 +154,10 @@ pub fn format_attention_line_styled(
         })
         .collect();
     let sep_w = 3; // " │ "
+    let more_text = |remaining: usize| format!(" … +{remaining} more");
+    // Greedy fit, then give back entries from the tail until the overflow
+    // marker also fits: a clipped `… +N more` would be unreadable and,
+    // since it is a click target, unreachable.
     let mut included = 0usize;
     let mut total = 0usize;
     for (i, w) in widths.iter().enumerate() {
@@ -152,6 +167,14 @@ pub fn format_attention_line_styled(
         }
         total += s + w;
         included += 1;
+    }
+    while included > 1 && included < entries.len() {
+        let tail_w = more_text(entries.len() - included).chars().count();
+        if total + tail_w <= max_width {
+            break;
+        }
+        included -= 1;
+        total -= widths[included] + sep_w;
     }
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut segments: Vec<AttentionSegment> = Vec::new();
@@ -190,15 +213,19 @@ pub fn format_attention_line_styled(
         });
     }
     let remaining = entries.len().saturating_sub(included);
+    let mut more = None;
     if remaining > 0 {
-        spans.push(Span::styled(
-            format!(" … +{remaining} more"),
-            theme.dim_style(),
-        ));
+        let text = more_text(remaining);
+        more = Some(AttentionMore {
+            start_col: col as u16,
+            width: text.chars().count() as u16,
+        });
+        spans.push(Span::styled(text, theme.dim_style()));
     }
     Some(AttentionLine {
         line: Line::from(spans),
         segments,
+        more,
     })
 }
 
@@ -830,5 +857,84 @@ mod tests {
             .find(|s| s.content.as_ref() == "\u{b7}")
             .expect("idle glyph span");
         assert_eq!(idle.style, theme.status_style(Status::Idle));
+    }
+
+    fn three_entries() -> Vec<AttentionEntry> {
+        // Widths: "? a/q (1s)" = 10, "! bb/ss (1s)" = 12, twice.
+        vec![
+            AttentionEntry {
+                workspace_id: WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "q".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Question,
+                lifecycle: None,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(2),
+                repo_name: "bb".into(),
+                name: "ss".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Stalled,
+                lifecycle: None,
+            },
+            AttentionEntry {
+                workspace_id: WorkspaceId(3),
+                repo_name: "bb".into(),
+                name: "ss".into(),
+                age_anchor_ms: 9_000,
+                status: Status::Stalled,
+                lifecycle: None,
+            },
+        ]
+    }
+
+    fn line_width(line: &Line<'_>) -> usize {
+        line.spans.iter().map(|s| s.content.chars().count()).sum()
+    }
+
+    #[test]
+    fn styled_line_reports_more_tail_extent() {
+        // Budget 36: entries 0+1 take 25 cols, entry 2 would need 40, so
+        // it folds into " … +1 more" (10 cols) starting at col 25.
+        let theme = Theme::wsx();
+        let out = format_attention_line_styled(&three_entries(), 10_000, 36, &theme).expect("line");
+        assert_eq!(out.segments.len(), 2);
+        assert_eq!(
+            out.more,
+            Some(AttentionMore {
+                start_col: 25,
+                width: 10
+            })
+        );
+        assert!(line_width(&out.line) <= 36, "{}", line_width(&out.line));
+    }
+
+    #[test]
+    fn styled_line_reserves_room_for_more_tail() {
+        // Budget 30: entries 0+1 fit on their own (25) but not with the
+        // tail (35), so entry 1 folds into the tail too: 10 + " … +2 more".
+        let theme = Theme::wsx();
+        let out = format_attention_line_styled(&three_entries(), 10_000, 30, &theme).expect("line");
+        assert_eq!(out.segments.len(), 1, "entry 1 must yield to the tail");
+        assert_eq!(
+            out.more,
+            Some(AttentionMore {
+                start_col: 10,
+                width: 10
+            })
+        );
+        assert!(line_width(&out.line) <= 30, "{}", line_width(&out.line));
+        let text: String = out.line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.ends_with("+2 more"), "{text:?}");
+    }
+
+    #[test]
+    fn styled_line_has_no_more_tail_when_everything_fits() {
+        let theme = Theme::wsx();
+        let out =
+            format_attention_line_styled(&three_entries(), 10_000, 200, &theme).expect("line");
+        assert_eq!(out.segments.len(), 3);
+        assert_eq!(out.more, None);
     }
 }

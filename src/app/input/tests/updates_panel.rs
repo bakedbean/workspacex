@@ -1679,6 +1679,36 @@ async fn attached_view_shows_status_row_for_other_workspace_needing_attention() 
         flagged_at < quiet_at,
         "flagged workspace must precede the unflagged one:\n{rendered}"
     );
+    assert!(
+        app.attention_more_rect.is_none(),
+        "no overflow tail when every entry fits"
+    );
+
+    // Narrow the terminal so only one entry fits: the rest fold into a
+    // `… +N more` tail whose click rect the render pass publishes.
+    let backend = TestBackend::new(60, 24);
+    let mut term = Terminal::new(backend).unwrap();
+    term.draw(|f| draw_for_test(f, &mut app)).unwrap();
+    let buf = term.backend().buffer();
+    let top: String = (0..buf.area.width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(
+        top.contains("+1 more"),
+        "expected overflow tail on top row:\n{top}"
+    );
+    let rect = app
+        .attention_more_rect
+        .expect("render must publish the more-tail click rect");
+    assert_eq!(rect.y, 0);
+    let covered: String = top
+        .chars()
+        .skip(rect.x as usize)
+        .take(rect.width as usize)
+        .collect();
+    assert_eq!(
+        covered.trim(),
+        "… +1 more",
+        "rect {rect:?} must cover exactly the tail text:\n{top}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

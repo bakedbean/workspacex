@@ -87,6 +87,7 @@ impl App {
             pending_remote_gen: None,
             chip_rects: Vec::new(),
             attention_rects: Vec::new(),
+            attention_more_rect: None,
             detail_scroll_offsets: [0; 4],
             detail_scroll_last_workspace: None,
             detail_container_rects: [None; 4],
@@ -582,6 +583,11 @@ pub struct App {
     /// to attach on click. Mirrors the `chip_rects` draw-populates /
     /// input-reads pattern; cleared each frame.
     pub attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
+    /// Rect of the attention row's `… +N more` tail from the last draw
+    /// tick, when entries overflowed. Consumed by `handle_mouse` to open
+    /// the updates panel. Same draw-populates / input-reads pattern as
+    /// `attention_rects`; cleared each frame.
+    pub attention_more_rect: Option<ratatui::layout::Rect>,
     /// Per-slot scroll offset for detail-bar containers. Bumped by mouse
     /// wheel via `handle_mouse`, clamped on every draw to
     /// `content_height - visible_height` for the matching container.

@@ -614,16 +614,15 @@ mod bottom_tests {
     fn narrow_rows_drop_model_tokens_then_agents_then_procs_then_diff() {
         let pinned = cmds(&[("PR", "/pr")]);
         let agents = agents();
-        // Widths chosen well inside each drop band (measured against the
-        // actual render, not recomputed by hand): full strength fits down
-        // to 92 (narrower drops model_tokens, the lowest priority), agents
-        // fits down to 72, procs down to 46, diff down to 41, and pr —
-        // never dropped by priority in this fixture — down to 34.
+        // Left side is 19 cells (` ^x  menu` + 2 + ` 1  PR` + 2). Right side at
+        // full strength is 73: 2 + agents 26 + 3 + model 17 + 1 + procs 4 + 1
+        // + diff 6 + 1 + pr 12. Dropping model removes 18, agents 29, procs 5,
+        // diff 7.
         let widths_and_expect: [(u16, &[&str]); 5] = [
             (120, &["agents", "model_tokens", "procs", "diff", "pr"]),
             (80, &["agents", "procs", "diff", "pr"]),
             (50, &["procs", "diff", "pr"]),
-            (42, &["diff", "pr"]),
+            (40, &["diff", "pr"]),
             (35, &["pr"]),
         ];
         for (w, expect) in widths_and_expect {
@@ -653,8 +652,49 @@ mod bottom_tests {
         inputs.procs = 0;
         let out = render(inputs, 60);
         let buf = render_line(&out.line, 60);
-        assert_eq!(buf[(59, 0)].symbol(), "k");
-        assert_eq!(buf[(59, 0)].fg, theme.warn);
+        // No PR: the accepted trailing-blank defect (see the theme comment)
+        // lands at the very last cell; the tokens' own last character sits
+        // one cell in from it.
+        assert_eq!(buf[(58, 0)].symbol(), "k");
+        assert_eq!(buf[(58, 0)].fg, theme.warn);
+        assert_eq!(buf[(59, 0)].symbol(), " ");
+    }
+
+    /// A single-agent workspace renders no agent pills (`agents` needs 2+ to
+    /// show any), so `model_tokens` becomes the first element of the
+    /// flush-right block. With trailing per-element separators, a missing
+    /// element takes its own gap with it — the rule is followed by exactly
+    /// the stock two-cell gap, not the 4-cell gap that would land after
+    /// agents specifically (3-cell group gap + 1-cell model_tokens gap).
+    #[test]
+    fn single_agent_stats_block_sits_two_cells_after_the_rule() {
+        let pinned = cmds(&[]);
+        let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = vec![];
+        let mut inputs = full(&pinned, &agents);
+        inputs.agents = &[];
+        inputs.active_agent = None;
+        let out = render(inputs, 120);
+        let t = plain(&out.line);
+        assert!(t.contains("──  opus 4.8 45k/200k"), "{t:?}");
+        assert!(!t.contains("   opus"), "{t:?}");
+    }
+
+    /// The accepted tradeoff of trailing separators: `$pr` is bare (no
+    /// trailing separator of its own), so a workspace with no PR leaves the
+    /// diff count's own trailing gap as one dangling blank cell at the very
+    /// right edge, instead of hugging it exactly.
+    #[test]
+    fn no_pr_leaves_only_a_trailing_blank() {
+        let pinned = cmds(&[]);
+        let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = vec![];
+        let mut inputs = full(&pinned, &agents);
+        inputs.agents = &[];
+        inputs.active_agent = None;
+        inputs.pr = None;
+        let out = render(inputs, 120);
+        let t = plain(&out.line);
+        assert!(t.ends_with("+12 −3 "), "{t:?}");
+        assert_eq!(out.line.width(), 120);
     }
 
     /// `[pr].symbol` overrides the lifecycle glyph the provider would

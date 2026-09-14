@@ -38,11 +38,14 @@ format = "($agent_bar )$workspace(   $attention)"
 
 [attached_bottom]
 format       = "$keys  ($pins  )"
-# Each element after the first carries its OWN leading separator (rather
-# than a trailing one on the element before it), so whichever element ends
-# up actually last — usually $pr, but $pr is absent for a workspace with no
-# PR — always hugs the right edge with no dangling trailing space.
-right_format = "( $agents(   $model_tokens)( $procs)( $diff)( $pr))"
+# Each element carries its OWN trailing separator, so a missing element
+# takes its gap with it (a single-agent workspace, with no agent pills,
+# still gets exactly one gap before model_tokens, not two). The one
+# leading space here plus the engine's mandatory blank reproduce the
+# stock two-cell gap after the rule. The tradeoff: a workspace with no PR
+# — $pr is bare, with no trailing separator of its own — leaves one blank
+# cell at the right edge instead of hugging it exactly; accepted.
+right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
 

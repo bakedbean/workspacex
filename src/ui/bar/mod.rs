@@ -442,3 +442,245 @@ mod footer_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod bottom_tests {
+    use super::*;
+    use crate::commands::pinned::PinnedCommand;
+    use crate::config::theme_file::bundled_default;
+    use crate::data::store::AgentInstanceId;
+    use crate::git::forge::{BranchLifecycle, ReviewDecision};
+    use crate::pty::session::AgentKind;
+    use crate::ui::attached::ChipPr;
+    use crate::ui::bar::test_util::{plain, render_line};
+    use crate::ui::detail_modules::session_summary::ChipModelTokens;
+
+    fn cmds(specs: &[(&str, &str)]) -> Vec<PinnedCommand> {
+        specs
+            .iter()
+            .map(|(l, c)| PinnedCommand {
+                label: (*l).into(),
+                command: (*c).into(),
+            })
+            .collect()
+    }
+    fn pr(review: Option<ReviewDecision>) -> Option<ChipPr> {
+        Some(ChipPr {
+            lifecycle: BranchLifecycle::PrOpen,
+            number: 42,
+            review,
+            unresolved: None,
+        })
+    }
+    fn mt() -> Option<ChipModelTokens> {
+        Some(ChipModelTokens {
+            model: Some("opus 4.8".into()),
+            tokens: "45k/200k".into(),
+            warn: false,
+        })
+    }
+    fn agents() -> Vec<(AgentInstanceId, AgentKind, String, Option<char>)> {
+        vec![
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".into(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Codex,
+                "codex".into(),
+                Some('w'),
+            ),
+        ]
+    }
+    fn render(inputs: AttachedInputs<'_>, width: u16) -> Rendered {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        attached_bars(&specs, &theme, inputs, width, width).1
+    }
+    fn full<'a>(
+        pinned: &'a [PinnedCommand],
+        agents: &'a [(AgentInstanceId, AgentKind, String, Option<char>)],
+    ) -> AttachedInputs<'a> {
+        AttachedInputs {
+            repo: "wsx",
+            name: "foo",
+            agent: None,
+            attention: None,
+            pinned,
+            procs: 3,
+            diff: Some(crate::git::DiffStats {
+                added: 12,
+                removed: 3,
+            }),
+            pr: pr(Some(ReviewDecision::Approved)),
+            model_tokens: mt(),
+            agents,
+            active_agent: Some(AgentInstanceId(1)),
+        }
+    }
+    fn present(out: &Rendered) -> Vec<&'static str> {
+        let t = plain(&out.line);
+        let mut v = Vec::new();
+        if t.contains("claude") {
+            v.push("agents");
+        }
+        if t.contains("45k/200k") {
+            v.push("model_tokens");
+        }
+        if t.contains("3p") {
+            v.push("procs");
+        }
+        if t.contains("+12") {
+            v.push("diff");
+        }
+        if t.contains("#42") {
+            v.push("pr");
+        }
+        v
+    }
+
+    #[test]
+    fn default_bottom_snapshot_and_hits() {
+        let pinned = cmds(&[("PR", "/pr"), ("feedback", "/fb")]);
+        let agents = agents();
+        let out = render(full(&pinned, &agents), 120);
+        let t = plain(&out.line);
+        // keys ` ^x  menu`, two literal spaces, chips ` 1  PR` and ` 2  feedback`
+        // (pill pad + `index` pad + space-led label), two spaces, then the rule.
+        assert!(
+            t.starts_with(" ^x  menu   1  PR   2  feedback  ──"),
+            "{t:?}"
+        );
+        // Each agent pill ends with its ` q ` key pill (trailing pad), then the
+        // 3-cell separator / group gap, so four spaces precede `○` and `opus`.
+        assert!(
+            t.ends_with("● claude  q    ○ codex  w    opus 4.8 45k/200k ● 3p +12 −3 ⏺ #42 open ✓"),
+            "{t:?}"
+        );
+        assert_eq!(out.line.width(), 120);
+        let chips: Vec<_> = out
+            .hits
+            .iter()
+            .filter(|h| matches!(h.hit, Hit::PinnedChip(_)))
+            .collect();
+        assert_eq!(chips.len(), 2);
+        assert_eq!(chips[0].width, 6, "` 1  PR` is 6 cells");
+        assert_eq!(chips[1].width, 12, "` 2  feedback` is 12 cells");
+        assert_eq!(chips[1].start_col, chips[0].start_col + 6 + 2, "2-cell gap");
+        let leader = out.hits.iter().find(|h| h.hit == Hit::ArmLeader).unwrap();
+        assert_eq!((leader.start_col, leader.width), (0, 9));
+        let pr = out.hits.iter().find(|h| h.hit == Hit::Pr).unwrap();
+        assert_eq!(pr.start_col + pr.width, 120, "PR chip hugs the right edge");
+        let ids: Vec<_> = out
+            .hits
+            .iter()
+            .filter_map(|h| match h.hit {
+                Hit::Agent(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec![AgentInstanceId(1), AgentInstanceId(2)]);
+    }
+
+    #[test]
+    fn zero_procs_and_clean_diff_render_nothing() {
+        let pinned = cmds(&[]);
+        let agents = vec![];
+        let mut inputs = full(&pinned, &agents);
+        inputs.procs = 0;
+        inputs.diff = Some(crate::git::DiffStats {
+            added: 0,
+            removed: 0,
+        });
+        let out = render(inputs, 120);
+        assert_eq!(present(&out), vec!["model_tokens", "pr"]);
+        assert!(out.hits.iter().all(|h| h.hit != Hit::Procs));
+    }
+
+    #[test]
+    fn pr_mark_is_absent_without_a_verdict() {
+        let pinned = cmds(&[]);
+        let agents = vec![];
+        let mut inputs = full(&pinned, &agents);
+        inputs.pr = pr(None);
+        let t = plain(&render(inputs, 120).line);
+        assert!(t.ends_with("⏺ #42 open"), "{t:?}");
+    }
+
+    #[test]
+    fn narrow_rows_drop_model_tokens_then_agents_then_procs_then_diff() {
+        let pinned = cmds(&[("PR", "/pr")]);
+        let agents = agents();
+        // Widths chosen well inside each drop band (measured against the
+        // actual render, not recomputed by hand): full strength fits down
+        // to 92 (narrower drops model_tokens, the lowest priority), agents
+        // fits down to 72, procs down to 46, diff down to 41, and pr —
+        // never dropped by priority in this fixture — down to 34.
+        let widths_and_expect: [(u16, &[&str]); 5] = [
+            (120, &["agents", "model_tokens", "procs", "diff", "pr"]),
+            (80, &["agents", "procs", "diff", "pr"]),
+            (50, &["procs", "diff", "pr"]),
+            (42, &["diff", "pr"]),
+            (35, &["pr"]),
+        ];
+        for (w, expect) in widths_and_expect {
+            let out = render(full(&pinned, &agents), w);
+            assert_eq!(
+                present(&out),
+                expect.to_vec(),
+                "width {w}: {:?}",
+                plain(&out.line)
+            );
+        }
+    }
+
+    #[test]
+    fn model_tokens_warn_style_is_the_warn_color() {
+        let theme = Theme::wsx();
+        let pinned = cmds(&[]);
+        let agents = vec![];
+        let mut inputs = full(&pinned, &agents);
+        inputs.model_tokens = Some(ChipModelTokens {
+            model: None,
+            tokens: "190k/200k".into(),
+            warn: true,
+        });
+        inputs.pr = None;
+        inputs.diff = None;
+        inputs.procs = 0;
+        let out = render(inputs, 60);
+        let buf = render_line(&out.line, 60);
+        assert_eq!(buf[(59, 0)].symbol(), "k");
+        assert_eq!(buf[(59, 0)].fg, theme.warn);
+    }
+
+    /// `[pr].symbol` overrides the lifecycle glyph the provider would
+    /// otherwise use — the amendment to Task 8/9's shared-segment-map plan.
+    #[test]
+    fn pr_symbol_overrides_lifecycle_glyph() {
+        let theme = Theme::wsx();
+        let mut specs = bundled_default(&theme);
+        specs.segments.get_mut("pr").unwrap().symbol = Some("X".into());
+        let pinned = cmds(&[]);
+        let agents = vec![];
+        let inputs = AttachedInputs {
+            repo: "wsx",
+            name: "foo",
+            agent: None,
+            attention: None,
+            pinned: &pinned,
+            procs: 0,
+            diff: None,
+            pr: pr(None),
+            model_tokens: None,
+            agents: &agents,
+            active_agent: None,
+        };
+        let out = attached_bars(&specs, &theme, inputs, 120, 120).1;
+        let t = plain(&out.line);
+        assert!(t.ends_with("X #42 open"), "{t:?}");
+    }
+}

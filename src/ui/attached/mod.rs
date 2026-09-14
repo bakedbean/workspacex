@@ -17,7 +17,7 @@ mod nav_menu;
 
 // Re-exported for app::render / app::input via `crate::ui::attached::*`.
 pub use agents_row::agent_switch_keys;
-pub(crate) use chip_row::{ChipPr, ChipRowOutput, render_chip_row};
+pub(crate) use chip_row::ChipPr;
 pub use nav_menu::{NavItem, nav_item_key, nav_menu_items, render_nav_overlay};
 
 /// One pane in the attached view: a workspace's PTY plus its label,
@@ -140,11 +140,10 @@ pub(crate) fn render_panes(
 
     let mut out = PanesDrawOutput::default();
 
-    // Info line (top): agent bar + focused label, then attention items,
-    // rendered through the bar engine, with a full-width `─` rule beneath
-    // it — same dim chrome as the chip-row rule — to set the indicator off
-    // from the pane content below.
-    let (top, _bottom) = crate::ui::bar::attached_bars(
+    // Both the info line (top) and the chip row (bottom) render from one
+    // shared segment map, so a segment that appears in either bar's format
+    // — or moves between them — renders identically and keeps its click.
+    let (top, bottom) = crate::ui::bar::attached_bars(
         specs,
         theme,
         crate::ui::bar::AttachedInputs {
@@ -156,7 +155,7 @@ pub(crate) fn render_panes(
             procs,
             diff,
             pr,
-            model_tokens: model_tokens.clone(),
+            model_tokens,
             agents,
             active_agent,
         },
@@ -173,59 +172,12 @@ pub(crate) fn render_panes(
         );
     }
 
-    // `^x: menu` hint at the far left of the chip row: a `^x` key-pill + a
-    // ` menu` label. Clickable — arms the leader (opens the overlay) exactly
-    // like pressing Ctrl-x. The pinned chips/rule/right-block render in the
-    // area to its right, unchanged.
-    let menu_label = " menu";
-    // pill width = 2 + "^x".chars().count() = 4; label width = 5; total = 9.
-    let hint_w = (2 + "^x".chars().count() as u16) + menu_label.chars().count() as u16;
-    let mut hint_spans: Vec<Span<'static>> = Vec::with_capacity(4);
-    hint_spans.extend(key_pill_spans("^x", theme));
-    hint_spans.push(Span::styled(
-        menu_label.to_string(),
-        Style::default().fg(theme.path),
-    ));
-    let hint_rect = Rect {
-        x: chip_area.x,
-        y: chip_area.y,
-        width: hint_w.min(chip_area.width),
-        height: 1,
-    };
-    f.render_widget(Paragraph::new(Line::from(hint_spans)), hint_rect);
-    out.footer_hint_rects
-        .push((hint_rect, crate::ui::footer::FooterHintAction::ArmLeader));
+    // Chip row (bottom): `^x menu` hint + pinned chips left, the stats
+    // block (agents, model+tokens, procs, diff, PR) flush right.
+    f.render_widget(Paragraph::new(bottom.line), chip_area);
+    route_hits(chip_area, &bottom.hits, &mut out);
 
-    // Chips render to the right of the hint (plus a 2-col gap).
-    let chips_area = Rect {
-        x: chip_area.x.saturating_add(hint_w + 2),
-        y: chip_area.y,
-        width: chip_area.width.saturating_sub(hint_w + 2),
-        height: 1,
-    };
-    let ChipRowOutput {
-        chip_rects,
-        pr_rect,
-        procs_rect,
-        agent_rects,
-    } = render_chip_row(
-        f,
-        chips_area,
-        pinned,
-        procs,
-        diff,
-        pr,
-        model_tokens,
-        agents,
-        active_agent,
-        theme,
-    );
-
-    out.chip_rects = chip_rects;
-    out.pr_link_rect = pr_rect;
-    out.procs_link_rect = procs_rect;
     out.pane_rects = pane_rects;
-    out.agent_chip_rects = agent_rects;
     out
 }
 
@@ -380,8 +332,8 @@ fn title_bar_spans(
 }
 
 /// The footer/chip "key pill" style: a dim, bold glyph on the soft chip
-/// background. Shared by the footer keybinds, the pinned-chip row, and the
-/// agent pills so every pill reads identically.
+/// background. Shared by the nav overlay and the pinned-chip row so every
+/// pill reads identically.
 fn key_pill_style(theme: &Theme) -> Style {
     Style::default()
         .fg(theme.dim)
@@ -392,7 +344,7 @@ fn key_pill_style(theme: &Theme) -> Style {
 /// The three spans forming one key pill: a 1-cell pad, the `key` glyph in
 /// [`key_pill_style`], and a trailing 1-cell pad — all on the chip background.
 /// Width is always `2 + key.chars().count()`. Callers append any label tail
-/// themselves (the agent pills have none; the footer/chip rows do).
+/// themselves (the nav overlay has none; the pinned-chip row does).
 fn key_pill_spans(key: &str, theme: &Theme) -> [Span<'static>; 3] {
     let pad_style = theme.chip_bg_style();
     [
@@ -400,6 +352,51 @@ fn key_pill_spans(key: &str, theme: &Theme) -> [Span<'static>; 3] {
         Span::styled(key.to_string(), key_pill_style(theme)),
         Span::styled(" ".to_string(), pad_style),
     ]
+}
+
+/// Paint pinned-command chips only, with no right-justified stats block.
+/// Used by the dashboard detail pane's chip row, which has no procs/diff/PR
+/// data of its own to show (those live in the header strip instead) — the
+/// attached view's own chip row renders through the bar engine instead (see
+/// `crate::ui::bar::attached_bars`). Returns each chip's clickable rect.
+pub(crate) fn render_pinned_chip_row(
+    f: &mut Frame,
+    area: Rect,
+    pinned: &[PinnedCommand],
+    theme: &Theme,
+) -> Vec<Rect> {
+    let rects = chip_row::layout_chip_row(area, pinned);
+    let label_style = Style::default().fg(theme.path);
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 5 + 2);
+    let mut used: usize = 0;
+    for (i, (_rect, cmd)) in rects.iter().zip(pinned.iter()).enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  ".to_string()));
+            used += 2;
+        }
+        let label = truncate_label(&cmd.label, chip_row::CHIP_LABEL_COLS);
+        let chip_text = format!("{}", i + 1);
+        used += 2 + chip_text.chars().count();
+        spans.extend(key_pill_spans(&chip_text, theme));
+        let label_with_lead = format!(" {label}");
+        used += label_with_lead.chars().count();
+        spans.push(Span::styled(label_with_lead, label_style));
+    }
+    // Trailing dim rule, same treatment as the attached chip row's fill,
+    // so the pinned chips read consistently in both places.
+    let width = area.width as usize;
+    if width > used {
+        let gap = if used == 0 { 0 } else { 2 };
+        let rule_len = width.saturating_sub(used + gap);
+        if gap > 0 && rule_len > 0 {
+            spans.push(Span::raw(" ".repeat(gap)));
+        }
+        if rule_len > 0 {
+            spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    rects
 }
 
 #[cfg(test)]
@@ -493,29 +490,29 @@ mod tests {
         (pinned, diff, pr, mt, agents)
     }
 
-    /// Durable evidence, gathered BEFORE the legacy chip row was deleted:
-    /// the engine's bottom bar (`attached_bars(...).1`) matched
-    /// `render_panes`' legacy `render_chip_row` output cell-for-cell, and
-    /// the routed rects matched the legacy `PanesDrawOutput` fields. Once
-    /// `render_panes` itself switched to the engine for both bars (and the
-    /// legacy builder was deleted), this test would only compare the
-    /// engine to itself, so it was removed rather than kept as a no-op —
-    /// see `cross_bar_click_routing_pr_moves_to_top_pins_stay_bottom` and
-    /// `bottom_tests` in `src/ui/bar/mod.rs` for the durable coverage.
+    /// Proof that a segment routes to the right `PanesDrawOutput` field no
+    /// matter which bar's format it appears in: with the PR chip moved to
+    /// the top bar's format and dropped from the bottom bar's, its rect
+    /// still lands in `pr_link_rect` — now on the info row — while the
+    /// pinned chips (left where they normally are) still land in
+    /// `chip_rects` on the chip row. `route_hits` is called once per bar,
+    /// so a segment moved between bars keeps its click rather than being
+    /// silently dropped.
     #[test]
-    fn engine_bottom_bar_matches_legacy_chip_row() {
-        use crate::ui::bar::segment::Hit;
+    fn cross_bar_click_routing_pr_moves_to_top_pins_stay_bottom() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         let theme = Theme::wsx();
-        let specs = crate::config::theme_file::bundled_default(&theme);
+        let mut specs = crate::config::theme_file::bundled_default(&theme);
+        specs.attached_top.format = crate::ui::bar::format::parse("$pr").unwrap();
+        specs.attached_bottom.right_format = crate::ui::bar::format::parse("").unwrap();
         let (pinned, diff, pr, mt, agents) = bottom_fixture();
         let (w, h) = (120u16, 4u16);
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-        let mut legacy_out = None;
+        let mut out_result = None;
         term.draw(|f| {
             let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h));
-            legacy_out = Some(render_panes(
+            out_result = Some(render_panes(
                 f,
                 &[],
                 &[],
@@ -531,77 +528,27 @@ mod tests {
                 3,
                 diff,
                 pr,
-                mt.clone(),
+                mt,
                 &agents,
                 Some(AgentInstanceId(1)),
                 &theme,
             ));
         })
         .unwrap();
-        let legacy_out = legacy_out.unwrap();
-        let legacy_buf = term.backend().buffer().clone();
+        let out = out_result.unwrap();
 
-        let new = crate::ui::bar::attached_bars(
-            &specs,
-            &theme,
-            crate::ui::bar::AttachedInputs {
-                repo: "wsx",
-                name: "foo",
-                agent: None,
-                attention: None,
-                pinned: &pinned,
-                procs: 3,
-                diff,
-                pr,
-                model_tokens: mt,
-                agents: &agents,
-                active_agent: Some(AgentInstanceId(1)),
-            },
-            w,
-            w,
-        )
-        .1;
-        let new_buf = crate::ui::bar::test_util::render_line(&new.line, w);
-        crate::ui::bar::test_util::assert_rows_match(&legacy_buf, h - 1, &new_buf, 0, w);
+        let pr_rect = out.pr_link_rect.expect("pr chip moved to the top bar");
+        assert_eq!(pr_rect.y, 0, "pr now renders on the info row");
+        assert!(pr_rect.x + pr_rect.width <= w);
 
-        let chip_area = Rect::new(0, h - 1, w, 1);
-        let rects = crate::ui::bar::render::hit_rects(chip_area, &new.hits);
-        let of = |pred: &dyn Fn(Hit) -> bool| -> Vec<Rect> {
-            rects
-                .iter()
-                .filter(|(_, h)| pred(*h))
-                .map(|(r, _)| *r)
-                .collect()
-        };
         assert_eq!(
-            of(&|h| matches!(h, Hit::PinnedChip(_))),
-            legacy_out.chip_rects
+            out.chip_rects.len(),
+            2,
+            "pins still render on the bottom row"
         );
-        assert_eq!(
-            of(&|h| h == Hit::Pr).first().copied(),
-            legacy_out.pr_link_rect
-        );
-        assert_eq!(
-            of(&|h| h == Hit::Procs).first().copied(),
-            legacy_out.procs_link_rect
-        );
-        let agent_rects: Vec<(AgentInstanceId, Rect)> = rects
-            .iter()
-            .filter_map(|(r, h)| match h {
-                Hit::Agent(id) => Some((*id, *r)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(agent_rects, legacy_out.agent_chip_rects);
-        let leader: Vec<Rect> = of(&|h| h == Hit::ArmLeader);
-        assert_eq!(
-            leader,
-            legacy_out
-                .footer_hint_rects
-                .iter()
-                .map(|(r, _)| *r)
-                .collect::<Vec<_>>()
-        );
+        for rect in &out.chip_rects {
+            assert_eq!(rect.y, 3, "pins stay on the chip row");
+        }
     }
 
     /// Durable evidence for the engine cutover: this snapshot and its hit
@@ -801,28 +748,6 @@ mod tests {
         assert_eq!(
             crate::ui::bar::test_util::plain(&out.line).trim_end(),
             "wsx/foo"
-        );
-    }
-
-    #[test]
-    fn menu_hint_width_offsets_chips() {
-        // The chips must start past the "^x menu" hint + 2-col gap.
-        let hint_w = (2 + "^x".chars().count() as u16) + " menu".chars().count() as u16;
-        let chip_area = Rect::new(0, 5, 80, 1);
-        let chips_area = Rect {
-            x: chip_area.x + hint_w + 2,
-            y: chip_area.y,
-            width: chip_area.width - (hint_w + 2),
-            height: 1,
-        };
-        let pinned = [crate::commands::pinned::PinnedCommand {
-            label: "pr".into(),
-            command: "/pr".into(),
-        }];
-        let rects = chip_row::layout_chip_row(chips_area, &pinned);
-        assert!(
-            rects[0].x >= chip_area.x + hint_w + 2,
-            "chip clears the hint"
         );
     }
 }

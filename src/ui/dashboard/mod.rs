@@ -172,42 +172,6 @@ pub fn render(
     );
 }
 
-/// Convert a footer line's relative hint spans into absolute screen rects,
-/// clipped to `area`. Shared by the dashboard and attached footers so click
-/// hit-testing stays consistent. `row` is the absolute y of the keys line.
-///
-/// The dashboard footer now goes through `crate::ui::bar::render::hit_rects`
-/// instead (see `render_footer` above), so this is unused until the attached
-/// view's footer migrates in a later task; kept rather than deleted per the
-/// Task 7 brief.
-#[allow(dead_code)]
-pub(crate) fn footer_hint_rects(
-    area: Rect,
-    row: u16,
-    hints: &[crate::ui::footer::FooterHintSpan],
-) -> Vec<(Rect, crate::ui::footer::FooterHintAction)> {
-    let max_col = area.x.saturating_add(area.width);
-    hints
-        .iter()
-        .filter_map(|h| {
-            let x = area.x.saturating_add(h.start_col);
-            if x >= max_col {
-                return None; // hint scrolled entirely off the right edge
-            }
-            let width = h.width.min(max_col - x);
-            Some((
-                Rect {
-                    x,
-                    y: row,
-                    width,
-                    height: 1,
-                },
-                h.action,
-            ))
-        })
-        .collect()
-}
-
 /// A workspace row's clickable PR chip, positioned by flat list index:
 /// `(workspace, flat item index, (char offset in row, char width))`.
 type PrChipSpan = (crate::data::store::WorkspaceId, usize, (u16, u16));

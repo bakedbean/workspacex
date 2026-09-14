@@ -38,7 +38,11 @@ format = "($agent_bar )$workspace(   $attention)"
 
 [attached_bottom]
 format       = "$keys  ($pins  )"
-right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
+# Each element after the first carries its OWN leading separator (rather
+# than a trailing one on the element before it), so whichever element ends
+# up actually last — usually $pr, but $pr is absent for a workspace with no
+# PR — always hugs the right edge with no dangling trailing space.
+right_format = "( $agents(   $model_tokens)( $procs)( $diff)( $pr))"
 fill         = "─"
 fill_style   = "fg:dim"
 

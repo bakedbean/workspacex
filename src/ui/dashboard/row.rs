@@ -149,6 +149,13 @@ impl LifecycleBadge {
     }
 }
 
+/// One peer's identity and recent terminal activity, independent of task status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerIndicator {
+    pub agent: AgentKind,
+    pub active: bool,
+}
+
 /// Inputs the renderer needs about one workspace, gathered by the caller
 /// from `app.rs` state.
 #[derive(Debug, Clone)]
@@ -160,7 +167,7 @@ pub struct RowInputs {
     /// drops out and the strip narrows back on its own, while a registered
     /// peer whose PTY died with the previous wsx process keeps its bar
     /// across restarts (see `App::strip_instances`).
-    pub peers: Vec<AgentKind>,
+    pub peers: Vec<PeerIndicator>,
     pub status: Status,
     pub branch: String,
     pub pr_number: Option<u32>,
@@ -215,38 +222,49 @@ impl crate::ui::dashboard::sort::SortRow for RowInputs {
     }
 }
 
-/// The leftmost column: one bar per live agent, right-aligned so the
-/// primary stays adjacent to the status gutter and a single-agent row
-/// looks exactly as it did before the strip existed. Always returns
-/// exactly `widths.agent` chars — the whole row's column alignment
-/// depends on it.
+/// The leftmost column: one identity cell per agent, right-aligned so the
+/// primary stays adjacent to the status gutter. Active peer cells animate
+/// without changing workspace status or grouping. Always returns exactly
+/// `widths.agent` chars so activity cannot shift the row's column alignment.
 pub fn agent_strip_spans(
     inputs: &RowInputs,
     widths: ColumnWidths,
+    tick: u32,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let cells = widths.agent.max(1);
     let total = inputs.peers.len() + 1;
+    let peer_span = |peer: &PeerIndicator| {
+        let glyph = if peer.active {
+            spinner::frame(tick)
+        } else {
+            '▎'
+        };
+        Span::styled(glyph.to_string(), theme.agent_style(peer.agent))
+    };
     if total > cells {
-        // Overflow: a `+` stands in for the peers that don't fit, then the
-        // NEWEST peers, then the primary — the oldest peers are what drop
-        // out. With only one cell there's no room for the marker, so the
-        // primary alone is the honest render.
+        // Overflow keeps the newest peers and the primary. The marker for
+        // hidden peers animates if any is active; otherwise it is `+`.
+        // With only one cell there is no room for the marker.
         let peer_cells = cells.saturating_sub(2);
         if cells >= 2 {
-            spans.push(Span::styled("+".to_string(), theme.dim_style()));
+            let hidden = &inputs.peers[..inputs.peers.len() - peer_cells];
+            spans.push(match hidden.iter().find(|peer| peer.active) {
+                Some(peer) => peer_span(peer),
+                None => Span::styled("+".to_string(), theme.dim_style()),
+            });
         }
-        for kind in &inputs.peers[inputs.peers.len() - peer_cells..] {
-            spans.push(Span::styled("▎".to_string(), theme.agent_style(*kind)));
+        for peer in &inputs.peers[inputs.peers.len() - peer_cells..] {
+            spans.push(peer_span(peer));
         }
     } else {
         let pad = cells - total;
         if pad > 0 {
             spans.push(Span::raw(" ".repeat(pad)));
         }
-        for kind in &inputs.peers {
-            spans.push(Span::styled("▎".to_string(), theme.agent_style(*kind)));
+        for peer in &inputs.peers {
+            spans.push(peer_span(peer));
         }
     }
     spans.push(Span::styled(
@@ -267,11 +285,11 @@ pub fn render(
     let pr_width = widths.pr;
     let mut spans: Vec<Span<'static>> = Vec::new();
 
-    // 0: agent identity strip — one fixed-per-kind colored bar per live
-    // agent, primary rightmost. Sits left of the status gutter so the row
-    // shows a two-tone left edge: outer = agents, inner = status. Plain
-    // Unicode, no nerd-font gating (same glyph as the gutter).
-    spans.extend(agent_strip_spans(inputs, widths, theme));
+    // 0: agent identity strip — one fixed-per-kind colored cell per agent,
+    // with active peers animated and the primary rightmost. The two-tone
+    // left edge separates agent identity from task status. Plain Unicode,
+    // no nerd-font gating (same glyph as the gutter).
+    spans.extend(agent_strip_spans(inputs, widths, tick, theme));
 
     // 1: gutter — thicker bar on the selected row gives a high-contrast
     // leading edge that doesn't rely on the row-bg tint being visible.
@@ -1034,13 +1052,12 @@ mod tests {
 
     #[test]
     fn live_spinner_follows_the_primary_agent_not_a_peer() {
-        // A multi-agent row has one spinner and several identity bars. The
-        // spinner tracks `inputs.agent` (the primary); peers only color
-        // their own bars in the strip.
+        // The status spinner tracks the primary; inactive peers retain
+        // their own identity bars in the strip.
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.agent = AgentKind::Codex;
-        inputs.peers = vec![AgentKind::Pi, AgentKind::Omp];
+        inputs.peers = vec![quiet_peer(AgentKind::Pi), quiet_peer(AgentKind::Omp)];
         inputs.status = Status::Waiting;
         let line = render(
             &inputs,
@@ -2167,9 +2184,39 @@ mod tests {
         );
     }
 
+    fn quiet_peer(agent: AgentKind) -> PeerIndicator {
+        PeerIndicator {
+            agent,
+            active: false,
+        }
+    }
+
+    #[test]
+    fn strip_overflow_keeps_hidden_peer_activity_visible() {
+        let mut inputs = base();
+        inputs.peers = vec![quiet_peer(AgentKind::Codex); 4];
+        inputs.peers[0].active = true;
+        let widths = ColumnWidths::default().with_agent(MAX_AGENT_WIDTH);
+        let theme = Theme::wsx();
+        for (tick, glyph) in [(0, "⠋"), (1, "⠙")] {
+            let spans = agent_strip_spans(&inputs, widths, tick, &theme);
+            assert_eq!(spans[0].content, glyph);
+            assert_eq!(spans[0].style.fg, theme.agent_style(AgentKind::Codex).fg);
+            assert_eq!(
+                spans
+                    .iter()
+                    .map(|s| s.content.chars().count())
+                    .sum::<usize>(),
+                4
+            );
+        }
+        inputs.peers[0].active = false;
+        assert_eq!(strip_text(&inputs, widths), "+▎▎▎");
+    }
+
     fn strip_text(inputs: &RowInputs, widths: ColumnWidths) -> String {
         let theme = Theme::wsx();
-        agent_strip_spans(inputs, widths, &theme)
+        agent_strip_spans(inputs, widths, 0, &theme)
             .iter()
             .map(|s| s.content.as_ref())
             .collect()
@@ -2184,7 +2231,7 @@ mod tests {
     #[test]
     fn strip_right_aligns_with_primary_last() {
         let mut inputs = base();
-        inputs.peers = vec![AgentKind::Codex, AgentKind::Pi];
+        inputs.peers = vec![quiet_peer(AgentKind::Codex), quiet_peer(AgentKind::Pi)];
         // Two peers + primary = 3 bars in a 4-wide field: one pad cell.
         assert_eq!(
             strip_text(&inputs, ColumnWidths::default().with_agent(4)),
@@ -2206,8 +2253,8 @@ mod tests {
         let theme = Theme::wsx();
         let mut inputs = base();
         inputs.agent = AgentKind::Claude;
-        inputs.peers = vec![AgentKind::Codex];
-        let spans = agent_strip_spans(&inputs, ColumnWidths::default().with_agent(2), &theme);
+        inputs.peers = vec![quiet_peer(AgentKind::Codex)];
+        let spans = agent_strip_spans(&inputs, ColumnWidths::default().with_agent(2), 0, &theme);
         let bars: Vec<_> = spans.iter().filter(|s| s.content.contains('▎')).collect();
         assert_eq!(bars.len(), 2);
         assert_eq!(bars[0].style.fg, theme.agent_style(AgentKind::Codex).fg);
@@ -2220,10 +2267,10 @@ mod tests {
         let mut inputs = base();
         // 4 peers + primary = 5 live, one more than MAX_AGENT_WIDTH.
         inputs.peers = vec![
-            AgentKind::Codex,
-            AgentKind::Pi,
-            AgentKind::Hermes,
-            AgentKind::Codex,
+            quiet_peer(AgentKind::Codex),
+            quiet_peer(AgentKind::Pi),
+            quiet_peer(AgentKind::Hermes),
+            quiet_peer(AgentKind::Codex),
         ];
         let widths = ColumnWidths::default().with_agent(MAX_AGENT_WIDTH);
         let text = strip_text(&inputs, widths);
@@ -2236,7 +2283,7 @@ mod tests {
         // two surviving peer bars must be Hermes (index 2) then Codex
         // (index 3, the second/duplicate one) — not Codex+Pi (indices 0-1),
         // which is what a `&peers[..peer_cells]` bug would keep instead.
-        let spans = agent_strip_spans(&inputs, widths, &theme);
+        let spans = agent_strip_spans(&inputs, widths, 0, &theme);
         let bars: Vec<_> = spans.iter().filter(|s| s.content.contains('▎')).collect();
         assert_eq!(bars.len(), 3, "two surviving peers + primary");
         assert_eq!(
@@ -2261,7 +2308,7 @@ mod tests {
         for agent_width in 1..=MAX_AGENT_WIDTH {
             for peer_count in 0..6 {
                 let mut inputs = base();
-                inputs.peers = vec![AgentKind::Codex; peer_count];
+                inputs.peers = vec![quiet_peer(AgentKind::Codex); peer_count];
                 let text = strip_text(&inputs, ColumnWidths::default().with_agent(agent_width));
                 assert_eq!(
                     text.chars().count(),
@@ -2343,7 +2390,8 @@ mod tests {
         for selected in [false, true] {
             let mut inputs = base();
             inputs.selected = selected;
-            let spans = agent_strip_spans(&inputs, ColumnWidths::default().with_agent(4), &theme);
+            let spans =
+                agent_strip_spans(&inputs, ColumnWidths::default().with_agent(4), 0, &theme);
             let pad = spans
                 .iter()
                 .find(|s| s.content.as_ref() == "   ")

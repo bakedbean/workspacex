@@ -14,6 +14,19 @@ Activity column for running sessions:
 - `off` — no current session
 - `resumable` — prior session exists, not currently running
 
+### Multiple agents
+
+A non-primary agent's colored cell in the dashboard's agent strip becomes a
+spinner when its running session has produced terminal output within the last
+2 seconds. It returns to a bar when quiet; exited peers leave the strip.
+If peers overflow the strip, the `+` marker animates while any hidden peer is active.
+
+This is terminal activity, not task status: typing or a resize repaint can
+briefly animate a peer cell too. The workspace's task-status glyph, section,
+age, details, and attention alerts are unchanged. Peer output does not move a
+completed workspace into `WORKING`, and a primary question remains visible
+alongside the peer indicator.
+
 ### Activity sub-line
 
 Below each workspace row, wsx shows the most recent event from claude's

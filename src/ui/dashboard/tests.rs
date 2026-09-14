@@ -887,7 +887,13 @@ fn matches_filter_matches_fallback_text_and_branch() {
 
 fn row_with_peers(n: usize) -> RowInputs {
     let mut r = base_row();
-    r.peers = vec![AgentKind::Codex; n];
+    r.peers = vec![
+        row::PeerIndicator {
+            agent: AgentKind::Codex,
+            active: false
+        };
+        n
+    ];
     r
 }
 
@@ -927,7 +933,13 @@ fn fixture_dashboard_inputs_with_pr() -> DashboardInputs<'static> {
 }
 
 fn give_workspace_peers(inputs: &mut DashboardInputs<'_>, index: usize, n: usize) {
-    inputs.workspaces[index].row.peers = vec![AgentKind::Codex; n];
+    inputs.workspaces[index].row.peers = vec![
+        row::PeerIndicator {
+            agent: AgentKind::Codex,
+            active: false
+        };
+        n
+    ];
 }
 
 /// Render a single `ListItem` through a 1-row `TestBackend` and read the

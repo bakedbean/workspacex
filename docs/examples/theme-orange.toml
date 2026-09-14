@@ -10,7 +10,7 @@
 # This file translates the cterm indices of Normal mode through the
 # xterm-256 table: 166 -> #d75f00, 234 -> #1c1c1c, 223 -> #ffd7af, and ANSI
 # black -> the jellybeans background. Section a is the bright orange block
-# with cream text, b is orange text on ash, c is orange text on black, so
+# with black text, b is orange text on ash, c is orange text on black, so
 # each chain steps from orange through the darker tones; the right side
 # mirrors it (x = c, y = b, z = a).
 #
@@ -32,31 +32,30 @@ cream    = "#ffd7af"   # ctermBrightYellow 223
 blood    = "#870000"   # ctermBlood 88 (Insert mode block)
 green    = "#008700"   # cterm0B 28
 cyan     = "#5fb3b3"   # gui0C
-white    = "#ffffff"
 
 [dashboard_header]
-format       = "[ $brand ](bg:orange fg:cream)[](fg:orange bg:ash)[ $group ](bg:ash fg:orange)[](fg:ash bg:black)[( $sort )](bg:black fg:orange)[](fg:black)(  $filter)"
+format       = "[ $brand ](bg:orange fg:black)[](fg:orange bg:ash)[ $group ](bg:ash fg:orange)[](fg:ash bg:black)[( $sort )](bg:black fg:orange)[](fg:black)(  $filter)"
 right_format = "[](fg:ash)[ $counts ](bg:ash fg:orange)"
 fill         = " "
 
 [dashboard_footer]
-format       = "[ $keys ](bg:orange fg:cream)[](fg:orange)"
-right_format = "[](fg:ash)[( $version )](bg:ash fg:orange)[](fg:orange bg:ash)[ $usage ](bg:orange fg:cream)"
+format       = "[ $keys ](bg:orange fg:black)[](fg:orange)"
+right_format = "[](fg:ash)[( $version )](bg:ash fg:orange)[](fg:orange bg:ash)[ $usage ](bg:orange fg:black)"
 fill         = " "
 
 [attached_top]
-format       = "[($agent_bar )$workspace ](bg:orange fg:cream bold)[](fg:orange bg:ash)[( $attention )](bg:ash fg:orange)[](fg:ash)"
+format       = "[($agent_bar )$workspace ](bg:orange fg:black bold)[](fg:orange bg:ash)[( $attention )](bg:ash fg:orange)[](fg:ash)"
 fill         = " "
 
 [attached_bottom]
-format       = "[ $keys ](bg:orange fg:cream)[](fg:orange bg:ash)[( $pins )](bg:ash fg:orange)[](fg:ash)"
-right_format = "[](fg:black)[( $agents )( $model_tokens )](bg:black fg:orange)[](fg:ash bg:black)[( $procs )( $diff )](bg:ash fg:orange)[](fg:orange bg:ash)[( $pr )](bg:orange fg:cream)"
+format       = "[ $keys ](bg:orange fg:black)[](fg:orange bg:ash)[( $pins )](bg:ash fg:orange)[](fg:ash)"
+right_format = "[](fg:black)[( $agents )( $model_tokens )](bg:black fg:orange)[](fg:ash bg:black)[( $procs )( $diff )](bg:ash fg:orange)[](fg:orange bg:ash)[( $pr )](bg:orange fg:black)"
 fill         = " "
 
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 [brand]
-format = "[$symbol](fg:white) [$name](bold)[ $mark](fg:white bold)[ · $view]()"
+format = "[$symbol]() [$name](bold)[ $mark](bold)[ · $view]()"
 
 [group]
 format = "[$label ]()$tabs"
@@ -79,7 +78,7 @@ format = "[$version]()"
 format = "[$label $spark]()"
 
 [keys]
-format    = "[$key](fg:white bold) [$label]()"
+format    = "[$key](bold) [$label]()"
 separator = "  "
 
 [pins]

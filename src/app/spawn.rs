@@ -145,13 +145,13 @@ pub(crate) fn pin_session_id_for(
     Some(id)
 }
 
-/// A pi primary that predates per-instance ids has conversations on disk
-/// but no pin, and pi has no hook to report one later — so without this it
-/// would `--continue` forever, resuming whichever pi in the worktree spoke
-/// last once a peer is added. Adopt the newest pi session not owned by
-/// another instance as the primary's own, store it, and resume it exactly.
-/// Only for a primary with no recorded id; a session owned by a peer (its
-/// recorded id) is never adopted. Returns the adopted id.
+/// A pi primary that predates per-instance ids can have conversations on disk
+/// but no pin. The session-start extension reports newly opened sessions, not
+/// which older conversation belongs to this primary. Adopt the newest pi
+/// session not owned by another pi instance, store it, and resume it exactly.
+/// Only for a primary with no recorded id. If any pi peer has no recorded id,
+/// ownership is ambiguous and adoption is skipped; the caller starts fresh
+/// with a new pin instead. Returns the adopted id.
 pub(crate) fn adopt_legacy_pi_session(
     app: &App,
     instance: &crate::data::agents::AgentInstance,
@@ -163,14 +163,14 @@ pub(crate) fn adopt_legacy_pi_session(
     {
         return None;
     }
-    let owned_by_peers: Vec<String> = app
+    let owned_by_peers = app
         .store
         .workspace_agents(instance.workspace_id)
         .ok()?
         .into_iter()
-        .filter(|a| a.id != instance.id)
-        .filter_map(|a| a.agent_session_id)
-        .collect();
+        .filter(|a| a.id != instance.id && a.agent == instance.agent)
+        .map(|a| a.agent_session_id)
+        .collect::<Option<Vec<String>>>()?;
     let id = crate::pty::session::newest_pi_session_id(worktree, &owned_by_peers)?;
     if let Err(e) = app.store.set_instance_agent_session(instance.id, &id) {
         tracing::warn!(error = %e, "failed to store the adopted pi session id");
@@ -741,6 +741,9 @@ mod added_spawn_tests {
         app.store
             .set_instance_agent_session(added.id, "peer000000000000000000000000000")
             .unwrap();
+        app.store
+            .add_workspace_agent(ws.id, AgentKind::Codex)
+            .unwrap();
 
         let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws.id).expect("spawn info");
         match mode {
@@ -802,6 +805,56 @@ mod added_spawn_tests {
                     .unwrap()
                     .unwrap();
                 assert_eq!(stored.agent_session_id.as_deref(), Some(pin.as_str()));
+            }
+            other => panic!("expected Fresh with a new pin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_pi_primary_with_unpinned_pi_peer_spawns_fresh_pinned() {
+        let (app, primary, _added, _sid, home, wt, _env) = app_with_claude_session(AgentKind::Pi);
+        let ws = app.workspaces.first().unwrap().1.clone();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspace_agents SET agent = 'pi', ordinal = 0 WHERE id = ?1",
+                [primary.id.0],
+            )
+            .unwrap();
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET agent = 'pi' WHERE id = ?1",
+                [ws.id.0],
+            )
+            .unwrap();
+        let mut app = app;
+        app.refresh().unwrap();
+        // Without a recorded peer id, this transcript could belong to either
+        // Pi instance. The primary must not adopt it just because it is newest.
+        seed_pi_file(home.path(), wt.path(), "unknown-peer-session");
+
+        let (_id, _wt, mode, _repo, _agent) = build_spawn_info(&app, ws.id).expect("spawn info");
+        match mode {
+            SpawnMode::Fresh { pin_session_id, .. } => {
+                let pin = pin_session_id.expect("a new pin");
+                assert_ne!(pin, "unknown-peer-session");
+                let stored = app
+                    .store
+                    .workspace_agents_by_id(primary.id)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stored.agent_session_id.as_deref(), Some(pin.as_str()));
+
+                seed_pi_file(home.path(), wt.path(), &pin);
+                let (_id, _wt, mode, _repo, _agent) =
+                    build_spawn_info(&app, ws.id).expect("respawn info");
+                match mode {
+                    SpawnMode::Continue {
+                        resume_session_id, ..
+                    } => assert_eq!(resume_session_id.as_deref(), Some(pin.as_str())),
+                    other => panic!("expected Continue with the primary's pin, got {other:?}"),
+                }
             }
             other => panic!("expected Fresh with a new pin, got {other:?}"),
         }

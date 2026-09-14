@@ -115,10 +115,12 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         .map(|v| v.len() as u32)
         .unwrap_or(0);
 
+    let instances = app.store.workspace_agents(focused_id).unwrap_or_default();
     // Usage belongs to the focused agent, not its workspace. Only the primary
     // shares the dashboard's event cache; an untracked peer must not borrow it.
-    let focused_events = if app.store.primary_instance_id(focused_id).ok().flatten()
-        == Some(focused_target.instance)
+    let focused_events = if instances
+        .iter()
+        .any(|instance| instance.id == focused_target.instance && instance.is_primary)
     {
         app.workspace_events.get(&focused_id)
     } else {
@@ -135,7 +137,6 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         String,
         Option<char>,
     )> = {
-        let instances = app.store.workspace_agents(focused_id).unwrap_or_default();
         if instances.len() > 1 {
             // Keys cap at 10 (see `agent_switch_keys`); agents past the
             // pool get `None` so they still render and stay clickable

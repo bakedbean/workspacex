@@ -528,9 +528,11 @@ pub struct App {
     /// Per-workspace tracking for attention-alert state.
     pub workspace_activity:
         std::collections::HashMap<crate::data::store::WorkspaceId, ActivityState>,
-    /// Workspaces whose JSONL events have been read at least once by the
-    /// tail loop. Until a workspace is in this set the classifier's output
-    /// is provisional (it can only see session-liveness, not stop_reason),
+    /// Workspaces whose primary transcript has been read successfully at least
+    /// once. Initialization is sticky even if that transcript later disappears
+    /// or becomes unreadable/ambiguous; peer scans never initialize a workspace.
+    /// Until then the classifier's output is provisional (it can only see
+    /// session-liveness, not stop_reason),
     /// so we hold off on recording activity / firing bells for it. Without
     /// this gate the classifier flickers from Active → AwaitingAnswer the
     /// instant the tail loop catches up, which the bell loop would treat

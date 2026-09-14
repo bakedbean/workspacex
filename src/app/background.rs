@@ -121,11 +121,12 @@ async fn tail_instance_events(
     let Some(file) = current_file else {
         // Missing pinned files and ambiguous unpinned instances must not keep
         // model/usage from the session they used to resolve.
+        // Keep primary initialization sticky so PTY/permission activity can
+        // still advance after a previously scanned transcript disappears.
         if let Some(peer) = peer_id {
             g.agent_events.remove(&peer);
         } else {
             g.workspace_events.remove(&id);
-            g.workspace_events_scanned.remove(&id);
         }
         return;
     };
@@ -137,7 +138,6 @@ async fn tail_instance_events(
                 g.agent_events.remove(&peer);
             } else {
                 g.workspace_events.remove(&id);
-                g.workspace_events_scanned.remove(&id);
             }
         }
         return;
@@ -282,10 +282,9 @@ async fn tail_instance_events(
     for e in events {
         crate::activity::events::push_event(evt, e);
     }
-    // First successful tail of this workspace's JSONL.
-    // After this point the classifier sees the agent's
-    // real stop_reason, so the bell loop can start
-    // trusting activity transitions for this workspace.
+    // Only a successful primary scan opens the cold-start activity gate.
+    // Once initialized, keep tracking transitions even if this transcript
+    // later disappears, becomes ambiguous, or fails to read after replacement.
     if peer_id.is_none() {
         g.workspace_events_scanned.insert(id);
     }
@@ -294,8 +293,9 @@ async fn tail_instance_events(
 #[cfg(test)]
 mod instance_event_tests {
     use super::*;
+    use crate::app::activity::ActivityState;
     use crate::data::store::{AgentInstanceId, NewWorkspace, Store};
-    use crate::pty::session::AgentKind;
+    use crate::pty::session::{AgentKind, SessionStatus};
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -383,6 +383,14 @@ mod instance_event_tests {
             .open(path)
             .unwrap()
             .write_all(record.as_bytes())
+            .unwrap();
+    }
+
+    fn draw_once(app: &mut App) {
+        let backend = ratatui::backend::TestBackend::new(120, 40);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| crate::app::render::draw_for_test(frame, app))
             .unwrap();
     }
 
@@ -484,22 +492,116 @@ mod instance_event_tests {
     async fn missing_primary_does_not_mark_workspace_scanned_from_peer_events() {
         let dir = tempfile::TempDir::new().unwrap();
         let (app, ws, primary, peer, _, _) = setup(dir.path());
-        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
         app.lock()
             .await
             .store
             .set_instance_agent_session(primary, dir.path().join("missing.jsonl").to_str().unwrap())
             .unwrap();
         tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
-        let g = app.lock().await;
+        let mut g = app.lock().await;
         assert!(!g.workspace_events.contains_key(&ws));
-        assert!(!g.workspace_events_scanned.contains(&ws));
+        g.test_spawn_session(primary, SessionStatus::Running { pid: 1 });
+        draw_once(&mut g);
+        assert!(!g.workspace_activity.contains_key(&ws));
+        assert!(!g.workspace_needs_attention.contains(&ws));
+        assert!(g.pending_bells.is_empty());
         assert_eq!(
             g.agent_events[&peer].model_id.as_deref(),
             Some("peer-model")
         );
         assert_eq!(g.agent_events[&peer].context_tokens, Some(17_128));
         assert_eq!(g.agent_events[&peer].log.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn missing_primary_after_scan_keeps_activity_and_attention_live() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (app, ws, primary, _, _, _) = setup(dir.path());
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        {
+            let mut g = app.lock().await;
+            g.test_spawn_session(primary, SessionStatus::Running { pid: 1 });
+            draw_once(&mut g);
+            assert_eq!(g.workspace_events[&ws].context_tokens, Some(16_485));
+            assert_eq!(g.workspace_activity[&ws], ActivityState::Complete);
+            assert!(g.workspace_needs_attention.remove(&ws));
+            assert!(
+                g.pending_bells.is_empty(),
+                "cold-start completion is silent"
+            );
+            g.store
+                .set_instance_agent_session(
+                    primary,
+                    dir.path().join("missing.jsonl").to_str().unwrap(),
+                )
+                .unwrap();
+        }
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let mut g = app.lock().await;
+        assert!(
+            g.workspace_events
+                .get(&ws)
+                .and_then(|events| events.context_tokens)
+                .is_none(),
+            "missing primary must not retain old usage or borrow peer usage"
+        );
+        let session = g.sessions.get(primary).unwrap();
+        session.activity_ms.store(
+            crate::util::time::now_ms() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        draw_once(&mut g);
+        assert_eq!(g.workspace_activity[&ws], ActivityState::Active);
+        assert!(!g.workspace_needs_attention.contains(&ws));
+
+        let session = g.sessions.get(primary).unwrap();
+        session.activity_ms.store(
+            (crate::util::time::now_ms() - 10_000) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        draw_once(&mut g);
+        assert_eq!(g.workspace_activity[&ws], ActivityState::Idle);
+
+        // A fresh primary permission signal must still reach the alert loop,
+        // without another successful transcript scan reopening its gate.
+        g.workspace_events
+            .entry(ws)
+            .or_default()
+            .pending_tool_uses
+            .insert("permission".into(), ("bash".into(), 0));
+        draw_once(&mut g);
+        assert_eq!(g.workspace_activity[&ws], ActivityState::Awaiting);
+        assert!(g.workspace_needs_attention.contains(&ws));
+        assert_eq!(g.pending_bells, vec![ActivityState::Awaiting]);
+        draw_once(&mut g);
+        assert_eq!(g.pending_bells, vec![ActivityState::Awaiting]);
+    }
+
+    #[tokio::test]
+    async fn unreadable_primary_replacement_keeps_activity_live_without_stale_usage() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (app, ws, primary, _, _, _) = setup(dir.path());
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let replacement = dir.path().join("unreadable.jsonl");
+        std::fs::write(&replacement, [0xff, b'\n']).unwrap();
+        {
+            let mut g = app.lock().await;
+            draw_once(&mut g);
+            assert_eq!(g.workspace_activity[&ws], ActivityState::Complete);
+            g.store
+                .set_instance_agent_session(primary, replacement.to_str().unwrap())
+                .unwrap();
+        }
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let mut g = app.lock().await;
+        assert!(
+            g.workspace_events
+                .get(&ws)
+                .and_then(|events| events.context_tokens)
+                .is_none()
+        );
+        draw_once(&mut g);
+        assert_eq!(g.workspace_activity[&ws], ActivityState::Off);
     }
 
     #[tokio::test]

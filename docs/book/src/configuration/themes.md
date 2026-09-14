@@ -28,8 +28,9 @@ wsx theme init     # write the bundled default there (never overwrites)
 wsx theme check    # validate and print every error; exit 1 on any
 ```
 
-The path honors `XDG_CONFIG_HOME`: when set, the file is
-`$XDG_CONFIG_HOME/wsx/theme.toml`. `wsx theme check [path]` can also validate
+The path honors `XDG_CONFIG_HOME`: when set to an absolute path, the file is
+`$XDG_CONFIG_HOME/wsx/theme.toml`; a relative or unset value falls back to
+`~/.config/wsx/theme.toml`. `wsx theme check [path]` can also validate
 another file before you install it.
 
 The file is optional. Anything you leave out keeps the bundled default,
@@ -46,7 +47,7 @@ bundled default.
 ```toml
 [dashboard_footer]
 format       = "$keys"
-right_format = "$version  $usage"
+right_format = "($version  )$usage"
 
 [attached_top]
 format = "($agent_bar )$workspace(   $attention)"
@@ -57,6 +58,11 @@ right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
 ```
+
+The `($version  )` group around `$version` and its trailing two spaces means
+that separator drops along with `$version` itself when the footer is too
+narrow for both — the same "put separators inside the group" rule described
+under Grammar below.
 
 | Key | Meaning |
 |---|---|
@@ -96,9 +102,9 @@ base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 
 Each segment has its own table, such as `[workspace]`, with `format` (its
 layout, using the variables below), `style`, `symbol`, `disabled`,
-`priority` (overflow survival; higher lasts longer), and, for multi-item
-segments, `separator`. A multi-item segment's format describes one item;
-the items keep their existing order.
+`priority` (overflow survival; higher lasts longer; unset defaults to 100),
+and, for multi-item segments, `separator`. A multi-item segment's format
+describes one item; the items keep their existing order.
 
 | Segment | Variables | Notes |
 |---|---|---|
@@ -109,7 +115,7 @@ the items keep their existing order.
 | `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. |
 | `attention` | `$items` | Cross-workspace attention list. Clickable. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
-| `agents` | `$symbol $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. Clickable. |
+| `agents` | `$symbol $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — the pill always uses a filled/hollow dot to show which agent is active. Clickable. |
 | `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
 | `procs` | `$symbol $count` | Hidden at zero. Clickable. |
 | `diff` | `$added $removed` | Hidden when clean. |
@@ -120,6 +126,13 @@ click targets follow them between bars as well as within a bar. `keys` uses
 the attached view's leader-key hints in both attached bars. On the
 dashboard, only `keys`, `version`, and `usage` produce output; other segments
 render empty. Segments also render empty when their underlying data is absent.
+
+#### What the file does not cover
+
+The dashboard's own DETAIL pane (the pane shown when a workspace row is
+selected, distinct from the attached view) draws its own pinned-command
+chips with their stock look. That row is not built from `[pins]` and is
+unaffected by it.
 
 #### Overriding a segment's style
 

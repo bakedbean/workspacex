@@ -63,7 +63,7 @@ rust   = "#d75f00"
 
 [dashboard_footer]
 format       = "$keys"
-right_format = "$version  $usage"
+right_format = "($version  )$usage"
 
 [attached_top]
 format = "($agent_bar )$workspace(   $attention)"
@@ -148,6 +148,11 @@ Multi-item segments (`keys`, `pins`, `agents`) keep their item order
 fixed. Their `format` describes one item; the engine repeats it per
 item with `separator` (default two spaces) between, recording a hit
 per item.
+
+`[agents].symbol` is ignored: `$symbol` for that segment is always a
+filled or hollow dot showing which agent is active, not a
+user-configurable glyph. `[pr].symbol`, by contrast, does override the
+lifecycle glyph when set.
 
 Providers supply a segment's *default* style from state: the PR lifecycle
 tint, the agent identity color, and the `ok`/`warn` model-token tint. A user

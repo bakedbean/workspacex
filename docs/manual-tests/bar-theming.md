@@ -166,6 +166,12 @@ the lifecycle foreground becomes orange, while the review mark retains
 `$mark_style`. Confirm `dimmed` is accepted as a modifier and `fg:dim` as a
 color token.
 
+Restyle `[pins]` (e.g. `style = "bg:second"`, or change its `format`).
+Expected: the attached bottom bar's pin chips pick up the change, but the
+dashboard's own DETAIL pane — the pane shown when a workspace row is
+selected, separate from the attached view — keeps its pinned-command chips
+in their stock look; that row is not built from `[pins]`.
+
 Exit the scratch wsx session when finished. Close the dedicated shells to
 restore your normal environment; remove only the scratch directory you
 created once it is no longer needed.

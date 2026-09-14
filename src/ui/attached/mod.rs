@@ -84,15 +84,14 @@ fn route_hits(area: Rect, hits: &[crate::ui::bar::segment::HitSpan], out: &mut P
             Hit::Pr => out.pr_link_rect = Some(rect),
             Hit::Procs => out.procs_link_rect = Some(rect),
             Hit::Agent(id) => out.agent_chip_rects.push((id, rect)),
-            Hit::ArmLeader => out
-                .footer_hint_rects
-                .push((rect, crate::ui::footer::FooterHintAction::ArmLeader)),
-            Hit::Key(k) => out
-                .footer_hint_rects
-                .push((rect, crate::ui::footer::FooterHintAction::Key(k))),
             Hit::Attention(id) => out.attention_rects.push((id, rect)),
             Hit::AttentionMore => out.attention_more_rect = Some(rect),
             Hit::UsageGraph => out.usage_graph_rect = Some(rect),
+            Hit::ArmLeader | Hit::Key(_) => {
+                if let Some(action) = hit.footer_action() {
+                    out.footer_hint_rects.push((rect, action));
+                }
+            }
         }
     }
 }
@@ -155,7 +154,7 @@ pub(crate) fn render_panes(
     // Both the info line (top) and the chip row (bottom) render from one
     // shared segment map, so a segment that appears in either bar's format
     // — or moves between them — renders identically and keeps its click.
-    let (top, bottom) = crate::ui::bar::attached_bars(
+    let bars = crate::ui::bar::attached_bars(
         specs,
         theme,
         crate::ui::bar::AttachedInputs {
@@ -177,8 +176,8 @@ pub(crate) fn render_panes(
         info_area.width,
         chip_area.width,
     );
-    f.render_widget(Paragraph::new(top.line), info_area);
-    route_hits(info_area, &top.hits, &mut out);
+    f.render_widget(Paragraph::new(bars.top.line), info_area);
+    route_hits(info_area, &bars.top.hits, &mut out);
     if separator_area.width > 0 {
         let rule = "─".repeat(separator_area.width as usize);
         f.render_widget(
@@ -189,8 +188,8 @@ pub(crate) fn render_panes(
 
     // Chip row (bottom): `^x menu` hint + pinned chips left, the stats
     // block (agents, model+tokens, procs, diff, PR) flush right.
-    f.render_widget(Paragraph::new(bottom.line), chip_area);
-    route_hits(chip_area, &bottom.hits, &mut out);
+    f.render_widget(Paragraph::new(bars.bottom.line), chip_area);
+    route_hits(chip_area, &bars.bottom.hits, &mut out);
 
     out.pane_rects = pane_rects;
     out
@@ -437,7 +436,7 @@ mod tests {
             width,
             width,
         )
-        .0
+        .top
     }
 
     /// The bottom row's fixture inputs: two pinned commands, a diff, a PR

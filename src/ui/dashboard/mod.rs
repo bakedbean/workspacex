@@ -332,7 +332,6 @@ pub fn render_footer(
     Vec<(Rect, crate::ui::footer::FooterHintAction)>,
 ) {
     use crate::ui::bar::segment::Hit;
-    use crate::ui::footer::FooterHintAction;
     if let Some(msg) = notice {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.err_style()))),
@@ -357,9 +356,11 @@ pub fn render_footer(
     for (rect, hit) in crate::ui::bar::render::hit_rects(area, &rendered.hits) {
         match hit {
             Hit::UsageGraph => graph = Some(rect),
-            Hit::Key(k) => hints.push((rect, FooterHintAction::Key(k))),
-            Hit::ArmLeader => hints.push((rect, FooterHintAction::ArmLeader)),
-            _ => {}
+            _ => {
+                if let Some(action) = hit.footer_action() {
+                    hints.push((rect, action));
+                }
+            }
         }
     }
     (graph, hints)

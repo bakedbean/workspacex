@@ -204,33 +204,39 @@ fn attached_segments(
     segments
 }
 
+/// The attached view's rendered top and bottom bars.
+pub(crate) struct AttachedBars {
+    pub top: Rendered,
+    pub bottom: Rendered,
+}
+
 /// Render the attached view's top and bottom bars from one shared segment
-/// map. Returns `(top, bottom)`.
+/// map.
 pub(crate) fn attached_bars(
     specs: &BarSpecs,
     theme: &Theme,
     inputs: AttachedInputs<'_>,
     top_width: u16,
     bottom_width: u16,
-) -> (Rendered, Rendered) {
+) -> AttachedBars {
     let resolver = specs.resolver(theme);
     let segments = attached_segments(specs, theme, inputs, &resolver);
-    (
-        render_bar(
+    AttachedBars {
+        top: render_bar(
             &specs.attached_top,
             &segments,
             &specs.segments,
             top_width,
             &resolver,
         ),
-        render_bar(
+        bottom: render_bar(
             &specs.attached_bottom,
             &segments,
             &specs.segments,
             bottom_width,
             &resolver,
         ),
-    )
+    }
 }
 
 /// How many columns the attention line's items may occupy in whichever

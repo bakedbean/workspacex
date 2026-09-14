@@ -22,6 +22,19 @@ pub enum Hit {
     AttentionMore,
 }
 
+impl Hit {
+    /// This hit's footer key-hint action — the two variants a footer's
+    /// key-hint row can dispatch (a synthesized key press, or arming the
+    /// attached-view leader); `None` for every other hit.
+    pub fn footer_action(self) -> Option<crate::ui::footer::FooterHintAction> {
+        match self {
+            Hit::Key(k) => Some(crate::ui::footer::FooterHintAction::Key(k)),
+            Hit::ArmLeader => Some(crate::ui::footer::FooterHintAction::ArmLeader),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HitSpan {
     pub start_col: u16,

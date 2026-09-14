@@ -169,14 +169,15 @@ mod attention_budget_tests {
 
         // Measure the PR chip's own rendered width independently, via a
         // wide, non-dropping render of the bottom bar's hits.
-        let (_, bottom) = attached_bars(
+        let bars = attached_bars(
             &specs,
             &theme,
             pr_input(inputs("wsx", "foo", None)),
             200,
             200,
         );
-        let pr_hit = bottom
+        let pr_hit = bars
+            .bottom
             .hits
             .iter()
             .find(|h| h.hit == Hit::Pr)
@@ -218,7 +219,7 @@ mod attached_bars_tests {
         let theme = Theme::wsx();
         let mut specs = bundled_default(&theme);
         specs.attached_top.format = format::parse("$keys").unwrap();
-        let (top, _bottom) = attached_bars(
+        let bars = attached_bars(
             &specs,
             &theme,
             AttachedInputs {
@@ -241,12 +242,12 @@ mod attached_bars_tests {
             60,
         );
         assert!(
-            test_util::plain(&top.line).starts_with(" ^x  menu"),
+            test_util::plain(&bars.top.line).starts_with(" ^x  menu"),
             "{:?}",
-            test_util::plain(&top.line)
+            test_util::plain(&bars.top.line)
         );
-        assert_eq!(top.hits[0].start_col, 0);
-        assert_eq!(top.hits[0].hit, Hit::ArmLeader);
+        assert_eq!(bars.top.hits[0].start_col, 0);
+        assert_eq!(bars.top.hits[0].hit, Hit::ArmLeader);
     }
 }
 
@@ -485,7 +486,7 @@ mod bottom_tests {
     fn render(inputs: AttachedInputs<'_>, width: u16) -> Rendered {
         let theme = Theme::wsx();
         let specs = bundled_default(&theme);
-        attached_bars(&specs, &theme, inputs, width, width).1
+        attached_bars(&specs, &theme, inputs, width, width).bottom
     }
     fn full<'a>(
         pinned: &'a [PinnedCommand],
@@ -712,7 +713,7 @@ mod bottom_tests {
             agents: &agents,
             active_agent: None,
         };
-        let out = attached_bars(&specs, &theme, inputs, 120, 120).1;
+        let out = attached_bars(&specs, &theme, inputs, 120, 120).bottom;
         let t = plain(&out.line);
         assert!(t.ends_with("X #42 open"), "{t:?}");
     }

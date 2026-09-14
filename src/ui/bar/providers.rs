@@ -6,6 +6,9 @@
 use super::render::eval;
 use super::segment::{Hit, Segment, SegmentConfig, SegmentMap};
 use super::style::Resolver;
+use crate::pty::session::AgentKind;
+use crate::ui::theme::Theme;
+use crate::ui::updates_bar::AttentionLine;
 use ratatui::style::Style;
 use ratatui::text::Span;
 use std::collections::HashMap;
@@ -96,6 +99,74 @@ pub fn version(cfg: &SegmentConfig, version: &str, resolver: &Resolver) -> Optio
     eval_segment(
         cfg,
         &vars(vec![("version", var(version))]),
+        Style::default(),
+        &[],
+        resolver,
+    )
+}
+
+/// The agent identity bar; `$style` is the agent's fixed color.
+pub fn agent_bar(
+    cfg: &SegmentConfig,
+    agent: Option<AgentKind>,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let agent = agent?;
+    let symbol = cfg.symbol.clone().unwrap_or_else(|| "▎".to_string());
+    eval_segment(
+        cfg,
+        &vars(vec![("symbol", var(symbol))]),
+        theme.agent_style(agent),
+        &[],
+        resolver,
+    )
+}
+
+/// `$repo` is absent (so `($repo/)` collapses) when the repo name is empty.
+pub fn workspace(
+    cfg: &SegmentConfig,
+    repo: &str,
+    name: &str,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let mut v = vars(vec![("name", var(name))]);
+    if !repo.is_empty() {
+        v.insert("repo".to_string(), var(repo));
+    }
+    eval_segment(cfg, &v, theme.header_style(), &[], resolver)
+}
+
+/// The pre-built attention line as one opaque `$items` variable, its entry
+/// and `… +N more` click extents carried as hits.
+pub fn attention(
+    cfg: &SegmentConfig,
+    line: Option<AttentionLine>,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let line = line?;
+    let mut items = Segment::default();
+    for span in line.line.spans {
+        items.push(span);
+    }
+    for s in &line.segments {
+        items.hits.push(super::segment::HitSpan {
+            start_col: s.start_col,
+            width: s.width,
+            hit: Hit::Attention(s.workspace_id),
+        });
+    }
+    if let Some(m) = line.more {
+        items.hits.push(super::segment::HitSpan {
+            start_col: m.start_col,
+            width: m.width,
+            hit: Hit::AttentionMore,
+        });
+    }
+    eval_segment(
+        cfg,
+        &vars(vec![("items", items)]),
         Style::default(),
         &[],
         resolver,

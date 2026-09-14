@@ -31,7 +31,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         }
     };
     let focused_id = focused_target.workspace_id;
-    let focused_label = app
+    let (focused_repo, focused_name): (String, String) = app
         .workspaces
         .iter()
         .find(|(_, w)| w.id == focused_id)
@@ -40,15 +40,16 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
                 .repos
                 .iter()
                 .find(|r| r.id == w.repo_id)
-                .map(|r| r.name.as_str())
-                .unwrap_or("");
-            if repo_name.is_empty() {
-                w.name.clone()
-            } else {
-                format!("{}/{}", repo_name, w.name)
-            }
+                .map(|r| r.name.clone())
+                .unwrap_or_default();
+            (repo_name, w.name.clone())
         })
         .unwrap_or_default();
+    let focused_label = if focused_repo.is_empty() {
+        focused_name.clone()
+    } else {
+        format!("{focused_repo}/{focused_name}")
+    };
     let focused_agent = app
         .workspaces
         .iter()
@@ -152,42 +153,6 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         }
     };
     let (info_area, separator_area, pane_area, chip_area) = attached::layout_chrome(area);
-    let attention_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)> = attention
-        .as_ref()
-        .map(|a| {
-            a.segments
-                .iter()
-                .map(|s| {
-                    (
-                        s.workspace_id,
-                        ratatui::layout::Rect {
-                            x: info_area
-                                .x
-                                .saturating_add(prefix_w as u16)
-                                .saturating_add(s.start_col),
-                            y: info_area.y,
-                            width: s.width,
-                            height: 1,
-                        },
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let attention_more_rect =
-        attention
-            .as_ref()
-            .and_then(|a| a.more)
-            .map(|m| ratatui::layout::Rect {
-                x: info_area
-                    .x
-                    .saturating_add(prefix_w as u16)
-                    .saturating_add(m.start_col),
-                y: info_area.y,
-                width: m.width,
-                height: 1,
-            });
-    let attention_line = attention.map(|a| a.line);
 
     let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
     let multi_pane = panes.len() > 1;
@@ -251,9 +216,11 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         info_area,
         separator_area,
         chip_area,
-        &focused_label,
+        &app.bar_specs,
+        &focused_repo,
+        &focused_name,
         focused_agent,
-        attention_line,
+        attention,
         &pinned,
         procs,
         diff,
@@ -266,8 +233,8 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.chip_rects = out.chip_rects;
     app.pr_link_rect = out.pr_link_rect.map(|r| (focused_id, r));
     app.procs_link_rect = out.procs_link_rect.map(|r| (focused_id, r));
-    app.attention_rects = attention_rects;
-    app.attention_more_rect = attention_more_rect;
+    app.attention_rects = out.attention_rects;
+    app.attention_more_rect = out.attention_more_rect;
     app.attached_pane_rects = out.pane_rects;
     app.agent_chip_rects = out.agent_chip_rects;
     app.footer_hint_rects = out.footer_hint_rects;
@@ -340,6 +307,8 @@ pub(super) fn draw_attached_remote(
             info_area,
             separator_area,
             chip_area,
+            &app.bar_specs,
+            "",
             &label,
             None,
             None,

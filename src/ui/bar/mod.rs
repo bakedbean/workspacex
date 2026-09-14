@@ -90,6 +90,145 @@ pub fn dashboard_footer(
     )
 }
 
+/// Everything both attached bars need, so any attached segment can appear
+/// in either bar's format and keep its click. `pub(crate)`, not `pub`: it
+/// carries `ChipPr`/`ChipModelTokens`, which are themselves `pub(crate)`.
+///
+/// `#[allow(dead_code)]`: `attached_segments` only reads `agent`, `repo`,
+/// `name`, and `attention` for now (`keys`/`agent_bar`/`workspace`/
+/// `attention`, the Task 8 segments); the rest feed `pins`/`agents`/
+/// `model_tokens`/`procs`/`diff`/`pr` once Task 9 adds those segments to
+/// the same function.
+#[allow(dead_code)]
+pub(crate) struct AttachedInputs<'a> {
+    pub repo: &'a str,
+    pub name: &'a str,
+    pub agent: Option<crate::pty::session::AgentKind>,
+    pub attention: Option<crate::ui::updates_bar::AttentionLine>,
+    pub pinned: &'a [crate::commands::pinned::PinnedCommand],
+    pub procs: u32,
+    pub diff: Option<crate::git::DiffStats>,
+    pub pr: Option<crate::ui::attached::ChipPr>,
+    pub model_tokens: Option<crate::ui::detail_modules::session_summary::ChipModelTokens>,
+    pub agents: &'a [(
+        crate::data::store::AgentInstanceId,
+        crate::pty::session::AgentKind,
+        String,
+        Option<char>,
+    )],
+    pub active_agent: Option<crate::data::store::AgentInstanceId>,
+}
+
+/// Build every attached segment once, so a segment that appears in both
+/// bars (or moves between them) renders identically and keeps its hit.
+fn attached_segments(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: AttachedInputs<'_>,
+    resolver: &style::Resolver<'_>,
+) -> SegmentMap {
+    let mut segments = SegmentMap::new();
+    let keys_items: [(&str, &str, Option<Hit>); 1] = [("^x", "menu", Some(Hit::ArmLeader))];
+    put(
+        &mut segments,
+        "keys",
+        providers::keys(cfg(specs, "keys"), &keys_items, resolver),
+    );
+    put(
+        &mut segments,
+        "agent_bar",
+        providers::agent_bar(cfg(specs, "agent_bar"), inputs.agent, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "workspace",
+        providers::workspace(
+            cfg(specs, "workspace"),
+            inputs.repo,
+            inputs.name,
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "attention",
+        providers::attention(cfg(specs, "attention"), inputs.attention, resolver),
+    );
+    segments
+}
+
+/// Render the attached view's top and bottom bars from one shared segment
+/// map. Returns `(top, bottom)`.
+pub(crate) fn attached_bars(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: AttachedInputs<'_>,
+    top_width: u16,
+    bottom_width: u16,
+) -> (Rendered, Rendered) {
+    let resolver = specs.resolver(theme);
+    let segments = attached_segments(specs, theme, inputs, &resolver);
+    (
+        render_bar(
+            &specs.attached_top,
+            &segments,
+            &specs.segments,
+            top_width,
+            &resolver,
+        ),
+        render_bar(
+            &specs.attached_bottom,
+            &segments,
+            &specs.segments,
+            bottom_width,
+            &resolver,
+        ),
+    )
+}
+
+#[cfg(test)]
+mod attached_bars_tests {
+    use super::*;
+    use crate::config::theme_file::bundled_default;
+
+    /// A segment normally in the bottom bar (`keys`, the `^x menu` pill)
+    /// renders — and keeps its hit — when the theme puts it in the top
+    /// bar's format instead: proof the two bars share one segment map.
+    #[test]
+    fn bottom_bar_segment_renders_in_top_bar_with_its_hit() {
+        let theme = Theme::wsx();
+        let mut specs = bundled_default(&theme);
+        specs.attached_top.format = format::parse("$keys").unwrap();
+        let (top, _bottom) = attached_bars(
+            &specs,
+            &theme,
+            AttachedInputs {
+                repo: "wsx",
+                name: "foo",
+                agent: None,
+                attention: None,
+                pinned: &[],
+                procs: 0,
+                diff: None,
+                pr: None,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+            },
+            60,
+            60,
+        );
+        assert!(
+            test_util::plain(&top.line).starts_with(" ^x  menu"),
+            "{:?}",
+            test_util::plain(&top.line)
+        );
+        assert_eq!(top.hits[0].start_col, 0);
+        assert_eq!(top.hits[0].hit, Hit::ArmLeader);
+    }
+}
+
 #[cfg(test)]
 mod footer_tests {
     use super::*;

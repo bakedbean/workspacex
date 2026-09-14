@@ -35,6 +35,7 @@ pub struct PaneSpec<'a> {
 }
 
 /// What `render_panes` reports back to the caller for input hit-testing.
+#[derive(Default)]
 pub struct PanesDrawOutput {
     /// Clickable rects of the pinned-command chips (same as before).
     pub chip_rects: Vec<Rect>,
@@ -57,6 +58,34 @@ pub struct PanesDrawOutput {
     /// `^x` leader pill). Consumed by the input handler to fire the matching
     /// key on click.
     pub footer_hint_rects: Vec<(Rect, crate::ui::footer::FooterHintAction)>,
+    /// `(workspace, rect)` per attention entry on the info line.
+    pub attention_rects: Vec<(crate::data::store::WorkspaceId, Rect)>,
+    /// Rect of the `… +N more` tail, when present.
+    pub attention_more_rect: Option<Rect>,
+}
+
+/// Route one bar's hits into the output the input handlers read. Called for
+/// the top bar and (from Task 9 on) the bottom bar, so a segment moved
+/// between bars keeps its click.
+fn route_hits(area: Rect, hits: &[crate::ui::bar::segment::HitSpan], out: &mut PanesDrawOutput) {
+    use crate::ui::bar::segment::Hit;
+    for (rect, hit) in crate::ui::bar::render::hit_rects(area, hits) {
+        match hit {
+            Hit::PinnedChip(_) => out.chip_rects.push(rect),
+            Hit::Pr => out.pr_link_rect = Some(rect),
+            Hit::Procs => out.procs_link_rect = Some(rect),
+            Hit::Agent(id) => out.agent_chip_rects.push((id, rect)),
+            Hit::ArmLeader => out
+                .footer_hint_rects
+                .push((rect, crate::ui::footer::FooterHintAction::ArmLeader)),
+            Hit::Key(k) => out
+                .footer_hint_rects
+                .push((rect, crate::ui::footer::FooterHintAction::Key(k))),
+            Hit::Attention(id) => out.attention_rects.push((id, rect)),
+            Hit::AttentionMore => out.attention_more_rect = Some(rect),
+            Hit::UsageGraph => {}
+        }
+    }
 }
 
 /// Render one or more attached panes plus the shared chrome (info line,
@@ -85,9 +114,11 @@ pub(crate) fn render_panes(
     info_area: Rect,
     separator_area: Rect,
     chip_area: Rect,
-    label: &str,
+    specs: &crate::config::theme_file::BarSpecs,
+    repo: &str,
+    name: &str,
     agent: Option<AgentKind>,
-    attention_line: Option<Line<'static>>,
+    attention: Option<crate::ui::updates_bar::AttentionLine>,
     pinned: &[PinnedCommand],
     procs: u32,
     diff: Option<crate::git::DiffStats>,
@@ -107,11 +138,33 @@ pub(crate) fn render_panes(
 
     render_dividers(f, dividers, theme);
 
-    // Info line (top): agent bar + focused label, then attention items, with a
-    // full-width `─` rule beneath it — same dim chrome as the chip-row rule —
-    // to set the indicator off from the pane content below.
-    let line = info_line(label, agent, attention_line, theme);
-    f.render_widget(Paragraph::new(line), info_area);
+    let mut out = PanesDrawOutput::default();
+
+    // Info line (top): agent bar + focused label, then attention items,
+    // rendered through the bar engine, with a full-width `─` rule beneath
+    // it — same dim chrome as the chip-row rule — to set the indicator off
+    // from the pane content below.
+    let (top, _bottom) = crate::ui::bar::attached_bars(
+        specs,
+        theme,
+        crate::ui::bar::AttachedInputs {
+            repo,
+            name,
+            agent,
+            attention,
+            pinned,
+            procs,
+            diff,
+            pr,
+            model_tokens: model_tokens.clone(),
+            agents,
+            active_agent,
+        },
+        info_area.width,
+        chip_area.width,
+    );
+    f.render_widget(Paragraph::new(top.line), info_area);
+    route_hits(info_area, &top.hits, &mut out);
     if separator_area.width > 0 {
         let rule = "─".repeat(separator_area.width as usize);
         f.render_widget(
@@ -140,7 +193,8 @@ pub(crate) fn render_panes(
         height: 1,
     };
     f.render_widget(Paragraph::new(Line::from(hint_spans)), hint_rect);
-    let footer_hint_rects = vec![(hint_rect, crate::ui::footer::FooterHintAction::ArmLeader)];
+    out.footer_hint_rects
+        .push((hint_rect, crate::ui::footer::FooterHintAction::ArmLeader));
 
     // Chips render to the right of the hint (plus a 2-col gap).
     let chips_area = Rect {
@@ -167,14 +221,12 @@ pub(crate) fn render_panes(
         theme,
     );
 
-    PanesDrawOutput {
-        chip_rects,
-        pr_link_rect: pr_rect,
-        procs_link_rect: procs_rect,
-        pane_rects,
-        agent_chip_rects: agent_rects,
-        footer_hint_rects,
-    }
+    out.chip_rects = chip_rects;
+    out.pr_link_rect = pr_rect;
+    out.procs_link_rect = procs_rect;
+    out.pane_rects = pane_rects;
+    out.agent_chip_rects = agent_rects;
+    out
 }
 
 fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: &Theme) -> Rect {
@@ -286,35 +338,14 @@ pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
 
 /// Width in columns of the info line's leading `[agent-bar ]label   ` prefix,
 /// before the attention items begin. Shared by `render.rs` (to shrink the
-/// attention width budget and offset its click rects) and `info_line` (to
-/// draw it) so the two never disagree.
+/// attention width budget and offset its click rects) and the engine's
+/// `attached_top` bar (which renders the same prefix) so the two never
+/// disagree.
 pub fn info_line_prefix_width(label: &str, agent: Option<AgentKind>) -> u16 {
     let bar = if agent.is_some() { 2 } else { 0 }; // "▎" + " "
     // Cells, not chars: a double-width glyph in a workspace name would
     // otherwise shift every attention click rect one column left.
     bar + Span::raw(label).width() as u16 + 3 // 3-col gap before attention
-}
-
-/// Build the info line: optional agent identity bar, the focused workspace
-/// label (header style), then — when present — the attention items. The
-/// attention `Line` is pre-truncated by the caller to the post-prefix width.
-fn info_line(
-    label: &str,
-    agent: Option<AgentKind>,
-    attention: Option<Line<'static>>,
-    theme: &Theme,
-) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    if let Some(a) = agent {
-        spans.push(Span::styled("▎".to_string(), theme.agent_style(a)));
-        spans.push(Span::raw(" ".to_string()));
-    }
-    spans.push(Span::styled(label.to_string(), theme.header_style()));
-    if let Some(line) = attention {
-        spans.push(Span::raw("   ".to_string()));
-        spans.extend(line.spans);
-    }
-    Line::from(spans)
 }
 
 /// Build the spans for a pane's title bar: an optional per-agent identity
@@ -375,6 +406,108 @@ fn key_pill_spans(key: &str, theme: &Theme) -> [Span<'static>; 3] {
 mod tests {
     use super::*;
 
+    fn attached_bars_top(
+        specs: &crate::config::theme_file::BarSpecs,
+        theme: &Theme,
+        repo: &str,
+        name: &str,
+        agent: Option<AgentKind>,
+        attention: Option<crate::ui::updates_bar::AttentionLine>,
+        width: u16,
+    ) -> crate::ui::bar::render::Rendered {
+        crate::ui::bar::attached_bars(
+            specs,
+            theme,
+            crate::ui::bar::AttachedInputs {
+                repo,
+                name,
+                agent,
+                attention,
+                pinned: &[],
+                procs: 0,
+                diff: None,
+                pr: None,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+            },
+            width,
+            width,
+        )
+        .0
+    }
+
+    /// Durable evidence for the engine cutover: this snapshot and its hit
+    /// tuples were verified byte-for-byte against the legacy `info_line`
+    /// builder (temporarily restored in git history for that one check,
+    /// then removed again — see the `engine_top_bar_matches_legacy_info_line`
+    /// commit history) before `info_line` was deleted.
+    #[test]
+    fn engine_top_bar_snapshot_with_attention() {
+        use crate::ui::bar::segment::Hit;
+        use crate::ui::updates_bar::{AttentionLine, AttentionMore, AttentionSegment};
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let attention = Some(AttentionLine {
+            line: Line::from(vec![
+                Span::styled("? foo".to_string(), theme.attention_style()),
+                Span::raw("  ".to_string()),
+                Span::styled("… +2 more".to_string(), theme.dim_style()),
+            ]),
+            segments: vec![AttentionSegment {
+                workspace_id: crate::data::store::WorkspaceId(7),
+                start_col: 0,
+                width: 5,
+            }],
+            more: Some(AttentionMore {
+                start_col: 7,
+                width: 9,
+            }),
+        });
+        let new = attached_bars_top(
+            &specs,
+            &theme,
+            "wsx",
+            "foo",
+            Some(AgentKind::Claude),
+            attention,
+            60,
+        );
+        assert!(
+            crate::ui::bar::test_util::plain(&new.line).starts_with("▎ wsx/foo   ? foo  … +2 more"),
+            "{:?}",
+            crate::ui::bar::test_util::plain(&new.line)
+        );
+        let prefix = info_line_prefix_width("wsx/foo", Some(AgentKind::Claude));
+        let hits: Vec<_> = new
+            .hits
+            .iter()
+            .map(|h| (h.start_col, h.width, h.hit))
+            .collect();
+        assert_eq!(
+            hits,
+            vec![
+                (
+                    prefix,
+                    5,
+                    Hit::Attention(crate::data::store::WorkspaceId(7))
+                ),
+                (prefix + 7, 9, Hit::AttentionMore),
+            ]
+        );
+    }
+
+    #[test]
+    fn engine_top_bar_label_has_no_slash_without_repo() {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let new = attached_bars_top(&specs, &theme, "", "solo", None, None, 20);
+        assert_eq!(
+            crate::ui::bar::test_util::plain(&new.line).trim_end(),
+            "solo"
+        );
+    }
+
     #[test]
     fn title_bar_spans_prepend_agent_bar_when_present() {
         let theme = Theme::wsx();
@@ -420,6 +553,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
         let (w, h) = (40u16, 10u16);
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| {
@@ -433,7 +567,9 @@ mod tests {
                 info,
                 separator,
                 chip,
-                "wsx/foo",
+                &specs,
+                "wsx",
+                "foo",
                 None,
                 None,
                 &[],
@@ -466,38 +602,39 @@ mod tests {
     }
 
     #[test]
-    fn info_line_prefix_width_matches_drawn_prefix() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
+    fn prefix_width_matches_drawn_prefix() {
+        use crate::ui::updates_bar::AttentionLine;
         let theme = Theme::wsx();
-        let attn = Line::from(vec![Span::raw("ATTN".to_string())]);
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let attention = Some(AttentionLine {
+            line: Line::from(vec![Span::raw("ATTN".to_string())]),
+            segments: vec![],
+            more: None,
+        });
         let prefix = info_line_prefix_width("wsx/foo", Some(AgentKind::Claude)) as usize;
-        let mut term = Terminal::new(TestBackend::new(60, 1)).unwrap();
-        term.draw(|f| {
-            let line = info_line(
-                "wsx/foo",
-                Some(AgentKind::Claude),
-                Some(attn.clone()),
-                &theme,
-            );
-            f.render_widget(Paragraph::new(line), Rect::new(0, 0, 60, 1));
-        })
-        .unwrap();
-        let buf = term.backend().buffer();
-        // Collect per-column symbols so multibyte glyphs (the `▎` agent bar)
-        // count as one column, keeping the slice index in column space —
-        // the same space `info_line_prefix_width` returns.
+        let out = attached_bars_top(
+            &specs,
+            &theme,
+            "wsx",
+            "foo",
+            Some(AgentKind::Claude),
+            attention,
+            60,
+        );
+        let buf = crate::ui::bar::test_util::render_line(&out.line, 60);
         let cols: Vec<String> = (0..60).map(|x| buf[(x, 0)].symbol().to_string()).collect();
-        let attn: String = cols[prefix..prefix + 4].concat();
-        assert_eq!(attn, "ATTN", "cols={cols:?}");
+        assert_eq!(cols[prefix..prefix + 4].concat(), "ATTN", "cols={cols:?}");
     }
 
     #[test]
-    fn info_line_label_only_when_no_attention() {
+    fn top_bar_is_label_only_without_attention() {
         let theme = Theme::wsx();
-        let line = info_line("wsx/foo", None, None, &theme);
-        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
-        assert_eq!(text, "wsx/foo");
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let out = attached_bars_top(&specs, &theme, "wsx", "foo", None, None, 20);
+        assert_eq!(
+            crate::ui::bar::test_util::plain(&out.line).trim_end(),
+            "wsx/foo"
+        );
     }
 
     #[test]

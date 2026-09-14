@@ -826,7 +826,14 @@ mod build_row_inputs_tests {
             .activity_ms
             .store(crate::util::time::now_ms_u64(), Ordering::Relaxed);
         *session.status.write().unwrap() = SessionStatus::Exited { code: 0 };
-        assert_eq!(row_inputs(&app, ws).status, Status::Complete);
+        let exited_line = row::render(
+            &row_inputs(&app, ws),
+            row::ColumnWidths::default().with_agent(2),
+            0,
+            &theme,
+            160,
+        );
+        assert_eq!(exited_line.spans[0].content, " ");
     }
 
     #[test]

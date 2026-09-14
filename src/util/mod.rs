@@ -5,4 +5,4 @@
 //! `data`, `app`, or `ui` belongs in the subsystem it serves, not here.
 
 pub mod names;
-pub(crate) mod time;
+pub mod time;

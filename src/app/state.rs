@@ -73,6 +73,9 @@ impl App {
             pending_edit: None,
             theme,
             bar_specs,
+            theme_path: None,
+            theme_fingerprint: None,
+            theme_notice: None,
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
             recaps: Default::default(),
@@ -583,6 +586,13 @@ pub struct App {
     /// Bar theme (formats + palette) resolved from `~/.config/wsx/theme.toml`
     /// merged over the bundled default. Reloaded by `maybe_reload_theme`.
     pub bar_specs: crate::config::theme_file::BarSpecs,
+    /// `~/.config/wsx/theme.toml`, set by `main` after construction. `None`
+    /// in tests, which then keep the bundled default.
+    pub theme_path: Option<std::path::PathBuf>,
+    /// `(mtime, len)` of the theme file at the last check; `None` when absent.
+    pub theme_fingerprint: Option<(std::time::SystemTime, u64)>,
+    /// `(message, expires_at_ms)` for the footer after a failed reload.
+    pub theme_notice: Option<(String, u64)>,
     pub pm_visible: bool,
     pub focus: crate::ui::PaneFocus,
     /// Recaps for every workspace, loaded from the store each `refresh()`.

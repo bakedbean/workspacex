@@ -176,6 +176,9 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     }
     // Render footer below detail/PM so the spec order
     // list / detail / pm / footer is respected.
+    let notice = app
+        .theme_notice(crate::util::time::now_ms_u64())
+        .map(str::to_string);
     let (graph_rect, footer_hint_rects) = dashboard::render_footer(
         f,
         footer_area,
@@ -184,6 +187,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         &app.bar_specs,
         window.label(),
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))),
+        notice.as_deref(),
     );
     app.usage_graph_rect = graph_rect;
     app.footer_hint_rects = footer_hint_rects;

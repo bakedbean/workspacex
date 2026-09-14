@@ -169,6 +169,7 @@ pub fn render(
         specs,
         "24h",
         matches!(state.selection, Some(SelectionTarget::Workspace(_))),
+        None,
     );
 }
 
@@ -316,6 +317,7 @@ pub fn render_without_footer(
 /// Render only the footer line into `area` (exactly 1 row tall) through the
 /// bar engine. Returns the on-screen rect of the usage graph (when the
 /// `usage` segment is present) and each clickable key hint.
+#[allow(clippy::too_many_arguments)]
 pub fn render_footer(
     f: &mut Frame,
     area: Rect,
@@ -324,12 +326,20 @@ pub fn render_footer(
     specs: &crate::config::theme_file::BarSpecs,
     window_label: &str,
     workspace_selected: bool,
+    notice: Option<&str>,
 ) -> (
     Option<Rect>,
     Vec<(Rect, crate::ui::footer::FooterHintAction)>,
 ) {
     use crate::ui::bar::segment::Hit;
     use crate::ui::footer::FooterHintAction;
+    if let Some(msg) = notice {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.err_style()))),
+            area,
+        );
+        return (None, Vec::new());
+    }
     let rendered = crate::ui::bar::dashboard_footer(
         specs,
         theme,

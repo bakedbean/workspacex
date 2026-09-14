@@ -1276,3 +1276,32 @@ fn ordered_sections_by_attention_emits_non_empty_sections_in_urgency_order() {
         vec![WorkspaceId(11), WorkspaceId(10)]
     );
 }
+
+#[test]
+fn footer_shows_a_theme_notice_instead_of_hints() {
+    let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
+    let backend = TestBackend::new(80, 1);
+    let mut term = Terminal::new(backend).unwrap();
+    let mut out = None;
+    term.draw(|f| {
+        out = Some(render_footer(
+            f,
+            f.area(),
+            &[],
+            &theme,
+            &specs,
+            "24h",
+            true,
+            Some("theme.toml: [pr].format: col 3: unknown `$nope`"),
+        ));
+    })
+    .unwrap();
+    let (graph, hints) = out.unwrap();
+    assert!(graph.is_none());
+    assert!(hints.is_empty());
+    let buf = term.backend().buffer();
+    let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+    assert!(row.starts_with("theme.toml: [pr].format"), "{row:?}");
+    assert_eq!(buf[(0, 0)].fg, theme.err);
+}

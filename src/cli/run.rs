@@ -375,6 +375,45 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 println!("set {key} ({} chars)", normalized.len());
             }
         }
+        CliAction::ThemePath => {
+            println!("{}", dirs.theme_path().display());
+        }
+        CliAction::ThemeInit => {
+            let path = dirs.theme_path();
+            if path.exists() {
+                return Err(Error::UserInput(format!(
+                    "{} already exists; edit it in place or delete it to re-init",
+                    path.display()
+                )));
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, crate::config::theme_file::DEFAULT_TOML)?;
+            println!("wrote {}", path.display());
+        }
+        CliAction::ThemeCheck { path } => {
+            let path = path.unwrap_or_else(|| dirs.theme_path());
+            let theme_name = store.get_setting("theme")?.unwrap_or_default();
+            let theme = crate::ui::theme::Theme::by_name(&theme_name);
+            match crate::config::theme_file::load(&path, &theme) {
+                Ok(_) if path.exists() => println!("ok: {}", path.display()),
+                Ok(_) => println!(
+                    "ok: no file at {}; the bundled default applies",
+                    path.display()
+                ),
+                Err(errors) => {
+                    for e in &errors {
+                        eprintln!("{}: {e}", path.display());
+                    }
+                    return Err(Error::UserInput(format!(
+                        "{} error(s) in {}",
+                        errors.len(),
+                        path.display()
+                    )));
+                }
+            }
+        }
         CliAction::RemoteList => {
             let remotes = crate::commands::remotes::list(&store)?;
             if remotes.is_empty() {

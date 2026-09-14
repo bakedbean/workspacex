@@ -13,6 +13,7 @@ pub(crate) mod config;
 pub(crate) mod desktop;
 pub(crate) mod repo;
 pub(crate) mod reporting;
+pub(crate) mod theme;
 pub(crate) mod workspace;
 
 use agent::parse_agent;
@@ -20,6 +21,7 @@ use config::parse_config;
 use desktop::{parse_menubar, parse_remote, parse_setup, parse_waybar};
 use repo::parse_repo;
 use reporting::{parse_context, parse_recap, parse_status};
+use theme::parse_theme;
 use workspace::{parse_shared, parse_workspace};
 
 /// The dashed help flags. Bare `help` is handled separately — only in a
@@ -94,6 +96,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
     match group {
         "repo" => parse_repo(&mut it).map_err(|e| tag_group(e, group)),
         "config" => parse_config(&mut it).map_err(|e| tag_group(e, group)),
+        "theme" => parse_theme(&mut it).map_err(|e| tag_group(e, group)),
         "remote" => parse_remote(&mut it).map_err(|e| tag_group(e, group)),
         "shared" => parse_shared(&mut it).map_err(|e| tag_group(e, group)),
         "workspace" => parse_workspace(&mut it).map_err(|e| tag_group(e, group)),

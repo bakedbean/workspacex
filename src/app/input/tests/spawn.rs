@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::data::store::Store;
-use crate::test_support::{EnvGuard, cat_path};
+use crate::test_support::EnvGuard;
 use std::path::PathBuf;
 // `dashboard_renders_split_with_pm_title_when_visible_even_without_session`
 // (the PTY-placeholder render test) is gone — the dashboard's PM pane
@@ -800,7 +800,7 @@ async fn shared_workspace_with_running_added_instance_is_not_detached() {
     std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     env.set("WSX_TMUX_BIN", script.to_str().unwrap());
-    env.set("WSX_CODEX_BIN", cat_path());
+    env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
 
     let store = Store::open_in_memory().unwrap();
     let repo_id = store
@@ -890,7 +890,7 @@ async fn shared_workspace_with_instance_added_after_last_refresh_is_not_detached
     std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     env.set("WSX_TMUX_BIN", script.to_str().unwrap());
-    env.set("WSX_CODEX_BIN", cat_path());
+    env.set("WSX_CODEX_BIN", crate::test_support::cat_ignore_args_path());
 
     let store = Store::open_in_memory().unwrap();
     let repo_id = store

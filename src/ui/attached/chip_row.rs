@@ -18,20 +18,6 @@ pub(crate) struct ChipPr {
     pub unresolved: Option<u32>,
 }
 
-impl ChipPr {
-    /// A PR with no review verdict — the shape most tests want.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    fn new(lifecycle: BranchLifecycle, number: u32) -> Self {
-        Self {
-            lifecycle,
-            number,
-            review: None,
-            unresolved: None,
-        }
-    }
-}
-
 /// Compute the clickable Rect for each chip that fits within `area`.
 /// Returns one Rect per chip rendered left-to-right; chips that don't fit
 /// are dropped from the end. The chip text is ` <N> <label> ` (V5 button

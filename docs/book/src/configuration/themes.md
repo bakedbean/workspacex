@@ -90,7 +90,10 @@ literal strings can contain format escapes directly, such as `'\[$workspace\]'`.
 
 A **style** is space-separated tokens: `fg:<c>`, `bg:<c>`, a bare `<c>`
 (foreground), `bold`, `dimmed`, `italic`, `underline`, `none`, and `$style`
-(the segment's resolved style, see below). A **color** is `#rrggbb`, a 0–255
+(the segment's resolved style, see below). `none` is accepted for Starship
+compatibility but does nothing: it is a no-op, not a reset, so it neither
+clears inherited attributes nor cancels other tokens in the same style.
+A **color** is `#rrggbb`, a 0–255
 index, an ANSI name (`red`, `bright-blue`, `white`), a `[palette]` name, or
 a theme token: `dim path code bg_alt bg_soft ok warn err attention merged
 header_fg selected_fg selected_bg question stalled waiting thinking complete
@@ -122,10 +125,28 @@ describes one item; the items keep their existing order.
 | `pr` | `$symbol $number $label $mark` | `$style` includes the lifecycle tint; `$mark_style` supplies the review verdict style. Clickable. |
 
 All segments are available in **either attached bar**, on either side;
-click targets follow them between bars as well as within a bar. `keys` uses
-the attached view's leader-key hints in both attached bars. On the
-dashboard, only `keys`, `version`, and `usage` produce output; other segments
-render empty. Segments also render empty when their underlying data is absent.
+click targets follow them between bars as well as within a bar. `version`
+and `usage` work in all three bars, not just the dashboard footer — put
+`$usage` in an attached bar and its sparkline is the same graph, clickable
+the same way. `keys` uses the attached view's leader-key hints in both
+attached bars. On the dashboard, only `keys`, `version`, and `usage` produce
+output; other segments render empty. Segments also render empty when their
+underlying data is absent.
+
+Two details of the **stock formats** are worth knowing before you override
+them:
+
+- `style` only reaches the output through `$style`. The stock formats of
+  `agent_bar`, `workspace`, `agents`, `model_tokens`, `procs`, and `pr`
+  bind it (`[…]($style)`), so setting `style` on those works as written.
+  The stock formats of `keys`, `pins`, `version`, `usage`, `attention`, and
+  `diff` style their parts directly instead (or, for `attention`, not at
+  all), so a bare `style = …` on one of those has no effect unless you also
+  put `$style` in its `format`.
+- `symbol` is substituted into `format`, but the literal spacing around it
+  stays. Emptying one (`[pr]` `symbol = ""`) leaves the space that follows
+  `$symbol` in the stock format; delete that space in `format` too if you
+  want the glyph gone entirely.
 
 #### What the file does not cover
 

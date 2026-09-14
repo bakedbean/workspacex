@@ -121,3 +121,90 @@ pub fn dashboard_footer(
     }
     rendered
 }
+
+#[cfg(test)]
+mod footer_tests {
+    use super::*;
+    use crate::config::theme_file::bundled_default;
+    use crate::ui::bar::test_util::{plain, render_line};
+    use crossterm::event::KeyCode;
+
+    fn footer(selected: bool, label: &str, width: u16) -> Rendered {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let activity: Vec<u32> = (0..24).collect();
+        dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &activity,
+                version: "0.1.0",
+                window_label: label,
+                workspace_selected: selected,
+            },
+            width,
+        )
+    }
+
+    #[test]
+    fn default_footer_snapshot() {
+        let out = footer(true, "24h", 120);
+        let text = plain(&out.line);
+        assert!(
+            text.starts_with(
+                " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   ?  actions   q  quit"
+            ),
+            "{text:?}"
+        );
+        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
+        assert!(text.ends_with(&format!("0.1.0  24h {spark}")), "{text:?}");
+        assert_eq!(out.line.width(), 120);
+        assert_eq!(
+            out.hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::Key(_)))
+                .count(),
+            8
+        );
+    }
+
+    #[test]
+    fn footer_omits_actions_pill_without_workspace() {
+        assert!(!plain(&footer(false, "24h", 120).line).contains("actions"));
+        assert!(plain(&footer(true, "24h", 120).line).contains("actions"));
+    }
+
+    #[test]
+    fn footer_key_pill_wraps_key_only_not_label() {
+        let theme = Theme::wsx();
+        let out = footer(true, "24h", 120);
+        let buf = render_line(&out.line, 120);
+        // " ↑↓ " is cols 0..4 on the chip bg; " nav" follows on the bar bg.
+        assert_eq!(buf[(1, 0)].bg, theme.bg_soft);
+        assert_eq!(buf[(5, 0)].symbol(), "n");
+        assert_ne!(buf[(5, 0)].bg, theme.bg_soft);
+    }
+
+    #[test]
+    fn footer_hints_align_with_rendered_key_pills() {
+        let out = footer(true, "24h", 120);
+        let buf = render_line(&out.line, 120);
+        let order = out
+            .hits
+            .iter()
+            .find(|h| matches!(h.hit, Hit::Key(k) if k.code == KeyCode::Char('o')))
+            .expect("order hint");
+        let cells: String = (order.start_col..order.start_col + order.width)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect();
+        assert_eq!(cells, " o  order");
+    }
+
+    #[test]
+    fn footer_usage_hit_covers_label_and_sparkline() {
+        let out = footer(true, "1w", 120);
+        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
+        assert_eq!(usage.width, 2 + 1 + 24);
+        assert_eq!(usage.start_col + usage.width, 120);
+    }
+}

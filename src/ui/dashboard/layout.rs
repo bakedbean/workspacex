@@ -1,10 +1,9 @@
-//! Renders the three chrome bars around the V5 dashboard list:
-//! top chrome, status strip, footer (keybinds + sparkline).
+//! Renders the dashboard's top chrome and status strip. The footer
+//! (keybinds + sparkline) renders through the bar engine instead; see
+//! `crate::ui::bar::dashboard_footer`.
 
 use crate::ui::dashboard::sort::{SortMode, StatusCounts};
-use crate::ui::dashboard::sparkline;
 use crate::ui::dashboard::status::Status;
-use crate::ui::footer::{FooterHintAction, FooterHintSpan, key_for_glyph};
 use crate::ui::text::{FILTER_ECHO_MAX, truncate};
 use crate::ui::theme::{BRAND_ACCENT, BRAND_WORDMARK, Theme};
 use ratatui::style::{Modifier, Style};
@@ -159,88 +158,6 @@ pub fn status_strip(counts: StatusCounts, theme: &Theme) -> Line<'static> {
         spans.push(Span::styled(format!(" {}", status.label()), label_style));
     }
     Line::from(spans)
-}
-
-pub fn footer(
-    activity_samples: &[u32],
-    version: &str,
-    width: usize,
-    theme: &Theme,
-    window_label: &str,
-    workspace_selected: bool,
-) -> (Line<'static>, u16, Vec<FooterHintSpan>) {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut keys: Vec<(&str, &str)> = vec![
-        ("↑↓", "nav"),
-        ("↵", "open"),
-        ("n", "new"),
-        ("G", "group"),
-        ("o", "order"),
-        ("/", "filter"),
-    ];
-    if workspace_selected {
-        keys.push(("?", "actions"));
-    }
-    keys.push(("q", "quit"));
-    let key_style = Style::default()
-        .fg(theme.dim)
-        .add_modifier(Modifier::BOLD)
-        .bg(theme.bg_soft);
-    let label_style = Style::default().fg(theme.path);
-    let pad_style = theme.chip_bg_style();
-    // Pill wraps only the key glyph (` key `); the label is plain text on
-    // the bar bg, with a single leading space separating it from the pill.
-    // `col` tracks the running column so each pill+label run can be recorded
-    // as a clickable hint (offsets relative to the line start).
-    let mut hints: Vec<FooterHintSpan> = Vec::new();
-    let mut col: u16 = 0;
-    let push = |spans: &mut Vec<Span<'static>>, col: &mut u16, span: Span<'static>| {
-        *col += span.content.chars().count() as u16;
-        spans.push(span);
-    };
-    for (i, (key, label)) in keys.iter().enumerate() {
-        if i > 0 {
-            push(&mut spans, &mut col, Span::raw("  ".to_string()));
-        }
-        let start = col;
-        push(
-            &mut spans,
-            &mut col,
-            Span::styled(" ".to_string(), pad_style),
-        );
-        push(
-            &mut spans,
-            &mut col,
-            Span::styled((*key).to_string(), key_style),
-        );
-        push(
-            &mut spans,
-            &mut col,
-            Span::styled(" ".to_string(), pad_style),
-        );
-        push(
-            &mut spans,
-            &mut col,
-            Span::styled(format!(" {label}"), label_style),
-        );
-        if let Some(key_event) = key_for_glyph(key) {
-            hints.push(FooterHintSpan {
-                start_col: start,
-                width: col - start,
-                action: FooterHintAction::Key(key_event),
-            });
-        }
-    }
-
-    let spark = sparkline::render(activity_samples, 24);
-    let right = format!("{version}  {window_label} {spark}");
-    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    let gap = width.saturating_sub(used + right.chars().count()).max(1);
-    spans.push(Span::raw(" ".repeat(gap)));
-    spans.push(Span::styled(right, Style::default().fg(theme.path)));
-    // The clickable graph is the trailing "<label> <24-char sparkline>" run.
-    let graph_w = (window_label.chars().count() + 1 + 24) as u16;
-    (Line::from(spans), graph_w, hints)
 }
 
 #[cfg(test)]
@@ -451,25 +368,6 @@ mod tests {
     }
 
     #[test]
-    fn footer_offers_the_order_key() {
-        let theme = Theme::wsx();
-        let (line, _, hints) = footer(&[1, 2, 3], "0.1.0", 200, &theme, "24h", false);
-        let t = text(&line);
-        assert!(t.contains(" order"), "order label present: {t:?}");
-        let order = hints
-            .iter()
-            .find(|h| h.action == FooterHintAction::Key(key_for_glyph("o").unwrap()))
-            .expect("order hint present");
-        let cells: Vec<char> = t.chars().collect();
-        assert_eq!(
-            cells[order.start_col as usize..(order.start_col + order.width) as usize]
-                .iter()
-                .collect::<String>(),
-            " o  order"
-        );
-    }
-
-    #[test]
     fn status_strip_includes_all_six_cells_with_zero_counts() {
         let theme = Theme::wsx();
         let counts = StatusCounts {
@@ -498,105 +396,5 @@ mod tests {
         let t = text(&line);
         assert!(t.contains("? 0 question"));
         assert!(t.contains("· 0 idle"));
-    }
-
-    #[test]
-    fn footer_includes_keybinds_and_sparkline() {
-        let theme = Theme::wsx();
-        let samples = vec![1, 2, 3, 4, 5];
-        let (line, _, _) = footer(&samples, "v0.5.0", 200, &theme, "24h", true);
-        let t = text(&line);
-        // After the V5 pill treatment, key and label are separated by the
-        // pill's trailing pad + the label's leading space (2 cells total).
-        assert!(t.contains("↑↓"), "key present: {t:?}");
-        assert!(t.contains(" nav"), "nav label present: {t:?}");
-        assert!(t.contains(" actions"), "actions hint present: {t:?}");
-        assert!(!t.contains(" lazygit"), "lazygit hint removed: {t:?}");
-        assert!(!t.contains(" edit"), "edit hint removed: {t:?}");
-        assert!(!t.contains(" term"), "term hint removed: {t:?}");
-        assert!(!t.contains(" diff"), "diff hint removed: {t:?}");
-        assert!(t.contains(" group"));
-        assert!(t.contains(" quit"));
-        assert!(t.contains("24h "));
-        assert!(t.contains("v0.5.0"));
-    }
-
-    #[test]
-    fn footer_key_pill_wraps_key_only_not_label() {
-        // V5 footer chips paint bg_soft behind only the key glyph (with
-        // 1ch padding on each side). The label following the pill is plain
-        // text on the bar bg — a regression that re-extended bg_soft over
-        // the label would visually merge key and label into one block.
-        let theme = Theme::wsx();
-        let (line, _, _) = footer(&[1, 2, 3], "v0.5.0", 200, &theme, "24h", true);
-        let key_span = line
-            .spans
-            .iter()
-            .find(|s| s.content.as_ref() == "↑↓")
-            .expect("expected ↑↓ key span");
-        assert_eq!(key_span.style.bg, Some(theme.bg_soft));
-        let label_span = line
-            .spans
-            .iter()
-            .find(|s| s.content.as_ref() == " nav")
-            .expect("expected ` nav` label span (no chip padding)");
-        assert_eq!(
-            label_span.style.bg, None,
-            "label should not carry the chip bg"
-        );
-    }
-
-    #[test]
-    fn footer_uses_provided_window_label_and_reports_graph_width() {
-        let theme = Theme::wsx();
-        let (line, graph_w, _) = footer(&[1, 2, 3], "9.9.9", 120, &theme, "1w", true);
-        let rendered = text(&line);
-        assert!(rendered.contains("1w"), "label should appear: {rendered}");
-        assert!(!rendered.contains("24h"), "old hardcoded label gone");
-        // graph segment = label chars + 1 space + 24 sparkline chars.
-        assert_eq!(graph_w, ("1w".chars().count() + 1 + 24) as u16);
-    }
-
-    #[test]
-    fn footer_hints_align_with_rendered_key_pills() {
-        // Each hint's column run must cover exactly the pill+label it
-        // describes, so a click lands on the same key the user sees. We
-        // reconstruct the line's per-cell text and assert the first hint
-        // (↑↓ nav → Down) and a single-letter hint (q quit → Char('q'))
-        // sit over their glyphs.
-        let theme = Theme::wsx();
-        let (line, _, hints) = footer(&[1, 2, 3], "v0.5.0", 200, &theme, "24h", true);
-        let cells: Vec<char> = text(&line).chars().collect();
-        let slice = |h: &FooterHintSpan| -> String {
-            cells[h.start_col as usize..(h.start_col + h.width) as usize]
-                .iter()
-                .collect()
-        };
-        let nav = hints
-            .iter()
-            .find(|h| h.action == FooterHintAction::Key(key_for_glyph("↑↓").unwrap()))
-            .expect("nav hint present");
-        assert_eq!(slice(nav), " ↑↓  nav", "nav hint covers pill + label");
-        let quit = hints
-            .iter()
-            .find(|h| h.action == FooterHintAction::Key(key_for_glyph("q").unwrap()))
-            .expect("quit hint present");
-        assert_eq!(slice(quit), " q  quit", "quit hint covers pill + label");
-        // Every printed keybind gets a hint (none drop out).
-        assert_eq!(hints.len(), 8);
-    }
-
-    #[test]
-    fn footer_omits_actions_pill_without_workspace() {
-        let theme = Theme::wsx();
-        let samples = vec![1, 2, 3, 4, 5];
-        let (line, _, hints) = footer(&samples, "v0.5.0", 200, &theme, "24h", false);
-        let t = text(&line);
-        assert!(!t.contains(" actions"), "actions pill hidden: {t:?}");
-        assert!(t.contains(" nav"), "nav still present: {t:?}");
-        assert!(t.contains(" group"), "group still present: {t:?}");
-        assert!(t.contains(" filter"), "filter still present: {t:?}");
-        assert!(t.contains(" quit"), "quit still present: {t:?}");
-        assert_eq!(hints.len(), 7, "7 hints when actions omitted");
     }
 }

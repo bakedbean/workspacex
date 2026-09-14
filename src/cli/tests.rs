@@ -739,6 +739,23 @@ fn parses_repo_set_name() {
 }
 
 #[test]
+fn parses_repo_set_path() {
+    let a = parse(&["repo", "set-path", "myrepo", "/srv/mono"]).unwrap();
+    match a {
+        CliAction::RepoSetPath { name, path } => {
+            assert_eq!(name, "myrepo");
+            assert_eq!(path, std::path::PathBuf::from("/srv/mono"));
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn parse_repo_set_path_requires_path() {
+    assert!(parse(&["repo", "set-path", "myrepo"]).is_err());
+}
+
+#[test]
 fn parse_repo_edit_related_repos() {
     match parse(&["repo", "edit-related-repos", "backend"]).unwrap() {
         CliAction::RepoEditRelatedRepos { name } => assert_eq!(name, "backend"),

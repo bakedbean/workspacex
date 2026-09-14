@@ -28,6 +28,12 @@ wsx repo set-name <name> <new-name>
 Renames the repo in the wsx registry. The new name appears on the dashboard and is used in workspace references (e.g. `wsx workspace create <repo>`). Other commands like `wsx repo set-prefix <new-name> ...` must use the new name afterwards.
 
 ```
+wsx repo set-path <name> <path>
+```
+
+Repoints the repo at a different source checkout, for when the repository moved on disk (a rename, or a project folded into a monorepo). `<path>` must be an existing git working tree, exactly as for `repo add`, and is stored absolute. The registry row keeps its name, prefix, scripts, instructions and workspaces, so this is the alternative to `remove` + `add` when you want that configuration to survive. Existing worktrees were created from the old checkout, so if the old path is gone they need re-creating; new workspaces are cut from the new path.
+
+```
 wsx repo set-prefix <name> <prefix>
 ```
 

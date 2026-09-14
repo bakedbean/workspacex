@@ -828,6 +828,43 @@ mod tests {
     }
 
     #[test]
+    fn set_repo_path_round_trip() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/old/app"), "app", "eg").unwrap();
+        store
+            .set_repo_setup_script(id, Some("pnpm install"))
+            .unwrap();
+        store.set_repo_path(id, Path::new("/mono")).unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(repo.path, PathBuf::from("/mono"));
+        // Everything else on the row survives the move.
+        assert_eq!(repo.name, "app");
+        assert_eq!(repo.branch_prefix, "eg");
+        assert_eq!(repo.setup_script.as_deref(), Some("pnpm install"));
+    }
+
+    #[test]
+    fn set_repo_path_rejects_path_of_another_repo() {
+        let store = Store::open_in_memory().unwrap();
+        let a = store.add_repo(Path::new("/a"), "a", "").unwrap();
+        store.add_repo(Path::new("/b"), "b", "").unwrap();
+        let err = store.set_repo_path(a, Path::new("/b")).unwrap_err();
+        assert!(err.to_string().contains("'b'"), "{err}");
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == a)
+            .unwrap();
+        assert_eq!(repo.path, PathBuf::from("/a"));
+    }
+
+    #[test]
     fn set_repo_name_round_trip() {
         let store = Store::open_in_memory().unwrap();
         let id = store.add_repo(Path::new("/r"), "old-name", "").unwrap();

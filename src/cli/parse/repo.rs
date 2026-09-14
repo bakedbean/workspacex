@@ -164,6 +164,20 @@ pub(in crate::cli) fn parse_repo(it: &mut Args) -> Result<CliAction> {
             })?;
             Ok(CliAction::RepoSetName { name, new_name })
         }
+        Some("set-path") => {
+            let name = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-path <name> <path>".into(),
+            })?;
+            let path = it.next().ok_or_else(|| Error::Usage {
+                group: None,
+                msg: "repo set-path <name> <path>".into(),
+            })?;
+            Ok(CliAction::RepoSetPath {
+                name,
+                path: PathBuf::from(path),
+            })
+        }
         Some("set-related-repos") => {
             let name = it.next().ok_or_else(|| Error::Usage {
                 group: None,

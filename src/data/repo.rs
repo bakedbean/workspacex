@@ -16,6 +16,19 @@ pub fn list(store: &Store) -> Result<Vec<Repo>> {
     store.repos()
 }
 
+/// Repoint a registered repo at a different source checkout — the case
+/// where a repo moved on disk (e.g. folded into a monorepo) and the
+/// registry row, with its prefix, scripts and instructions, should follow
+/// rather than be dropped and re-added. The path is validated the same way
+/// `add` validates it and stored absolute, so a relative `.` works from a
+/// shell but never lands in the registry.
+pub async fn set_path(store: &Store, id: RepoId, path: &Path) -> Result<PathBuf> {
+    git::validate_repo(path).await?;
+    let abs = std::path::absolute(path)?;
+    store.set_repo_path(id, &abs)?;
+    Ok(abs)
+}
+
 pub fn remove(store: &Store, id: RepoId) -> Result<()> {
     // Collect worktree paths before the rows are gone, so their
     // ~/.claude.json entries can be pruned like `workspace::archive` does.
@@ -193,6 +206,31 @@ impl Store {
         self.conn().execute(
             "UPDATE repos SET related_repos = ?1 WHERE id = ?2",
             rusqlite::params![value, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_repo_path(&self, id: RepoId, path: &Path) -> Result<()> {
+        let path_s = path.to_string_lossy();
+        // `repos.path` is UNIQUE; surface the clash as user input rather
+        // than a bare constraint error.
+        let dup: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT name FROM repos WHERE path = ?1 AND id != ?2",
+                rusqlite::params![path_s, id.0],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(other) = dup {
+            return Err(crate::error::Error::UserInput(format!(
+                "repo '{other}' is already registered at {}",
+                path.display()
+            )));
+        }
+        self.conn().execute(
+            "UPDATE repos SET path = ?1 WHERE id = ?2",
+            rusqlite::params![path_s, id.0],
         )?;
         Ok(())
     }

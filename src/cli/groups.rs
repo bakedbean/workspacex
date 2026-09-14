@@ -126,6 +126,10 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Rename a repository",
             },
             CmdInfo {
+                usage: "set-path <name> <path>",
+                blurb: "Point a repository at a new source checkout",
+            },
+            CmdInfo {
                 usage: "set-related-repos <name> <value-or-@file>",
                 blurb: "Set related repos",
             },

@@ -45,31 +45,11 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
             (repo_name, w.name.clone())
         })
         .unwrap_or_default();
-    let focused_label = if focused_repo.is_empty() {
-        focused_name.clone()
-    } else {
-        format!("{focused_repo}/{focused_name}")
-    };
     let focused_agent = app
         .workspaces
         .iter()
         .find(|(_, w)| w.id == focused_id)
         .map(|(_, w)| w.agent);
-
-    // The attention items follow the bottom line's label prefix, so
-    // shrink their width budget by the prefix and offset their click
-    // rects by it too — `info_line_prefix_width` is the single source
-    // of truth shared with the renderer.
-    let prefix_w = attached::info_line_prefix_width(&focused_label, focused_agent) as usize;
-    let max_width = (area.width as usize).saturating_sub(3 + prefix_w);
-    let attention = if matches!(
-        app.modal,
-        Some(crate::ui::modal::Modal::UpdatesPanel { .. })
-    ) {
-        None
-    } else {
-        compute_attention_line(app, Some(focused_id), max_width)
-    };
 
     // Pinned commands resolve against the FOCUSED pane's workspace.
     let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
@@ -209,6 +189,49 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         })
         .collect();
 
+    // `$version` / `$usage` are available in the attached bars too (the
+    // bundled default doesn't use them there). The sparkline comes from the
+    // same helper the dashboard footer uses, so a theme that shows it in
+    // both places draws one graph, not two.
+    let (usage_window, usage_activity) = super::dashboard::usage_sparkline(app);
+
+    // The attention items share the top bar with everything else the
+    // theme's `attached_top` format draws, so measure that chrome from the
+    // real format (a probe render) rather than assuming the stock
+    // `▎ label   ` prefix — under a custom format the items would
+    // otherwise overrun the bar and be clipped along with their clicks.
+    // Built last because the probe needs the same segment data the real
+    // render gets: any of them can appear in `attached_top`.
+    let attention = if matches!(
+        app.modal,
+        Some(crate::ui::modal::Modal::UpdatesPanel { .. })
+    ) {
+        None
+    } else {
+        let max_width = crate::ui::bar::attention_width_budget(
+            &app.bar_specs,
+            &app.theme,
+            crate::ui::bar::AttachedInputs {
+                repo: &focused_repo,
+                name: &focused_name,
+                version: env!("CARGO_PKG_VERSION"),
+                window_label: usage_window.label(),
+                activity: &usage_activity,
+                agent: focused_agent,
+                attention: None,
+                pinned: &pinned,
+                procs,
+                diff,
+                pr,
+                model_tokens: model_tokens.clone(),
+                agents: &focused_agents_list,
+                active_agent,
+            },
+            info_area.width,
+        );
+        compute_attention_line(app, Some(focused_id), max_width)
+    };
+
     let out = attached::render_panes(
         f,
         &specs,
@@ -219,6 +242,9 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         &app.bar_specs,
         &focused_repo,
         &focused_name,
+        env!("CARGO_PKG_VERSION"),
+        usage_window.label(),
+        &usage_activity,
         focused_agent,
         attention,
         &pinned,
@@ -235,6 +261,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.procs_link_rect = out.procs_link_rect.map(|r| (focused_id, r));
     app.attention_rects = out.attention_rects;
     app.attention_more_rect = out.attention_more_rect;
+    app.usage_graph_rect = out.usage_graph_rect;
     app.attached_pane_rects = out.pane_rects;
     app.agent_chip_rects = out.agent_chip_rects;
     app.footer_hint_rects = out.footer_hint_rects;
@@ -291,6 +318,7 @@ pub(super) fn draw_attached_remote(
                     })
                 })
         });
+        let (usage_window, usage_activity) = super::dashboard::usage_sparkline(app);
         let (info_area, separator_area, pane_area, chip_area) = attached::layout_chrome(area);
         attached::resize_pane(session, pane_area, false);
         let specs = [crate::ui::attached::PaneSpec {
@@ -310,6 +338,9 @@ pub(super) fn draw_attached_remote(
             &app.bar_specs,
             "",
             &label,
+            env!("CARGO_PKG_VERSION"),
+            usage_window.label(),
+            &usage_activity,
             None,
             None,
             &pinned,
@@ -324,6 +355,7 @@ pub(super) fn draw_attached_remote(
         app.attached_pane_rects = out.pane_rects;
         app.footer_hint_rects = out.footer_hint_rects;
         app.chip_rects = out.chip_rects;
+        app.usage_graph_rect = out.usage_graph_rect;
         app.pinned_commands_cache = pinned;
         // The PR chip renders but isn't clickable: opening a PR keys off a
         // local WorkspaceId we don't have for a remote workspace, so

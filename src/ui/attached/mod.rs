@@ -66,6 +66,11 @@ pub struct PanesDrawOutput {
     pub attention_rects: Vec<(crate::data::store::WorkspaceId, Rect)>,
     /// Rect of the `… +N more` tail, when present.
     pub attention_more_rect: Option<Rect>,
+    /// Clickable rect of the `$usage` sparkline, when a theme puts it in
+    /// either attached bar (the bundled default does not). Consumed by the
+    /// input handler to open the usage-window picker, exactly as on the
+    /// dashboard footer.
+    pub usage_graph_rect: Option<Rect>,
 }
 
 /// Route one bar's hits into the output the input handlers read. Called for
@@ -87,7 +92,7 @@ fn route_hits(area: Rect, hits: &[crate::ui::bar::segment::HitSpan], out: &mut P
                 .push((rect, crate::ui::footer::FooterHintAction::Key(k))),
             Hit::Attention(id) => out.attention_rects.push((id, rect)),
             Hit::AttentionMore => out.attention_more_rect = Some(rect),
-            Hit::UsageGraph => {}
+            Hit::UsageGraph => out.usage_graph_rect = Some(rect),
         }
     }
 }
@@ -121,6 +126,9 @@ pub(crate) fn render_panes(
     specs: &crate::config::theme_file::BarSpecs,
     repo: &str,
     name: &str,
+    version: &str,
+    window_label: &str,
+    activity: &[u32],
     agent: Option<AgentKind>,
     attention: Option<crate::ui::updates_bar::AttentionLine>,
     pinned: &[PinnedCommand],
@@ -153,6 +161,9 @@ pub(crate) fn render_panes(
         crate::ui::bar::AttachedInputs {
             repo,
             name,
+            version,
+            window_label,
+            activity,
             agent,
             attention,
             pinned,
@@ -292,18 +303,6 @@ pub fn resize_pane(session: &Arc<Session>, pane_rect: Rect, multi_pane: bool) {
     let _ = session.resize(pane_rect.width, pane_rect.height.saturating_sub(title));
 }
 
-/// Width in columns of the info line's leading `[agent-bar ]label   ` prefix,
-/// before the attention items begin. Shared by `render.rs` (to shrink the
-/// attention width budget and offset its click rects) and the engine's
-/// `attached_top` bar (which renders the same prefix) so the two never
-/// disagree.
-pub fn info_line_prefix_width(label: &str, agent: Option<AgentKind>) -> u16 {
-    let bar = if agent.is_some() { 2 } else { 0 }; // "▎" + " "
-    // Cells, not chars: a double-width glyph in a workspace name would
-    // otherwise shift every attention click rect one column left.
-    bar + Span::raw(label).width() as u16 + 3 // 3-col gap before attention
-}
-
 /// Build the spans for a pane's title bar: an optional per-agent identity
 /// bar, the focus gutter (accent when focused, idle otherwise), then the
 /// bold workspace label. Pure so the agent-bar branch is unit-testable
@@ -422,6 +421,9 @@ mod tests {
             crate::ui::bar::AttachedInputs {
                 repo,
                 name,
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
                 agent,
                 attention,
                 pinned: &[],
@@ -440,7 +442,7 @@ mod tests {
 
     /// The bottom row's fixture inputs: two pinned commands, a diff, a PR
     /// with a verdict, model+token usage, and two agents. Shared by the
-    /// parity test and the cross-bar routing test.
+    /// click-routing tests below.
     #[allow(clippy::type_complexity)]
     fn bottom_fixture() -> (
         Vec<crate::commands::pinned::PinnedCommand>,
@@ -526,6 +528,9 @@ mod tests {
                 &specs,
                 "wsx",
                 "foo",
+                "0.1.0",
+                "24h",
+                &[],
                 None,
                 None,
                 &pinned,
@@ -556,6 +561,62 @@ mod tests {
         }
     }
 
+    /// `$usage` is available in the attached bars, not just the dashboard
+    /// footer, and its click reaches the input handler: a theme that puts
+    /// it in the chip row's `right_format` gets a `usage_graph_rect`
+    /// covering `label + space + 24-cell sparkline`, flush against the
+    /// right edge of the chip row. (The bundled default doesn't reference
+    /// `$usage` in either attached bar, so the stock look is unchanged —
+    /// the snapshot tests above pin that.)
+    #[test]
+    fn usage_in_the_bottom_bar_routes_its_click_rect() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = Theme::wsx();
+        let mut specs = crate::config::theme_file::bundled_default(&theme);
+        specs.attached_bottom.right_format = crate::ui::bar::format::parse("$usage").unwrap();
+        let (pinned, diff, pr, mt, agents) = bottom_fixture();
+        let (w, h) = (120u16, 4u16);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let mut out_result = None;
+        term.draw(|f| {
+            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h));
+            out_result = Some(render_panes(
+                f,
+                &[],
+                &[],
+                info,
+                sep,
+                chip,
+                &specs,
+                "wsx",
+                "foo",
+                "0.1.0",
+                "24h",
+                &[],
+                None,
+                None,
+                &pinned,
+                3,
+                diff,
+                pr,
+                mt,
+                &agents,
+                Some(AgentInstanceId(1)),
+                &theme,
+            ));
+        })
+        .unwrap();
+        let out = out_result.unwrap();
+
+        let rect = out
+            .usage_graph_rect
+            .expect("$usage in the chip row is clickable");
+        assert_eq!(rect.y, 3, "the usage graph sits on the chip row");
+        assert_eq!(rect.x + rect.width, w, "flush against the right edge");
+        assert_eq!(rect.width, 3 + 1 + 24, "`24h` + space + 24-cell sparkline");
+    }
+
     /// `$pins` appearing in BOTH bars' formats must not make the second
     /// run's indexes collide with or continue past the first: each run
     /// re-emits `Hit::PinnedChip(0)`/`Hit::PinnedChip(1)` from the same
@@ -583,6 +644,9 @@ mod tests {
                 &specs,
                 "wsx",
                 "foo",
+                "0.1.0",
+                "24h",
+                &[],
                 None,
                 None,
                 &pinned,
@@ -655,7 +719,9 @@ mod tests {
             "{:?}",
             crate::ui::bar::test_util::plain(&new.line)
         );
-        let prefix = info_line_prefix_width("wsx/foo", Some(AgentKind::Claude));
+        // The stock prefix: `▎` + a space, the label, and the format's
+        // 3-column gap before the attention items.
+        let prefix: u16 = 2 + 7 + 3;
         let hits: Vec<_> = new
             .hits
             .iter()
@@ -747,6 +813,9 @@ mod tests {
                 &specs,
                 "wsx",
                 "foo",
+                "0.1.0",
+                "24h",
+                &[],
                 None,
                 None,
                 &[],
@@ -769,17 +838,12 @@ mod tests {
         assert_eq!(row1, "─".repeat(w as usize), "separator spans the width");
     }
 
+    /// The attention width budget's complement is exactly where the items
+    /// land: `attention_width_budget` measures the bar's own chrome, so
+    /// `width - budget` is the column the first attention cell occupies.
+    /// (Replaces the old `info_line_prefix_width` round-trip.)
     #[test]
-    fn info_line_prefix_width_counts_cells_not_chars() {
-        // "日本" is 2 chars but 4 cells; the attention click rects are
-        // offset by this width, so it must be measured in cells.
-        let wide = info_line_prefix_width("r/日本", Some(AgentKind::Claude));
-        let narrow = info_line_prefix_width("r/ab", Some(AgentKind::Claude));
-        assert_eq!(wide, narrow + 2);
-    }
-
-    #[test]
-    fn prefix_width_matches_drawn_prefix() {
+    fn attention_budget_complement_is_where_the_items_are_drawn() {
         use crate::ui::updates_bar::AttentionLine;
         let theme = Theme::wsx();
         let specs = crate::config::theme_file::bundled_default(&theme);
@@ -788,7 +852,28 @@ mod tests {
             segments: vec![],
             more: None,
         });
-        let prefix = info_line_prefix_width("wsx/foo", Some(AgentKind::Claude)) as usize;
+        let budget = crate::ui::bar::attention_width_budget(
+            &specs,
+            &theme,
+            crate::ui::bar::AttachedInputs {
+                repo: "wsx",
+                name: "foo",
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
+                agent: Some(AgentKind::Claude),
+                attention: None,
+                pinned: &[],
+                procs: 0,
+                diff: None,
+                pr: None,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+            },
+            60,
+        );
+        let prefix = 60 - budget;
         let out = attached_bars_top(
             &specs,
             &theme,

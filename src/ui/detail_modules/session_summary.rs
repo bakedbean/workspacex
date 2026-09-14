@@ -392,8 +392,8 @@ fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
 /// The chat view's compact model + token-usage chip, split into parts so
 /// the renderer can color the model and the token fill independently —
 /// the same treatment as the detail bar's model/context lines. `Clone`:
-/// `render_panes` feeds the same value to both the bar-engine segment map
-/// and the legacy chip row.
+/// `draw_attached` feeds the same value to the top bar's attention-width
+/// probe and to the real bar render.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ChipModelTokens {
     /// Short model label (e.g. `opus 4.8`); `None` when the model id is

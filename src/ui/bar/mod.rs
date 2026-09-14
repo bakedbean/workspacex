@@ -96,6 +96,13 @@ pub fn dashboard_footer(
 pub(crate) struct AttachedInputs<'a> {
     pub repo: &'a str,
     pub name: &'a str,
+    /// `$version`'s value — `env!("CARGO_PKG_VERSION")` in the app.
+    pub version: &'a str,
+    /// `$usage`'s `$label`: the configured usage window (`24h`/`1w`/`1mo`).
+    pub window_label: &'a str,
+    /// `$usage`'s samples, the same 24-bucket vector the dashboard footer
+    /// builds, so the sparkline reads identically in every bar.
+    pub activity: &'a [u32],
     pub agent: Option<crate::pty::session::AgentKind>,
     pub attention: Option<crate::ui::updates_bar::AttentionLine>,
     pub pinned: &'a [crate::commands::pinned::PinnedCommand],
@@ -126,6 +133,19 @@ fn attached_segments(
         &mut segments,
         "keys",
         providers::keys(cfg(specs, "keys"), &keys_items, resolver),
+    );
+    put(
+        &mut segments,
+        "version",
+        providers::version(cfg(specs, "version"), inputs.version, resolver),
+    );
+    // Same 24-bucket sparkline the dashboard footer draws — `$usage` is a
+    // segment in all three bars, not a dashboard-only one.
+    let spark = crate::ui::dashboard::sparkline::render(inputs.activity, 24);
+    put(
+        &mut segments,
+        "usage",
+        providers::usage(cfg(specs, "usage"), inputs.window_label, &spark, resolver),
     );
     put(
         &mut segments,
@@ -221,6 +241,154 @@ pub(crate) fn attached_bars(
     )
 }
 
+/// How many columns the attention line's items may occupy in the top bar.
+///
+/// Measured from the REAL `attached_top` format, not from an assumed
+/// `▎ label   ` prefix: under a custom format (the powerline example, say)
+/// a hardcoded prefix is wrong, and the items then overrun the bar and are
+/// clipped along with their click rects.
+///
+/// The measurement renders the bar once with a ONE-cell probe standing in
+/// for the attention line — one cell rather than none, so the enclosing
+/// `( … $attention)` group and all of its literals survive — and subtracts
+/// everything the bar drew apart from the probe's own cell. `inputs` must
+/// carry every other segment's real data (they share the bar) but need not
+/// set `attention`; whatever it holds is replaced by the probe.
+///
+/// Rendered at width 0 so `render_bar` adds no fill: the left `format` is
+/// never dropped, so its full content is what comes back. The one blind
+/// spot is a theme that puts `$attention` in `attached_top.right_format`,
+/// which a zero-width render drops — an unusual shape (both the bundled
+/// default and the documented powerline example put it in `format`), and
+/// the result is then the old, un-measured behavior rather than anything
+/// worse.
+pub(crate) fn attention_width_budget(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: AttachedInputs<'_>,
+    width: u16,
+) -> usize {
+    let probe = crate::ui::updates_bar::AttentionLine {
+        line: ratatui::text::Line::from("x"),
+        segments: Vec::new(),
+        more: None,
+    };
+    let inputs = AttachedInputs {
+        attention: Some(probe),
+        ..inputs
+    };
+    let (probe_top, _) = attached_bars(specs, theme, inputs, 0, 0);
+    let chrome = probe_top.line.width().saturating_sub(1);
+    usize::from(width).saturating_sub(chrome)
+}
+
+#[cfg(test)]
+mod attention_budget_tests {
+    use super::*;
+    use crate::config::theme_file::bundled_default;
+    use crate::pty::session::AgentKind;
+
+    fn inputs<'a>(repo: &'a str, name: &'a str, agent: Option<AgentKind>) -> AttachedInputs<'a> {
+        AttachedInputs {
+            repo,
+            name,
+            version: "0.1.0",
+            window_label: "24h",
+            activity: &[],
+            agent,
+            attention: None,
+            pinned: &[],
+            procs: 0,
+            diff: None,
+            pr: None,
+            model_tokens: None,
+            agents: &[],
+            active_agent: None,
+        }
+    }
+
+    /// The prefix the deleted `info_line_prefix_width` hardcoded: the
+    /// agent bar (`▎` + a space) when present, the label in CELLS, and the
+    /// stock format's 3-column gap before the attention items.
+    fn stock_prefix(label: &str, agent: Option<AgentKind>) -> usize {
+        let bar = if agent.is_some() { 2 } else { 0 };
+        bar + ratatui::text::Span::raw(label).width() + 3
+    }
+
+    /// Parity with the stock prefix: for the bundled default the probe
+    /// measures exactly `▎ ` + label + the 3-column gap, with and without
+    /// an agent bar. (The old call site then subtracted a further 3 as an
+    /// unexplained right margin; the probe measures what the bar actually
+    /// draws, so those 3 columns are now available to the items.)
+    #[test]
+    fn bundled_default_budget_matches_the_stock_prefix() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        for agent in [Some(AgentKind::Claude), None] {
+            let budget = attention_width_budget(&specs, &theme, inputs("wsx", "foo", agent), 80);
+            assert_eq!(
+                budget,
+                80 - stock_prefix("wsx/foo", agent),
+                "agent={agent:?}"
+            );
+        }
+    }
+
+    /// Cells, not chars: "日本" is 2 chars but 4 cells, so a wide label
+    /// must cost the budget 2 more columns than a 2-cell one. (Moved from
+    /// `info_line_prefix_width_counts_cells_not_chars`.)
+    #[test]
+    fn budget_counts_label_cells_not_chars() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let wide = attention_width_budget(
+            &specs,
+            &theme,
+            inputs("r", "日本", Some(AgentKind::Claude)),
+            80,
+        );
+        let narrow = attention_width_budget(
+            &specs,
+            &theme,
+            inputs("r", "ab", Some(AgentKind::Claude)),
+            80,
+        );
+        assert_eq!(wide, narrow - 2);
+    }
+
+    /// A custom format gets its own measurement: `[ $workspace ](bg:blue)`
+    /// is `label + 2` cells and `( $attention)` contributes its leading
+    /// space, so the items get `width - (label + 2) - 1`. The old
+    /// hardcoded prefix would have claimed 3 columns that this format
+    /// never draws, overrunning the bar.
+    #[test]
+    fn custom_format_budget_follows_that_format() {
+        let theme = Theme::wsx();
+        let mut specs = bundled_default(&theme);
+        specs.attached_top.format = format::parse("[ $workspace ](bg:blue)( $attention)").unwrap();
+        let label_width = "wsx/foo".len();
+        let budget = attention_width_budget(
+            &specs,
+            &theme,
+            inputs("wsx", "foo", Some(AgentKind::Claude)),
+            80,
+        );
+        assert_eq!(budget, 80 - (label_width + 2) - 1);
+    }
+
+    /// A bar wider than the terminal leaves no room at all rather than
+    /// underflowing.
+    #[test]
+    fn budget_saturates_at_zero_on_a_narrow_bar() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        assert_eq!(
+            attention_width_budget(&specs, &theme, inputs("wsx", "foo", None), 4),
+            0
+        );
+    }
+}
+
 #[cfg(test)]
 mod attached_bars_tests {
     use super::*;
@@ -240,6 +408,9 @@ mod attached_bars_tests {
             AttachedInputs {
                 repo: "wsx",
                 name: "foo",
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
                 agent: None,
                 attention: None,
                 pinned: &[],
@@ -507,6 +678,9 @@ mod bottom_tests {
         AttachedInputs {
             repo: "wsx",
             name: "foo",
+            version: "0.1.0",
+            window_label: "24h",
+            activity: &[],
             agent: None,
             attention: None,
             pinned,
@@ -709,6 +883,9 @@ mod bottom_tests {
         let inputs = AttachedInputs {
             repo: "wsx",
             name: "foo",
+            version: "0.1.0",
+            window_label: "24h",
+            activity: &[],
             agent: None,
             attention: None,
             pinned: &pinned,

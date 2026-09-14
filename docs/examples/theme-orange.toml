@@ -39,8 +39,10 @@ format       = "[ $brand ](bg:orange fg:black)[](fg:orange bg:ash)[ $group ](
 right_format = "[](fg:orange)[ $counts ](bg:orange fg:black)"
 fill         = " "
 
+# Left: a blank orange stub as the mode block, then the key hints on ash,
+# so the footer chain reads like the header's brand -> group step.
 [dashboard_footer]
-format       = "[ $keys ](bg:orange fg:black)[](fg:orange)"
+format       = "[  ](bg:orange)[](fg:orange bg:ash)[ $keys ](bg:ash fg:orange)[](fg:ash)"
 right_format = "[](fg:ash)[( $version )](bg:ash fg:orange)[](fg:orange bg:ash)[ $usage ](bg:orange fg:black)"
 fill         = " "
 

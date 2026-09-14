@@ -169,6 +169,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                     config: &detail_cfg,
                     registry: &app.registry,
                     pinned: &pinned,
+                    bar_specs: &app.bar_specs,
                     scroll_offsets: &mut app.detail_scroll_offsets,
                 };
                 let out =

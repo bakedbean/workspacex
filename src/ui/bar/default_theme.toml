@@ -49,6 +49,13 @@ right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
 
+# The dashboard detail pane's pinned-command row: chips, then a rule to
+# the edge. Only `$pins` carries data here; other segments render empty.
+[dashboard_detail]
+format     = "($pins  )"
+fill       = "─"
+fill_style = "fg:dim"
+
 # --- segments ---------------------------------------------------------
 
 # Key hints: one pill per binding. Variables: $key $label

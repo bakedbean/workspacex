@@ -82,6 +82,32 @@ pub fn dashboard_footer(
     )
 }
 
+/// The dashboard detail pane's pinned-command row: chips, then a rule to
+/// the edge. Only `$pins` is built; every other registered segment is
+/// absent from the map and so renders empty wherever a theme references
+/// it here.
+pub fn dashboard_detail(
+    specs: &BarSpecs,
+    theme: &Theme,
+    pinned: &[crate::commands::pinned::PinnedCommand],
+    width: u16,
+) -> Rendered {
+    let resolver = specs.resolver(theme);
+    let mut segments = SegmentMap::new();
+    put(
+        &mut segments,
+        "pins",
+        providers::pins(cfg(specs, "pins"), pinned, &resolver),
+    );
+    render_bar(
+        &specs.dashboard_detail,
+        &segments,
+        &specs.segments,
+        width,
+        &resolver,
+    )
+}
+
 /// Everything both attached bars need, so any attached segment can appear
 /// in either bar's format and keep its click. `pub(crate)`, not `pub`: it
 /// carries `ChipPr`/`ChipModelTokens`, which are themselves `pub(crate)`.

@@ -719,6 +719,113 @@ mod bottom_tests {
     }
 }
 
+/// Parity with the legacy `render_pinned_chip_row` painter, captured
+/// BEFORE that painter and `chip_row::layout_chip_row` were deleted: the
+/// legacy painter and `dashboard_detail` were both rendered into
+/// identical `TestBackend` buffers and compared cell-for-cell with
+/// `test_util::assert_rows_match`, and their returned `(pinned index,
+/// rect)` lists compared with `assert_eq!` — for two pins at width 80, no
+/// pins at width 80, and nine pins at width 200. That run passed
+/// (`dashboard_detail_matches_the_legacy_pinned_chip_row ... ok`, 1
+/// passed; 0 failed — see the refactor-56 report for the full run). The
+/// exact text and rects it captured are pinned below as literals, so this
+/// keeps guarding the engine after the legacy code is gone.
+#[cfg(test)]
+mod dashboard_detail_parity_tests {
+    use super::*;
+    use crate::commands::pinned::PinnedCommand;
+    use crate::config::theme_file::bundled_default;
+    use crate::ui::bar::render::hit_rects;
+    use crate::ui::bar::test_util::plain;
+    use ratatui::layout::Rect;
+
+    fn cmds(specs: &[(&str, &str)]) -> Vec<PinnedCommand> {
+        specs
+            .iter()
+            .map(|(l, c)| PinnedCommand {
+                label: (*l).into(),
+                command: (*c).into(),
+            })
+            .collect()
+    }
+
+    /// `dashboard_detail`'s hits, as the same `(pinned index, rect)` shape
+    /// the legacy painter returned.
+    fn pinned_rects(out: &Rendered, width: u16) -> Vec<(usize, Rect)> {
+        hit_rects(Rect::new(0, 0, width, 1), &out.hits)
+            .into_iter()
+            .filter_map(|(rect, hit)| match hit {
+                Hit::PinnedChip(i) => Some((i, rect)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn two_pins_match_the_legacy_pinned_chip_row() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let pinned = cmds(&[("PR", "/pr"), ("feedback", "/fb")]);
+        let out = dashboard_detail(&specs, &theme, &pinned, 80);
+        assert_eq!(
+            plain(&out.line),
+            " 1  PR   2  feedback  ──────────────────────────────────────────────────────────"
+        );
+        assert_eq!(
+            pinned_rects(&out, 80),
+            vec![(0, Rect::new(0, 0, 6, 1)), (1, Rect::new(8, 0, 12, 1))]
+        );
+    }
+
+    #[test]
+    fn no_pins_is_a_full_width_rule_like_the_legacy_painter() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let out = dashboard_detail(&specs, &theme, &[], 80);
+        assert_eq!(
+            plain(&out.line),
+            "────────────────────────────────────────────────────────────────────────────────"
+        );
+        assert!(pinned_rects(&out, 80).is_empty());
+    }
+
+    #[test]
+    fn nine_pins_at_width_200_match_the_legacy_pinned_chip_row() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let nine = cmds(&[
+            ("one", "/1"),
+            ("two", "/2"),
+            ("three", "/3"),
+            ("four", "/4"),
+            ("five", "/5"),
+            ("six", "/6"),
+            ("seven", "/7"),
+            ("eight", "/8"),
+            ("nine", "/9"),
+        ]);
+        let out = dashboard_detail(&specs, &theme, &nine, 200);
+        assert_eq!(
+            plain(&out.line),
+            " 1  one   2  two   3  three   4  four   5  five   6  six   7  seven   8  eight   9  nine  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+        );
+        assert_eq!(
+            pinned_rects(&out, 200),
+            vec![
+                (0, Rect::new(0, 0, 7, 1)),
+                (1, Rect::new(9, 0, 7, 1)),
+                (2, Rect::new(18, 0, 9, 1)),
+                (3, Rect::new(29, 0, 8, 1)),
+                (4, Rect::new(39, 0, 8, 1)),
+                (5, Rect::new(49, 0, 7, 1)),
+                (6, Rect::new(58, 0, 9, 1)),
+                (7, Rect::new(69, 0, 9, 1)),
+                (8, Rect::new(80, 0, 8, 1)),
+            ]
+        );
+    }
+}
+
 /// Guards the three places a segment must agree: `registry::SEGMENTS`
 /// (its declaration), `providers.rs` (the function that renders it), and
 /// `bars.rs` (the composer that wires the provider into a segment map).

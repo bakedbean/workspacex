@@ -1,9 +1,10 @@
 # Themes
 
 wsx has two layers of theming: a **base palette** chosen with the `theme`
-setting, and a **bar theme file** that describes what the dashboard footer
-and the attached view's top and bottom bars contain and how each piece is
-styled, using a subset of Starship's format grammar.
+setting, and a **bar theme file** that describes what the dashboard footer,
+the attached view's top and bottom bars, and the dashboard detail pane's
+pinned-command row contain and how each piece is styled, using a subset of
+Starship's format grammar.
 
 ## Base palette
 
@@ -73,9 +74,6 @@ replaced:
   first, then the usage graph, instead of overflowing the terminal width.
 - A pinned chip clipped by the right edge keeps its visible portion
   clickable, rather than being dropped in full.
-- The dashboard's own DETAIL pane (the pane shown when a workspace row is
-  selected) draws its own pinned-command chips with their stock look; it's
-  not built from `[pins]` and the file doesn't theme it.
 
 ### Bars
 
@@ -92,7 +90,18 @@ format       = "$keys  ($pins  )"
 right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
+
+[dashboard_detail]
+format     = "($pins  )"
+fill       = "─"
+fill_style = "fg:dim"
 ```
+
+`[dashboard_detail]` is the dashboard's own DETAIL pane (the pane shown when
+a workspace row is selected, distinct from the attached view): its
+pinned-command chip row, followed by a rule to the edge. `$pins` is the only
+data-bearing segment there — every other registered segment renders empty if
+you put it in this bar's format.
 
 The `($version  )` group around `$version` and its trailing two spaces means
 that separator drops along with `$version` itself when the footer is too
@@ -167,16 +176,20 @@ segment is the unset default, 100.
 target, unlike `pins`/`agents`/`keys`, which record one hit per item. Put
 one of these four in more than one place across the two attached bars'
 `format`/`right_format` (or twice within the dashboard footer's own
+`format`/`right_format`, or twice within the dashboard detail pane's own
 `format`/`right_format`) and only the last-routed placement would be
-clickable, so `wsx theme check` rejects it as a duplicate instead.
+clickable, so `wsx theme check` rejects it as a duplicate instead. These
+three scopes are independent: a singleton segment may appear once in each
+without conflicting with the others.
 
 All segments are available in **either attached bar**, on either side;
 click targets follow them between bars as well as within a bar. `version`
 and `usage` work in all three bars, not just the dashboard footer — put
 `$usage` in an attached bar and its sparkline is the same graph, clickable
 the same way. `keys` uses the attached view's leader-key hints in both
-attached bars. On the dashboard, only `keys`, `version`, and `usage` produce
-output; other segments render empty. Segments also render empty when their
+attached bars. On the dashboard footer, only `keys`, `version`, and `usage`
+produce output; on the dashboard detail pane's row, only `pins` does; other
+segments render empty in each. Segments also render empty when their
 underlying data is absent.
 
 Two details of the **stock formats** are worth knowing before you override
@@ -193,13 +206,6 @@ them:
   stays. Emptying one (`[pr]` `symbol = ""`) leaves the space that follows
   `$symbol` in the stock format; delete that space in `format` too if you
   want the glyph gone entirely.
-
-#### What the file does not cover
-
-The dashboard's own DETAIL pane (the pane shown when a workspace row is
-selected, distinct from the attached view) draws its own pinned-command
-chips with their stock look. That row is not built from `[pins]` and is
-unaffected by it.
 
 #### Overriding a segment's style
 

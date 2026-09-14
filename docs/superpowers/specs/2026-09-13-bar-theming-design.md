@@ -28,9 +28,7 @@ per-segment tables, and a named palette.
 - Per-repo overrides. The file is global. Layering a per-repo override
   the way `detail_bar_config` does can come later.
 - Theming the split-pane title bars, the separator rule under the top
-  bar, the detail bar header, modals, or markdown. This includes the
-  dashboard DETAIL pane's own pinned-chip row: it stays a small legacy
-  painter (`render_pinned_chip_row`), not `[pins]`.
+  bar, the detail bar header, modals, or markdown.
 - Replacing the built-in `Theme` structs (`wsx`, `ansi`, `dracula`,
   `jellybeans`, `nord`). The `theme` setting still selects the base
   palette; the file layers bar formats and extra colors on top.
@@ -79,6 +77,11 @@ format       = "$keys  ($pins  )"
 right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
+
+[dashboard_detail]
+format     = "($pins  )"
+fill       = "─"
+fill_style = "fg:dim"
 
 # A powerline top bar:
 # [attached_top]
@@ -136,7 +139,7 @@ format = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 | `agent_bar` | `$symbol` (fg = agent identity color) | — | attached |
 | `workspace` | `$repo $name` | — | attached |
 | `attention` | `$items` | `Attention(i)` | attached |
-| `pins` | one chip: `$index $label` | `PinnedChip(i)` | attached |
+| `pins` | one chip: `$index $label` | `PinnedChip(i)` | attached, dashboard detail |
 | `agents` | one pill: `$symbol $label $key` | `Agent(id)` | attached |
 | `model_tokens` | `$model $tokens` | — | attached |
 | `procs` | `$symbol $count` | `Procs` | attached |
@@ -145,8 +148,9 @@ format = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 
 All segments are available in either attached bar, in `format` or
 `right_format`, with click targets following between bars. A segment
-without applicable data renders empty. The dashboard supplies only
-`keys`, `version`, and `usage`; all others render empty there.
+without applicable data renders empty. The dashboard footer supplies only
+`keys`, `version`, and `usage`; the dashboard detail pane's row supplies
+only `pins`; all others render empty in each.
 `keys` in either attached bar is the `^x` leader pill plus the
 leader-prefixed hints that exist today.
 
@@ -159,11 +163,14 @@ per item.
 isn't indexed by item (unlike the multi-item segments above, which
 record a hit per item and so tolerate repeats). Placing one of these in
 more than one of the four attached-bar format strings — or twice within
-the dashboard footer's own `format`/`right_format` — would draw two
+the dashboard footer's own `format`/`right_format`, or twice within the
+dashboard detail pane's own `format`/`right_format` — would draw two
 chips with only the last-routed one clickable, so `resolve` rejects it:
-an error naming the segment and how many placements were found. This
-also fixes `attention_width_budget`'s measurement, which otherwise
-can't know which placement to measure from.
+an error naming the segment and how many placements were found. These
+three scopes (the attached pair, the dashboard footer, the dashboard
+detail pane) are checked independently, so a singleton may appear once
+in each. This also fixes `attention_width_budget`'s measurement, which
+otherwise can't know which placement to measure from.
 
 `[agents].symbol` is ignored: `$symbol` for that segment is always a
 filled or hollow dot showing which agent is active, not a

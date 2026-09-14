@@ -1,4 +1,4 @@
-use crate::commands::pinned::{PinnedCommand, truncate_label};
+use crate::commands::pinned::PinnedCommand;
 use crate::data::store::AgentInstanceId;
 use crate::git::forge::BranchLifecycle;
 use crate::pty::render::render_screen;
@@ -331,74 +331,6 @@ fn title_bar_spans(
     spans.push(Span::styled("▎".to_string(), gutter_style));
     spans.push(Span::styled(format!(" {} ", label), name_style));
     spans
-}
-
-/// The footer/chip "key pill" style: a dim, bold glyph on the soft chip
-/// background. Shared by the nav overlay and the pinned-chip row so every
-/// pill reads identically.
-fn key_pill_style(theme: &Theme) -> Style {
-    Style::default()
-        .fg(theme.dim)
-        .add_modifier(Modifier::BOLD)
-        .bg(theme.bg_soft)
-}
-
-/// The three spans forming one key pill: a 1-cell pad, the `key` glyph in
-/// [`key_pill_style`], and a trailing 1-cell pad — all on the chip background.
-/// Width is always `2 + key.chars().count()`. Callers append any label tail
-/// themselves (the nav overlay has none; the pinned-chip row does).
-fn key_pill_spans(key: &str, theme: &Theme) -> [Span<'static>; 3] {
-    let pad_style = theme.chip_bg_style();
-    [
-        Span::styled(" ".to_string(), pad_style),
-        Span::styled(key.to_string(), key_pill_style(theme)),
-        Span::styled(" ".to_string(), pad_style),
-    ]
-}
-
-/// Paint pinned-command chips only, with no right-justified stats block.
-/// Used by the dashboard detail pane's chip row, which has no procs/diff/PR
-/// data of its own to show (those live in the header strip instead) — the
-/// attached view's own chip row renders through the bar engine instead (see
-/// `crate::ui::bar::attached_bars`). Returns each chip's clickable rect.
-pub(crate) fn render_pinned_chip_row(
-    f: &mut Frame,
-    area: Rect,
-    pinned: &[PinnedCommand],
-    theme: &Theme,
-) -> Vec<(usize, Rect)> {
-    let rects = chip_row::layout_chip_row(area, pinned);
-    let label_style = Style::default().fg(theme.path);
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 5 + 2);
-    let mut used: usize = 0;
-    for (i, (_rect, cmd)) in rects.iter().zip(pinned.iter()).enumerate() {
-        if i > 0 {
-            spans.push(Span::raw("  ".to_string()));
-            used += 2;
-        }
-        let label = truncate_label(&cmd.label, chip_row::CHIP_LABEL_COLS);
-        let chip_text = format!("{}", i + 1);
-        used += 2 + chip_text.chars().count();
-        spans.extend(key_pill_spans(&chip_text, theme));
-        let label_with_lead = format!(" {label}");
-        used += label_with_lead.chars().count();
-        spans.push(Span::styled(label_with_lead, label_style));
-    }
-    // Trailing dim rule, same treatment as the attached chip row's fill,
-    // so the pinned chips read consistently in both places.
-    let width = area.width as usize;
-    if width > used {
-        let gap = if used == 0 { 0 } else { 2 };
-        let rule_len = width.saturating_sub(used + gap);
-        if gap > 0 && rule_len > 0 {
-            spans.push(Span::raw(" ".repeat(gap)));
-        }
-        if rule_len > 0 {
-            spans.push(Span::styled("─".repeat(rule_len), theme.dim_style()));
-        }
-    }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
-    rects.into_iter().enumerate().collect()
 }
 
 #[cfg(test)]

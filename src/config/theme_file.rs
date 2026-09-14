@@ -28,6 +28,10 @@ pub struct ThemeFile {
     pub attached_top: BarTable,
     #[serde(default)]
     pub attached_bottom: BarTable,
+    /// The dashboard detail pane's pinned-command row. A named field, not
+    /// part of the flattened `segments` map, like the other three bars.
+    #[serde(default)]
+    pub dashboard_detail: BarTable,
     /// Every other top-level table is a `[segment]`.
     #[serde(flatten)]
     pub segments: BTreeMap<String, SegmentTable>,
@@ -113,6 +117,7 @@ impl ThemeFile {
         self.dashboard_footer = self.dashboard_footer.merge_over(base.dashboard_footer);
         self.attached_top = self.attached_top.merge_over(base.attached_top);
         self.attached_bottom = self.attached_bottom.merge_over(base.attached_bottom);
+        self.dashboard_detail = self.dashboard_detail.merge_over(base.dashboard_detail);
         for (name, tbl) in base.segments {
             let mine = self.segments.remove(&name).unwrap_or_default();
             self.segments.insert(name, mine.merge_over(tbl));
@@ -128,6 +133,7 @@ pub struct BarSpecs {
     pub dashboard_footer: BarSpec,
     pub attached_top: BarSpec,
     pub attached_bottom: BarSpec,
+    pub dashboard_detail: BarSpec,
     pub segments: HashMap<String, SegmentConfig>,
 }
 
@@ -309,52 +315,70 @@ fn resolve_bar(
     }
 }
 
-/// Reject a singleton segment (see [`crate::ui::bar::registry::SegmentDef::singleton`])
-/// placed more than once among the bars that would each try to route its
-/// one click target — the attached pair together, and the dashboard
-/// footer's own two sides.
+/// Within one scope (a group of bar sides that together route one set of
+/// click targets), reject a singleton segment (see
+/// [`crate::ui::bar::registry::SegmentDef::singleton`]) placed more than
+/// once.
+fn check_singleton_scope(loc: &str, nodes: &[&[Node]], verb: &str, errors: &mut Vec<ThemeError>) {
+    let count_var = |name: &str| -> usize {
+        nodes
+            .iter()
+            .flat_map(|n| format::vars(n))
+            .filter(|v| *v == name)
+            .count()
+    };
+    for name in singleton_names() {
+        let count = count_var(name);
+        if count > 1 {
+            errors.push(error(
+                loc,
+                format!(
+                    "segment `${name}` carries one click target and may appear only once {verb} (found {count}; a bar side you did not set keeps its bundled default, so set that `format`/`right_format` to \"\" to clear it)"
+                ),
+            ));
+        }
+    }
+}
+
+/// Reject a singleton segment placed more than once among the bars that
+/// would each try to route its one click target. Three independent
+/// scopes: the attached pair together, the dashboard footer's own two
+/// sides, and the dashboard detail pane's pinned-chip row on its own (a
+/// singleton may appear once there without conflicting with the other
+/// scopes).
 fn check_singletons(
     dashboard: &BarSpec,
     top: &BarSpec,
     bottom: &BarSpec,
+    detail: &BarSpec,
     errors: &mut Vec<ThemeError>,
 ) {
-    let count_var = |groups: &[&[Node]], name: &str| -> usize {
-        groups
-            .iter()
-            .flat_map(|nodes| format::vars(nodes))
-            .filter(|v| *v == name)
-            .count()
-    };
     let attached_nodes: [&[Node]; 4] = [
         &top.format,
         &top.right_format,
         &bottom.format,
         &bottom.right_format,
     ];
-    for name in singleton_names() {
-        let count = count_var(&attached_nodes, name);
-        if count > 1 {
-            errors.push(error(
-                "[attached_top]/[attached_bottom]",
-                format!(
-                    "segment `${name}` carries one click target and may appear only once across the attached bars (found {count}; a bar side you did not set keeps its bundled default, so set that `format`/`right_format` to \"\" to clear it)"
-                ),
-            ));
-        }
-    }
+    check_singleton_scope(
+        "[attached_top]/[attached_bottom]",
+        &attached_nodes,
+        "across the attached bars",
+        errors,
+    );
     let footer_nodes: [&[Node]; 2] = [&dashboard.format, &dashboard.right_format];
-    for name in singleton_names() {
-        let count = count_var(&footer_nodes, name);
-        if count > 1 {
-            errors.push(error(
-                "[dashboard_footer]",
-                format!(
-                    "segment `${name}` carries one click target and may appear only once in the dashboard footer (found {count}; a bar side you did not set keeps its bundled default, so set that `format`/`right_format` to \"\" to clear it)"
-                ),
-            ));
-        }
-    }
+    check_singleton_scope(
+        "[dashboard_footer]",
+        &footer_nodes,
+        "in the dashboard footer",
+        errors,
+    );
+    let detail_nodes: [&[Node]; 2] = [&detail.format, &detail.right_format];
+    check_singleton_scope(
+        "[dashboard_detail]",
+        &detail_nodes,
+        "in the dashboard detail pane's pinned-chip row",
+        errors,
+    );
 }
 
 /// Merge `file` over the bundled default and resolve it. Every problem is
@@ -396,11 +420,19 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         &resolver,
         &mut errors,
     );
+    let dashboard_detail = resolve_bar(
+        "dashboard_detail",
+        &file.dashboard_detail,
+        &segment_names,
+        &resolver,
+        &mut errors,
+    );
 
     check_singletons(
         &dashboard_footer,
         &attached_top,
         &attached_bottom,
+        &dashboard_detail,
         &mut errors,
     );
 
@@ -410,6 +442,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             dashboard_footer,
             attached_top,
             attached_bottom,
+            dashboard_detail,
             segments,
         })
     } else {
@@ -455,6 +488,10 @@ mod tests {
             format::parse("$keys").unwrap()
         );
         assert_eq!(specs.attached_bottom.fill, "─");
+        assert_eq!(
+            specs.dashboard_detail.format,
+            format::parse("($pins  )").unwrap()
+        );
         assert_eq!(specs.segments["pr"].priority, 50);
         assert_eq!(specs.segments["keys"].separator, "  ");
         assert_eq!(specs.segments["procs"].symbol.as_deref(), Some("●"));
@@ -482,6 +519,19 @@ mod tests {
         assert_eq!(
             specs.segments["pr"].format,
             format::parse("[$symbol #$number $label]($style)( [$mark]($mark_style))").unwrap(),
+            "unset fields keep the default"
+        );
+    }
+
+    #[test]
+    fn partial_dashboard_detail_table_merges_over_the_default() {
+        let specs = ok("[dashboard_detail]\nformat = \"$pins\"\n");
+        assert_eq!(
+            specs.dashboard_detail.format,
+            format::parse("$pins").unwrap()
+        );
+        assert_eq!(
+            specs.dashboard_detail.fill, "─",
             "unset fields keep the default"
         );
     }
@@ -623,6 +673,8 @@ mod tests {
         let e = ThemeFile::parse("[pr]\npriorty = 7\n").unwrap_err();
         assert!(e.message.contains("priorty"), "{}", e.message);
         let e = ThemeFile::parse("[attached_top]\nfromat = \"x\"\n").unwrap_err();
+        assert!(e.message.contains("fromat"), "{}", e.message);
+        let e = ThemeFile::parse("[dashboard_detail]\nfromat = \"x\"\n").unwrap_err();
         assert!(e.message.contains("fromat"), "{}", e.message);
     }
 

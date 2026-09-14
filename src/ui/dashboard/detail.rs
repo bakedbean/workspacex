@@ -53,6 +53,9 @@ pub struct DetailInputs<'a> {
     /// Pinned commands resolved for the selected workspace's repo. When
     /// empty, no chip row is rendered.
     pub pinned: &'a [crate::commands::pinned::PinnedCommand],
+    /// The resolved bar theme, so the chip row draws through
+    /// `crate::ui::bar::dashboard_detail` instead of a bespoke painter.
+    pub bar_specs: &'a crate::config::theme_file::BarSpecs,
     /// Per-slot scroll offsets. Borrowed mutably so the container can
     /// clamp them to the current content height during render.
     pub scroll_offsets: &'a mut [u16; 4],
@@ -177,8 +180,18 @@ pub fn render(
     // The detail bar's PR chip, diff count, and procs count live in the header
     // strip and row (above/elsewhere), so the chip row here carries pinned
     // commands only — no right-justified agent pills, procs, diff, or PR chip.
+    // Themed via `[dashboard_detail]`, the fourth bar the engine draws.
     let chip_rects = if let Some(area) = chip_area {
-        crate::ui::attached::render_pinned_chip_row(f, area, inputs.pinned, theme)
+        let rendered =
+            crate::ui::bar::dashboard_detail(inputs.bar_specs, theme, inputs.pinned, area.width);
+        f.render_widget(Paragraph::new(rendered.line), area);
+        crate::ui::bar::render::hit_rects(area, &rendered.hits)
+            .into_iter()
+            .filter_map(|(rect, hit)| match hit {
+                crate::ui::bar::segment::Hit::PinnedChip(i) => Some((i, rect)),
+                _ => None,
+            })
+            .collect()
     } else {
         Vec::new()
     };
@@ -788,6 +801,10 @@ mod tests {
         reg
     }
 
+    fn bar_specs() -> crate::config::theme_file::BarSpecs {
+        crate::config::theme_file::bundled_default(&Theme::wsx())
+    }
+
     fn render_to_text(inputs: &mut DetailInputs<'_>, w: u16, h: u16) -> String {
         let backend = TestBackend::new(w, h);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -858,6 +875,7 @@ mod tests {
             let theme = Theme::wsx();
             let cfg = DetailBarConfig::default();
             let mut offsets = [0u16; 4];
+            let specs = bar_specs();
             let mut inputs = DetailInputs {
                 repo: &repo,
                 workspace: &ws,
@@ -879,6 +897,7 @@ mod tests {
                 config: &cfg,
                 registry: &reg,
                 pinned: &[],
+                bar_specs: &specs,
                 scroll_offsets: &mut offsets,
             };
             render(f, Rect::new(0, 0, 80, 0), &mut inputs, &theme);
@@ -1152,6 +1171,7 @@ mod tests {
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1176,6 +1196,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 10);
@@ -1207,6 +1228,7 @@ mod tests {
         };
         let reg = make_registry();
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1228,6 +1250,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         // Width 100, height exactly CHROME_ROWS (4).
@@ -1256,6 +1279,7 @@ mod tests {
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1277,6 +1301,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 70, 10);
@@ -1311,6 +1336,7 @@ mod tests {
         };
         let reg = make_registry();
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1332,6 +1358,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 10);
@@ -1354,6 +1381,7 @@ mod tests {
         };
         let reg = make_registry();
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1375,6 +1403,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 10);
@@ -1404,6 +1433,7 @@ mod tests {
             },
         ];
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1425,6 +1455,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &pinned,
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 12);
@@ -1458,6 +1489,7 @@ mod tests {
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1479,6 +1511,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         // Capture render's returned rects via a closure-bound outer mut
@@ -1515,6 +1548,7 @@ mod tests {
             command: "/pr".into(),
         }];
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1536,6 +1570,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &pinned,
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         // Area height exactly CHROME_ROWS (4). With chips present we need 5.
@@ -1718,6 +1753,7 @@ mod tests {
         let cfg = DetailBarConfig::default();
         let reg = make_registry();
         let mut offsets = [0u16; 4];
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1739,6 +1775,7 @@ mod tests {
             config: &cfg,
             registry: &reg,
             pinned: &[],
+            bar_specs: &specs,
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 10);

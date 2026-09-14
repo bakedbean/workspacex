@@ -38,10 +38,16 @@ fn err(offset: usize, message: impl Into<String>) -> ParseError {
     }
 }
 
+/// How deep `[ … ]` / `( … )` may nest. The parser recurses once per
+/// opener, so without a cap a pathological format (tens of thousands of
+/// nested parens) overflows the stack and ABORTS the process — which the
+/// last-good-theme reload fallback cannot catch, unlike a `ParseError`.
+const MAX_DEPTH: usize = 64;
+
 pub fn parse(src: &str) -> Result<Vec<Node>, ParseError> {
     let chars: Vec<char> = src.chars().collect();
     let mut pos = 0;
-    let nodes = parse_seq(&chars, &mut pos, None)?;
+    let nodes = parse_seq(&chars, &mut pos, None, 0)?;
     debug_assert_eq!(pos, chars.len());
     Ok(nodes)
 }
@@ -53,12 +59,21 @@ fn flush(text: &mut String, nodes: &mut Vec<Node>) {
 }
 
 /// Parse nodes until `until` (or end of input when `None`). On return
-/// `pos` sits on the closer (not consumed) or at the end.
+/// `pos` sits on the closer (not consumed) or at the end. `depth` counts
+/// the enclosing `[`/`(` openers; past [`MAX_DEPTH`] this errors instead of
+/// recursing (see the constant).
 fn parse_seq(
     chars: &[char],
     pos: &mut usize,
     until: Option<char>,
+    depth: usize,
 ) -> Result<Vec<Node>, ParseError> {
+    if depth > MAX_DEPTH {
+        return Err(err(
+            pos.saturating_sub(1),
+            format!("nesting deeper than {MAX_DEPTH} levels"),
+        ));
+    }
     let mut nodes = Vec::new();
     let mut text = String::new();
     while *pos < chars.len() {
@@ -113,7 +128,7 @@ fn parse_seq(
                 flush(&mut text, &mut nodes);
                 let open = *pos;
                 *pos += 1;
-                let inner = parse_seq(chars, pos, Some(']'))?;
+                let inner = parse_seq(chars, pos, Some(']'), depth + 1)?;
                 if chars.get(*pos) != Some(&']') {
                     return Err(err(open, "unclosed `[`"));
                 }
@@ -139,7 +154,7 @@ fn parse_seq(
                 flush(&mut text, &mut nodes);
                 let open = *pos;
                 *pos += 1;
-                let inner = parse_seq(chars, pos, Some(')'))?;
+                let inner = parse_seq(chars, pos, Some(')'), depth + 1)?;
                 if chars.get(*pos) != Some(&')') {
                     return Err(err(open, "unclosed `(`"));
                 }
@@ -318,6 +333,38 @@ mod tests {
         assert_eq!(parse("(x]").unwrap_err().offset, 2);
         assert_eq!(parse("${}").unwrap_err().offset, 0);
         assert_eq!(parse("$").unwrap_err().offset, 0);
+    }
+
+    #[test]
+    fn nesting_up_to_the_cap_parses_and_past_it_errors() {
+        let nest = |n: usize| format!("{}$a{}", "(".repeat(n), ")".repeat(n));
+        assert!(
+            parse(&nest(MAX_DEPTH)).is_ok(),
+            "{MAX_DEPTH} groups must parse"
+        );
+        let e = parse(&nest(MAX_DEPTH + 1)).unwrap_err();
+        assert!(
+            e.message.contains(&MAX_DEPTH.to_string()),
+            "error should name the limit: {}",
+            e.message
+        );
+        // `[ … ](style)` recursion is capped the same way.
+        let styled = format!(
+            "{}$a{}",
+            "[".repeat(MAX_DEPTH + 1),
+            "](bold)".repeat(MAX_DEPTH + 1)
+        );
+        assert!(parse(&styled).is_err());
+    }
+
+    /// A pathological format must return a `ParseError` (which the theme
+    /// loader reports and recovers from) rather than overflowing the stack,
+    /// which would abort the process.
+    #[test]
+    fn absurd_nesting_errors_instead_of_aborting() {
+        let src = format!("{}$a{}", "(".repeat(100_000), ")".repeat(100_000));
+        let e = parse(&src).unwrap_err();
+        assert!(e.message.contains("nesting"), "{}", e.message);
     }
 
     #[test]

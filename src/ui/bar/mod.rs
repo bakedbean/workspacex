@@ -14,7 +14,7 @@ pub mod test_util;
 
 use crate::config::theme_file::BarSpecs;
 use crate::ui::theme::Theme;
-use render::{Rendered, eval, render_bar};
+use render::{Rendered, render_bar};
 use segment::{Hit, Segment, SegmentConfig, SegmentMap};
 
 /// The segment config by name. Every name in `SEGMENTS` is present because
@@ -81,45 +81,13 @@ pub fn dashboard_footer(
         "usage",
         providers::usage(cfg(specs, "usage"), inputs.window_label, &spark, &resolver),
     );
-
-    // The footer never sheds a segment on overflow (unlike the attached
-    // bars, which lean on priority): the legacy builder never did either,
-    // it just let the line run past the terminal edge and relied on the
-    // renderer to clip it. Render at whatever width the content actually
-    // needs so the engine never drops anything here; a too-narrow terminal
-    // then clips the same way the legacy line did.
-    let base = resolver
-        .resolve(&specs.dashboard_footer.style)
-        .unwrap_or_default();
-    let (left, _) = eval(&specs.dashboard_footer.format, &segments, &resolver, base);
-    let (right, _) = eval(
-        &specs.dashboard_footer.right_format,
-        &segments,
-        &resolver,
-        base,
-    );
-    let needed = left
-        .width
-        .saturating_add(right.width)
-        .saturating_add(u16::from(!left.is_empty() && !right.is_empty()));
-    let mut rendered = render_bar(
+    render_bar(
         &specs.dashboard_footer,
         &segments,
         &specs.segments,
-        width.max(needed),
+        width,
         &resolver,
-    );
-
-    // The legacy builder always anchored the usage graph's click target to
-    // the terminal's right edge (`area.width - graph_w`), never to where
-    // the (possibly overflowing) text actually sits. Match that so a click
-    // near the edge still opens the usage picker on a narrow terminal; this
-    // is a no-op whenever the bar isn't overflowing, since the segment
-    // already sits flush against the right edge in that case.
-    if let Some(hit) = rendered.hits.iter_mut().find(|h| h.hit == Hit::UsageGraph) {
-        hit.start_col = width.saturating_sub(hit.width);
-    }
-    rendered
+    )
 }
 
 #[cfg(test)]
@@ -206,5 +174,41 @@ mod footer_tests {
         let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
         assert_eq!(usage.width, 2 + 1 + 24);
         assert_eq!(usage.start_col + usage.width, 120);
+    }
+
+    // At 100 columns the full content (keys 71 + gap 1 + version 5 + "  " 2
+    // + usage 28 = 107, without the actions pill) doesn't fit. `version`'s
+    // lower priority drops it first: keys 71 + gap 1 + usage 28 = 100 fits
+    // exactly, so the usage graph survives and lands flush against the
+    // right edge. `workspace_selected: false` (no `actions` pill) — with
+    // it, keys alone are already 84 wide, leaving no room for usage either,
+    // so this specifically exercises version-drops-before-usage rather than
+    // everything-drops.
+    #[test]
+    fn narrow_footer_drops_version_before_usage() {
+        let out = footer(false, "24h", 100);
+        let text = plain(&out.line);
+        assert!(!text.contains("0.1.0"), "{text:?}");
+        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
+        assert!(text.ends_with(&format!("24h {spark}")), "{text:?}");
+        assert_eq!(out.line.width(), 100);
+        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
+        assert_eq!(usage.start_col + usage.width, 100);
+
+        // Narrower still (60): even usage alone no longer fits, so both
+        // right-side segments are gone — but the left side is never
+        // dropped, only clipped by whatever renders the (now wider than
+        // requested) line.
+        let out = footer(false, "24h", 60);
+        let text = plain(&out.line);
+        assert!(!text.contains("0.1.0"), "{text:?}");
+        assert!(!text.contains("24h"), "{text:?}");
+        assert_eq!(
+            out.hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::Key(_)))
+                .count(),
+            7
+        );
     }
 }

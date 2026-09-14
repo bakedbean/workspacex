@@ -27,9 +27,11 @@
 [palette]
 
 [dashboard_footer]
-format       = "$keys"
-right_format = "$version  $usage"
-fill         = " "
+format = "$keys"
+# The trailing "  " is grouped with $version so it drops along with it (not
+# left as an orphaned gap) when the terminal is too narrow for both.
+right_format = "($version  )$usage"
+fill = " "
 
 [attached_top]
 format = "($agent_bar )$workspace(   $attention)"
@@ -49,7 +51,10 @@ separator = "  "
 
 # Variables: $version
 [version]
-format = "[$version](fg:path)"
+format   = "[$version](fg:path)"
+# Least useful right-side element on the dashboard footer, so it drops
+# before the usage graph when the terminal is too narrow for both.
+priority = 50
 
 # Usage sparkline. Variables: $label $spark
 [usage]

@@ -65,6 +65,10 @@ pub enum CliAction {
         name: String,
         new_name: String,
     },
+    RepoSetPath {
+        name: String,
+        path: PathBuf,
+    },
     RepoSetRelatedRepos {
         name: String,
         source: ValueSource,

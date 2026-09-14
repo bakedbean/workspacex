@@ -275,6 +275,15 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             store.set_repo_name(r.id, trimmed)?;
             println!("renamed repo {name} to {trimmed}");
         }
+        CliAction::RepoSetPath { name, path } => {
+            let repos = crate::data::repo::list(&store)?;
+            let r = repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let path = crate::data::repo::set_path(&store, r.id, &path).await?;
+            println!("set path for {name} to {}", path.display());
+        }
         CliAction::RepoSetRelatedRepos { name, source } => {
             let repos = crate::data::repo::list(&store)?;
             let r = repos

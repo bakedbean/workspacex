@@ -555,10 +555,8 @@ mod added_spawn_tests {
 
     fn seed_pi_file(home: &std::path::Path, worktree: &std::path::Path, id: &str) {
         let abs = std::fs::canonicalize(worktree).unwrap();
-        let encoded = abs.to_string_lossy().replace('/', "-");
-        let dir = home
-            .join(".pi/agent/sessions")
-            .join(format!("--{encoded}--"));
+        let encoded = crate::activity::pi_events::encode_cwd(&abs);
+        let dir = home.join(".pi/agent/sessions").join(encoded);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(format!("2026-09-13T10-00-00_{id}.jsonl")), "{}").unwrap();
     }

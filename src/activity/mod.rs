@@ -31,6 +31,34 @@ pub fn locate_session_file_for(kind: AgentKind, worktree: &Path) -> Option<PathB
     }
 }
 
+/// Locate only this instance's transcript. A recorded identity is authoritative:
+/// a missing file never permits borrowing another session in the same cwd.
+/// Without an identity, cwd discovery is safe only for a singleton agent kind.
+pub(crate) fn locate_instance_session_file(
+    instance: &crate::data::agents::AgentInstance,
+    worktree: &Path,
+    same_kind_count: usize,
+) -> Option<PathBuf> {
+    use crate::pty::session::{
+        claude_session_file, codex_session_file, omp_session_exists, pi_session_file,
+    };
+
+    if let Some(id) = instance.agent_session_id.as_deref() {
+        return match instance.agent {
+            AgentKind::Claude => claude_session_file(worktree, id),
+            AgentKind::Pi => pi_session_file(worktree, id),
+            AgentKind::Codex => codex_session_file(id),
+            AgentKind::Omp => omp_session_exists(id).then(|| PathBuf::from(id)),
+            // Hermes has no per-instance session identity in the roster.
+            AgentKind::Hermes => None,
+        };
+    }
+    if same_kind_count != 1 {
+        return None;
+    }
+    locate_session_file_for(instance.agent, worktree)
+}
+
 /// Tail `path` from byte `offset` with the parser matching the agent kind.
 /// Pass `offset = 0` to read the whole transcript.
 pub fn tail_session_for(
@@ -50,8 +78,173 @@ pub fn tail_session_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::agents::AgentInstance;
+    use crate::data::store::{AgentInstanceId, WorkspaceId};
     use crate::pty::session::AgentKind;
+    use crate::test_support::EnvGuard;
     use std::path::Path;
+
+    fn instance(kind: AgentKind, session_id: Option<String>) -> AgentInstance {
+        AgentInstance {
+            id: AgentInstanceId(2),
+            workspace_id: WorkspaceId(1),
+            agent: kind,
+            ordinal: 2,
+            is_primary: false,
+            session_ref: None,
+            agent_session_id: session_id,
+            created_at: 0,
+        }
+    }
+
+    fn seed_instance_session(
+        home: &Path,
+        worktree: &Path,
+        kind: AgentKind,
+        id: &str,
+        modified_secs: u64,
+    ) -> (String, PathBuf) {
+        let abs = std::fs::canonicalize(worktree).unwrap();
+        let path = match kind {
+            AgentKind::Claude => home
+                .join(".claude/projects")
+                .join(events::encode_cwd(&abs))
+                .join(format!("{id}.jsonl")),
+            AgentKind::Pi => home
+                .join(".pi/agent/sessions")
+                .join(pi_events::encode_cwd(&abs))
+                .join(format!("2026-09-13T10-00-00_{id}.jsonl")),
+            AgentKind::Codex => home
+                .join(".codex/sessions/2026/09/13")
+                .join(format!("rollout-2026-09-13T10-00-00-{id}.jsonl")),
+            AgentKind::Omp => omp_events::session_dir(worktree)
+                .unwrap()
+                .join(format!("2026-09-13T10-00-00_{id}.jsonl")),
+            AgentKind::Hermes => unreachable!("Hermes uses SQLite"),
+        };
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let meta = serde_json::json!({
+            "type": "session_meta",
+            "payload": { "id": id, "cwd": abs }
+        });
+        std::fs::write(&path, format!("{meta}\n")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(modified_secs),
+            )
+            .unwrap();
+        let pin = if kind == AgentKind::Omp {
+            path.to_str().unwrap().to_owned()
+        } else {
+            id.to_owned()
+        };
+        (pin, path)
+    }
+
+    #[test]
+    fn instance_locator_uses_exact_identity_not_newest_same_kind_sibling() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        for kind in [
+            AgentKind::Claude,
+            AgentKind::Pi,
+            AgentKind::Codex,
+            AgentKind::Omp,
+        ] {
+            let (pin, mine) = seed_instance_session(home.path(), work.path(), kind, "mine", 1);
+            seed_instance_session(home.path(), work.path(), kind, "peer-mine", 2);
+            assert_eq!(
+                locate_instance_session_file(&instance(kind, Some(pin)), work.path(), 2),
+                Some(mine),
+                "{kind:?} must not select the newer peer"
+            );
+        }
+    }
+
+    #[test]
+    fn instance_locator_missing_pin_never_falls_back_to_sibling() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        for kind in [
+            AgentKind::Claude,
+            AgentKind::Pi,
+            AgentKind::Codex,
+            AgentKind::Omp,
+        ] {
+            let (pin, mine) = seed_instance_session(home.path(), work.path(), kind, "mine", 1);
+            seed_instance_session(home.path(), work.path(), kind, "peer-mine", 2);
+            std::fs::remove_file(mine).unwrap();
+            assert_eq!(
+                locate_instance_session_file(&instance(kind, Some(pin)), work.path(), 1),
+                None,
+                "{kind:?} must not fall back even when only one instance is registered"
+            );
+        }
+    }
+
+    #[test]
+    fn instance_locator_allows_cwd_fallback_only_for_unambiguous_unpinned_kind() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        for kind in [
+            AgentKind::Claude,
+            AgentKind::Pi,
+            AgentKind::Codex,
+            AgentKind::Omp,
+        ] {
+            let (_, path) = seed_instance_session(home.path(), work.path(), kind, "peer", 1);
+            let unpinned = instance(kind, None);
+            assert_eq!(
+                locate_instance_session_file(&unpinned, work.path(), 1),
+                Some(path),
+                "{kind:?} singleton may discover its session"
+            );
+            assert_eq!(
+                locate_instance_session_file(&unpinned, work.path(), 2),
+                None,
+                "{kind:?} must not borrow a peer's session"
+            );
+        }
+    }
+
+    #[test]
+    fn instance_locator_hermes_virtual_path_requires_singleton_kind() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(home.path().join(".hermes")).unwrap();
+        let conn = rusqlite::Connection::open(home.path().join(".hermes/state.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, started_at REAL);
+             INSERT INTO sessions VALUES ('peer', 100);",
+        )
+        .unwrap();
+        std::fs::create_dir_all(work.path().join(".git/info")).unwrap();
+        std::fs::write(
+            work.path().join(".git/info/wsx-hermes-spawn-at"),
+            "100\npeer\n",
+        )
+        .unwrap();
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        let unpinned = instance(AgentKind::Hermes, None);
+        assert_eq!(
+            locate_instance_session_file(&unpinned, work.path(), 1),
+            Some(PathBuf::from("hermes:peer"))
+        );
+        assert_eq!(
+            locate_instance_session_file(&unpinned, work.path(), 2),
+            None
+        );
+    }
 
     /// A worktree nobody has ever opened an agent in has no session file
     /// for any kind. Exercises every dispatch arm without a fixture.

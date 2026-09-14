@@ -5,11 +5,11 @@ use crate::app::App;
 use crate::app::SharedApp;
 use crate::data::store::WorkspaceId;
 
-/// Tail the agent session JSONL for `id` and merge any new events into
-/// `App::workspace_events`. Shared by `branch_drift_poll` (the periodic
-/// 2s poll) and the detach handlers (which spawn this immediately on
-/// return-to-dashboard so the detail bar reflects work done in the
-/// just-detached session without waiting for the next tick).
+/// Tail each recorded agent instance for `id`, keeping primary events in
+/// `App::workspace_events` and peers in `App::agent_events`. Shared by
+/// `branch_drift_poll` (the periodic 2s poll) and the detach handlers
+/// (which spawn this immediately on return-to-dashboard so the detail bar
+/// reflects the just-detached session without waiting for the next tick).
 ///
 /// Callers pass `worktree_path` + `ws_agent` directly so this helper
 /// doesn't have to walk `App::workspaces` (O(n) lookup that would make
@@ -32,18 +32,59 @@ pub async fn tail_workspace_events(
     worktree_path: std::path::PathBuf,
     ws_agent: crate::pty::session::AgentKind,
 ) {
-    if !worktree_path.exists() {
-        return;
+    // Read the store, not the render cache: hooks can record a new session
+    // identity before the next App::refresh.
+    let roster = {
+        let g = app.lock().await;
+        let Ok(roster) = g.store.workspace_agents(id) else {
+            return;
+        };
+        roster
+    };
+    if roster.is_empty() {
+        // Retain the legacy entrypoint for workspaces without instance rows.
+        tail_instance_events(&app, id, &worktree_path, ws_agent, None, &roster).await;
+    } else {
+        for instance in &roster {
+            tail_instance_events(
+                &app,
+                id,
+                &worktree_path,
+                instance.agent,
+                Some(instance),
+                &roster,
+            )
+            .await;
+        }
     }
-    let current_file = crate::activity::locate_session_file_for(ws_agent, &worktree_path);
-    // Snapshot the FULL (file_path, byte_offset) pair so the commit can
-    // detect a concurrent tail that landed between our snapshot and now.
+}
+
+async fn tail_instance_events(
+    app: &SharedApp,
+    id: WorkspaceId,
+    worktree_path: &std::path::Path,
+    agent: crate::pty::session::AgentKind,
+    instance: Option<&crate::data::agents::AgentInstance>,
+    roster: &[crate::data::agents::AgentInstance],
+) {
+    let peer_id = instance.filter(|i| !i.is_primary).map(|i| i.id);
+    // Snapshot before locating/reading the file. Never clone event histories.
     let (snapshot_file, snapshot_offset) = {
         let g = app.lock().await;
-        match g.workspace_events.get(&id) {
-            Some(evt) => (evt.file_path.clone(), evt.byte_offset),
-            None => (None, 0),
-        }
+        let evt = match peer_id {
+            Some(peer) => g.agent_events.get(&peer),
+            None => g.workspace_events.get(&id),
+        };
+        evt.map(|evt| (evt.file_path.clone(), evt.byte_offset))
+            .unwrap_or((None, 0))
+    };
+    let current_file = if !worktree_path.exists() {
+        None
+    } else if let Some(instance) = instance {
+        let same_kind_count = roster.iter().filter(|i| i.agent == agent).count();
+        crate::activity::locate_instance_session_file(instance, worktree_path, same_kind_count)
+    } else {
+        crate::activity::locate_session_file_for(agent, worktree_path)
     };
     // The byte we actually tail from: reuse the prior offset only when
     // the snapshot's file matches the current session file; otherwise
@@ -52,11 +93,53 @@ pub async fn tail_workspace_events(
         (Some(p), Some(c)) if p == c => snapshot_offset,
         _ => 0,
     };
+    let tail_result = current_file
+        .as_ref()
+        .map(|file| crate::activity::tail_session_for(agent, file, tail_from));
+    let mut g = app.lock().await;
+    // Session hooks and roster changes can land while file I/O is running.
+    // Recheck identity AND singleton eligibility before committing or clearing.
+    // A newer recorded identity must never receive an older session's stats.
+    if !g
+        .store
+        .workspace_agents(id)
+        .is_ok_and(|current| current == roster)
+    {
+        return;
+    }
+    let cached = match peer_id {
+        Some(peer) => g.agent_events.get(&peer),
+        None => g.workspace_events.get(&id),
+    };
+    let still_at_snapshot = match cached {
+        Some(evt) => evt.file_path == snapshot_file && evt.byte_offset == snapshot_offset,
+        None => snapshot_file.is_none() && snapshot_offset == 0,
+    };
+    if !still_at_snapshot {
+        return;
+    }
     let Some(file) = current_file else {
+        // Missing pinned files and ambiguous unpinned instances must not keep
+        // model/usage from the session they used to resolve.
+        if let Some(peer) = peer_id {
+            g.agent_events.remove(&peer);
+        } else {
+            g.workspace_events.remove(&id);
+            g.workspace_events_scanned.remove(&id);
+        }
         return;
     };
-    let tail_result = crate::activity::tail_session_for(ws_agent, &file, tail_from);
-    let Ok(update) = tail_result else {
+    let Some(Ok(update)) = tail_result else {
+        // Preserve an unchanged session on transient read errors (including
+        // Hermes virtual paths), but never show the previous identity's usage.
+        if snapshot_file.as_ref() != Some(&file) {
+            if let Some(peer) = peer_id {
+                g.agent_events.remove(&peer);
+            } else {
+                g.workspace_events.remove(&id);
+                g.workspace_events_scanned.remove(&id);
+            }
+        }
         return;
     };
     let crate::activity::events::TailUpdate {
@@ -78,22 +161,10 @@ pub async fn tail_workspace_events(
         current_action,
         pending_question_text,
     } = update;
-    let mut g = app.lock().await;
-    // Concurrent-tail guard. If another `tail_workspace_events` call
-    // for the same workspace committed between our snapshot and now,
-    // its commit already advanced `byte_offset` (and may have replaced
-    // `file_path`). Our `update` was computed against the snapshot —
-    // applying it on top would re-add the same events and double-count
-    // tool-use metrics. Skip; the next periodic tick re-snapshots and
-    // catches any bytes past the newer offset.
-    let still_at_snapshot = match g.workspace_events.get(&id) {
-        Some(evt) => evt.file_path == snapshot_file && evt.byte_offset == snapshot_offset,
-        None => snapshot_file.is_none() && snapshot_offset == 0,
+    let evt = match peer_id {
+        Some(peer) => g.agent_events.entry(peer).or_default(),
+        None => g.workspace_events.entry(id).or_default(),
     };
-    if !still_at_snapshot {
-        return;
-    }
-    let evt = g.workspace_events.entry(id).or_default();
     // If the session file was replaced (different path) or
     // truncated/rewound (reset_from_zero), discard all
     // session-derived state before applying the new batch.
@@ -215,7 +286,308 @@ pub async fn tail_workspace_events(
     // After this point the classifier sees the agent's
     // real stop_reason, so the bell loop can start
     // trusting activity transitions for this workspace.
-    g.workspace_events_scanned.insert(id);
+    if peer_id.is_none() {
+        g.workspace_events_scanned.insert(id);
+    }
+}
+
+#[cfg(test)]
+mod instance_event_tests {
+    use super::*;
+    use crate::data::store::{AgentInstanceId, NewWorkspace, Store};
+    use crate::pty::session::AgentKind;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    const TRANSCRIPT: &str = include_str!("../../tests/fixtures/omp-session.jsonl");
+
+    fn setup(
+        worktree: &Path,
+    ) -> (
+        SharedApp,
+        WorkspaceId,
+        AgentInstanceId,
+        AgentInstanceId,
+        PathBuf,
+        PathBuf,
+    ) {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store.add_repo(worktree, "events", "").unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "events",
+                branch: "events",
+                worktree_path: worktree,
+                yolo: false,
+                agent: AgentKind::Omp,
+                shared: false,
+            })
+            .unwrap();
+        let primary = store.add_primary_agent(ws, AgentKind::Omp, 0).unwrap();
+        let peer = store.add_workspace_agent(ws, AgentKind::Omp).unwrap();
+        let primary_file = worktree.join("primary.jsonl");
+        let peer_file = worktree.join("peer.jsonl");
+        std::fs::write(&primary_file, TRANSCRIPT).unwrap();
+        std::fs::write(
+            &peer_file,
+            TRANSCRIPT
+                .replace("gpt-5.6-sol", "peer-model")
+                .replace("\"input\":357", "\"input\":1000"),
+        )
+        .unwrap();
+        store
+            .set_instance_agent_session(primary.id, primary_file.to_str().unwrap())
+            .unwrap();
+        store
+            .set_instance_agent_session(peer.id, peer_file.to_str().unwrap())
+            .unwrap();
+        let app = App::new(store, worktree.to_path_buf()).unwrap();
+        (
+            Arc::new(Mutex::new(app)),
+            ws,
+            primary.id,
+            peer.id,
+            primary_file,
+            peer_file,
+        )
+    }
+
+    fn assistant_record(model: &str, tokens: u64, tool: &str) -> String {
+        // Keep the real harness envelope and usage schema, varying only the
+        // observable signals needed to distinguish sessions and new batches.
+        let mut record = TRANSCRIPT
+            .lines()
+            .rev()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|record| record["message"]["role"] == "assistant")
+            .unwrap();
+        record["message"]["model"] = model.into();
+        record["message"]["usage"]["input"] = tokens.into();
+        record["message"]["usage"]["cacheRead"] = 0.into();
+        record["message"]["usage"]["cacheWrite"] = 0.into();
+        record["message"]["content"] = serde_json::json!([{
+            "type": "toolCall",
+            "id": format!("{model}-{tool}"),
+            "name": tool,
+            "arguments": {}
+        }]);
+        format!("{record}\n")
+    }
+
+    fn append(path: &Path, record: &str) {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .unwrap()
+            .write_all(record.as_bytes())
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_kind_instances_accumulate_independently_without_duplicate_polls() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (app, ws, _, peer, primary_file, peer_file) = setup(dir.path());
+        // The passed workspace kind must not override the actual instance roster.
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Claude).await;
+        {
+            let g = app.lock().await;
+            let primary_events = &g.workspace_events[&ws];
+            let peer_events = &g.agent_events[&peer];
+            assert_eq!(primary_events.model_id.as_deref(), Some("gpt-5.6-sol"));
+            assert_eq!(primary_events.context_tokens, Some(16_485));
+            assert_eq!(peer_events.model_id.as_deref(), Some("peer-model"));
+            assert_eq!(peer_events.context_tokens, Some(17_128));
+            assert_eq!(primary_events.log.len(), 4);
+            assert_eq!(peer_events.log.len(), 4);
+            assert!(g.workspace_events_scanned.contains(&ws));
+        }
+        append(
+            &primary_file,
+            &assistant_record("primary-next", 33_000, "bash"),
+        );
+        append(&peer_file, &assistant_record("peer-next", 44_000, "read"));
+        tokio::join!(
+            tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp),
+            tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp),
+        );
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let g = app.lock().await;
+        let primary_events = &g.workspace_events[&ws];
+        let peer_events = &g.agent_events[&peer];
+        assert_eq!(primary_events.log.len(), 5);
+        assert_eq!(peer_events.log.len(), 5);
+        assert_eq!(primary_events.model_id.as_deref(), Some("primary-next"));
+        assert_eq!(primary_events.context_tokens, Some(33_000));
+        assert_eq!(peer_events.model_id.as_deref(), Some("peer-next"));
+        assert_eq!(peer_events.context_tokens, Some(44_000));
+    }
+
+    #[tokio::test]
+    async fn peer_rollover_and_missing_identity_reset_only_that_instance() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (app, ws, _, peer, _, _) = setup(dir.path());
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let replacement = dir.path().join("replacement.jsonl");
+        std::fs::write(
+            &replacement,
+            assistant_record("replacement", 55_000, "read"),
+        )
+        .unwrap();
+        {
+            let g = app.lock().await;
+            g.store
+                .set_instance_agent_session(peer, replacement.to_str().unwrap())
+                .unwrap();
+            // Deliberately do not refresh: the recorded identity leads the
+            // dashboard's cached agent_roster.
+        }
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        {
+            let g = app.lock().await;
+            let events = &g.agent_events[&peer];
+            assert_eq!(events.model_id.as_deref(), Some("replacement"));
+            assert_eq!(events.context_tokens, Some(55_000));
+            assert!(events.first_user_text.is_none());
+        }
+        // Rewind the same path: old context and model must reset too.
+        std::fs::write(&replacement, "{}\n").unwrap();
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        {
+            let g = app.lock().await;
+            let events = &g.agent_events[&peer];
+            assert_eq!(events.context_tokens, None);
+            assert_eq!(events.model_id, None);
+        }
+        std::fs::write(
+            &replacement,
+            assistant_record("replacement", 55_000, "read"),
+        )
+        .unwrap();
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        std::fs::remove_file(&replacement).unwrap();
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let g = app.lock().await;
+        assert!(!g.agent_events.contains_key(&peer));
+        assert_eq!(
+            g.workspace_events[&ws].model_id.as_deref(),
+            Some("gpt-5.6-sol")
+        );
+        assert_eq!(g.workspace_events[&ws].context_tokens, Some(16_485));
+        assert_eq!(g.workspace_events[&ws].log.len(), 4);
+        assert!(g.workspace_events_scanned.contains(&ws));
+    }
+
+    #[tokio::test]
+    async fn missing_primary_does_not_mark_workspace_scanned_from_peer_events() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (app, ws, primary, peer, _, _) = setup(dir.path());
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        app.lock()
+            .await
+            .store
+            .set_instance_agent_session(primary, dir.path().join("missing.jsonl").to_str().unwrap())
+            .unwrap();
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let g = app.lock().await;
+        assert!(!g.workspace_events.contains_key(&ws));
+        assert!(!g.workspace_events_scanned.contains(&ws));
+        assert_eq!(
+            g.agent_events[&peer].model_id.as_deref(),
+            Some("peer-model")
+        );
+        assert_eq!(g.agent_events[&peer].context_tokens, Some(17_128));
+        assert_eq!(g.agent_events[&peer].log.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn stale_roster_cannot_commit_after_recorded_identity_changes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (app, ws, _, peer, _, _) = setup(dir.path());
+        let roster = app.lock().await.store.workspace_agents(ws).unwrap();
+        let instance = roster.iter().find(|i| i.id == peer).unwrap();
+        app.lock()
+            .await
+            .store
+            .set_instance_agent_session(peer, dir.path().join("missing.jsonl").to_str().unwrap())
+            .unwrap();
+        // Models a tail whose identity snapshot predates a session hook.
+        tail_instance_events(
+            &app,
+            ws,
+            dir.path(),
+            instance.agent,
+            Some(instance),
+            &roster,
+        )
+        .await;
+        assert!(!app.lock().await.agent_events.contains_key(&peer));
+    }
+
+    #[tokio::test]
+    async fn unchanged_hermes_identity_keeps_summary_when_database_tail_fails() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        std::fs::create_dir_all(home.path().join(".hermes")).unwrap();
+        let db = rusqlite::Connection::open(home.path().join(".hermes/state.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, started_at REAL);
+             INSERT INTO sessions VALUES ('current', 100);
+             CREATE TABLE messages (
+                 id INTEGER, session_id TEXT, role TEXT, content TEXT,
+                 tool_call_id TEXT, tool_calls TEXT, tool_name TEXT,
+                 timestamp REAL, finish_reason TEXT
+             );
+             INSERT INTO messages VALUES
+                 (1, 'current', 'assistant', 'Completed work', NULL, NULL, NULL, 100, 'stop');",
+        )
+        .unwrap();
+        std::fs::create_dir_all(work.path().join(".git/info")).unwrap();
+        std::fs::write(
+            work.path().join(".git/info/wsx-hermes-spawn-at"),
+            "100\ncurrent\n",
+        )
+        .unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store.add_repo(work.path(), "hermes", "").unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "hermes",
+                branch: "hermes",
+                worktree_path: work.path(),
+                yolo: false,
+                agent: AgentKind::Hermes,
+                shared: false,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Hermes, 0).unwrap();
+        let app = Arc::new(Mutex::new(App::new(store, work.path().into()).unwrap()));
+        tail_workspace_events(app.clone(), ws, work.path().into(), AgentKind::Hermes).await;
+        assert_eq!(
+            app.lock().await.workspace_events[&ws]
+                .last_assistant_text
+                .as_deref(),
+            Some("Completed work"),
+        );
+
+        // Discovery still resolves the same virtual session, but its message
+        // query fails. An I/O error must not erase the last successful summary.
+        db.execute_batch("DROP TABLE messages").unwrap();
+        tail_workspace_events(app.clone(), ws, work.path().into(), AgentKind::Hermes).await;
+        let g = app.lock().await;
+        assert_eq!(
+            g.workspace_events
+                .get(&ws)
+                .and_then(|e| e.last_assistant_text.as_deref()),
+            Some("Completed work"),
+        );
+        assert!(g.workspace_events_scanned.contains(&ws));
+    }
 }
 
 /// Periodically check each live workspace's current git branch against

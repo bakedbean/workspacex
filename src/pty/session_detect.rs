@@ -74,12 +74,16 @@ fn claude_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
 /// spawns fresh instead (`app::spawn`). No snapshot gate applies — the id was
 /// reported by this workspace's own instance, so it is "ours" by construction.
 pub fn claude_session_exists(worktree: &Path, session_id: &str) -> bool {
+    claude_session_file(worktree, session_id).is_some()
+}
+
+/// The existing transcript for exactly this Claude session, never a cwd fallback.
+pub(crate) fn claude_session_file(worktree: &Path, session_id: &str) -> Option<std::path::PathBuf> {
     if !plausible_session_id(session_id) {
-        return false;
+        return None;
     }
-    claude_session_dir(worktree)
-        .map(|d| d.join(format!("{session_id}.jsonl")).is_file())
-        .unwrap_or(false)
+    let path = claude_session_dir(worktree)?.join(format!("{session_id}.jsonl"));
+    path.is_file().then_some(path)
 }
 
 /// True if pi has a persisted session `session_id` for `worktree` — a
@@ -88,14 +92,18 @@ pub fn claude_session_exists(worktree: &Path, session_id: &str) -> bool {
 /// decides Fresh-vs-Continue for the spawn (handoff note, model flags), not
 /// whether the flag is safe to pass.
 pub fn pi_session_exists(worktree: &Path, session_id: &str) -> bool {
-    if !plausible_session_id(session_id) {
-        return false;
+    pi_session_file(worktree, session_id).is_some()
+}
+
+/// The existing transcript whose full pi id matches this instance's pin.
+pub(crate) fn pi_session_file(worktree: &Path, session_id: &str) -> Option<std::path::PathBuf> {
+    if !pi_session_id_is_valid(session_id) {
+        return None;
     }
-    let Some(dir) = pi_session_dir(worktree) else {
-        return false;
-    };
-    let suffix = format!("_{session_id}.jsonl");
-    jsonl_names(&dir).iter().any(|name| name.ends_with(&suffix))
+    pi_session_files(worktree)
+        .into_iter()
+        .find(|file| file.id == session_id && file.path.is_file())
+        .map(|file| file.path)
 }
 
 /// Test seam: pi's session directory for a worktree.
@@ -169,31 +177,35 @@ pub fn newest_pi_session_id(worktree: &Path, exclude: &[String]) -> Option<Strin
 /// its own recorded cwd. The guard matters for the same reason as Claude's:
 /// `codex resume` on an unknown id fails the launch.
 pub fn codex_session_exists(session_id: &str) -> bool {
+    codex_session_file(session_id).is_some()
+}
+
+/// The rollout for exactly this Codex thread, independent of cwd or mtime.
+pub(crate) fn codex_session_file(session_id: &str) -> Option<std::path::PathBuf> {
     if !plausible_session_id(session_id) {
-        return false;
+        return None;
     }
-    let Some(home) = dirs::home_dir() else {
-        return false;
-    };
-    let root = home.join(".codex/sessions");
-    let suffix = format!("-{session_id}.jsonl");
+    let root = dirs::home_dir()?.join(".codex/sessions");
     // The tree is a fixed three levels deep; walk it without a dependency.
-    fn walk(dir: &Path, depth: u8, suffix: &str) -> bool {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return false;
-        };
-        entries.flatten().any(|e| {
-            let path = e.path();
+    fn walk(dir: &Path, depth: u8, session_id: &str) -> Option<std::path::PathBuf> {
+        std::fs::read_dir(dir).ok()?.flatten().find_map(|entry| {
+            let path = entry.path();
             if path.is_dir() {
-                depth > 0 && walk(&path, depth - 1, suffix)
-            } else {
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("rollout-") && n.ends_with(suffix))
+                return (depth > 0)
+                    .then(|| walk(&path, depth - 1, session_id))
+                    .flatten();
             }
+            let name = path.file_name()?.to_str()?;
+            // `rollout-YYYY-MM-DDTHH-MM-SS-<thread-id>.jsonl`: skip the
+            // 19-byte timestamp and separator, not a suffix of another id.
+            let id = name
+                .strip_prefix("rollout-")?
+                .strip_suffix(".jsonl")?
+                .get(20..)?;
+            (id == session_id && path.is_file()).then_some(path)
         })
     }
-    walk(&root, 3, &suffix)
+    walk(&root, 3, session_id)
 }
 
 /// omp's name for a terminal, derived the way `@oh-my-pi/pi-tui`'s
@@ -336,15 +348,11 @@ pub fn pi_session_id_is_valid(id: &str) -> bool {
 /// Pi's session directory for `worktree`, or None if the path can't be
 /// canonicalized. Pi stores sessions at
 /// `~/.pi/agent/sessions/--<encoded-cwd>--/<ts>_<uuid>.jsonl`, where the
-/// encoding replaces `/` with `-`.
+/// encoding is shared with the activity parser.
 fn pi_session_dir(worktree: &Path) -> Option<std::path::PathBuf> {
     let abs = std::fs::canonicalize(worktree).ok()?;
-    let encoded = abs.to_string_lossy().replace('/', "-");
-    Some(
-        dirs::home_dir()?
-            .join(".pi/agent/sessions")
-            .join(format!("--{}--", encoded)),
-    )
+    let encoded = crate::activity::pi_events::encode_cwd(&abs);
+    Some(dirs::home_dir()?.join(".pi/agent/sessions").join(encoded))
 }
 
 /// omp's session directory for `worktree`, or None if the path can't be
@@ -760,11 +768,8 @@ mod tests {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
         let abs = std::fs::canonicalize(work.path()).unwrap();
-        let encoded = abs.to_string_lossy().replace('/', "-");
-        let dir = home
-            .path()
-            .join(".pi/agent/sessions")
-            .join(format!("--{encoded}--"));
+        let encoded = crate::activity::pi_events::encode_cwd(&abs);
+        let dir = home.path().join(".pi/agent/sessions").join(encoded);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("2026-09-13T10-00-00_abc123def456.jsonl"), "{}").unwrap();
 
@@ -783,10 +788,8 @@ mod tests {
     /// epoch.
     fn seed_pi_session(home: &std::path::Path, worktree: &std::path::Path, id: &str, secs: u64) {
         let abs = std::fs::canonicalize(worktree).unwrap();
-        let encoded = abs.to_string_lossy().replace('/', "-");
-        let dir = home
-            .join(".pi/agent/sessions")
-            .join(format!("--{encoded}--"));
+        let encoded = crate::activity::pi_events::encode_cwd(&abs);
+        let dir = home.join(".pi/agent/sessions").join(encoded);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("2026-01-01T00-00-{secs:02}_{id}.jsonl"));
         std::fs::write(&path, "{}\n").unwrap();
@@ -1178,11 +1181,8 @@ mod tests {
         let home = tempfile::TempDir::new().unwrap();
         let work = tempfile::TempDir::new().unwrap();
         let abs = std::fs::canonicalize(work.path()).unwrap();
-        let encoded = abs.to_string_lossy().replace('/', "-");
-        let dir = home
-            .path()
-            .join(".pi/agent/sessions")
-            .join(format!("--{}--", encoded));
+        let encoded = crate::activity::pi_events::encode_cwd(&abs);
+        let dir = home.path().join(".pi/agent/sessions").join(encoded);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("1770000000_abc.jsonl"), "{}").unwrap();
         snapshot(work.path(), &["pi:1770000000_abc.jsonl"]);

@@ -25,6 +25,9 @@ pub use crate::pty::session_detect::{
     newest_pi_session_id, omp_breadcrumb_session_file, omp_crumb_snapshot, omp_session_exists,
     omp_terminal_id, pi_session_exists, pi_session_id_is_valid,
 };
+pub(crate) use crate::pty::session_detect::{
+    claude_session_file, codex_session_file, pi_session_file,
+};
 pub use crate::pty::session_detect::{
     has_prior_codex_session, has_prior_hermes_session, has_prior_pi_session, has_prior_session,
     has_prior_session_for, latest_hermes_session_id_default, write_worktree_sessions,

@@ -10,8 +10,9 @@
 # The orange is cterm 166 -> #d75f00 and the edge-block text is black; the
 # rest of each chain steps away from the orange through the file's own dark
 # tones, darkest first: ash (cterm 234), charcoal (gui01), slate (gui02),
-# grey (gui03). Left chains run orange -> ash -> charcoal; the right chain
-# of the attached bottom bar shows the whole ramp, orange at the edge.
+# grey (gui03). Left chains run orange -> ash -> charcoal (-> slate on the
+# header); the right chain of the attached bottom bar shows the whole ramp,
+# orange at the edge.
 #
 # Airline layout: a "mode" block at each outer edge (sections a / z), a
 # mid block beside it (b / y), and a base-toned block toward the middle
@@ -34,8 +35,11 @@ cream    = "#ffd7af"   # ctermBrightYellow 223
 green    = "#008700"   # cterm0B 28
 blood    = "#870000"   # ctermBlood 88
 
+# The brand segment draws its own wedge so the wordmark and the view name
+# are two blocks: title on orange, view on ash, then group on charcoal and
+# sort on slate.
 [dashboard_header]
-format       = "[ $brand ](bg:orange fg:black)[](fg:orange bg:ash)[ $group ](bg:ash fg:orange)[](fg:ash bg:charcoal)[( $sort )](bg:charcoal fg:orange)[](fg:charcoal)(  $filter)"
+format       = "[ $brand](bg:orange fg:black)[](fg:ash bg:charcoal)[ $group ](bg:charcoal fg:orange)[](fg:charcoal bg:slate)[( $sort )](bg:slate fg:cream)[](fg:slate)(  $filter)"
 right_format = "[](fg:orange)[ $counts ](bg:orange fg:black)"
 fill         = " "
 
@@ -63,7 +67,7 @@ fill         = " "
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 [brand]
-format = "[$symbol]() [$name](bold)[ $mark](bold)[ · $view]()"
+format = "[$symbol]() [$name](bold)[ $mark](bold) [](fg:orange bg:ash)[ $view ](bg:ash fg:orange)"
 
 [group]
 format = "[$label ]()$tabs"

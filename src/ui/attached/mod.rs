@@ -37,8 +37,12 @@ pub struct PaneSpec<'a> {
 /// What `render_panes` reports back to the caller for input hit-testing.
 #[derive(Default)]
 pub struct PanesDrawOutput {
-    /// Clickable rects of the pinned-command chips (same as before).
-    pub chip_rects: Vec<Rect>,
+    /// `(pinned-command index, clickable rect)` per pinned chip. The index
+    /// travels with the rect rather than being recovered from its position
+    /// in the vector: a pin can render zero-width (no hit is emitted for
+    /// it, shifting later indexes) or `$pins` can appear in both bars (a
+    /// second run would otherwise index past the pinned list).
+    pub chip_rects: Vec<(usize, Rect)>,
     /// Clickable rect of the right-justified PR chip on the chip row, or `None`
     /// when the focused workspace has no PR (or the chip didn't fit). Consumed
     /// by the input handler to open the PR in the browser on click.
@@ -71,7 +75,7 @@ fn route_hits(area: Rect, hits: &[crate::ui::bar::segment::HitSpan], out: &mut P
     use crate::ui::bar::segment::Hit;
     for (rect, hit) in crate::ui::bar::render::hit_rects(area, hits) {
         match hit {
-            Hit::PinnedChip(_) => out.chip_rects.push(rect),
+            Hit::PinnedChip(i) => out.chip_rects.push((i, rect)),
             Hit::Pr => out.pr_link_rect = Some(rect),
             Hit::Procs => out.procs_link_rect = Some(rect),
             Hit::Agent(id) => out.agent_chip_rects.push((id, rect)),
@@ -364,7 +368,7 @@ pub(crate) fn render_pinned_chip_row(
     area: Rect,
     pinned: &[PinnedCommand],
     theme: &Theme,
-) -> Vec<Rect> {
+) -> Vec<(usize, Rect)> {
     let rects = chip_row::layout_chip_row(area, pinned);
     let label_style = Style::default().fg(theme.path);
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(rects.len() * 5 + 2);
@@ -396,7 +400,7 @@ pub(crate) fn render_pinned_chip_row(
         }
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
-    rects
+    rects.into_iter().enumerate().collect()
 }
 
 #[cfg(test)]
@@ -541,14 +545,73 @@ mod tests {
         assert_eq!(pr_rect.y, 0, "pr now renders on the info row");
         assert!(pr_rect.x + pr_rect.width <= w);
 
+        let indexes: Vec<usize> = out.chip_rects.iter().map(|(i, _)| *i).collect();
         assert_eq!(
-            out.chip_rects.len(),
-            2,
-            "pins still render on the bottom row"
+            indexes,
+            vec![0, 1],
+            "pinned-command indexes travel with the rects"
         );
-        for rect in &out.chip_rects {
+        for (_, rect) in &out.chip_rects {
             assert_eq!(rect.y, 3, "pins stay on the chip row");
         }
+    }
+
+    /// `$pins` appearing in BOTH bars' formats must not make the second
+    /// run's indexes collide with or continue past the first: each run
+    /// re-emits `Hit::PinnedChip(0)`/`Hit::PinnedChip(1)` from the same
+    /// pinned list, so both runs report indexes `[0, 1]`, not `[0, 1, 2, 3]`.
+    #[test]
+    fn pins_in_both_bars_each_carry_their_own_0_based_indexes() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = Theme::wsx();
+        let mut specs = crate::config::theme_file::bundled_default(&theme);
+        specs.attached_top.format = crate::ui::bar::format::parse("$pins").unwrap();
+        let (pinned, diff, pr, mt, agents) = bottom_fixture();
+        let (w, h) = (120u16, 4u16);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let mut out_result = None;
+        term.draw(|f| {
+            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h));
+            out_result = Some(render_panes(
+                f,
+                &[],
+                &[],
+                info,
+                sep,
+                chip,
+                &specs,
+                "wsx",
+                "foo",
+                None,
+                None,
+                &pinned,
+                3,
+                diff,
+                pr,
+                mt,
+                &agents,
+                Some(AgentInstanceId(1)),
+                &theme,
+            ));
+        })
+        .unwrap();
+        let out = out_result.unwrap();
+
+        assert_eq!(out.chip_rects.len(), 4, "two pins rendered in each bar");
+        let indexes: Vec<usize> = out.chip_rects.iter().map(|(i, _)| *i).collect();
+        assert_eq!(indexes, vec![0, 1, 0, 1]);
+        let rows: Vec<u16> = out.chip_rects.iter().map(|(_, r)| r.y).collect();
+        assert_eq!(
+            rows.iter().filter(|&&y| y == 0).count(),
+            2,
+            "two on the info row: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter().filter(|&&y| y == 3).count(),
+            2,
+            "two on the chip row: {rows:?}"
+        );
     }
 
     /// Durable evidence for the engine cutover: this snapshot and its hit

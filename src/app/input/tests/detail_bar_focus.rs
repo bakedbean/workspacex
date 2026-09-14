@@ -233,12 +233,15 @@ async fn ctrl_x_digit_works_while_reply_focused() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     // Drive Ctrl-X through the real dispatcher (handle_key_dashboard),
     // which first gives handle_detail_bar_reply_key a crack at it

@@ -607,9 +607,14 @@ pub struct App {
     /// Live PM digest filter buffer. `None` = inactive; `Some(buf)` = filter
     /// mode, matched case-insensitively against workspace names.
     pub pm_filter: Option<String>,
-    /// Rects of the rendered chip row buttons from the last draw tick.
-    /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
-    pub chip_rects: Vec<ratatui::layout::Rect>,
+    /// `(pinned-command index, rect)` per rendered chip row button from the
+    /// last draw tick. The index travels with the rect rather than being
+    /// recovered from its position in the vector: a pin can render
+    /// zero-width (no hit emitted, shifting later indexes) or `$pins` can
+    /// appear in more than one bar, so vector position alone doesn't
+    /// identify which pinned command was clicked. Used by mouse/key
+    /// handlers (Tasks 8 and 9) to dispatch clicks.
+    pub chip_rects: Vec<(usize, ratatui::layout::Rect)>,
     /// Rects of the rendered attention-row entries from the last draw tick,
     /// each paired with the workspace it points to. Consumed by `handle_mouse`
     /// to attach on click. Mirrors the `chip_rects` draw-populates /

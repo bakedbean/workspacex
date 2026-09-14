@@ -664,12 +664,15 @@ async fn dashboard_ctrl_x_then_digit_fires_pinned_chip() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     // Ctrl-X — arms the leader.
     handle_key_dashboard(
@@ -722,12 +725,15 @@ async fn dashboard_ctrl_x_then_non_digit_clears_leader_no_fire() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     // Ctrl-X — arms the leader.
     handle_key_dashboard(
@@ -794,18 +800,24 @@ async fn dashboard_ctrl_x_digit_beyond_visible_chips_is_noop() {
         },
     ];
     app.chip_rects = vec![
-        ratatui::layout::Rect {
-            x: 5,
-            y: 30,
-            width: 7,
-            height: 1,
-        },
-        ratatui::layout::Rect {
-            x: 13,
-            y: 30,
-            width: 5,
-            height: 1,
-        },
+        (
+            0,
+            ratatui::layout::Rect {
+                x: 5,
+                y: 30,
+                width: 7,
+                height: 1,
+            },
+        ),
+        (
+            1,
+            ratatui::layout::Rect {
+                x: 13,
+                y: 30,
+                width: 5,
+                height: 1,
+            },
+        ),
     ];
 
     // Ctrl-X then '3' — index 2, beyond chip_rects.len() == 2.

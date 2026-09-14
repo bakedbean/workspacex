@@ -68,7 +68,10 @@ pub(crate) struct HeaderChip {
 
 #[derive(Debug, Default)]
 pub struct DetailDrawOutput {
-    pub chip_rects: Vec<ratatui::layout::Rect>,
+    /// `(pinned-command index, rect)` per pinned chip — see
+    /// `crate::ui::attached::PanesDrawOutput::chip_rects` for why the index
+    /// travels with the rect.
+    pub chip_rects: Vec<(usize, ratatui::layout::Rect)>,
     pub container_rects: [Option<ratatui::layout::Rect>; 4],
     pub pr_link_rect: Option<ratatui::layout::Rect>,
 }
@@ -1482,7 +1485,7 @@ mod tests {
         // (Terminal::draw can't propagate values out of its closure).
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 12)).unwrap();
-        let mut returned: Vec<ratatui::layout::Rect> = Vec::new();
+        let mut returned: Vec<(usize, ratatui::layout::Rect)> = Vec::new();
         terminal
             .draw(|f| {
                 let theme = Theme::wsx();
@@ -1538,7 +1541,7 @@ mod tests {
         // Area height exactly CHROME_ROWS (4). With chips present we need 5.
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 4)).unwrap();
-        let mut returned: Vec<ratatui::layout::Rect> = Vec::new();
+        let mut returned: Vec<(usize, ratatui::layout::Rect)> = Vec::new();
         terminal
             .draw(|f| {
                 let theme = Theme::wsx();

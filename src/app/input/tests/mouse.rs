@@ -74,12 +74,15 @@ async fn click_in_chip_rect_fires_pinned_command() {
         command: "/pull-request".into(),
     }];
     // Place a 7-wide chip at (5, 30): "[1] PR " = 7 cols.
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -111,12 +114,15 @@ async fn click_outside_chip_rect_does_nothing() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -526,12 +532,15 @@ async fn click_chip_in_dashboard_view_fires_pinned_command() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -577,12 +586,15 @@ async fn chip_dispatch_echoes_command_into_reply_input() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     let now_before_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -720,12 +732,15 @@ async fn click_chip_auto_spawns_session_when_missing() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -778,12 +793,15 @@ async fn attached_chip_click_preserves_dashboard_draft_and_focus() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     let click = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),

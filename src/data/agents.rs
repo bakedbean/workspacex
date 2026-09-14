@@ -62,7 +62,7 @@ fn row_to_instance(r: &rusqlite::Row) -> rusqlite::Result<AgentInstance> {
 impl Store {
     /// All instances for a workspace, primary first then by creation time.
     pub fn workspace_agents(&self, ws: WorkspaceId) -> Result<Vec<AgentInstance>> {
-        let mut stmt = self.conn().prepare(
+        let mut stmt = self.conn().prepare_cached(
             "SELECT id, workspace_id, agent, ordinal, is_primary, session_ref, created_at, agent_session_id
              FROM workspace_agents WHERE workspace_id = ?1
              ORDER BY is_primary DESC, created_at ASC, id ASC",

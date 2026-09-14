@@ -59,11 +59,16 @@ table keeps its default.
 # Named colors. Style strings can use these, plus the built-in theme
 # tokens: dim, path, code, bg_alt, bg_soft, ok, warn, err, attention,
 # merged, header_fg, selected_fg, selected_bg, question, stalled,
-# waiting, thinking, complete, idle, brand.
+# waiting, thinking, complete, idle, brand, wordmark.
 [palette]
 first  = "#121212"
 second = "#262626"
 rust   = "#d75f00"
+
+[dashboard_header]
+format       = "$brand      $group(   $sort)(  $filter)"
+right_format = "$counts"
+fill         = " "
 
 [dashboard_footer]
 format       = "$keys"
@@ -117,9 +122,9 @@ format = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 - `right_format` is right-aligned against the bar's edge with at least
   one blank column between it and `format` when both sides are nonempty.
   This column counts toward the fit calculation and remains blank even
-  with a visible fill. When the bar is too narrow the right side is
-  dropped segment-by-segment (see Overflow). `format` is never dropped,
-  only clipped at the right edge.
+  with a visible fill. When the bar is too narrow, droppable segments are
+  removed from either side, segment by segment (see Overflow); what
+  survives on the left is clipped at the right edge.
 - Each `[bar]` table accepts `format`, `right_format`, `style`, `fill`,
   and `fill_style`. `style` supplies the inherited base style; the first
   character of `fill` repeats across the remaining gap, with
@@ -133,6 +138,11 @@ format = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 
 | Segment | Variables in its `format` | Hit | Non-empty in |
 |---|---|---|---|
+| `brand` | `$symbol $name $mark $view` | — | dashboard header |
+| `group` | `$label $tabs` (opaque; active tab highlighted) | — | dashboard header |
+| `sort` | `$label $tabs` (opaque; active tab highlighted) | — | dashboard header |
+| `filter` | `$needle` (capped at `FILTER_ECHO_MAX`) | — | dashboard header |
+| `counts` | `$repos $workspaces` | — | dashboard header |
 | `keys` | one pill: `$key $label` | `Key`/`ArmLeader` per pill | all three bars |
 | `version` | `$version` | — | all three bars |
 | `usage` | `$label $spark` | `UsageGraph` | all three bars |
@@ -190,15 +200,23 @@ separate verdict style is exposed as `$mark_style`, used by
 ### Overflow
 
 Each segment has an integer `priority` (unset defaults to 100); higher
-survives longer. The bundled defaults reproduce the chip row's current
-drop order: `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr`
-50; every other segment 100. When `right_format` does not fit beside
-`format` and the required one-column blank gap, the renderer removes
-the lowest-priority segment present in `right_format`, re-evaluates the
-AST (so conditional groups drop their separators), and repeats. If
-every variable is removed and the remaining literal text still doesn't
-fit, the right side is omitted entirely rather than partially rendered.
-`format` is never dropped this way, only clipped at the right edge.
+survives longer, and 100 never drops at all — a segment is droppable
+only if its theme gives it an explicitly lower number. The bundled
+defaults reproduce each bar's current drop order: `model_tokens` 10,
+`agents` 20, `procs` 30, `diff` 40, `pr` 50 (attached chip row);
+`version` 50, `usage` 60 (dashboard footer); `sort` 30, `counts` 50
+(dashboard header); every other segment 100.
+
+When `format` and `right_format` do not fit together with the required
+one-column blank gap, the renderer removes the lowest-priority droppable
+segment across BOTH sides, re-evaluates both (so conditional groups drop
+their separators), and repeats until the pair fits or nothing droppable
+remains. Ties go to the lowest priority first and then to the first
+occurrence, scanning `format` before `right_format`, depth-first. If the
+sides still don't fit — default-priority segments and bare literals
+can't be thinned — the right side is omitted entirely rather than
+partially rendered, and the left side is left overlong for the caller to
+clip.
 
 ## Architecture
 

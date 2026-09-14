@@ -113,6 +113,32 @@ gap contains fill plus at least one blank column. Near the fit boundary,
 the version must be removed rather than touch `L`. Repeat with `fill = " "`.
 Restore the defaults before continuing.
 
+## 4b. The dashboard header
+
+On the dashboard (not attached), restyle the wordmark:
+
+```toml
+[brand]
+format = "[ $name $mark ](bg:brand fg:black bold)[ · $view](fg:dim)"
+```
+
+Expected on the next reload: the top line opens with `workspace x` in black
+on the brand blue, the ` · dashboard` tail still dim, and the `group:` and
+`sort:` tabs unmoved after it. The active tab in each pair keeps the
+selection highlight. Press `G` and `o` and confirm the highlight follows the
+mode.
+
+Then narrow the terminal step by step with no filter active. Expected drop
+order on that line: the `sort:` tabs first (priority 30), then the
+repo/workspace counts (50); the wordmark, the `group:` tabs, and the filter
+echo never drop. Press `/` and type a long needle: the echo appears after
+the tabs, capped at 24 characters with a trailing `…`, and it costs the
+counts before it costs itself. Very narrow plus a long needle clips the line
+at the right edge rather than shrinking the needle further — an accepted
+difference from the stock header. Widen again; everything returns.
+
+Restore `[brand]` before continuing.
+
 ## 5. Broken edit
 
 Change `$workspace` in `[attached_top].format` to `$nope` and save.
@@ -157,6 +183,9 @@ in each attached bar to check non-clickable content availability. Check that
 conditional decorations disappear when a segment has no data. On the
 dashboard, `keys`, `version`, and `usage` remain available and interactive
 where applicable; referencing attached-only segments there renders empty.
+The dashboard header's five segments (`brand`, `group`, `sort`, `filter`,
+`counts`) are display only — clicking them does nothing — and render empty
+in every other bar.
 
 Use a workspace name containing a double-width character and repeat a click
 on a segment following it. Resize until a clickable chip is partly clipped:

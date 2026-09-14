@@ -1,10 +1,10 @@
 # Themes
 
 wsx has two layers of theming: a **base palette** chosen with the `theme`
-setting, and a **bar theme file** that describes what the dashboard footer,
-the attached view's top and bottom bars, and the dashboard detail pane's
-pinned-command row contain and how each piece is styled, using a subset of
-Starship's format grammar.
+setting, and a **bar theme file** that describes what the dashboard header
+and footer, the attached view's top and bottom bars, and the dashboard
+detail pane's pinned-command row contain and how each piece is styled,
+using a subset of Starship's format grammar.
 
 ## Base palette
 
@@ -74,10 +74,23 @@ replaced:
   first, then the usage graph, instead of overflowing the terminal width.
 - A pinned chip clipped by the right edge keeps its visible portion
   clickable, rather than being dropped in full.
+- The dashboard header's filter echo is capped at 24 characters and never
+  shrinks further. The stock header instead budgeted the needle against
+  whatever room was left on the line, so the repo/workspace counts always
+  survived. Now a long needle costs the counts (`priority` 50) first, and
+  below roughly 80 columns the header runs long and is clipped at the right
+  edge. Why the echo itself never drops is unchanged: a needle with no
+  visible cause is worse than a truncated one — rows are missing from the
+  list and nothing on screen says why.
 
 ### Bars
 
 ```toml
+[dashboard_header]
+format       = "$brand      $group(   $sort)(  $filter)"
+right_format = "$counts"
+fill         = " "
+
 [dashboard_footer]
 format       = "$keys"
 right_format = "($version  )$usage"
@@ -97,6 +110,11 @@ fill       = "─"
 fill_style = "fg:dim"
 ```
 
+`[dashboard_header]` is the dashboard's top line: the wordmark, the `group:`
+and `sort:` mode tabs, the live filter echo, and the repo/workspace counts
+flush right. Its five segments are display only — nothing on that line is
+clickable.
+
 `[dashboard_detail]` is the dashboard's own DETAIL pane (the pane shown when
 a workspace row is selected, distinct from the attached view): its
 pinned-command chip row, followed by a rule to the edge. `$pins` is the only
@@ -110,8 +128,8 @@ under Grammar below.
 
 | Key | Meaning |
 |---|---|
-| `format` | The left side. Never dropped; clipped at the right edge if too long. |
-| `right_format` | Flush right. When the bar is too narrow, segments are removed lowest `priority` first until it fits. |
+| `format` | The left side, clipped at the right edge if too long. |
+| `right_format` | Flush right. |
 | `style` | Base style inherited by literal text, segment content, and the fill; inner styles can override it. |
 | `fill` | The first character repeated across the unused gap. |
 | `fill_style` | Style for the fill, merged over the bar's base style. |
@@ -119,6 +137,15 @@ under Grammar below.
 When both sides are nonempty, at least one column between them stays blank,
 even with a visible `fill` character. This blank column counts when deciding
 whether the right side fits. The fill occupies the remaining gap.
+
+**Overflow.** When a bar is too narrow for both sides plus that blank
+column, segments with a `priority` below 100 may drop — from either side,
+lowest first, re-evaluating both sides after each removal so conditional
+groups shed their separators with them — until the bar fits or nothing
+droppable is left. Segments at the default priority (100) never drop. If
+the sides still don't fit after that, the right side is omitted entirely
+rather than partially rendered, and the left side is clipped at the right
+edge.
 
 ### Grammar
 
@@ -141,7 +168,7 @@ A **color** is `#rrggbb`, a 0–255
 index, an ANSI name (`red`, `bright-blue`, `white`), a `[palette]` name, or
 a theme token: `dim path code bg_alt bg_soft ok warn err attention merged
 header_fg selected_fg selected_bg question stalled waiting thinking complete
-idle brand`. Palette names shadow theme tokens, which shadow ANSI names.
+idle brand wordmark`. Palette names shadow theme tokens, which shadow ANSI names.
 Shadowing changes color lookup in the bar theme only; it never changes the
 base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 
@@ -149,16 +176,22 @@ base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 
 Each segment has its own table, such as `[workspace]`, with `format` (its
 layout, using the variables below), `style`, `symbol`, `disabled`,
-`priority` (overflow survival; higher lasts longer; unset defaults to 100),
-and, for multi-item segments, `separator`. A multi-item segment's format
-describes one item; the items keep their existing order. The bundled
-default sets `priority` on the segments that compete for room on the chip
-row's right side: `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40,
-`pr` 50, `version` 50 (on the dashboard footer's right side); every other
-segment is the unset default, 100.
+`priority` (overflow survival; higher lasts longer; unset defaults to 100,
+which never drops), and, for multi-item segments, `separator`. A multi-item
+segment's format describes one item; the items keep their existing order.
+The bundled default sets `priority` on the segments that compete for room:
+`model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
+attached chip row's right side); `version` 50, `usage` 60 (the dashboard
+footer's right side); `sort` 30, `counts` 50 (the dashboard header). Every
+other segment is the unset default, 100, and so never drops.
 
 | Segment | Variables | Notes |
 |---|---|---|
+| `brand` | `$symbol $name $mark $view` | The wordmark. `$name` is `workspace`, `$mark` is `x`, `$view` names the view (`dashboard`). Dashboard header only. |
+| `group` | `$label $tabs` | The `group:` mode tabs; `$tabs` is opaque, with the active mode highlighted. Dashboard header only. |
+| `sort` | `$label $tabs` | The `sort:` mode tabs, same shape as `group`. Dashboard header only. |
+| `filter` | `$needle` | The live filter echo, absent when no filter is active; `$needle` is capped at 24 characters. Dashboard header only. |
+| `counts` | `$repos $workspaces` | Registered repo and workspace counts. Dashboard header only. |
 | `keys` | `$key $label` | One pill per key hint. Clickable. |
 | `version` | `$version` | |
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
@@ -176,11 +209,11 @@ segment is the unset default, 100.
 target, unlike `pins`/`agents`/`keys`, which record one hit per item. Put
 one of these four in more than one place across the two attached bars'
 `format`/`right_format` (or twice within the dashboard footer's own
-`format`/`right_format`, or twice within the dashboard detail pane's own
-`format`/`right_format`) and only the last-routed placement would be
-clickable, so `wsx theme check` rejects it as a duplicate instead. These
-three scopes are independent: a singleton segment may appear once in each
-without conflicting with the others.
+`format`/`right_format`, or twice within the dashboard header's, or twice
+within the dashboard detail pane's) and only the last-routed placement
+would be clickable, so `wsx theme check` rejects it as a duplicate instead.
+These four scopes are independent: a singleton segment may appear once in
+each without conflicting with the others.
 
 All segments are available in **either attached bar**, on either side;
 click targets follow them between bars as well as within a bar. `version`
@@ -188,8 +221,9 @@ and `usage` work in all three bars, not just the dashboard footer — put
 `$usage` in an attached bar and its sparkline is the same graph, clickable
 the same way. `keys` uses the attached view's leader-key hints in both
 attached bars. On the dashboard footer, only `keys`, `version`, and `usage`
-produce output; on the dashboard detail pane's row, only `pins` does; other
-segments render empty in each. Segments also render empty when their
+produce output; on the dashboard header, only `brand`, `group`, `sort`,
+`filter`, and `counts`; on the dashboard detail pane's row, only `pins`;
+other segments render empty in each. Segments also render empty when their
 underlying data is absent.
 
 Two details of the **stock formats** are worth knowing before you override

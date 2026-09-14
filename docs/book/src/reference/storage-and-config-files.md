@@ -1,5 +1,6 @@
 | Path                                                | Contents                                                                                                 |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `~/.config/wsx/theme.toml` (honors `XDG_CONFIG_HOME`) | Optional bar theme file; see [Themes](../configuration/themes.md). Reloaded while running. |
 | `$XDG_STATE_HOME/wsx/state.db`                      | SQLite database: repos, workspaces, settings                                                             |
 | `$XDG_STATE_HOME/wsx/worktrees/<repo>/<workspace>/` | Worktree directories created by `wsx`                                                                    |
 | `$XDG_STATE_HOME/wsx/context/<repo>/<workspace>.md` | Workspace context digest written by `wsx context write` for editor-hosted agents                         |

@@ -18,8 +18,8 @@ per-segment tables, and a named palette.
   clickable ones (key hints, pinned chips, agent pills, PR chip, procs
   count, usage graph, attention items). Click targets travel with the
   segment wherever it is placed.
-- A missing or invalid file changes nothing: the bundled default
-  reproduces today's bars exactly.
+- A missing or invalid file at startup uses the bundled default, preserving
+  today's bar content and styling. A bad live edit keeps the last good theme.
 - Edits to the file are picked up while wsx runs, without a restart.
 - Validation is available from the CLI so errors are found before save.
 
@@ -32,7 +32,8 @@ per-segment tables, and a named palette.
 - Replacing the built-in `Theme` structs (`wsx`, `ansi`, `dracula`,
   `jellybeans`, `nord`). The `theme` setting still selects the base
   palette; the file layers bar formats and extra colors on top.
-- Overriding built-in theme tokens (e.g. `selected_bg`) from the file.
+- Mutating built-in `Theme` fields (e.g. `selected_bg`) from the file.
+  Palette names may shadow tokens during bar-style lookup only.
 - starship's `$fill` and `add_newline`, and per-item format strings
   inside multi-item segments.
 - A live-preview editor inside wsx.
@@ -44,7 +45,7 @@ way `Dirs` resolves the state dir (`src/config/mod.rs`). `Dirs` gains a
 `config_dir()` and `theme_path()`.
 
 The bundled default (`src/ui/bar/default_theme.toml`, embedded with
-`include_str!`) has the same shape and reproduces today's rendering. A
+`include_str!`) has the same shape and preserves today's content and styling. A
 user file is merged over it per key: an unmentioned bar or segment
 table keeps its default.
 
@@ -52,7 +53,7 @@ table keeps its default.
 # Named colors. Style strings can use these, plus the built-in theme
 # tokens: dim, path, code, bg_alt, bg_soft, ok, warn, err, attention,
 # merged, header_fg, selected_fg, selected_bg, question, stalled,
-# waiting, thinking, complete, idle.
+# waiting, thinking, complete, idle, brand.
 [palette]
 first  = "#121212"
 second = "#262626"
@@ -63,19 +64,21 @@ format       = "$keys"
 right_format = "$version  $usage"
 
 [attached_top]
-format = "$agent_bar $workspace   $attention"
+format = "($agent_bar )$workspace(   $attention)"
 
 [attached_bottom]
-format       = "$pins"
-right_format = "$agents $model_tokens $procs $diff $pr"
+format       = "$keys  ($pins  )"
+right_format = "(  ($agents   )($model_tokens )($procs )($diff )$pr)"
+fill         = "─"
+fill_style   = "fg:dim"
 
 # A powerline top bar:
 # [attached_top]
-# format = "[](fg:first)[ $workspace ](bg:first fg:rust)[](fg:first bg:second)( $attention )[](fg:second)"
+# format = "[](fg:first)[ $workspace ](bg:first)[](fg:first)( [](fg:second)[ $attention ](bg:second)[](fg:second))"
 
 [workspace]
-style  = "bold"
-format = "$repo/$name"
+style  = "fg:rust bold"
+format = "[($repo/)$name]($style)"
 
 [pr]
 symbol = ""
@@ -99,35 +102,42 @@ format = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 - Styles inherit inward: an inner `[ ](…)` keeps the outer `bg` unless
   it sets its own. This is what makes powerline blocks composable.
 - `right_format` is right-aligned against the bar's edge with at least
-  one blank column between it and `format`. When the bar is too narrow
-  it is dropped segment-by-segment (see Overflow). `format` is never
-  dropped, only clipped at the right edge.
-- Each `[bar]` table accepts `format` and `right_format`. Each
-  `[segment]` table accepts `style`, `symbol`, `format`, `disabled`,
-  `priority`, and (for multi-item segments) `separator`. Inside a
-  segment's `format`, `$style` is the segment's resolved style and the
-  remaining variables are listed per segment below.
+  one blank column between it and `format` when both sides are nonempty.
+  This column counts toward the fit calculation and remains blank even
+  with a visible fill. When the bar is too narrow the right side is
+  dropped segment-by-segment (see Overflow). `format` is never dropped,
+  only clipped at the right edge.
+- Each `[bar]` table accepts `format`, `right_format`, `style`, `fill`,
+  and `fill_style`. `style` supplies the inherited base style; the first
+  character of `fill` repeats across the remaining gap, with
+  `fill_style` merged over the base. Each `[segment]` table accepts
+  `style`, `symbol`, `format`, `disabled`, `priority`, and (for multi-item
+  segments) `separator`. Inside style expressions in a segment's
+  `format`, `$style` is the segment's resolved style; the remaining
+  variables are listed per segment below.
 
 ### Segments
 
 | Segment | Variables in its `format` | Hit | Non-empty in |
 |---|---|---|---|
-| `keys` | one pill: `$key $label` | `Key`/`ArmLeader` per pill | both |
-| `version` | `$version` | — | both |
-| `usage` | `$label $spark` | `UsageGraph` | both |
+| `keys` | one pill: `$key $label` | `Key`/`ArmLeader` per pill | all three bars |
+| `version` | `$version` | — | all three bars |
+| `usage` | `$label $spark` | `UsageGraph` | all three bars |
 | `agent_bar` | `$symbol` (fg = agent identity color) | — | attached |
 | `workspace` | `$repo $name` | — | attached |
-| `attention` | opaque, styled internally today | `Attention(i)` | attached |
+| `attention` | `$items` | `Attention(i)` | attached |
 | `pins` | one chip: `$index $label` | `PinnedChip(i)` | attached |
-| `agents` | one pill: `$symbol $kind $key` | `Agent(id)` | attached |
-| `model_tokens` | `$model $used $window` | — | attached |
+| `agents` | one pill: `$symbol $label $key` | `Agent(id)` | attached |
+| `model_tokens` | `$model $tokens` | — | attached |
 | `procs` | `$symbol $count` | `Procs` | attached |
 | `diff` | `$added $removed` | — | attached |
-| `pr` | `$symbol $number $label $mark $unresolved`, `$mark_style` | `Pr` | attached |
+| `pr` | `$symbol $number $label $mark`, `$mark_style` in styles | `Pr` | attached |
 
-Any segment may appear in any bar's format. A segment that does not
-apply to a bar renders empty there, so one file never errors across
-bars. `keys` in the attached bars is the `^x` leader pill plus the
+All segments are available in either attached bar, in `format` or
+`right_format`, with click targets following between bars. A segment
+without applicable data renders empty. The dashboard supplies only
+`keys`, `version`, and `usage`; all others render empty there.
+`keys` in either attached bar is the `^x` leader pill plus the
 leader-prefixed hints that exist today.
 
 Multi-item segments (`keys`, `pins`, `agents`) keep their item order
@@ -135,17 +145,23 @@ fixed. Their `format` describes one item; the engine repeats it per
 item with `separator` (default two spaces) between, recording a hit
 per item.
 
-Providers supply a segment's *default* style from state: the PR
-lifecycle tint, the agent identity color, the `ok`/`err` tint on the
-review mark. A user `style` merges over that default attribute by
-attribute, so `style = "bg:second"` keeps the state-derived foreground.
+Providers supply a segment's *default* style from state: the PR lifecycle
+tint, the agent identity color, and the `ok`/`warn` model-token tint. A user
+`style` merges over that default attribute by attribute, so
+`style = "bg:second"` keeps the state-derived foreground. A segment format
+applies the result with `[… ]($style)`; setting `style` does not forcibly
+recolor every nested run. Explicit inner styles override inherited
+attributes, including an enclosing bar-format style. The PR review mark's
+separate verdict style is exposed as `$mark_style`, used by
+`[$mark]($mark_style)`.
 
 ### Overflow
 
 Each segment has an integer `priority`; higher survives longer. The
 bundled defaults reproduce the chip row's current drop order:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50; every
-other segment 100. When `right_format` does not fit beside `format`,
+other segment 100. When `right_format` does not fit beside `format`
+and the required one-column blank gap,
 the renderer removes the lowest-priority segment present in
 `right_format`, re-evaluates the AST (so conditional groups drop their
 separators), and repeats until it fits or the right side is empty.
@@ -344,5 +360,7 @@ Seven commits on this branch, each green (`cargo test`, clippy,
 
 Commits 1–3 are additive (~1200 lines with tests). Commits 4–6 are
 net-negative refactors of the three bars. No feature flag: the bundled
-default is pixel-identical to today, so users with no file see no
-change.
+default preserves today's content and styling. At narrow boundaries, the
+required blank column can cause earlier right-side overflow; a partially
+clipped pinned chip keeps its visible portion clickable instead of being
+dropped in full.

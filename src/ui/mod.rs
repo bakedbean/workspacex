@@ -1,4 +1,5 @@
 pub mod attached;
+pub mod bar;
 pub mod dashboard;
 pub mod detail_modules;
 pub mod footer;

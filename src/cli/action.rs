@@ -87,6 +87,14 @@ pub enum CliAction {
     ConfigEdit {
         key: String,
     },
+    /// Validate `~/.config/wsx/theme.toml` (or `path`) and report every error.
+    ThemeCheck {
+        path: Option<PathBuf>,
+    },
+    /// Print the resolved theme file path.
+    ThemePath,
+    /// Write the bundled default theme file if none exists.
+    ThemeInit,
     RemoteList,
     RemoteRun {
         name: String,

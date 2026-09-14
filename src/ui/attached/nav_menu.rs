@@ -139,7 +139,7 @@ pub fn render_nav_overlay(
         } else {
             spans.push(Span::raw("  ".to_string()));
         }
-        spans.extend(super::key_pill_spans(item.glyph, theme));
+        spans.extend(crate::ui::footer::key_pill_spans(item.glyph, theme));
         spans.push(Span::styled(
             format!("   {}", item.label),
             Style::default().fg(theme.path),

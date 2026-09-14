@@ -519,6 +519,11 @@ fn accepts_usage_graph_window() {
     assert!(known_setting_key("usage_graph_window"));
 }
 
+#[test]
+fn accepts_bar_theme() {
+    assert!(known_setting_key("bar_theme"));
+}
+
 /// `app::bell` silently falls back to the state default on an unknown
 /// pattern, so `config set` has to be the place a typo is caught.
 #[test]
@@ -1532,6 +1537,7 @@ fn registry_matches_dispatched_groups() {
         "context",
         "waybar",
         "menubar",
+        "theme",
     ];
     let registry: Vec<&str> = GROUPS.iter().map(|g| g.name).collect();
     for d in dispatched {
@@ -1977,4 +1983,36 @@ fn resolve_current_instance_requires_env_id_in_the_same_workspace() {
         resolve::resolve_current_instance(&store, ws_a, AgentKind::Claude),
         None
     );
+}
+
+#[test]
+fn parses_theme_subcommands() {
+    assert!(matches!(
+        parse(&["theme", "path"]).unwrap(),
+        CliAction::ThemePath
+    ));
+    assert!(matches!(
+        parse(&["theme", "init"]).unwrap(),
+        CliAction::ThemeInit
+    ));
+    match parse(&["theme", "check"]).unwrap() {
+        CliAction::ThemeCheck { path } => assert!(path.is_none()),
+        other => panic!("{other:?}"),
+    }
+    match parse(&["theme", "check", "/tmp/t.toml"]).unwrap() {
+        CliAction::ThemeCheck { path } => {
+            assert_eq!(path.as_deref(), Some(std::path::Path::new("/tmp/t.toml")))
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn theme_usage_errors_are_tagged_with_the_group() {
+    for args in [&["theme"][..], &["theme", "bogus"][..]] {
+        match parse(args).unwrap_err() {
+            Error::Usage { group, .. } => assert_eq!(group, Some("theme")),
+            other => panic!("{other:?}"),
+        }
+    }
 }

@@ -162,6 +162,24 @@ pub static GROUPS: &[GroupInfo] = &[
         ],
     },
     GroupInfo {
+        name: "theme",
+        blurb: "Validate and scaffold the bar theme file (~/.config/wsx/theme.toml)",
+        commands: &[
+            CmdInfo {
+                usage: "check [<path>]",
+                blurb: "Validate the theme file and print every error",
+            },
+            CmdInfo {
+                usage: "path",
+                blurb: "Print where wsx looks for theme.toml",
+            },
+            CmdInfo {
+                usage: "init",
+                blurb: "Write the bundled default theme.toml (refuses to overwrite)",
+            },
+        ],
+    },
+    GroupInfo {
         name: "remote",
         blurb: "Run saved remote shortcuts",
         commands: &[CmdInfo {

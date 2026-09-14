@@ -6,7 +6,10 @@
 //! keyboard, a hint's action is expressed as a synthetic key event that the
 //! input handler routes through the active view's key handler.
 
+use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 
 /// What clicking a footer nav hint should do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +58,29 @@ pub fn key_for_glyph(glyph: &str) -> Option<KeyEvent> {
         }
     };
     Some(KeyEvent::new(code, KeyModifiers::NONE))
+}
+
+/// The footer/chip "key pill" style: a dim, bold glyph on the soft chip
+/// background. Shared by the nav overlay and the pinned-chip row so every
+/// pill reads identically.
+pub(crate) fn key_pill_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.dim)
+        .add_modifier(Modifier::BOLD)
+        .bg(theme.bg_soft)
+}
+
+/// The three spans forming one key pill: a 1-cell pad, the `key` glyph in
+/// [`key_pill_style`], and a trailing 1-cell pad — all on the chip background.
+/// Width is always `2 + key.chars().count()`. Callers append any label tail
+/// themselves (the nav overlay has none; the pinned-chip row did).
+pub(crate) fn key_pill_spans(key: &str, theme: &Theme) -> [Span<'static>; 3] {
+    let pad_style = theme.chip_bg_style();
+    [
+        Span::styled(" ".to_string(), pad_style),
+        Span::styled(key.to_string(), key_pill_style(theme)),
+        Span::styled(" ".to_string(), pad_style),
+    ]
 }
 
 #[cfg(test)]

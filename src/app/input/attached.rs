@@ -52,10 +52,12 @@ pub(in crate::app::input) fn chip_target_session(
 }
 
 /// Dispatch the pinned command at `idx` to the chip-target session.
-/// No-op when:
-///   - `idx` exceeds the number of *visible* chip rects (the row may
-///     have truncated some chips at narrow widths),
-///   - the cache has no command at `idx` (defensive),
+/// `idx` is an index into `pinned_commands_cache` — the same 0-based
+/// pinned-command index a chip click carries in `chip_rects` — NOT a
+/// position in `chip_rects`, so the keyboard chord keeps working when the
+/// chips aren't drawn at all (a theme without `$pins`, a row too narrow to
+/// fit them). No-op when:
+///   - the cache has no command at `idx`,
 ///   - no chip target can be resolved.
 ///
 /// When dispatched from `View::Dashboard`, also clears any in-flight
@@ -64,9 +66,6 @@ pub(in crate::app::input) fn chip_target_session(
 /// attached-view keyboard chord and doesn't trample dashboard state the
 /// user can't see.
 pub(in crate::app::input) async fn fire_chip(app: &mut App, idx: usize) {
-    if idx >= app.chip_rects.len() {
-        return;
-    }
     let cmd = match app.pinned_commands_cache.get(idx) {
         Some(c) => c.clone(),
         None => return,

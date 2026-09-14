@@ -1,0 +1,162 @@
+# wsx bar theme — the bundled default. `wsx theme init` copies this to
+# ~/.config/wsx/theme.toml; edit it there and wsx reloads it while running.
+# Anything you leave out keeps the value below.
+#
+# Grammar (a subset of starship's):
+#   $name / ${name}   insert a segment (in a [segment] table: a variable)
+#   [text](style)     style a run; nested runs inherit the outer bg
+#   ( ... )           render only if a $segment inside is non-empty
+#   $$  \[  \(        literal characters
+#   style tokens      fg:<c> bg:<c> <c> bold dimmed italic underline none $style
+#   colors            #rrggbb, 0-255, ansi names (red, bright-blue, white),
+#                     [palette] names, theme tokens: dim path code bg_alt bg_soft
+#                     ok warn err attention merged header_fg selected_fg
+#                     selected_bg question stalled waiting thinking complete
+#                     idle brand wordmark
+#
+# Bars take `format`, `right_format` (flush right), `style`, `fill`,
+# `fill_style`. When a bar is too narrow, segments given a `priority` below
+# the default 100 drop — lowest first, from either side — until it fits;
+# segments at the default never drop, so the left side is clipped and the
+# right omitted if nothing droppable is left. Segments take `format`,
+# `style` (merged over the segment's own state color, available as $style),
+# `symbol`, `disabled`, `priority`, and `separator` (between items of
+# keys/pins/agents).
+#
+# The evaluator always keeps one blank cell between a nonempty `format` and
+# a nonempty `right_format`, so `right_format` groups need only one leading
+# space of their own padding, not two.
+
+[palette]
+
+[dashboard_footer]
+format = "$keys"
+# The trailing "  " is grouped with $version so it drops along with it (not
+# left as an orphaned gap) when the terminal is too narrow for both.
+right_format = "($version  )$usage"
+fill = " "
+
+# The dashboard's top line: wordmark, group and sort tabs, the live filter
+# echo, and the repo/workspace counts flush right.
+[dashboard_header]
+format       = "$brand      $group(   $sort)(  $filter)"
+right_format = "$counts"
+fill         = " "
+
+[attached_top]
+format = "($agent_bar )$workspace(   $attention)"
+
+[attached_bottom]
+format       = "$keys  ($pins  )"
+# Each element carries its OWN trailing separator, so a missing element
+# takes its gap with it (a single-agent workspace, with no agent pills,
+# still gets exactly one gap before model_tokens, not two). The one
+# leading space here plus the engine's mandatory blank reproduce the
+# stock two-cell gap after the rule. The tradeoff: a workspace with no PR
+# — $pr is bare, with no trailing separator of its own — leaves one blank
+# cell at the right edge instead of hugging it exactly; accepted.
+right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
+fill         = "─"
+fill_style   = "fg:dim"
+
+# The dashboard detail pane's pinned-command row: chips, then a rule to
+# the edge. Only `$pins` carries data here; other segments render empty.
+[dashboard_detail]
+format     = "($pins  )"
+fill       = "─"
+fill_style = "fg:dim"
+
+# --- segments ---------------------------------------------------------
+
+# The wordmark on the dashboard's top line. Variables: $symbol $name $mark $view
+[brand]
+symbol = "▌"
+format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold)[ · $view](fg:dim)"
+
+# Variables: $label $tabs (the active tab is highlighted)
+[group]
+format = "[$label ](fg:path)$tabs"
+
+# Variables: $label $tabs (the active tab is highlighted)
+[sort]
+format   = "[$label ](fg:path)$tabs"
+# First to go on a narrow header: the order stays discoverable from `o` and
+# the footer hint, whereas the counts have no other home on that line.
+priority = 30
+
+# The live filter echo. Variables: $needle (absent when no filter is active)
+# Never dropped, only truncated: a needle with no visible cause is worse
+# than a shortened one, since rows are missing and nothing says why.
+[filter]
+format = "[/$needle]($style)"
+
+# Variables: $repos $workspaces
+[counts]
+format   = "[$repos repos · $workspaces workspaces](fg:path)"
+priority = 50
+
+# Key hints: one pill per binding. Variables: $key $label
+[keys]
+format    = "[ $key ](bg:bg_soft fg:dim bold)[ $label](fg:path)"
+separator = "  "
+
+# Variables: $version
+[version]
+format   = "[$version](fg:path)"
+# Least useful right-side element on the dashboard footer, so it drops
+# before the usage graph when the terminal is too narrow for both.
+priority = 50
+
+# Usage sparkline. Variables: $label $spark
+[usage]
+format = "[$label $spark](fg:path)"
+# Droppable, but only after $version: on a narrow dashboard footer the
+# version string goes first and the graph is the last right-side element
+# standing.
+priority = 60
+
+# Agent identity bar; $style carries the agent's color. Variables: $symbol
+[agent_bar]
+symbol = "▎"
+format = "[$symbol]($style)"
+
+# Focused workspace. Variables: $repo $name
+[workspace]
+format = "[($repo/)$name]($style)"
+
+# Cross-workspace attention items. Variables: $items
+[attention]
+format = "$items"
+
+# Pinned commands: one chip per command. Variables: $index $label
+[pins]
+format    = "[ $index ](bg:bg_soft fg:dim bold)[ $label](fg:path)"
+separator = "  "
+
+# Agent pills (2+ agents). $style is the agent color. Variables: $symbol $label $key
+[agents]
+format    = "[$symbol]($style)$label ([ $key ](bg:bg_soft fg:dim bold))"
+separator = "   "
+priority  = 20
+
+# Variables: $model $tokens ($style is ok, or warn near the limit)
+[model_tokens]
+format   = "([$model](fg:code) )[$tokens]($style)"
+priority = 10
+
+# Running processes. Variables: $symbol $count
+[procs]
+symbol   = "●"
+format   = "[$symbol ${count}p]($style)"
+priority = 30
+
+# Variables: $added $removed
+[diff]
+format   = "[+$added](fg:ok) [−$removed](fg:err)"
+priority = 40
+
+# PR chip; $style is the lifecycle color, $mark_style the review verdict.
+# Variables: $symbol $number $label $mark
+[pr]
+format   = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
+priority = 50

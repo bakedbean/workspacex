@@ -84,7 +84,9 @@ async fn main() -> Result<()> {
     let worktree_base = dirs.app_dir().join("worktrees");
     std::fs::create_dir_all(&worktree_base)?;
     sweep_orphaned_claude_entries(&store, &worktree_base);
-    let app = Arc::new(Mutex::new(app::App::new(store, worktree_base)?));
+    let mut app_state = app::App::new(store, worktree_base)?;
+    app_state.set_theme_path(dirs.theme_path(), wsx::util::time::now_ms_u64());
+    let app = Arc::new(Mutex::new(app_state));
 
     if let Some((repo, slug)) = &select {
         app.lock().await.open_workspace_by_name(repo, slug);

@@ -664,12 +664,15 @@ async fn dashboard_ctrl_x_then_digit_fires_pinned_chip() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     // Ctrl-X — arms the leader.
     handle_key_dashboard(
@@ -722,12 +725,15 @@ async fn dashboard_ctrl_x_then_non_digit_clears_leader_no_fire() {
         label: "PR".into(),
         command: "/pull-request".into(),
     }];
-    app.chip_rects = vec![ratatui::layout::Rect {
-        x: 5,
-        y: 30,
-        width: 7,
-        height: 1,
-    }];
+    app.chip_rects = vec![(
+        0,
+        ratatui::layout::Rect {
+            x: 5,
+            y: 30,
+            width: 7,
+            height: 1,
+        },
+    )];
 
     // Ctrl-X — arms the leader.
     handle_key_dashboard(
@@ -765,10 +771,12 @@ async fn dashboard_ctrl_x_then_non_digit_clears_leader_no_fire() {
     );
 }
 
-/// Ctrl-X + a digit whose index exceeds the number of visible chip_rects
-/// is a no-op (fire_chip guards on idx >= chip_rects.len()).
+/// Ctrl-X + a digit past the end of the pinned-command cache is a no-op
+/// (`fire_chip`'s only bound is `pinned_commands_cache.get(idx)`; the
+/// rendered `chip_rects` do not gate it — see
+/// `dashboard_ctrl_x_digit_fires_without_any_chip_rects`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dashboard_ctrl_x_digit_beyond_visible_chips_is_noop() {
+async fn dashboard_ctrl_x_digit_beyond_cached_commands_is_noop() {
     use crossterm::event::{KeyCode, KeyEvent};
     let store = Store::open_in_memory().unwrap();
     let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
@@ -778,7 +786,7 @@ async fn dashboard_ctrl_x_digit_beyond_visible_chips_is_noop() {
     app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
     app.select_index(0);
 
-    // Three commands in cache but only two chip_rects rendered.
+    // Two commands in cache; the digit below asks for a third.
     app.pinned_commands_cache = vec![
         crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
@@ -788,27 +796,29 @@ async fn dashboard_ctrl_x_digit_beyond_visible_chips_is_noop() {
             label: "B".into(),
             command: "/build".into(),
         },
-        crate::commands::pinned::PinnedCommand {
-            label: "T".into(),
-            command: "/test".into(),
-        },
     ];
     app.chip_rects = vec![
-        ratatui::layout::Rect {
-            x: 5,
-            y: 30,
-            width: 7,
-            height: 1,
-        },
-        ratatui::layout::Rect {
-            x: 13,
-            y: 30,
-            width: 5,
-            height: 1,
-        },
+        (
+            0,
+            ratatui::layout::Rect {
+                x: 5,
+                y: 30,
+                width: 7,
+                height: 1,
+            },
+        ),
+        (
+            1,
+            ratatui::layout::Rect {
+                x: 13,
+                y: 30,
+                width: 5,
+                height: 1,
+            },
+        ),
     ];
 
-    // Ctrl-X then '3' — index 2, beyond chip_rects.len() == 2.
+    // Ctrl-X then '3' — index 2, past the end of the 2-entry cache.
     handle_key_dashboard(
         &mut app,
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
@@ -832,7 +842,62 @@ async fn dashboard_ctrl_x_digit_beyond_visible_chips_is_noop() {
     let screen_text = parser.screen().contents();
     assert!(
         !screen_text.contains("/test"),
-        "digit beyond visible chips must not dispatch any command; got: {screen_text:?}"
+        "digit beyond the cached commands must not dispatch; got: {screen_text:?}"
+    );
+}
+
+/// `Ctrl-x <digit>` fires from the pinned-command cache alone: with NO
+/// chip rects rendered — a theme whose bars omit `$pins`, or a row too
+/// narrow to draw them — the chord must still dispatch. The digit is a
+/// pinned-command index, not a position in `chip_rects`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashboard_ctrl_x_digit_fires_without_any_chip_rects() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let ws_id = spawn_attached_workspace(&mut app);
+
+    app.view = crate::ui::View::Dashboard;
+    app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+    app.select_index(0);
+
+    app.pinned_commands_cache = vec![
+        crate::commands::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+        },
+        crate::commands::pinned::PinnedCommand {
+            label: "B".into(),
+            command: "/build".into(),
+        },
+    ];
+    // The bars drew no chips at all.
+    app.chip_rects = vec![];
+
+    handle_key_dashboard(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await
+    .unwrap();
+    handle_key_dashboard(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+    assert!(!app.leader_pending);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let session = app
+        .sessions
+        .get(test_primary_instance(&app, ws_id))
+        .unwrap();
+    let parser = session.parser.lock().unwrap();
+    let screen_text = parser.screen().contents();
+    assert!(
+        screen_text.contains("/build"),
+        "Ctrl-x 2 must fire the second pinned command with no chip rects; got: {screen_text:?}"
     );
 }
 

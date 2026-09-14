@@ -384,6 +384,75 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 println!("set {key} ({} chars)", normalized.len());
             }
         }
+        CliAction::ThemePath => {
+            println!("{}", dirs.theme_path().display());
+        }
+        CliAction::ThemeInit => {
+            let path = dirs.theme_path();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            // `create_new` so the exists-check and the write are one atomic
+            // step: a check-then-write races another `theme init` (or the
+            // user's editor) and can clobber a file written in between.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::AlreadyExists {
+                        Error::UserInput(format!(
+                            "{} already exists; edit it in place or delete it to re-init",
+                            path.display()
+                        ))
+                    } else {
+                        Error::from(e)
+                    }
+                })?;
+            use std::io::Write as _;
+            file.write_all(crate::config::theme_file::DEFAULT_TOML.as_bytes())?;
+            println!("wrote {}", path.display());
+        }
+        CliAction::ThemeCheck { path } => {
+            // An explicit path that doesn't exist is a mistake (typo, wrong
+            // directory), not "no theme file": only the no-argument default
+            // path is allowed to be absent and still succeed.
+            if let Some(p) = path.as_deref()
+                && !p.exists()
+            {
+                return Err(Error::UserInput(format!("no such file: {}", p.display())));
+            }
+            let path = path.unwrap_or_else(|| dirs.theme_path());
+            let theme_name = store.get_setting("theme")?.unwrap_or_default();
+            let theme = crate::ui::theme::Theme::by_name(&theme_name);
+            match crate::config::theme_file::load(&path, &theme) {
+                Ok(_) => {
+                    if path.exists() {
+                        println!("ok: {}", path.display());
+                    } else {
+                        println!(
+                            "ok: no file at {}; the bundled default applies",
+                            path.display()
+                        );
+                    }
+                    if !crate::app::theme_reload::bar_theme_enabled(&store) {
+                        println!(
+                            "note: bar_theme is off, so wsx draws the stock bars; enable with `wsx config set bar_theme on`"
+                        );
+                    }
+                }
+                Err(errors) => {
+                    for e in &errors {
+                        eprintln!("{}: {e}", path.display());
+                    }
+                    return Err(Error::UserInput(format!(
+                        "{} error(s) in {}",
+                        errors.len(),
+                        path.display()
+                    )));
+                }
+            }
+        }
         CliAction::RemoteList => {
             let remotes = crate::commands::remotes::list(&store)?;
             if remotes.is_empty() {

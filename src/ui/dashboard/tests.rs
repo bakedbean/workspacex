@@ -106,9 +106,10 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     (0..buf.area.height)
@@ -150,10 +151,12 @@ fn repo_pr_link_rects_land_on_rendered_glyphs() {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
     let mut rects: Vec<(RepoId, Rect)> = Vec::new();
     term.draw(|f| {
-        rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme).repo_pr_links
+        rects =
+            render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs).repo_pr_links
     })
     .unwrap();
     let buf = term.backend().buffer().clone();
@@ -202,10 +205,12 @@ fn repo_pr_link_rect_survives_a_wide_repo_name() {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
     let mut rects: Vec<(RepoId, Rect)> = Vec::new();
     term.draw(|f| {
-        rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme).repo_pr_links
+        rects =
+            render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs).repo_pr_links
     })
     .unwrap();
     let buf = term.backend().buffer().clone();
@@ -226,10 +231,13 @@ fn by_attention_view_has_no_repo_pr_links() {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
     let mut targets = ListClickTargets::default();
-    term.draw(|f| targets = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme))
-        .unwrap();
+    term.draw(|f| {
+        targets = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs)
+    })
+    .unwrap();
     assert!(targets.repo_pr_links.is_empty());
 }
 
@@ -272,11 +280,12 @@ fn assert_pr_rects_match_buffer(group: GroupMode, height: u16, select_last: bool
         state.selection = Some(SelectionTarget::Workspace(last_id));
     }
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, height);
     let mut term = Terminal::new(backend).unwrap();
     let mut rects: Vec<(WorkspaceId, Rect)> = Vec::new();
     term.draw(|f| {
-        rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme).pr_chips
+        rects = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs).pr_chips
     })
     .unwrap();
     let buf = term.backend().buffer().clone();
@@ -360,9 +369,10 @@ fn footer_row_paints_chip_bg_but_no_bar_bg() {
     };
     let mut state = DashboardState::default();
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer();
     let footer_y = buf.area.height - 1;
@@ -426,9 +436,10 @@ fn render_sets_list_state_to_selected_workspace_index() {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     assert!(
         state.list_state.selected().is_some(),
@@ -471,9 +482,10 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     let mut saw_thick = 0;
@@ -663,8 +675,9 @@ fn visible_targets_matches_rendered_row_order_under_recency() {
         .collect();
 
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let mut term = Terminal::new(TestBackend::new(160, 60)).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     let lines: Vec<String> = (0..buf.area.height)
@@ -1074,8 +1087,9 @@ fn render_empty_body(repos: &[Repo], group: GroupMode, filter: Option<&str>) -> 
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let mut term = Terminal::new(TestBackend::new(160, 12)).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     (0..buf.area.height)
@@ -1269,4 +1283,33 @@ fn ordered_sections_by_attention_emits_non_empty_sections_in_urgency_order() {
         sections[2].workspace_ids,
         vec![WorkspaceId(11), WorkspaceId(10)]
     );
+}
+
+#[test]
+fn footer_shows_a_theme_notice_instead_of_hints() {
+    let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
+    let backend = TestBackend::new(80, 1);
+    let mut term = Terminal::new(backend).unwrap();
+    let mut out = None;
+    term.draw(|f| {
+        out = Some(render_footer(
+            f,
+            f.area(),
+            &[],
+            &theme,
+            &specs,
+            "24h",
+            true,
+            Some("theme.toml: [pr].format: col 3: unknown `$nope`"),
+        ));
+    })
+    .unwrap();
+    let (graph, hints) = out.unwrap();
+    assert!(graph.is_none());
+    assert!(hints.is_empty());
+    let buf = term.backend().buffer();
+    let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+    assert!(row.starts_with("theme.toml: [pr].format"), "{row:?}");
+    assert_eq!(buf[(0, 0)].fg, theme.err);
 }

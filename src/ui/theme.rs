@@ -257,6 +257,35 @@ impl Theme {
         }
     }
 
+    /// Look up a theme color by its token name, for `theme.toml` style
+    /// strings (`fg:dim`, `bg:bg_soft`). `None` for an unknown name.
+    pub fn token(&self, name: &str) -> Option<Color> {
+        Some(match name {
+            "header_fg" => self.header_fg,
+            "selected_fg" => self.selected_fg,
+            "selected_bg" => self.selected_bg,
+            "dim" => self.dim,
+            "path" => self.path,
+            "code" => self.code,
+            "bg_alt" => self.bg_alt,
+            "bg_soft" => self.bg_soft,
+            "ok" => self.ok,
+            "warn" => self.warn,
+            "err" => self.err,
+            "attention" => self.attention,
+            "merged" => self.merged,
+            "question" => self.question,
+            "stalled" => self.stalled,
+            "waiting" => self.waiting,
+            "thinking" => self.thinking,
+            "complete" => self.complete,
+            "idle" => self.idle,
+            "brand" => BRAND_ACCENT,
+            "wordmark" => BRAND_WORDMARK,
+            _ => return None,
+        })
+    }
+
     pub fn header_style(&self) -> Style {
         let mut s = Style::default()
             .fg(self.header_fg)

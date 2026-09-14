@@ -1,0 +1,106 @@
+# Example wsx bar theme: powerline blocks in the style of a starship prompt
+# (five stepped greys, orange accents, `` transitions).
+#
+# Install:  cp docs/examples/theme-starship.toml ~/.config/wsx/theme.toml
+#           wsx config set bar_theme on
+#           wsx theme check
+# Needs a Nerd Font (for the U+E0B0 / U+E0B2 caps) and a truecolor terminal.
+# Reload is live: save the file and the bars update within a second.
+
+[palette]
+# elsa, lifted ~30 points per step so the blocks read on a dark terminal
+first    = "#303030"
+second   = "#444444"
+third    = "#585858"
+fourth   = "#6c6c6c"
+fifth    = "#808080"
+# accents, as in starship's [palettes.elsa]
+orange   = "#d75f00"   # git / directory / hostname
+amber    = "#ff8700"   # code
+label    = "#e4e4e4"   # muted text on the grey blocks
+added    = "#ACE1AF"   # git_metrics added_style
+deleted  = "#FFA7A4"   # git_metrics deleted_style
+
+# ---------------------------------------------------------------- dashboard
+
+# One chain per side. Left: key hints on `first`. Right: version then the
+# usage graph, `fourth` blending into the darker `third` at the edge.
+[dashboard_footer]
+format       = "[ $keys ](bg:first)[](fg:first)"
+right_format = "[](fg:fourth)[( $version )](bg:fourth fg:label)[](fg:third bg:fourth)[ $usage ](bg:third fg:amber)"
+fill         = " "
+
+# ----------------------------------------------------------------- header
+
+[dashboard_header]
+# Wordmark on `first`, group tabs on `second`, sort tabs on `third` (dropped
+# first when narrow), the filter echo after the chain; counts on `fourth`
+# flush right, pointing left.
+format       = "[ $brand ](bg:first)[](fg:first bg:second)[ $group ](bg:second)[](fg:second bg:third)[( $sort )](bg:third)[](fg:third)(  $filter)"
+right_format = "[](fg:fourth)[ $counts ](bg:fourth fg:label)"
+fill         = " "
+
+# ------------------------------------------------------------ attached: top
+
+# Like starship's $directory -> $git chain: the workspace block on `first`
+# blends into the attention block on `second` (which stays as a thin wedge
+# when there is nothing to report).
+[attached_top]
+format       = "[ ($agent_bar )$workspace ](bg:first fg:orange bold)[](fg:first bg:second)[( $attention )](bg:second)[](fg:second)"
+fill         = " "
+
+# --------------------------------------------------------- attached: bottom
+
+# Left chain: `^x menu` on `first` blends into pinned commands on `second`.
+# Right chain, greys DARKENING toward the edge (mirror of the left side, so
+# the diff and PR colours sit on dark blocks): agent pills on `fifth`,
+# model + tokens on `fourth`, procs + diff on `third`, the PR chip on `second`. Optional
+# segments share a block, as starship does with its language modules, so a
+# missing one collapses to its transition wedge instead of breaking the chain.
+# Right-side transitions point left: fg is the block to the right, bg the block
+# to the left.
+[attached_bottom]
+format       = "[ $keys ](bg:first)[](fg:first bg:second)[( $pins )](bg:second)[](fg:second)"
+right_format = "[](fg:fifth)[( $agents )](bg:fifth)[](fg:fourth bg:fifth)[( $model_tokens )](bg:fourth)[](fg:third bg:fourth)[( $procs )( $diff )](bg:third)[](fg:second bg:third)[( $pr )](bg:second)"
+fill         = " "
+
+# ---------------------------------------------------------------- segments
+# Only the pieces that differ from the stock default are set here; unset
+# fields keep their bundled values (`wsx theme init` shows them all).
+
+[group]
+format = "[$label ](fg:label)$tabs"
+
+[sort]
+format = "[$label ](fg:label)$tabs"
+
+[counts]
+format = "[$repos repos · $workspaces workspaces](fg:label)"
+
+[keys]
+# Key in amber like starship's `code` colour, label muted; no per-pill
+# background since the whole block already has one.
+format    = "[$key](fg:amber bold) [$label](fg:label)"
+separator = "  "
+
+[pins]
+format    = "[$index](fg:amber bold) [$label](fg:label)"
+separator = "  "
+
+[workspace]
+format = "[($repo/)$name]($style)"
+
+[agents]
+# `● claude q   ○ codex w` — keys in amber, no pill background.
+format    = "[$symbol]($style)$label ([$key](fg:amber bold))"
+separator = "   "
+
+[model_tokens]
+format = "([$model](fg:amber) )[$tokens]($style)"
+
+[diff]
+format = "[+$added](fg:added bold) [−$removed](fg:deleted)"
+
+[pr]
+symbol = ""
+format = "[$symbol #$number $label]($style)( [$mark]($mark_style))"

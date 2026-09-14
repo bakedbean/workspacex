@@ -14,6 +14,7 @@ impl App {
             .flatten()
             .unwrap_or_default();
         let theme = crate::ui::theme::Theme::by_name(&theme_name);
+        let bar_specs = crate::config::theme_file::bundled_default(&theme);
         let mut registry = crate::ui::detail_modules::Registry::new();
         crate::ui::detail_modules::register_builtins(&mut registry);
         let mut dashboard = DashboardState::default();
@@ -71,6 +72,11 @@ impl App {
             ack_fails: std::collections::HashMap::new(),
             pending_edit: None,
             theme,
+            bar_specs,
+            theme_path: None,
+            theme_active: false,
+            theme_fingerprint: None,
+            theme_notice: None,
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
             recaps: Default::default(),
@@ -578,6 +584,20 @@ pub struct App {
     /// the TUI, invokes `external::edit_in_editor`, resumes, and saves.
     pub pending_edit: Option<PendingEdit>,
     pub theme: crate::ui::theme::Theme,
+    /// Bar theme (formats + palette) resolved from `~/.config/wsx/theme.toml`
+    /// merged over the bundled default. Reloaded by `maybe_reload_theme`.
+    pub bar_specs: crate::config::theme_file::BarSpecs,
+    /// `~/.config/wsx/theme.toml`, set by `main` after construction. `None`
+    /// in tests, which then keep the bundled default.
+    pub theme_path: Option<std::path::PathBuf>,
+    /// Whether `bar_specs` currently comes from the file (the `bar_theme`
+    /// setting was on at the last check). False means the bundled default.
+    pub theme_active: bool,
+    /// `(mtime, len, permission mode)` of the theme file at the last check
+    /// (mode is `0` on non-unix); `None` when absent.
+    pub theme_fingerprint: Option<(std::time::SystemTime, u64, u32)>,
+    /// `(message, expires_at_ms)` for the footer after a failed reload.
+    pub theme_notice: Option<(String, u64)>,
     pub pm_visible: bool,
     pub focus: crate::ui::PaneFocus,
     /// Recaps for every workspace, loaded from the store each `refresh()`.
@@ -592,9 +612,14 @@ pub struct App {
     /// Live PM digest filter buffer. `None` = inactive; `Some(buf)` = filter
     /// mode, matched case-insensitively against workspace names.
     pub pm_filter: Option<String>,
-    /// Rects of the rendered chip row buttons from the last draw tick.
-    /// Used by mouse/key handlers (Tasks 8 and 9) to dispatch clicks.
-    pub chip_rects: Vec<ratatui::layout::Rect>,
+    /// `(pinned-command index, rect)` per rendered chip row button from the
+    /// last draw tick. The index travels with the rect rather than being
+    /// recovered from its position in the vector: a pin can render
+    /// zero-width (no hit emitted, shifting later indexes) or `$pins` can
+    /// appear in more than one bar, so vector position alone doesn't
+    /// identify which pinned command was clicked. Used by mouse/key
+    /// handlers (Tasks 8 and 9) to dispatch clicks.
+    pub chip_rects: Vec<(usize, ratatui::layout::Rect)>,
     /// Rects of the rendered attention-row entries from the last draw tick,
     /// each paired with the workspace it points to. Consumed by `handle_mouse`
     /// to attach on click. Mirrors the `chip_rects` draw-populates /

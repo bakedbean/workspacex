@@ -10,6 +10,23 @@ use crate::data::store::Store;
 use crate::ui::dashboard::row::ColumnWidths;
 use ratatui::layout::{Constraint, Direction, Layout};
 
+/// The configured usage window plus its activity samples: the retained
+/// hourly buckets aggregated into a fixed 24-bar, time-aligned sparkline
+/// input. Shared by the dashboard footer and the attached bars — `$usage`
+/// is a segment in all three bars, so both paths must derive the graph the
+/// same way or the same theme would draw two different sparklines.
+pub(super) fn usage_sparkline(app: &App) -> (crate::config::usage_window::UsageWindow, Vec<u32>) {
+    let window = crate::config::usage_window::resolve(&app.store);
+    let now_secs = crate::util::time::now_secs();
+    let now_hour = now_secs - (now_secs % 3600);
+    // VecDeque is non-contiguous; collect into a slice-able Vec so
+    // aggregate_buckets can take it as `&[(u64, u32)]`.
+    let history: Vec<(u64, u32)> = app.activity_history.iter().copied().collect();
+    let activity =
+        crate::ui::dashboard::sparkline::aggregate_buckets(&history, now_hour, window.hours(), 24);
+    (window, activity)
+}
+
 /// The workspace list plus, when a workspace is selected, the detail bar.
 pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::Rect) {
     use crate::ui::dashboard;
@@ -49,16 +66,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let now_ms = crate::util::time::now_ms();
     let workspaces = build_workspace_items(app, &app.repos, now_ms, nerd_fonts);
 
-    // Aggregate the retained hourly buckets into a fixed 24-bar,
-    // time-aligned sparkline for the configured window.
-    let window = crate::config::usage_window::resolve(&app.store);
-    let now_secs = crate::util::time::now_secs();
-    let now_hour = now_secs - (now_secs % 3600);
-    // VecDeque is non-contiguous; collect into a slice-able Vec so
-    // aggregate_buckets can take it as `&[(u64, u32)]`.
-    let history: Vec<(u64, u32)> = app.activity_history.iter().copied().collect();
-    let activity: Vec<u32> =
-        crate::ui::dashboard::sparkline::aggregate_buckets(&history, now_hour, window.hours(), 24);
+    let (window, activity) = usage_sparkline(app);
     let column_widths = read_column_widths(&app.store);
     let inputs = dashboard::DashboardInputs {
         repos: app.repos.iter().collect(),
@@ -98,6 +106,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         &mut app.dashboard,
         app.tick,
         &app.theme,
+        &app.bar_specs,
     );
     app.dashboard_pr_rects = click_targets.pr_chips;
     app.dashboard_repo_pr_rects = click_targets.repo_pr_links;
@@ -161,6 +170,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                     config: &detail_cfg,
                     registry: &app.registry,
                     pinned: &pinned,
+                    bar_specs: &app.bar_specs,
                     scroll_offsets: &mut app.detail_scroll_offsets,
                 };
                 let out =
@@ -176,15 +186,20 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     }
     // Render footer below detail/PM so the spec order
     // list / detail / pm / footer is respected.
+    let notice = app
+        .theme_notice(crate::util::time::now_ms_u64())
+        .map(str::to_string);
     let (graph_rect, footer_hint_rects) = dashboard::render_footer(
         f,
         footer_area,
         &activity,
         &app.theme,
+        &app.bar_specs,
         window.label(),
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))),
+        notice.as_deref(),
     );
-    app.usage_graph_rect = Some(graph_rect);
+    app.usage_graph_rect = graph_rect;
     app.footer_hint_rects = footer_hint_rects;
 }
 

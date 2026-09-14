@@ -23,6 +23,7 @@ pub(in crate::cli) fn known_setting_key(k: &str) -> bool {
             | "notification_bell_permission"
             | "notification_bell_stalled"
             | "theme"
+            | "bar_theme"
             | "mcp_mirror"
             | "remote_control"
             | "remote_control_sandbox"

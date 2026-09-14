@@ -151,6 +151,7 @@ pub fn render(
     state: &mut DashboardState,
     tick: u32,
     theme: &Theme,
+    specs: &crate::config::theme_file::BarSpecs,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -159,45 +160,17 @@ pub fn render(
             Constraint::Length(1), // footer
         ])
         .split(area);
-    let _ = render_without_footer(f, chunks[0], inputs, state, tick, theme);
+    let _ = render_without_footer(f, chunks[0], inputs, state, tick, theme, specs);
     let _ = render_footer(
         f,
         chunks[1],
         inputs.activity,
         theme,
+        specs,
         "24h",
         matches!(state.selection, Some(SelectionTarget::Workspace(_))),
+        None,
     );
-}
-
-/// Convert a footer line's relative hint spans into absolute screen rects,
-/// clipped to `area`. Shared by the dashboard and attached footers so click
-/// hit-testing stays consistent. `row` is the absolute y of the keys line.
-pub(crate) fn footer_hint_rects(
-    area: Rect,
-    row: u16,
-    hints: &[crate::ui::footer::FooterHintSpan],
-) -> Vec<(Rect, crate::ui::footer::FooterHintAction)> {
-    let max_col = area.x.saturating_add(area.width);
-    hints
-        .iter()
-        .filter_map(|h| {
-            let x = area.x.saturating_add(h.start_col);
-            if x >= max_col {
-                return None; // hint scrolled entirely off the right edge
-            }
-            let width = h.width.min(max_col - x);
-            Some((
-                Rect {
-                    x,
-                    y: row,
-                    width,
-                    height: 1,
-                },
-                h.action,
-            ))
-        })
-        .collect()
 }
 
 /// A workspace row's clickable PR chip, positioned by flat list index:
@@ -263,6 +236,7 @@ pub fn render_without_footer(
     state: &mut DashboardState,
     tick: u32,
     theme: &Theme,
+    specs: &crate::config::theme_file::BarSpecs,
 ) -> ListClickTargets {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -278,15 +252,22 @@ pub fn render_without_footer(
     let global_counts = StatusCounts::from_iter(inputs.workspaces.iter().map(|w| w.status));
 
     f.render_widget(
-        Paragraph::new(layout::top_chrome(
-            state.group_mode,
-            state.sort_mode,
-            inputs.repos.len(),
-            inputs.workspaces.len(),
-            state.filter.as_deref(),
-            chunks[0].width as usize,
-            theme,
-        )),
+        Paragraph::new(
+            crate::ui::bar::dashboard_header(
+                specs,
+                theme,
+                &crate::ui::bar::DashboardHeaderInputs {
+                    group: state.group_mode,
+                    sort: state.sort_mode,
+                    repos: inputs.repos.len(),
+                    workspaces: inputs.workspaces.len(),
+                    filter: state.filter.as_deref(),
+                    view: "dashboard",
+                },
+                chunks[0].width,
+            )
+            .line,
+        ),
         chunks[0],
     );
     f.render_widget(
@@ -341,38 +322,56 @@ pub fn render_without_footer(
     }
 }
 
-/// Render only the footer line (key hints + sparkline) into `area`.
-/// `area` should be exactly 1 row tall. Returns the on-screen `Rect` of the
-/// clickable activity graph (the trailing "<label> <sparkline>" run) plus the
-/// clickable rect + action of each keybind hint, so the caller can hit-test
-/// clicks on them.
+/// Render only the footer line into `area` (exactly 1 row tall) through the
+/// bar engine. Returns the on-screen rect of the usage graph (when the
+/// `usage` segment is present) and each clickable key hint.
+#[allow(clippy::too_many_arguments)]
 pub fn render_footer(
     f: &mut Frame,
     area: Rect,
     activity: &[u32],
     theme: &Theme,
+    specs: &crate::config::theme_file::BarSpecs,
     window_label: &str,
     workspace_selected: bool,
-) -> (Rect, Vec<(Rect, crate::ui::footer::FooterHintAction)>) {
-    let (line, graph_w, hints) = layout::footer(
-        activity,
-        env!("CARGO_PKG_VERSION"),
-        area.width as usize,
+    notice: Option<&str>,
+) -> (
+    Option<Rect>,
+    Vec<(Rect, crate::ui::footer::FooterHintAction)>,
+) {
+    use crate::ui::bar::segment::Hit;
+    if let Some(msg) = notice {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.err_style()))),
+            area,
+        );
+        return (None, Vec::new());
+    }
+    let rendered = crate::ui::bar::dashboard_footer(
+        specs,
         theme,
-        window_label,
-        workspace_selected,
+        &crate::ui::bar::DashboardFooterInputs {
+            activity,
+            version: env!("CARGO_PKG_VERSION"),
+            window_label,
+            workspace_selected,
+        },
+        area.width,
     );
-    f.render_widget(Paragraph::new(line), area);
-    let hint_rects = footer_hint_rects(area, area.y, &hints);
-    // The graph is right-aligned within the footer row.
-    let x = area.x + area.width.saturating_sub(graph_w);
-    let graph_rect = Rect {
-        x,
-        y: area.y,
-        width: graph_w.min(area.width),
-        height: 1,
-    };
-    (graph_rect, hint_rects)
+    f.render_widget(Paragraph::new(rendered.line), area);
+    let mut graph = None;
+    let mut hints = Vec::new();
+    for (rect, hit) in crate::ui::bar::render::hit_rects(area, &rendered.hits) {
+        match hit {
+            Hit::UsageGraph => graph = Some(rect),
+            _ => {
+                if let Some(action) = hit.footer_action() {
+                    hints.push((rect, action));
+                }
+            }
+        }
+    }
+    (graph, hints)
 }
 
 /// Return the sequence of selectable targets in *visible order*, matching

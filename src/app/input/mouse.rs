@@ -198,7 +198,7 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, m: MouseEvent) {
                 return;
             }
 
-            if let Some(idx) = app.chip_rects.iter().position(|r| {
+            if let Some((idx, _)) = app.chip_rects.iter().copied().find(|(_, r)| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)
                     && m.row >= r.y

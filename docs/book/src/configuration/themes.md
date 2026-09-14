@@ -22,6 +22,18 @@ change the base palette or the appearance of other UI elements.
 
 ## Bar theme file
 
+The bar theme is opt-in. Turn it on with
+
+```
+wsx config set bar_theme on
+```
+
+and off again with `wsx config set bar_theme off` (the default). While off,
+wsx draws its stock bars and never reads the file; the `wsx theme` commands
+below still work, so you can prepare and validate a file before enabling it.
+The setting is re-read once a second, so switching either way takes effect
+in the running app without a restart.
+
 ```bash
 wsx theme path     # where wsx looks: ~/.config/wsx/theme.toml
 wsx theme init     # write the bundled default there (never overwrites)

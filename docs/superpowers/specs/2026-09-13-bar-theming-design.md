@@ -42,6 +42,12 @@ per-segment tables, and a named palette.
 
 ## File
 
+The whole feature is opt-in behind the `bar_theme` global setting (default
+`off`, added after the initial evaluation). While off, wsx draws the
+bundled default and never reads or watches the file; `on` enables the
+loading and reload described below. The setting is re-read on the same
+once-a-second check as the file fingerprint, so it toggles live.
+
 `~/.config/wsx/theme.toml`, resolved through `XDG_CONFIG_HOME` the same
 way `Dirs` resolves the state dir (`src/config/mod.rs`). `Dirs` gains a
 `config_dir()` and `theme_path()`.

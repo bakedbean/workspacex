@@ -24,6 +24,14 @@ When editing an initialized file, replace keys in its existing tables;
 do not append duplicate TOML tables. Unless a step says otherwise, keep
 unmentioned defaults.
 
+## 0. The switch
+
+`bar_theme` defaults to off. With a valid `theme.toml` in place and the app
+running, `wsx config set bar_theme on` changes the bars within a second;
+`wsx config set bar_theme off` snaps them back to the stock look and clears
+any error notice. `wsx theme check` prints a `note:` line while the setting
+is off. Enable it before the steps below.
+
 ## 1. Stock look with no file
 
 Start `wsx` without a theme file. Expected: the dashboard footer and, after

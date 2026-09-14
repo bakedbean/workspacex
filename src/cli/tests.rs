@@ -519,6 +519,11 @@ fn accepts_usage_graph_window() {
     assert!(known_setting_key("usage_graph_window"));
 }
 
+#[test]
+fn accepts_bar_theme() {
+    assert!(known_setting_key("bar_theme"));
+}
+
 /// `app::bell` silently falls back to the state default on an unknown
 /// pattern, so `config set` has to be the place a typo is caught.
 #[test]

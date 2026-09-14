@@ -74,6 +74,7 @@ impl App {
             theme,
             bar_specs,
             theme_path: None,
+            theme_active: false,
             theme_fingerprint: None,
             theme_notice: None,
             pm_visible: false,
@@ -589,6 +590,9 @@ pub struct App {
     /// `~/.config/wsx/theme.toml`, set by `main` after construction. `None`
     /// in tests, which then keep the bundled default.
     pub theme_path: Option<std::path::PathBuf>,
+    /// Whether `bar_specs` currently comes from the file (the `bar_theme`
+    /// setting was on at the last check). False means the bundled default.
+    pub theme_active: bool,
     /// `(mtime, len)` of the theme file at the last check; `None` when absent.
     pub theme_fingerprint: Option<(std::time::SystemTime, u64)>,
     /// `(message, expires_at_ms)` for the footer after a failed reload.

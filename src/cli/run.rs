@@ -417,11 +417,21 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let theme_name = store.get_setting("theme")?.unwrap_or_default();
             let theme = crate::ui::theme::Theme::by_name(&theme_name);
             match crate::config::theme_file::load(&path, &theme) {
-                Ok(_) if path.exists() => println!("ok: {}", path.display()),
-                Ok(_) => println!(
-                    "ok: no file at {}; the bundled default applies",
-                    path.display()
-                ),
+                Ok(_) => {
+                    if path.exists() {
+                        println!("ok: {}", path.display());
+                    } else {
+                        println!(
+                            "ok: no file at {}; the bundled default applies",
+                            path.display()
+                        );
+                    }
+                    if !crate::app::theme_reload::bar_theme_enabled(&store) {
+                        println!(
+                            "note: bar_theme is off, so wsx draws the stock bars; enable with `wsx config set bar_theme on`"
+                        );
+                    }
+                }
                 Err(errors) => {
                     for e in &errors {
                         eprintln!("{}: {e}", path.display());

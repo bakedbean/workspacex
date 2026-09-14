@@ -967,6 +967,8 @@ mod tests {
 
     #[test]
     fn rename_mode_pre_authorizes_wsx_workspace_rename_tool() {
+        let mut env = EnvGuard::new();
+        env.remove("WSX_RENAME_MODE");
         let ctx = RenameContext {
             current_branch: "wsx/bold-fern".into(),
             branch_prefix: "wsx".into(),

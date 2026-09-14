@@ -211,4 +211,61 @@ mod footer_tests {
             7
         );
     }
+
+    /// Durable evidence for fix round 2: these two strings were verified
+    /// byte-for-byte against the pre-Task-7 legacy footer builder
+    /// (temporarily restored in git history for that one check, then
+    /// removed again — see the `engine_footer_matches_legacy_footer` commit
+    /// history) before this test was written. Pinning them here means a
+    /// future change to the bundled default's overflow priorities gets
+    /// caught without needing to resurrect the legacy code again.
+    ///
+    /// `workspace_selected: false` fits its full content at 110 (keys 71 +
+    /// gap 4 + version 5 + "  " 2 + usage 28 = 110) without dropping
+    /// anything, so it matches legacy exactly. `workspace_selected: true`
+    /// does NOT: with the `actions` pill, keys alone are 84 wide, leaving
+    /// only 110 - 84 - 1 = 25 cells for the right side — 3 short of even
+    /// `usage` alone (28) — so both `version` and `usage` drop and legacy
+    /// parity does not apply (legacy has no such drop and would overflow
+    /// to 120 cells instead); this asserts the engine's own, intentional
+    /// behavior at that width.
+    #[test]
+    fn default_footer_snapshot_at_110() {
+        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
+
+        let out = footer(false, "24h", 110);
+        let expected = format!(
+            "{}{}0.1.0  24h {spark}",
+            " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   q  quit",
+            " ".repeat(4),
+        );
+        assert_eq!(plain(&out.line), expected);
+        assert_eq!(out.line.width(), 110);
+        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
+        assert_eq!(usage.start_col + usage.width, 110);
+        assert_eq!(
+            out.hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::Key(_)))
+                .count(),
+            7
+        );
+
+        let out = footer(true, "24h", 110);
+        let expected = format!(
+            "{}{}",
+            " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   ?  actions   q  quit",
+            " ".repeat(26)
+        );
+        assert_eq!(plain(&out.line), expected);
+        assert_eq!(out.line.width(), 110);
+        assert!(out.hits.iter().all(|h| h.hit != Hit::UsageGraph));
+        assert_eq!(
+            out.hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::Key(_)))
+                .count(),
+            8
+        );
+    }
 }

@@ -6,9 +6,17 @@
 use super::render::eval;
 use super::segment::{Hit, Segment, SegmentConfig, SegmentMap};
 use super::style::Resolver;
+use crate::commands::pinned::{PinnedCommand, truncate_label};
+use crate::data::store::AgentInstanceId;
+use crate::git::DiffStats;
 use crate::pty::session::AgentKind;
+use crate::ui::attached::ChipPr;
+use crate::ui::attached::chip_row::CHIP_LABEL_COLS;
+use crate::ui::dashboard::status::Status;
+use crate::ui::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::theme::Theme;
 use crate::ui::updates_bar::AttentionLine;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
 use std::collections::HashMap;
@@ -188,5 +196,163 @@ pub fn usage(
         resolver,
     )?;
     seg.hit_from(0, Hit::UsageGraph);
+    Some(seg)
+}
+
+/// Pinned-command chips, at most nine (they are keyed `1`–`9`).
+pub fn pins(cfg: &SegmentConfig, pinned: &[PinnedCommand], resolver: &Resolver) -> Option<Segment> {
+    let items: Vec<(SegmentMap, Style, Option<Hit>)> = pinned
+        .iter()
+        .take(9)
+        .enumerate()
+        .map(|(i, cmd)| {
+            let label = truncate_label(&cmd.label, CHIP_LABEL_COLS);
+            (
+                vars(vec![
+                    ("index", var((i + 1).to_string())),
+                    ("label", var(label)),
+                ]),
+                Style::default(),
+                Some(Hit::PinnedChip(i)),
+            )
+        })
+        .collect();
+    eval_items(cfg, &items, resolver)
+}
+
+/// Agent pills: `● claude q   ○ codex w`. The active instance gets the
+/// filled dot and a bold label. `$symbol` is the dot plus its space (the
+/// `[agents].symbol` field is not used; the dot encodes active/idle).
+pub fn agents(
+    cfg: &SegmentConfig,
+    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+    active: Option<AgentInstanceId>,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let items: Vec<(SegmentMap, Style, Option<Hit>)> = agents
+        .iter()
+        .map(|(id, kind, label, key)| {
+            let is_active = active == Some(*id);
+            let dot = if is_active { "● " } else { "○ " };
+            let label_style = if is_active {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let mut v = vars(vec![("symbol", var(dot))]);
+            v.insert(
+                "label".to_string(),
+                Segment::text(label.clone(), label_style),
+            );
+            if let Some(k) = key {
+                v.insert("key".to_string(), var(k.to_string()));
+            }
+            (v, theme.agent_style(*kind), Some(Hit::Agent(*id)))
+        })
+        .collect();
+    eval_items(cfg, &items, resolver)
+}
+
+/// `$style` is `ok`, or `warn` when the context window is nearly full.
+pub(crate) fn model_tokens(
+    cfg: &SegmentConfig,
+    mt: Option<ChipModelTokens>,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let mt = mt?;
+    let style = if mt.warn {
+        theme.warn_style()
+    } else {
+        theme.ok_style()
+    };
+    let mut v = vars(vec![("tokens", var(mt.tokens))]);
+    if let Some(model) = mt.model {
+        v.insert("model".to_string(), var(model));
+    }
+    eval_segment(cfg, &v, style, &[], resolver)
+}
+
+/// Hidden at zero, like the dashboard row's process dot.
+pub fn procs(
+    cfg: &SegmentConfig,
+    procs: u32,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    if procs == 0 {
+        return None;
+    }
+    let symbol = cfg.symbol.clone().unwrap_or_else(|| "●".to_string());
+    let mut seg = eval_segment(
+        cfg,
+        &vars(vec![
+            ("symbol", var(symbol)),
+            ("count", var(procs.to_string())),
+        ]),
+        theme.status_style(Status::Thinking),
+        &[],
+        resolver,
+    )?;
+    seg.hit_from(0, Hit::Procs);
+    Some(seg)
+}
+
+/// Hidden for a clean or unknown worktree.
+pub fn diff(
+    cfg: &SegmentConfig,
+    diff: Option<DiffStats>,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let d = diff?;
+    if d.added == 0 && d.removed == 0 {
+        return None;
+    }
+    eval_segment(
+        cfg,
+        &vars(vec![
+            ("added", var(d.added.to_string())),
+            ("removed", var(d.removed.to_string())),
+        ]),
+        theme.dim_style(),
+        &[],
+        resolver,
+    )
+}
+
+/// `$style` is the lifecycle tint, `$mark_style` the review verdict's.
+/// `$mark` is absent (so `( [$mark]($mark_style))` collapses) without a
+/// verdict or on lifecycles that don't show one. `[pr].symbol` overrides
+/// the lifecycle glyph when set.
+pub(crate) fn pr(
+    cfg: &SegmentConfig,
+    pr: Option<ChipPr>,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    use crate::ui::theme::{lifecycle_chip, lifecycle_shows_review, review_mark};
+    let pr = pr?;
+    let (glyph, label) = lifecycle_chip(pr.lifecycle);
+    if glyph.is_empty() {
+        return None;
+    }
+    let glyph = cfg.symbol.as_deref().unwrap_or(glyph);
+    let review = pr.review.filter(|_| lifecycle_shows_review(pr.lifecycle));
+    let style = theme
+        .lifecycle_style(Some(pr.lifecycle))
+        .unwrap_or_else(|| theme.dim_style());
+    let mark_style = review.map(|d| theme.review_style(d)).unwrap_or_default();
+    let mut v = vars(vec![
+        ("symbol", var(glyph)),
+        ("number", var(pr.number.to_string())),
+        ("label", var(label)),
+    ]);
+    if let Some(d) = review {
+        v.insert("mark".to_string(), var(review_mark(d, pr.unresolved)));
+    }
+    let mut seg = eval_segment(cfg, &v, style, &[("mark_style", mark_style)], resolver)?;
+    seg.hit_from(0, Hit::Pr);
     Some(seg)
 }

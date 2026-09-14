@@ -12,7 +12,7 @@ use ratatui::widgets::Paragraph;
 use std::sync::Arc;
 
 mod agents_row;
-mod chip_row;
+pub(crate) mod chip_row;
 mod nav_menu;
 
 // Re-exported for app::render / app::input via `crate::ui::attached::*`.
@@ -435,6 +435,173 @@ mod tests {
             width,
         )
         .0
+    }
+
+    /// The bottom row's fixture inputs: two pinned commands, a diff, a PR
+    /// with a verdict, model+token usage, and two agents. Shared by the
+    /// parity test and the cross-bar routing test.
+    #[allow(clippy::type_complexity)]
+    fn bottom_fixture() -> (
+        Vec<crate::commands::pinned::PinnedCommand>,
+        Option<crate::git::DiffStats>,
+        Option<ChipPr>,
+        Option<crate::ui::detail_modules::session_summary::ChipModelTokens>,
+        Vec<(AgentInstanceId, AgentKind, String, Option<char>)>,
+    ) {
+        use crate::git::forge::{BranchLifecycle, ReviewDecision};
+        let pinned = vec![
+            crate::commands::pinned::PinnedCommand {
+                label: "PR".into(),
+                command: "/pr".into(),
+            },
+            crate::commands::pinned::PinnedCommand {
+                label: "feedback".into(),
+                command: "/fb".into(),
+            },
+        ];
+        let diff = Some(crate::git::DiffStats {
+            added: 12,
+            removed: 3,
+        });
+        let pr = Some(ChipPr {
+            lifecycle: BranchLifecycle::PrOpen,
+            number: 42,
+            review: Some(ReviewDecision::Approved),
+            unresolved: Some(2),
+        });
+        let mt = Some(
+            crate::ui::detail_modules::session_summary::ChipModelTokens {
+                model: Some("opus 4.8".into()),
+                tokens: "45k/200k".into(),
+                warn: false,
+            },
+        );
+        let agents = vec![
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".to_string(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Codex,
+                "codex".to_string(),
+                Some('w'),
+            ),
+        ];
+        (pinned, diff, pr, mt, agents)
+    }
+
+    /// Durable evidence, gathered BEFORE the legacy chip row was deleted:
+    /// the engine's bottom bar (`attached_bars(...).1`) matched
+    /// `render_panes`' legacy `render_chip_row` output cell-for-cell, and
+    /// the routed rects matched the legacy `PanesDrawOutput` fields. Once
+    /// `render_panes` itself switched to the engine for both bars (and the
+    /// legacy builder was deleted), this test would only compare the
+    /// engine to itself, so it was removed rather than kept as a no-op —
+    /// see `cross_bar_click_routing_pr_moves_to_top_pins_stay_bottom` and
+    /// `bottom_tests` in `src/ui/bar/mod.rs` for the durable coverage.
+    #[test]
+    fn engine_bottom_bar_matches_legacy_chip_row() {
+        use crate::ui::bar::segment::Hit;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let (pinned, diff, pr, mt, agents) = bottom_fixture();
+        let (w, h) = (120u16, 4u16);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let mut legacy_out = None;
+        term.draw(|f| {
+            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h));
+            legacy_out = Some(render_panes(
+                f,
+                &[],
+                &[],
+                info,
+                sep,
+                chip,
+                &specs,
+                "wsx",
+                "foo",
+                None,
+                None,
+                &pinned,
+                3,
+                diff,
+                pr,
+                mt.clone(),
+                &agents,
+                Some(AgentInstanceId(1)),
+                &theme,
+            ));
+        })
+        .unwrap();
+        let legacy_out = legacy_out.unwrap();
+        let legacy_buf = term.backend().buffer().clone();
+
+        let new = crate::ui::bar::attached_bars(
+            &specs,
+            &theme,
+            crate::ui::bar::AttachedInputs {
+                repo: "wsx",
+                name: "foo",
+                agent: None,
+                attention: None,
+                pinned: &pinned,
+                procs: 3,
+                diff,
+                pr,
+                model_tokens: mt,
+                agents: &agents,
+                active_agent: Some(AgentInstanceId(1)),
+            },
+            w,
+            w,
+        )
+        .1;
+        let new_buf = crate::ui::bar::test_util::render_line(&new.line, w);
+        crate::ui::bar::test_util::assert_rows_match(&legacy_buf, h - 1, &new_buf, 0, w);
+
+        let chip_area = Rect::new(0, h - 1, w, 1);
+        let rects = crate::ui::bar::render::hit_rects(chip_area, &new.hits);
+        let of = |pred: &dyn Fn(Hit) -> bool| -> Vec<Rect> {
+            rects
+                .iter()
+                .filter(|(_, h)| pred(*h))
+                .map(|(r, _)| *r)
+                .collect()
+        };
+        assert_eq!(
+            of(&|h| matches!(h, Hit::PinnedChip(_))),
+            legacy_out.chip_rects
+        );
+        assert_eq!(
+            of(&|h| h == Hit::Pr).first().copied(),
+            legacy_out.pr_link_rect
+        );
+        assert_eq!(
+            of(&|h| h == Hit::Procs).first().copied(),
+            legacy_out.procs_link_rect
+        );
+        let agent_rects: Vec<(AgentInstanceId, Rect)> = rects
+            .iter()
+            .filter_map(|(r, h)| match h {
+                Hit::Agent(id) => Some((*id, *r)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(agent_rects, legacy_out.agent_chip_rects);
+        let leader: Vec<Rect> = of(&|h| h == Hit::ArmLeader);
+        assert_eq!(
+            leader,
+            legacy_out
+                .footer_hint_rects
+                .iter()
+                .map(|(r, _)| *r)
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Durable evidence for the engine cutover: this snapshot and its hit

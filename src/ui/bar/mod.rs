@@ -93,13 +93,6 @@ pub fn dashboard_footer(
 /// Everything both attached bars need, so any attached segment can appear
 /// in either bar's format and keep its click. `pub(crate)`, not `pub`: it
 /// carries `ChipPr`/`ChipModelTokens`, which are themselves `pub(crate)`.
-///
-/// `#[allow(dead_code)]`: `attached_segments` only reads `agent`, `repo`,
-/// `name`, and `attention` for now (`keys`/`agent_bar`/`workspace`/
-/// `attention`, the Task 8 segments); the rest feed `pins`/`agents`/
-/// `model_tokens`/`procs`/`diff`/`pr` once Task 9 adds those segments to
-/// the same function.
-#[allow(dead_code)]
 pub(crate) struct AttachedInputs<'a> {
     pub repo: &'a str,
     pub name: &'a str,
@@ -154,6 +147,47 @@ fn attached_segments(
         &mut segments,
         "attention",
         providers::attention(cfg(specs, "attention"), inputs.attention, resolver),
+    );
+    put(
+        &mut segments,
+        "pins",
+        providers::pins(cfg(specs, "pins"), inputs.pinned, resolver),
+    );
+    put(
+        &mut segments,
+        "agents",
+        providers::agents(
+            cfg(specs, "agents"),
+            inputs.agents,
+            inputs.active_agent,
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "model_tokens",
+        providers::model_tokens(
+            cfg(specs, "model_tokens"),
+            inputs.model_tokens,
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "procs",
+        providers::procs(cfg(specs, "procs"), inputs.procs, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "diff",
+        providers::diff(cfg(specs, "diff"), inputs.diff, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "pr",
+        providers::pr(cfg(specs, "pr"), inputs.pr, theme, resolver),
     );
     segments
 }

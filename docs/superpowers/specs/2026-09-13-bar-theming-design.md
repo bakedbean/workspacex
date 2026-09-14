@@ -155,6 +155,16 @@ fixed. Their `format` describes one item; the engine repeats it per
 item with `separator` (default two spaces) between, recording a hit
 per item.
 
+`pr`, `procs`, `usage`, and `attention` each carry one click target that
+isn't indexed by item (unlike the multi-item segments above, which
+record a hit per item and so tolerate repeats). Placing one of these in
+more than one of the four attached-bar format strings — or twice within
+the dashboard footer's own `format`/`right_format` — would draw two
+chips with only the last-routed one clickable, so `resolve` rejects it:
+an error naming the segment and how many placements were found. This
+also fixes `attention_width_budget`'s measurement, which otherwise
+can't know which placement to measure from.
+
 `[agents].symbol` is ignored: `$symbol` for that segment is always a
 filled or hollow dot showing which agent is active, not a
 user-configurable glyph. `[pr].symbol`, by contrast, does override the
@@ -404,11 +414,14 @@ each landed as one or more green commits (`cargo test`, clippy,
 
 Tasks 1–6 are additive (parsers, loader, CLI; no rendering change).
 Tasks 7–9 are net-negative refactors that delete the three legacy span
-builders once each is proven equivalent. No feature flag: the bundled
-default reproduces today's bar content and styling exactly, with two
-accepted, narrow exceptions — at the right edge of the chip row for a
-workspace with no PR, and in the drop order at the narrow-terminal
-boundary — enumerated in Testing above, plus: the required blank column
-can cause earlier right-side overflow than the legacy fixed-width
-layout did, and a pinned chip clipped by the right edge keeps its
-visible portion clickable instead of being dropped in full.
+builders once each is proven equivalent. The feature is opt-in behind
+the `bar_theme` setting described in the File section above (default
+off), so drawing from the engine only happens once a user turns it on;
+the bundled default it draws from otherwise reproduces today's bar
+content and styling exactly, with two accepted, narrow exceptions — at
+the right edge of the chip row for a workspace with no PR, and in the
+drop order at the narrow-terminal boundary — enumerated in Testing
+above, plus: the required blank column can cause earlier right-side
+overflow than the legacy fixed-width layout did, and a pinned chip
+clipped by the right edge keeps its visible portion clickable instead
+of being dropped in full.

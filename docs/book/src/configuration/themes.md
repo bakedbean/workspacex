@@ -54,6 +54,29 @@ red for five seconds (`(+N more)` when there is more than one), and the
 full list goes to the log. An invalid file at startup falls back to the
 bundled default.
 
+The loader reports every field-level problem it finds in one pass — an
+unknown segment, a bad color, a variable a format isn't allowed to use, and
+so on, each with its own location. A TOML syntax error or a format-string
+parse error is different: it stops parsing right there, so only the first
+such error in that string is reported, not every one that string might
+contain.
+
+### Differences from the stock bars
+
+A handful of narrow, accepted gaps between the engine and the bars it
+replaced:
+
+- A workspace with no PR leaves one blank cell at the chip row's right
+  edge instead of hugging it exactly (the stock chip row's `$pr` is bare,
+  with no trailing separator of its own).
+- Below roughly 107 columns, the dashboard footer drops the version string
+  first, then the usage graph, instead of overflowing the terminal width.
+- A pinned chip clipped by the right edge keeps its visible portion
+  clickable, rather than being dropped in full.
+- The dashboard's own DETAIL pane (the pane shown when a workspace row is
+  selected) draws its own pinned-command chips with their stock look; it's
+  not built from `[pins]` and the file doesn't theme it.
+
 ### Bars
 
 ```toml
@@ -119,7 +142,11 @@ Each segment has its own table, such as `[workspace]`, with `format` (its
 layout, using the variables below), `style`, `symbol`, `disabled`,
 `priority` (overflow survival; higher lasts longer; unset defaults to 100),
 and, for multi-item segments, `separator`. A multi-item segment's format
-describes one item; the items keep their existing order.
+describes one item; the items keep their existing order. The bundled
+default sets `priority` on the segments that compete for room on the chip
+row's right side: `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40,
+`pr` 50, `version` 50 (on the dashboard footer's right side); every other
+segment is the unset default, 100.
 
 | Segment | Variables | Notes |
 |---|---|---|
@@ -134,7 +161,14 @@ describes one item; the items keep their existing order.
 | `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
 | `procs` | `$symbol $count` | Hidden at zero. Clickable. |
 | `diff` | `$added $removed` | Hidden when clean. |
-| `pr` | `$symbol $number $label $mark` | `$style` includes the lifecycle tint; `$mark_style` supplies the review verdict style. Clickable. |
+| `pr` | `$symbol $number $label $mark` | `$style` includes the lifecycle tint; `$mark_style` supplies the review verdict style. Clickable — except over a remote (ssh) attach, where the chip still renders but isn't clickable (opening a PR keys off a local workspace id a remote attach doesn't have). |
+
+`pr`, `procs`, `usage`, and `attention` each carry exactly one click
+target, unlike `pins`/`agents`/`keys`, which record one hit per item. Put
+one of these four in more than one place across the two attached bars'
+`format`/`right_format` (or twice within the dashboard footer's own
+`format`/`right_format`) and only the last-routed placement would be
+clickable, so `wsx theme check` rejects it as a duplicate instead.
 
 All segments are available in **either attached bar**, on either side;
 click targets follow them between bars as well as within a bar. `version`

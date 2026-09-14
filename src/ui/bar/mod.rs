@@ -5,4 +5,6 @@
 //! See `docs/superpowers/specs/2026-09-13-bar-theming-design.md`.
 
 pub mod format;
+pub mod render;
+pub mod segment;
 pub mod style;

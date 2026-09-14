@@ -270,13 +270,29 @@ fn placeholder_styles(names: &[&str]) -> HashMap<String, Style> {
         .collect()
 }
 
-/// Merge `file` over the bundled default and resolve it. Every problem is
-/// reported, not just the first.
-pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeError>> {
-    let base = ThemeFile::parse(DEFAULT_TOML).expect("bundled default_theme.toml parses");
-    let file = file.merge_over(base);
-    let mut errors = Vec::new();
+/// Parse a style string and confirm it resolves, in one step — the shared
+/// tail of segment style, bar style, and bar `fill_style` validation.
+fn styled(
+    loc: &str,
+    src: Option<&str>,
+    resolver: &Resolver,
+    errors: &mut Vec<ThemeError>,
+) -> StyleSpec {
+    let style = parse_style(loc, src, errors);
+    if let Err(e) = resolver.resolve(&style) {
+        errors.push(error(loc, e.to_string()));
+    }
+    style
+}
 
+/// Resolve every `[palette]` entry to a concrete color: a literal parses
+/// directly, a named reference resolves against the theme's tokens, then
+/// ANSI names; anything else is an error.
+fn resolve_palette(
+    file: &ThemeFile,
+    theme: &Theme,
+    errors: &mut Vec<ThemeError>,
+) -> HashMap<String, Color> {
     let mut palette = HashMap::new();
     for (name, value) in &file.palette {
         let loc = format!("[palette].{name}");
@@ -293,95 +309,97 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             Err(e) => errors.push(error(loc, e.to_string())),
         }
     }
-    let resolver = Resolver::new(&palette, theme);
+    palette
+}
 
-    let mut segments = HashMap::new();
-    for (name, tbl) in &file.segments {
-        let Some(def) = segment_def(name) else {
-            errors.push(error(
-                format!("[{name}]"),
-                format!(
-                    "unknown segment (known: {})",
-                    SEGMENTS
-                        .iter()
-                        .map(|d| d.name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            ));
-            continue;
-        };
-        let loc = format!("[{name}].format");
-        let nodes = parse_format(&loc, tbl.format.as_deref().unwrap_or(""), &mut errors);
-        let seg_resolver = resolver.with_styles(placeholder_styles(def.style_vars));
-        validate(&loc, &nodes, def.vars, &seg_resolver, &mut errors);
-        let style = parse_style(
-            &format!("[{name}].style"),
-            tbl.style.as_deref(),
-            &mut errors,
-        );
-        if let Err(e) = resolver.resolve(&style) {
-            errors.push(error(format!("[{name}].style"), e.to_string()));
-        }
-        segments.insert(
-            name.clone(),
-            SegmentConfig {
-                style,
-                symbol: tbl.symbol.clone(),
-                format: nodes,
-                disabled: tbl.disabled.unwrap_or(false),
-                priority: tbl.priority.unwrap_or(100),
-                separator: tbl.separator.clone().unwrap_or_else(|| "  ".to_string()),
-            },
-        );
-    }
-
-    let segment_names: Vec<&str> = SEGMENTS.iter().map(|d| d.name).collect();
-    let mut bar = |name: &str, tbl: &BarTable| -> BarSpec {
-        let f_loc = format!("[{name}].format");
-        let format_nodes = parse_format(&f_loc, tbl.format.as_deref().unwrap_or(""), &mut errors);
-        validate(
-            &f_loc,
-            &format_nodes,
-            &segment_names,
-            &resolver,
-            &mut errors,
-        );
-        let r_loc = format!("[{name}].right_format");
-        let right_nodes = parse_format(
-            &r_loc,
-            tbl.right_format.as_deref().unwrap_or(""),
-            &mut errors,
-        );
-        validate(&r_loc, &right_nodes, &segment_names, &resolver, &mut errors);
-        let style = parse_style(
-            &format!("[{name}].style"),
-            tbl.style.as_deref(),
-            &mut errors,
-        );
-        if let Err(e) = resolver.resolve(&style) {
-            errors.push(error(format!("[{name}].style"), e.to_string()));
-        }
-        let fill_style = parse_style(
-            &format!("[{name}].fill_style"),
-            tbl.fill_style.as_deref(),
-            &mut errors,
-        );
-        if let Err(e) = resolver.resolve(&fill_style) {
-            errors.push(error(format!("[{name}].fill_style"), e.to_string()));
-        }
-        BarSpec {
-            format: format_nodes,
-            right_format: right_nodes,
-            style,
-            fill: tbl.fill.clone().unwrap_or_else(|| " ".to_string()),
-            fill_style,
-        }
+/// Validate one `[segment]` table's `format` (only its own `SegmentDef`
+/// vars) and `style`, and build its `SegmentConfig`; `None` (after pushing
+/// an error) for a name with no known definition.
+fn resolve_segment(
+    name: &str,
+    tbl: &SegmentTable,
+    resolver: &Resolver,
+    errors: &mut Vec<ThemeError>,
+) -> Option<SegmentConfig> {
+    let Some(def) = segment_def(name) else {
+        errors.push(error(
+            format!("[{name}]"),
+            format!(
+                "unknown segment (known: {})",
+                SEGMENTS
+                    .iter()
+                    .map(|d| d.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+        return None;
     };
-    let dashboard_footer = bar("dashboard_footer", &file.dashboard_footer);
-    let attached_top = bar("attached_top", &file.attached_top);
-    let attached_bottom = bar("attached_bottom", &file.attached_bottom);
+    let loc = format!("[{name}].format");
+    let nodes = parse_format(&loc, tbl.format.as_deref().unwrap_or(""), errors);
+    let seg_resolver = resolver.with_styles(placeholder_styles(def.style_vars));
+    validate(&loc, &nodes, def.vars, &seg_resolver, errors);
+    let style = styled(
+        &format!("[{name}].style"),
+        tbl.style.as_deref(),
+        resolver,
+        errors,
+    );
+    Some(SegmentConfig {
+        style,
+        symbol: tbl.symbol.clone(),
+        format: nodes,
+        disabled: tbl.disabled.unwrap_or(false),
+        priority: tbl.priority.unwrap_or(100),
+        separator: tbl.separator.clone().unwrap_or_else(|| "  ".to_string()),
+    })
+}
 
+/// Validate one bar's `format`/`right_format` (may reference only segment
+/// names) plus its `style` and `fill_style`, and build its `BarSpec`.
+fn resolve_bar(
+    name: &str,
+    tbl: &BarTable,
+    segment_names: &[&str],
+    resolver: &Resolver,
+    errors: &mut Vec<ThemeError>,
+) -> BarSpec {
+    let f_loc = format!("[{name}].format");
+    let format_nodes = parse_format(&f_loc, tbl.format.as_deref().unwrap_or(""), errors);
+    validate(&f_loc, &format_nodes, segment_names, resolver, errors);
+    let r_loc = format!("[{name}].right_format");
+    let right_nodes = parse_format(&r_loc, tbl.right_format.as_deref().unwrap_or(""), errors);
+    validate(&r_loc, &right_nodes, segment_names, resolver, errors);
+    let style = styled(
+        &format!("[{name}].style"),
+        tbl.style.as_deref(),
+        resolver,
+        errors,
+    );
+    let fill_style = styled(
+        &format!("[{name}].fill_style"),
+        tbl.fill_style.as_deref(),
+        resolver,
+        errors,
+    );
+    BarSpec {
+        format: format_nodes,
+        right_format: right_nodes,
+        style,
+        fill: tbl.fill.clone().unwrap_or_else(|| " ".to_string()),
+        fill_style,
+    }
+}
+
+/// Reject a `SINGLETON_SEGMENTS` name placed more than once among the bars
+/// that would each try to route its one click target — the attached pair
+/// together, and the dashboard footer's own two sides.
+fn check_singletons(
+    dashboard: &BarSpec,
+    top: &BarSpec,
+    bottom: &BarSpec,
+    errors: &mut Vec<ThemeError>,
+) {
     let count_var = |groups: &[&[Node]], name: &str| -> usize {
         groups
             .iter()
@@ -390,10 +408,10 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             .count()
     };
     let attached_nodes: [&[Node]; 4] = [
-        &attached_top.format,
-        &attached_top.right_format,
-        &attached_bottom.format,
-        &attached_bottom.right_format,
+        &top.format,
+        &top.right_format,
+        &bottom.format,
+        &bottom.right_format,
     ];
     for name in SINGLETON_SEGMENTS {
         let count = count_var(&attached_nodes, name);
@@ -406,7 +424,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             ));
         }
     }
-    let footer_nodes: [&[Node]; 2] = [&dashboard_footer.format, &dashboard_footer.right_format];
+    let footer_nodes: [&[Node]; 2] = [&dashboard.format, &dashboard.right_format];
     for name in SINGLETON_SEGMENTS {
         let count = count_var(&footer_nodes, name);
         if count > 1 {
@@ -418,6 +436,54 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             ));
         }
     }
+}
+
+/// Merge `file` over the bundled default and resolve it. Every problem is
+/// reported, not just the first.
+pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeError>> {
+    let base = ThemeFile::parse(DEFAULT_TOML).expect("bundled default_theme.toml parses");
+    let file = file.merge_over(base);
+    let mut errors = Vec::new();
+
+    let palette = resolve_palette(&file, theme, &mut errors);
+    let resolver = Resolver::new(&palette, theme);
+
+    let mut segments = HashMap::new();
+    for (name, tbl) in &file.segments {
+        if let Some(cfg) = resolve_segment(name, tbl, &resolver, &mut errors) {
+            segments.insert(name.clone(), cfg);
+        }
+    }
+
+    let segment_names: Vec<&str> = SEGMENTS.iter().map(|d| d.name).collect();
+    let dashboard_footer = resolve_bar(
+        "dashboard_footer",
+        &file.dashboard_footer,
+        &segment_names,
+        &resolver,
+        &mut errors,
+    );
+    let attached_top = resolve_bar(
+        "attached_top",
+        &file.attached_top,
+        &segment_names,
+        &resolver,
+        &mut errors,
+    );
+    let attached_bottom = resolve_bar(
+        "attached_bottom",
+        &file.attached_bottom,
+        &segment_names,
+        &resolver,
+        &mut errors,
+    );
+
+    check_singletons(
+        &dashboard_footer,
+        &attached_top,
+        &attached_bottom,
+        &mut errors,
+    );
 
     if errors.is_empty() {
         Ok(BarSpecs {

@@ -16,10 +16,16 @@ Activity column for running sessions:
 
 ### Multiple agents
 
-A running non-primary agent that has produced terminal output within the last
-2 seconds keeps the dashboard workspace in `thinking`, with an animated spinner,
-even when the primary is idle or complete. Quiet or exited peers do not keep it
-spinning. A primary question or stalled state still takes precedence.
+A non-primary agent's colored cell in the dashboard's agent strip becomes a
+spinner when its running session has produced terminal output within the last
+2 seconds. It returns to a bar when quiet; exited peers leave the strip.
+If peers overflow the strip, the `+` marker animates while any hidden peer is active.
+
+This is terminal activity, not task status: typing or a resize repaint can
+briefly animate a peer cell too. The workspace's task-status glyph, section,
+age, details, and attention alerts are unchanged. Peer output does not move a
+completed workspace into `WORKING`, and a primary question remains visible
+alongside the peer indicator.
 
 ### Activity sub-line
 

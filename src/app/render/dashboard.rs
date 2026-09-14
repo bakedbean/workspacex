@@ -325,7 +325,16 @@ pub(super) fn build_row_inputs(
             .strip_instances(ws.id)
             .into_iter()
             .filter(|inst| !inst.is_primary)
-            .map(|inst| inst.agent)
+            .map(|inst| crate::ui::dashboard::row::PeerIndicator {
+                agent: inst.agent,
+                // Exited instances were filtered by strip_instances. No
+                // session/output yet is not activity; a repaint only lights
+                // this identity cell, never changes the workspace status.
+                active: app.sessions.get(inst.id).is_some_and(|session| {
+                    crate::app::classify_activity(session.idle_secs())
+                        == crate::app::ActivityState::Active
+                }),
+            })
             .collect(),
         status,
         branch: ws.branch.clone(),
@@ -751,28 +760,66 @@ mod build_row_inputs_tests {
             ws,
             WorkspaceEvents {
                 last_stop_reason: Some(StopReason::EndTurn),
+                last_completed_turn_text: Some("Primary result".into()),
                 ..Default::default()
             },
         );
+        let theme = crate::ui::theme::Theme::wsx();
         let session = app.sessions.get(peer.id).unwrap();
         assert_eq!(row_inputs(&app, ws).status, Status::Complete);
+        let initial_line = row::render(
+            &row_inputs(&app, ws),
+            row::ColumnWidths::default().with_agent(2),
+            0,
+            &theme,
+            160,
+        );
+        assert_eq!(initial_line.spans[0].content, "▎");
 
         session
             .activity_ms
             .store(crate::util::time::now_ms_u64(), Ordering::Relaxed);
         let inputs = row_inputs(&app, ws);
-        assert_eq!(inputs.status, Status::Thinking);
-        let theme = crate::ui::theme::Theme::wsx();
+        assert_eq!(inputs.status, Status::Complete);
         for (tick, glyph) in [(0, '⠋'), (1, '⠙')] {
-            let line = row::render(&inputs, row::ColumnWidths::default(), tick, &theme, 120);
-            assert!(line.spans.iter().any(|span| span.content.contains(glyph)));
+            let line = row::render(
+                &inputs,
+                row::ColumnWidths::default().with_agent(2),
+                tick,
+                &theme,
+                160,
+            );
+            assert_eq!(line.spans[0].content, glyph.to_string());
+            assert!(line.spans.iter().any(|span| span.content.contains('✓')));
+            assert!(
+                line.spans
+                    .iter()
+                    .any(|span| span.content.contains("Primary result"))
+            );
         }
+        let sections = crate::ui::dashboard::by_attention::partition(
+            vec![crate::ui::dashboard::by_attention::FlatRow {
+                repo_name: "peer-activity".into(),
+                row: inputs,
+            }],
+            vec![],
+        );
+        assert!(sections.working.is_empty());
+        assert_eq!(sections.recent.len(), 1);
 
-        // Quiet peers must not turn a completed workspace into perpetual work.
+        // The peer cell stops animating when output leaves the active window.
         session
             .activity_ms
-            .store(crate::util::time::now_ms_u64() - 30_000, Ordering::Relaxed);
+            .store(crate::util::time::now_ms_u64() - 2_000, Ordering::Relaxed);
         assert_eq!(row_inputs(&app, ws).status, Status::Complete);
+        let quiet_line = row::render(
+            &row_inputs(&app, ws),
+            row::ColumnWidths::default().with_agent(2),
+            0,
+            &theme,
+            160,
+        );
+        assert_eq!(quiet_line.spans[0].content, "▎");
 
         // Recent output cannot keep an exited peer active.
         session
@@ -799,7 +846,7 @@ mod build_row_inputs_tests {
             crate::util::time::now_ms_u64(),
             std::sync::atomic::Ordering::Relaxed,
         );
-        assert_eq!(row_inputs(&app, ws).status, Status::Thinking);
+        assert_eq!(row_inputs(&app, ws).status, Status::Idle);
         app.workspace_events.insert(
             ws,
             WorkspaceEvents {
@@ -809,6 +856,21 @@ mod build_row_inputs_tests {
             },
         );
         assert_eq!(row_inputs(&app, ws).status, Status::Question);
+        let line = crate::ui::dashboard::row::render(
+            &row_inputs(&app, ws),
+            crate::ui::dashboard::row::ColumnWidths::default().with_agent(2),
+            0,
+            &crate::ui::theme::Theme::wsx(),
+            160,
+        );
+        assert_eq!(line.spans[0].content, "⠋");
+        assert_eq!(
+            line.spans[0].style.fg,
+            crate::ui::theme::Theme::wsx()
+                .agent_style(AgentKind::Codex)
+                .fg,
+        );
+        assert!(line.spans.iter().any(|span| span.content.contains('?')));
     }
 
     /// A workspace with no live PTY — detached, or every workspace right
@@ -899,7 +961,11 @@ mod build_row_inputs_tests {
         app.test_spawn_session(live_peer.id, SessionStatus::Running { pid: 2 });
         app.test_spawn_session(dead_peer.id, SessionStatus::Exited { code: 0 });
 
-        let peers = row_inputs(&app, ws).peers;
+        let peers: Vec<_> = row_inputs(&app, ws)
+            .peers
+            .iter()
+            .map(|peer| peer.agent)
+            .collect();
         assert_eq!(
             peers,
             vec![AgentKind::Codex],
@@ -919,7 +985,11 @@ mod build_row_inputs_tests {
         // No sessions at all: this is the state right after a wsx restart,
         // where the previous process killed every PTY on quit but the roster
         // rows survive in the DB.
-        let peers = row_inputs(&app, ws).peers;
+        let peers: Vec<_> = row_inputs(&app, ws)
+            .peers
+            .iter()
+            .map(|peer| peer.agent)
+            .collect();
         assert_eq!(
             peers,
             vec![AgentKind::Codex],

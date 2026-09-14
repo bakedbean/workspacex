@@ -79,14 +79,12 @@ impl App {
     }
 
     /// Classify a workspace into the V5 dashboard `Status` vocabulary.
-    /// Combines primary JSONL/reported status with live peer PTY activity.
-    /// Attention states retain priority over peers that are still working.
+    /// Combines session liveness, JSONL stopped/stalled signals, and
+    /// pending tool_use into one canonical state used by the renderer.
     pub fn classify_status(
         &self,
         ws: &crate::data::store::Workspace,
     ) -> crate::ui::dashboard::status::Status {
-        use crate::ui::dashboard::status::Status;
-
         let session = self
             .primary_instance(ws.id)
             .and_then(|i| self.sessions.get(i));
@@ -129,7 +127,7 @@ impl App {
             .map(|e| e.last_log_activity_ms)
             .unwrap_or(0);
         let reported = fresh_reported_state(self.pushed_status.get(&ws.id), last_log_activity);
-        let primary_status = Status::classify(
+        crate::ui::dashboard::status::Status::classify(
             awaiting,
             stopped_kind,
             stalled,
@@ -138,28 +136,7 @@ impl App {
             user_has_prompted,
             has_prior,
             reported,
-        );
-        // Workspace events describe the primary's conversation, not its
-        // peers. Classify peer activity independently so a primary end_turn
-        // cannot hide their output, and a peer cannot dismiss its question.
-        // Liveness alone is insufficient: idle agents stay attached between
-        // turns. Reuse the PTY classifier's active window, and ignore exited
-        // peers even if they produced output just before exiting.
-        if primary_status.priority() < Status::Thinking.priority()
-            && self.agent_roster.get(&ws.id).is_some_and(|instances| {
-                instances.iter().any(|inst| {
-                    !inst.is_primary
-                        && self.instance_is_running(inst.id)
-                        && self.sessions.get(inst.id).is_some_and(|session| {
-                            classify_activity(session.idle_secs()) == ActivityState::Active
-                        })
-                })
-            })
-        {
-            Status::Thinking
-        } else {
-            primary_status
-        }
+        )
     }
 
     /// The freshness-gated agent-pushed status for a workspace, or `None` when

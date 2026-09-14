@@ -109,6 +109,7 @@ pub struct ThemeFile {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BarTable {
     pub format: Option<String>,
     pub right_format: Option<String>,
@@ -118,6 +119,7 @@ pub struct BarTable {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SegmentTable {
     pub format: Option<String>,
     pub style: Option<String>,
@@ -539,6 +541,14 @@ mod tests {
     fn bad_toml_is_one_error() {
         let e = ThemeFile::parse("[pr\nformat = 1").unwrap_err();
         assert_eq!(e.location, "toml");
+    }
+
+    #[test]
+    fn unknown_table_keys_are_errors() {
+        let e = ThemeFile::parse("[pr]\npriorty = 7\n").unwrap_err();
+        assert!(e.message.contains("priorty"), "{}", e.message);
+        let e = ThemeFile::parse("[attached_top]\nfromat = \"x\"\n").unwrap_err();
+        assert!(e.message.contains("fromat"), "{}", e.message);
     }
 
     #[test]

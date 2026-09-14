@@ -1,0 +1,112 @@
+# Orange in an airline layout, converted from a vim-airline theme
+# (~/dotfiles/orange.vim: "originally based on Jellybeans, modified to
+# resemble the orclord colorscheme").
+# Pair with `wsx config set theme jellybeans` so the rest of the UI matches;
+# the base-toned blocks sit on that palette's background and melt into it.
+#
+# The airline file carries GUI and cterm colours side by side and they
+# disagree: the GUI columns still hold the jellybeans greens and greys, the
+# cterm columns are the orange ones vim actually renders (no termguicolors).
+# This file translates the cterm indices of Normal mode through the
+# xterm-256 table: 166 -> #d75f00, 234 -> #1c1c1c, 223 -> #ffd7af, and ANSI
+# black -> the jellybeans background. Section a is orange text on ash, b is
+# the bright orange block with cream text, c is orange text on black; the
+# right side mirrors it (x = c, y = b, z = a).
+#
+# Airline layout: a "mode" block at each outer edge (sections a / z), a
+# mid block beside it (b / y), and a base-toned block toward the middle
+# (c / x). Left chains point right; right chains point left.
+#
+# Install:  cp docs/examples/theme-orange.toml ~/.config/wsx/theme.toml
+#           wsx config set bar_theme on
+#           wsx theme check
+# Needs a Nerd Font (for the U+E0B0 / U+E0B2 caps) and a truecolor terminal.
+# Reload is live: save the file and the bars update within a second.
+
+[palette]
+black    = "#151515"   # ctermBlack, as the jellybeans base background
+ash      = "#1c1c1c"   # ctermAsh 234
+orange   = "#d75f00"   # ctermOrange 166
+cream    = "#ffd7af"   # ctermBrightYellow 223
+amber    = "#ffb964"   # airline's `modified` marker
+blood    = "#870000"   # ctermBlood 88 (Insert mode block)
+congeal  = "#5f0000"   # ctermCongealing 52
+cyan     = "#5fb3b3"   # gui0C
+white    = "#ffffff"
+
+[dashboard_header]
+format       = "[ $brand ](bg:ash fg:orange)[](fg:ash bg:orange)[ $group ](bg:orange fg:cream)[](fg:orange bg:black)[( $sort )](bg:black fg:orange)[](fg:black)(  $filter)"
+right_format = "[](fg:orange)[ $counts ](bg:orange fg:cream)"
+fill         = " "
+
+[dashboard_footer]
+format       = "[ $keys ](bg:ash fg:orange)[](fg:ash)"
+right_format = "[](fg:orange)[( $version )](bg:orange fg:cream)[](fg:ash bg:orange)[ $usage ](bg:ash fg:orange)"
+fill         = " "
+
+[attached_top]
+format       = "[($agent_bar )$workspace ](bg:ash fg:orange bold)[](fg:ash bg:orange)[( $attention )](bg:orange fg:cream)[](fg:orange)"
+fill         = " "
+
+[attached_bottom]
+format       = "[ $keys ](bg:ash fg:orange)[](fg:ash bg:orange)[( $pins )](bg:orange fg:cream)[](fg:orange)"
+right_format = "[](fg:black)[( $agents )( $model_tokens )](bg:black fg:orange)[](fg:orange bg:black)[( $procs )( $diff )](bg:orange fg:cream)[](fg:ash bg:orange)[( $pr )](bg:ash fg:orange)"
+fill         = " "
+
+# --- segments (unset fields keep the bundled defaults) -------------------
+
+[brand]
+format = "[$symbol](fg:amber) [$name](bold)[ $mark](fg:amber bold)[ · $view]()"
+
+[group]
+format = "[$label ]()$tabs"
+
+[sort]
+format = "[$label ]()$tabs"
+
+[filter]
+format = "[/$needle](fg:orange bold)"
+
+[counts]
+format = "[$repos repos · $workspaces workspaces]()"
+
+# Inherit the block's text colour; the bundled formats use fg:path, which
+# would override the block on a coloured background.
+[version]
+format = "[$version]()"
+
+[usage]
+format = "[$label $spark]()"
+
+[keys]
+format    = "[$key](fg:cream bold) [$label]()"
+separator = "  "
+
+[pins]
+format    = "[$index](fg:white bold) [$label]()"
+separator = "  "
+
+# Agent identity as a right-pointing chevron in the agent's colour (the
+# bundled default is a thin vertical bar).
+[agent_bar]
+symbol = ""
+
+[workspace]
+# Inherit the block's text colour (bold) instead of the base theme's header
+# colour, which the engine would otherwise supply as $style.
+format = "[($repo/)$name](bold)"
+
+[agents]
+format    = "[$symbol]($style)$label ([$key](fg:cream bold))"
+separator = "   "
+
+[model_tokens]
+format = "([$model](fg:cyan) )[$tokens]($style)"
+
+# The diff sits on the bright orange block, so green/red would not read;
+# white for added, the palette's darkest red for removed.
+[diff]
+format = "[+$added](fg:white bold) [−$removed](fg:congeal)"
+
+[pr]
+format = "[$symbol #$number $label](bold)( [$mark]($mark_style))"

@@ -33,13 +33,14 @@ Ready-to-use examples live in the repo under `docs/examples/`:
 | `theme-nord.toml` | Nord, same layout. |
 | `theme-nord0.toml` | Nord one step darker: base blocks on nord0, so the middle of each bar melts into a nord terminal background. |
 | `theme-jellybeans.toml` | Jellybeans, same layout. |
+| `theme-orange.toml` | Dark orange, converted from a vim-airline theme: orange text on ash at the edges, a bright orange block beside it, black toward the middle. |
 
 The airline files share one arrangement and differ only by palette: a
 bright "mode" block at each outer edge, a mid-toned block beside it, and a
 base-toned block toward the middle, so the eye lands on the edges first.
-The two Nord files and Jellybeans pair with `wsx config set theme nord` or
-`wsx config set theme jellybeans` so the rest of the UI matches; Rosé Pine
-has no built-in base palette, so leave the default `wsx`.
+The two Nord files pair with `wsx config set theme nord`, and Jellybeans and
+Orange with `wsx config set theme jellybeans`, so the rest of the UI
+matches; Rosé Pine has no built-in base palette, so leave the default `wsx`.
 
 To use one, copy it to `~/.config/wsx/theme.toml`, turn the feature on, and
 validate:

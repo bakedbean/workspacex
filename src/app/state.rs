@@ -14,6 +14,7 @@ impl App {
             .flatten()
             .unwrap_or_default();
         let theme = crate::ui::theme::Theme::by_name(&theme_name);
+        let bar_specs = crate::config::theme_file::bundled_default(&theme);
         let mut registry = crate::ui::detail_modules::Registry::new();
         crate::ui::detail_modules::register_builtins(&mut registry);
         let mut dashboard = DashboardState::default();
@@ -71,6 +72,7 @@ impl App {
             ack_fails: std::collections::HashMap::new(),
             pending_edit: None,
             theme,
+            bar_specs,
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
             recaps: Default::default(),
@@ -578,6 +580,9 @@ pub struct App {
     /// the TUI, invokes `external::edit_in_editor`, resumes, and saves.
     pub pending_edit: Option<PendingEdit>,
     pub theme: crate::ui::theme::Theme,
+    /// Bar theme (formats + palette) resolved from `~/.config/wsx/theme.toml`
+    /// merged over the bundled default. Reloaded by `maybe_reload_theme`.
+    pub bar_specs: crate::config::theme_file::BarSpecs,
     pub pm_visible: bool,
     pub focus: crate::ui::PaneFocus,
     /// Recaps for every workspace, loaded from the store each `refresh()`.

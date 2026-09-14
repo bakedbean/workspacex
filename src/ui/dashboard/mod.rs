@@ -151,6 +151,7 @@ pub fn render(
     state: &mut DashboardState,
     tick: u32,
     theme: &Theme,
+    specs: &crate::config::theme_file::BarSpecs,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -165,6 +166,7 @@ pub fn render(
         chunks[1],
         inputs.activity,
         theme,
+        specs,
         "24h",
         matches!(state.selection, Some(SelectionTarget::Workspace(_))),
     );
@@ -173,6 +175,12 @@ pub fn render(
 /// Convert a footer line's relative hint spans into absolute screen rects,
 /// clipped to `area`. Shared by the dashboard and attached footers so click
 /// hit-testing stays consistent. `row` is the absolute y of the keys line.
+///
+/// The dashboard footer now goes through `crate::ui::bar::render::hit_rects`
+/// instead (see `render_footer` above), so this is unused until the attached
+/// view's footer migrates in a later task; kept rather than deleted per the
+/// Task 7 brief.
+#[allow(dead_code)]
 pub(crate) fn footer_hint_rects(
     area: Rect,
     row: u16,
@@ -341,38 +349,46 @@ pub fn render_without_footer(
     }
 }
 
-/// Render only the footer line (key hints + sparkline) into `area`.
-/// `area` should be exactly 1 row tall. Returns the on-screen `Rect` of the
-/// clickable activity graph (the trailing "<label> <sparkline>" run) plus the
-/// clickable rect + action of each keybind hint, so the caller can hit-test
-/// clicks on them.
+/// Render only the footer line into `area` (exactly 1 row tall) through the
+/// bar engine. Returns the on-screen rect of the usage graph (when the
+/// `usage` segment is present) and each clickable key hint.
 pub fn render_footer(
     f: &mut Frame,
     area: Rect,
     activity: &[u32],
     theme: &Theme,
+    specs: &crate::config::theme_file::BarSpecs,
     window_label: &str,
     workspace_selected: bool,
-) -> (Rect, Vec<(Rect, crate::ui::footer::FooterHintAction)>) {
-    let (line, graph_w, hints) = layout::footer(
-        activity,
-        env!("CARGO_PKG_VERSION"),
-        area.width as usize,
+) -> (
+    Option<Rect>,
+    Vec<(Rect, crate::ui::footer::FooterHintAction)>,
+) {
+    use crate::ui::bar::segment::Hit;
+    use crate::ui::footer::FooterHintAction;
+    let rendered = crate::ui::bar::dashboard_footer(
+        specs,
         theme,
-        window_label,
-        workspace_selected,
+        &crate::ui::bar::DashboardFooterInputs {
+            activity,
+            version: env!("CARGO_PKG_VERSION"),
+            window_label,
+            workspace_selected,
+        },
+        area.width,
     );
-    f.render_widget(Paragraph::new(line), area);
-    let hint_rects = footer_hint_rects(area, area.y, &hints);
-    // The graph is right-aligned within the footer row.
-    let x = area.x + area.width.saturating_sub(graph_w);
-    let graph_rect = Rect {
-        x,
-        y: area.y,
-        width: graph_w.min(area.width),
-        height: 1,
-    };
-    (graph_rect, hint_rects)
+    f.render_widget(Paragraph::new(rendered.line), area);
+    let mut graph = None;
+    let mut hints = Vec::new();
+    for (rect, hit) in crate::ui::bar::render::hit_rects(area, &rendered.hits) {
+        match hit {
+            Hit::UsageGraph => graph = Some(rect),
+            Hit::Key(k) => hints.push((rect, FooterHintAction::Key(k))),
+            Hit::ArmLeader => hints.push((rect, FooterHintAction::ArmLeader)),
+            _ => {}
+        }
+    }
+    (graph, hints)
 }
 
 /// Return the sequence of selectable targets in *visible order*, matching

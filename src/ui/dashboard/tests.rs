@@ -106,9 +106,10 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     (0..buf.area.height)
@@ -360,9 +361,10 @@ fn footer_row_paints_chip_bg_but_no_bar_bg() {
     };
     let mut state = DashboardState::default();
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer();
     let footer_y = buf.area.height - 1;
@@ -426,9 +428,10 @@ fn render_sets_list_state_to_selected_workspace_index() {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     assert!(
         state.list_state.selected().is_some(),
@@ -471,9 +474,10 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     let mut saw_thick = 0;
@@ -663,8 +667,9 @@ fn visible_targets_matches_rendered_row_order_under_recency() {
         .collect();
 
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let mut term = Terminal::new(TestBackend::new(160, 60)).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     let lines: Vec<String> = (0..buf.area.height)
@@ -1074,8 +1079,9 @@ fn render_empty_body(repos: &[Repo], group: GroupMode, filter: Option<&str>) -> 
         ..Default::default()
     };
     let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
     let mut term = Terminal::new(TestBackend::new(160, 12)).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     (0..buf.area.height)
@@ -1269,4 +1275,50 @@ fn ordered_sections_by_attention_emits_non_empty_sections_in_urgency_order() {
         sections[2].workspace_ids,
         vec![WorkspaceId(11), WorkspaceId(10)]
     );
+}
+
+#[test]
+fn engine_footer_matches_legacy_footer() {
+    use crate::ui::bar::segment::Hit;
+    use crate::ui::footer::FooterHintAction;
+    let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
+    let activity: Vec<u32> = (0..24).collect();
+    for (selected, width) in [(true, 120u16), (false, 100u16)] {
+        let (legacy, graph_w, hints) =
+            layout::footer(&activity, "0.1.0", width as usize, &theme, "24h", selected);
+        let new = crate::ui::bar::dashboard_footer(
+            &specs,
+            &theme,
+            &crate::ui::bar::DashboardFooterInputs {
+                activity: &activity,
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: selected,
+            },
+            width,
+        );
+        crate::ui::bar::test_util::assert_lines_match(&legacy, &new.line, width);
+        let new_keys: Vec<(u16, u16, FooterHintAction)> = new
+            .hits
+            .iter()
+            .filter_map(|h| match h.hit {
+                Hit::Key(k) => Some((h.start_col, h.width, FooterHintAction::Key(k))),
+                Hit::ArmLeader => Some((h.start_col, h.width, FooterHintAction::ArmLeader)),
+                _ => None,
+            })
+            .collect();
+        let legacy_keys: Vec<_> = hints
+            .iter()
+            .map(|h| (h.start_col, h.width, h.action))
+            .collect();
+        assert_eq!(new_keys, legacy_keys, "selected={selected}");
+        let graph = new
+            .hits
+            .iter()
+            .find(|h| h.hit == Hit::UsageGraph)
+            .expect("usage hit");
+        assert_eq!(graph.width, graph_w);
+        assert_eq!(graph.start_col, width - graph_w);
+    }
 }

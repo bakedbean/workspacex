@@ -181,10 +181,11 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         footer_area,
         &activity,
         &app.theme,
+        &app.bar_specs,
         window.label(),
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))),
     );
-    app.usage_graph_rect = Some(graph_rect);
+    app.usage_graph_rect = graph_rect;
     app.footer_hint_rects = footer_hint_rects;
 }
 

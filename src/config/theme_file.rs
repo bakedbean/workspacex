@@ -401,7 +401,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             errors.push(error(
                 "[attached_top]/[attached_bottom]",
                 format!(
-                    "segment `${name}` carries one click target and may appear only once across the attached bars (found {count})"
+                    "segment `${name}` carries one click target and may appear only once across the attached bars (found {count}; a bar side you did not set keeps its bundled default, so set that `format`/`right_format` to \"\" to clear it)"
                 ),
             ));
         }
@@ -413,7 +413,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             errors.push(error(
                 "[dashboard_footer]",
                 format!(
-                    "segment `${name}` carries one click target and may appear only once in the dashboard footer (found {count})"
+                    "segment `${name}` carries one click target and may appear only once in the dashboard footer (found {count}; a bar side you did not set keeps its bundled default, so set that `format`/`right_format` to \"\" to clear it)"
                 ),
             ));
         }

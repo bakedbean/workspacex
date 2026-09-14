@@ -37,10 +37,10 @@ blood    = "#870000"   # ctermBlood 88
 
 # The brand segment draws its own wedge so the wordmark and the view name
 # are two blocks: title on orange, view on ash, then group on charcoal and
-# sort on slate.
+# sort on slate. The counts segment does the same on the right.
 [dashboard_header]
 format       = "[ $brand](bg:orange fg:black)[](fg:ash bg:charcoal)[ $group ](bg:charcoal fg:orange)[](fg:charcoal bg:slate)[( $sort )](bg:slate fg:cream)[](fg:slate)(  $filter)"
-right_format = "[](fg:orange)[ $counts ](bg:orange fg:black)"
+right_format = "[](fg:ash)[$counts ](bg:orange fg:black)"
 fill         = " "
 
 # Left: a blank orange stub as the mode block, then the key hints on ash,
@@ -78,8 +78,10 @@ format = "[$label ]()$tabs"
 [filter]
 format = "[/$needle](fg:orange bold)"
 
+# Two blocks, like the brand: repos on ash toward the middle, workspaces on
+# orange at the edge.
 [counts]
-format = "[$repos repos · $workspaces workspaces]()"
+format = "[ $repos repos ](bg:ash fg:orange)[](fg:orange bg:ash)[ $workspaces workspaces]()"
 
 # Inherit the block's text colour; the bundled formats use fg:path, which
 # would override the block on a coloured background.

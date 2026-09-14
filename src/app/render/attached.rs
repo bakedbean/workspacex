@@ -3,6 +3,231 @@
 
 use super::*;
 use crate::app::App;
+use crate::commands::pinned::PinnedCommand;
+use crate::data::store::AgentInstanceId;
+use crate::git::DiffStats;
+use crate::pty::session::AgentKind;
+use crate::ui::attached::ChipPr;
+use crate::ui::detail_modules::session_summary::ChipModelTokens;
+use crate::ui::updates_bar::AttentionLine;
+
+/// Everything the attached bars need from `App`, gathered once per frame.
+struct AttachedData {
+    repo: String,
+    name: String,
+    agent: Option<AgentKind>,
+    pinned: Vec<PinnedCommand>,
+    procs: u32,
+    diff: Option<DiffStats>,
+    pr: Option<ChipPr>,
+    model_tokens: Option<ChipModelTokens>,
+    agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)>,
+    active_agent: Option<AgentInstanceId>,
+    version: &'static str,
+    window_label: &'static str,
+    activity: Vec<u32>,
+}
+
+impl AttachedData {
+    fn inputs<'a>(
+        &'a self,
+        attention: Option<AttentionLine>,
+    ) -> crate::ui::bar::AttachedInputs<'a> {
+        crate::ui::bar::AttachedInputs {
+            repo: &self.repo,
+            name: &self.name,
+            version: self.version,
+            window_label: self.window_label,
+            activity: &self.activity,
+            agent: self.agent,
+            attention,
+            pinned: &self.pinned,
+            procs: self.procs,
+            diff: self.diff,
+            pr: self.pr,
+            model_tokens: self.model_tokens.clone(),
+            agents: &self.agents,
+            active_agent: self.active_agent,
+        }
+    }
+}
+
+/// Gather the local split view's bar inputs for `focused` — the
+/// `AttachTarget` at the split tree's focus path, which is also the
+/// "active agent" identity for the chip row's agent pill (the pane at that
+/// same path is exactly what `state.layout` would later report focused).
+fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedData {
+    let focused_id = focused.workspace_id;
+    let (repo, name): (String, String) = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == focused_id)
+        .map(|(_, w)| {
+            let repo_name = app
+                .repos
+                .iter()
+                .find(|r| r.id == w.repo_id)
+                .map(|r| r.name.clone())
+                .unwrap_or_default();
+            (repo_name, w.name.clone())
+        })
+        .unwrap_or_default();
+    let agent = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == focused_id)
+        .map(|(_, w)| w.agent);
+
+    // Pinned commands resolve against the FOCUSED pane's workspace.
+    let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
+    let repo_pinned = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == focused_id)
+        .and_then(|(_, w)| {
+            app.repos
+                .iter()
+                .find(|r| r.id == w.repo_id)
+                .and_then(|r| r.pinned_commands.clone())
+        });
+    let pinned = crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
+
+    // PR chip for the focused pane's workspace, drawn right-justified on
+    // the chip row. Same `(lifecycle, number)` source the dashboard
+    // detail header uses, so the chip text and click behaviour match.
+    let pr = app.pr_number.get(&focused_id).copied().and_then(|n| {
+        app.pr_lifecycle.get(&focused_id).copied().map(|lc| ChipPr {
+            lifecycle: lc,
+            number: n,
+            review: app.pr_review.get(&focused_id).copied(),
+            unresolved: app.pr_unresolved.get(&focused_id).copied(),
+        })
+    });
+
+    // Diff stats for the focused pane, drawn just left of the PR chip.
+    // Same `app.workspace_diff` cache the dashboard `+N −N` cell reads,
+    // so the chip-row count matches the dashboard and refreshes on the
+    // same 10s diff poll as the agent makes commits.
+    let diff = app.workspace_diff.get(&focused_id).copied();
+
+    // Running-process count for the focused workspace, drawn in the chip
+    // row's flush-right block. Same `app.workspace_processes`
+    // map the dashboard row/detail bar count, so the chip-row `● Np`
+    // matches them and refreshes on the same process-rescan tick.
+    let procs = app
+        .workspace_processes
+        .get(&focused_id)
+        .map(|v| v.len() as u32)
+        .unwrap_or(0);
+
+    let instances = app.store.workspace_agents(focused_id).unwrap_or_default();
+    // Usage belongs to the focused agent, not its workspace. Only the primary
+    // shares the dashboard's event cache; an untracked peer must not borrow it.
+    let focused_events = if instances
+        .iter()
+        .any(|instance| instance.id == focused.instance && instance.is_primary)
+    {
+        app.workspace_events.get(&focused_id)
+    } else {
+        app.agent_events.get(&focused.instance)
+    };
+    let model_tokens = focused_events
+        .and_then(crate::ui::detail_modules::session_summary::format_chip_model_tokens);
+
+    // Build the agent pill list for the chip row's flush-right block. Only
+    // shown when the focused workspace has more than its primary agent.
+    let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = if instances.len() > 1 {
+        // Keys cap at 10 (see `agent_switch_keys`); agents past the
+        // pool get `None` so they still render and stay clickable
+        // rather than being silently dropped by a `zip`.
+        let keys = crate::ui::attached::agent_switch_keys(instances.len());
+        instances
+            .into_iter()
+            .enumerate()
+            .map(|(i, inst)| (inst.id, inst.agent, inst.label(), keys.get(i).copied()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // `$version` / `$usage` are available in the attached bars too (the
+    // bundled default doesn't use them there). The sparkline comes from the
+    // same helper the dashboard footer uses, so a theme that shows it in
+    // both places draws one graph, not two.
+    let (usage_window, usage_activity) = super::dashboard::usage_sparkline(app);
+
+    AttachedData {
+        repo,
+        name,
+        agent,
+        pinned,
+        procs,
+        diff,
+        pr,
+        model_tokens,
+        agents,
+        active_agent: Some(focused.instance),
+        version: env!("CARGO_PKG_VERSION"),
+        window_label: usage_window.label(),
+        activity: usage_activity,
+    }
+}
+
+/// Gather the ssh-attached remote pane's bar inputs. A remote attach is
+/// just an `ssh -t … tmux attach` PTY stream, so the host never ships the
+/// workspace's live process/diff/model stats — those stay off. But two
+/// chip-row elements ARE reachable locally and worth showing:
+///   - the GLOBAL pinned commands (`resolve(global, None)`): they
+///     dispatch by writing bytes into the focused PTY, which here
+///     is the ssh hop into the remote tmux, so they drive the
+///     remote agent just like a local pane. Repo-scoped pins are
+///     skipped — we don't know the remote workspace's repo config.
+///   - the PR chip, recovered from the retained `remote_list`
+///     record whose agent owns the tmux session we attached to
+///     (the same `lifecycle`/`pr_number` the H picker colors by).
+fn gather_remote(app: &App, label: &str) -> AttachedData {
+    let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
+    let pinned = crate::commands::pinned::resolve(global_pinned.as_deref(), None);
+    let pr = app.remote_list.as_ref().and_then(|list| {
+        let tmux = app.remote_target.as_ref()?.tmux.as_str();
+        list.records
+            .iter()
+            .find(|rec| {
+                rec.agents
+                    .iter()
+                    .any(|a| a.tmux_session.as_deref() == Some(tmux))
+            })
+            .and_then(|rec| {
+                // The shared-workspace wire contract carries no
+                // review verdict, so a remote pane's chip stays
+                // unmarked rather than claiming "not gated".
+                rec.pr_number.and_then(|n| {
+                    rec.lifecycle.map(|lc| ChipPr {
+                        lifecycle: lc,
+                        number: n,
+                        review: None,
+                        unresolved: None,
+                    })
+                })
+            })
+    });
+    let (usage_window, usage_activity) = super::dashboard::usage_sparkline(app);
+    AttachedData {
+        repo: String::new(),
+        name: label.to_string(),
+        agent: None,
+        pinned,
+        procs: 0,
+        diff: None,
+        pr,
+        model_tokens: None,
+        agents: Vec::new(),
+        active_agent: None,
+        version: env!("CARGO_PKG_VERSION"),
+        window_label: usage_window.label(),
+        activity: usage_activity,
+    }
+}
 
 /// The local split tree of attached PTY panes.
 pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::Rect) {
@@ -31,119 +256,13 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         }
     };
     let focused_id = focused_target.workspace_id;
-    let (focused_repo, focused_name): (String, String) = app
-        .workspaces
-        .iter()
-        .find(|(_, w)| w.id == focused_id)
-        .map(|(_, w)| {
-            let repo_name = app
-                .repos
-                .iter()
-                .find(|r| r.id == w.repo_id)
-                .map(|r| r.name.clone())
-                .unwrap_or_default();
-            (repo_name, w.name.clone())
-        })
-        .unwrap_or_default();
-    let focused_agent = app
-        .workspaces
-        .iter()
-        .find(|(_, w)| w.id == focused_id)
-        .map(|(_, w)| w.agent);
 
-    // Pinned commands resolve against the FOCUSED pane's workspace.
-    let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
-    let repo_pinned = app
-        .workspaces
-        .iter()
-        .find(|(_, w)| w.id == focused_id)
-        .and_then(|(_, w)| {
-            app.repos
-                .iter()
-                .find(|r| r.id == w.repo_id)
-                .and_then(|r| r.pinned_commands.clone())
-        });
-    let pinned = crate::commands::pinned::resolve(global_pinned.as_deref(), repo_pinned.as_deref());
+    let data = gather_local(app, focused_target);
 
-    // PR chip for the focused pane's workspace, drawn right-justified on
-    // the chip row. Same `(lifecycle, number)` source the dashboard
-    // detail header uses, so the chip text and click behaviour match.
-    let pr = app.pr_number.get(&focused_id).copied().and_then(|n| {
-        app.pr_lifecycle
-            .get(&focused_id)
-            .copied()
-            .map(|lc| crate::ui::attached::ChipPr {
-                lifecycle: lc,
-                number: n,
-                review: app.pr_review.get(&focused_id).copied(),
-                unresolved: app.pr_unresolved.get(&focused_id).copied(),
-            })
-    });
-
-    // Diff stats for the focused pane, drawn just left of the PR chip.
-    // Same `app.workspace_diff` cache the dashboard `+N −N` cell reads,
-    // so the chip-row count matches the dashboard and refreshes on the
-    // same 10s diff poll as the agent makes commits.
-    let diff = app.workspace_diff.get(&focused_id).copied();
-
-    // Running-process count for the focused workspace, drawn in the chip
-    // row's flush-right block. Same `app.workspace_processes`
-    // map the dashboard row/detail bar count, so the chip-row `● Np`
-    // matches them and refreshes on the same process-rescan tick.
-    let procs = app
-        .workspace_processes
-        .get(&focused_id)
-        .map(|v| v.len() as u32)
-        .unwrap_or(0);
-
-    let instances = app.store.workspace_agents(focused_id).unwrap_or_default();
-    // Usage belongs to the focused agent, not its workspace. Only the primary
-    // shares the dashboard's event cache; an untracked peer must not borrow it.
-    let focused_events = if instances
-        .iter()
-        .any(|instance| instance.id == focused_target.instance && instance.is_primary)
-    {
-        app.workspace_events.get(&focused_id)
-    } else {
-        app.agent_events.get(&focused_target.instance)
-    };
-    let model_tokens = focused_events
-        .and_then(crate::ui::detail_modules::session_summary::format_chip_model_tokens);
-
-    // Build the agent pill list for the chip row's flush-right block. Only
-    // shown when the focused workspace has more than its primary agent.
-    let focused_agents_list: Vec<(
-        crate::data::store::AgentInstanceId,
-        crate::pty::session::AgentKind,
-        String,
-        Option<char>,
-    )> = {
-        if instances.len() > 1 {
-            // Keys cap at 10 (see `agent_switch_keys`); agents past the
-            // pool get `None` so they still render and stay clickable
-            // rather than being silently dropped by a `zip`.
-            let keys = attached::agent_switch_keys(instances.len());
-            instances
-                .into_iter()
-                .enumerate()
-                .map(|(i, inst)| (inst.id, inst.agent, inst.label(), keys.get(i).copied()))
-                .collect()
-        } else {
-            Vec::new()
-        }
-    };
     let (info_area, separator_area, pane_area, chip_area) = attached::layout_chrome(area);
 
     let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
     let multi_pane = panes.len() > 1;
-
-    // The agent instance in the focused pane is the "active" one; its chip
-    // row pill thickens its identity bar so it's clear which attached agent
-    // you're currently driving.
-    let active_agent = panes
-        .iter()
-        .find(|(_, path, _)| *path == state.focus)
-        .map(|(target, _, _)| target.instance);
 
     // Resize each session's PTY to its pane area (minus title row when multi-pane).
     for (target, _path, rect) in &panes {
@@ -189,12 +308,6 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         })
         .collect();
 
-    // `$version` / `$usage` are available in the attached bars too (the
-    // bundled default doesn't use them there). The sparkline comes from the
-    // same helper the dashboard footer uses, so a theme that shows it in
-    // both places draws one graph, not two.
-    let (usage_window, usage_activity) = super::dashboard::usage_sparkline(app);
-
     // The attention items share whichever attached bar the theme actually
     // places `$attention` in, so measure that bar's chrome from its real
     // format (a probe render) rather than assuming the stock
@@ -213,22 +326,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         let max_width = crate::ui::bar::attention_width_budget(
             &app.bar_specs,
             &app.theme,
-            crate::ui::bar::AttachedInputs {
-                repo: &focused_repo,
-                name: &focused_name,
-                version: env!("CARGO_PKG_VERSION"),
-                window_label: usage_window.label(),
-                activity: &usage_activity,
-                agent: focused_agent,
-                attention: None,
-                pinned: &pinned,
-                procs,
-                diff,
-                pr,
-                model_tokens: model_tokens.clone(),
-                agents: &focused_agents_list,
-                active_agent,
-            },
+            data.inputs(None),
             info_area.width,
         );
         compute_attention_line(app, Some(focused_id), max_width)
@@ -242,20 +340,20 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         separator_area,
         chip_area,
         &app.bar_specs,
-        &focused_repo,
-        &focused_name,
-        env!("CARGO_PKG_VERSION"),
-        usage_window.label(),
-        &usage_activity,
-        focused_agent,
+        &data.repo,
+        &data.name,
+        data.version,
+        data.window_label,
+        &data.activity,
+        data.agent,
         attention,
-        &pinned,
-        procs,
-        diff,
-        pr,
-        model_tokens,
-        &focused_agents_list,
-        active_agent,
+        &data.pinned,
+        data.procs,
+        data.diff,
+        data.pr,
+        data.model_tokens.clone(),
+        &data.agents,
+        data.active_agent,
         &app.theme,
     );
     app.chip_rects = out.chip_rects;
@@ -267,7 +365,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.attached_pane_rects = out.pane_rects;
     app.agent_chip_rects = out.agent_chip_rects;
     app.footer_hint_rects = out.footer_hint_rects;
-    app.pinned_commands_cache = pinned;
+    app.pinned_commands_cache = data.pinned;
 }
 
 /// The single full-screen pane of an ssh-attached remote workspace.
@@ -283,44 +381,7 @@ pub(super) fn draw_attached_remote(
             .as_ref()
             .map(|t| format!("{}/{}", t.host_name, t.tmux))
             .unwrap_or_else(|| "remote".to_string());
-        // A remote attach is just an `ssh -t … tmux attach` PTY stream,
-        // so the host never ships the workspace's live process/diff/model
-        // stats — those stay off. But two chip-row elements ARE reachable
-        // locally and worth showing:
-        //   - the GLOBAL pinned commands (`resolve(global, None)`): they
-        //     dispatch by writing bytes into the focused PTY, which here
-        //     is the ssh hop into the remote tmux, so they drive the
-        //     remote agent just like a local pane. Repo-scoped pins are
-        //     skipped — we don't know the remote workspace's repo config.
-        //   - the PR chip, recovered from the retained `remote_list`
-        //     record whose agent owns the tmux session we attached to
-        //     (the same `lifecycle`/`pr_number` the H picker colors by).
-        let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
-        let pinned = crate::commands::pinned::resolve(global_pinned.as_deref(), None);
-        let pr = app.remote_list.as_ref().and_then(|list| {
-            let tmux = app.remote_target.as_ref()?.tmux.as_str();
-            list.records
-                .iter()
-                .find(|rec| {
-                    rec.agents
-                        .iter()
-                        .any(|a| a.tmux_session.as_deref() == Some(tmux))
-                })
-                .and_then(|rec| {
-                    // The shared-workspace wire contract carries no
-                    // review verdict, so a remote pane's chip stays
-                    // unmarked rather than claiming "not gated".
-                    rec.pr_number.and_then(|n| {
-                        rec.lifecycle.map(|lc| crate::ui::attached::ChipPr {
-                            lifecycle: lc,
-                            number: n,
-                            review: None,
-                            unresolved: None,
-                        })
-                    })
-                })
-        });
-        let (usage_window, usage_activity) = super::dashboard::usage_sparkline(app);
+        let data = gather_remote(app, &label);
         let (info_area, separator_area, pane_area, chip_area) = attached::layout_chrome(area);
         attached::resize_pane(session, pane_area, false);
         let specs = [crate::ui::attached::PaneSpec {
@@ -338,27 +399,27 @@ pub(super) fn draw_attached_remote(
             separator_area,
             chip_area,
             &app.bar_specs,
-            "",
-            &label,
-            env!("CARGO_PKG_VERSION"),
-            usage_window.label(),
-            &usage_activity,
+            &data.repo,
+            &data.name,
+            data.version,
+            data.window_label,
+            &data.activity,
+            data.agent,
             None,
-            None,
-            &pinned,
-            0,
-            None,
-            pr,
-            None,
-            &[],
-            None,
+            &data.pinned,
+            data.procs,
+            data.diff,
+            data.pr,
+            data.model_tokens.clone(),
+            &data.agents,
+            data.active_agent,
             &app.theme,
         );
         app.attached_pane_rects = out.pane_rects;
         app.footer_hint_rects = out.footer_hint_rects;
         app.chip_rects = out.chip_rects;
         app.usage_graph_rect = out.usage_graph_rect;
-        app.pinned_commands_cache = pinned;
+        app.pinned_commands_cache = data.pinned;
         // The PR chip renders but isn't clickable: opening a PR keys off a
         // local WorkspaceId we don't have for a remote workspace, so
         // `out.pr_link_rect` is deliberately dropped. The other hit-test
@@ -417,7 +478,7 @@ mod tests {
     use super::*;
     use crate::activity::events::WorkspaceEvents;
     use crate::data::store::Store;
-    use crate::pty::session::{AgentKind, SessionStatus};
+    use crate::pty::session::SessionStatus;
     use crate::ui::split::AttachTarget;
     use crate::ui::{AttachedState, View};
     use ratatui::Terminal;

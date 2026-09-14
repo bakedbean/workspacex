@@ -1,0 +1,106 @@
+# Nord in an airline layout
+# Palette: https://www.nordtheme.com/docs/colors-and-palettes
+# Pair with `wsx config set theme nord` so the rest of the UI matches.
+#
+# Airline layout: a bright "mode" block at each outer edge (sections a / z),
+# a mid block beside it (b / y), and a base-toned block toward the middle
+# (c / x). Left chains point right; right chains point left.
+#
+# Install:  cp docs/examples/theme-nord.toml ~/.config/wsx/theme.toml
+#           wsx config set bar_theme on
+#           wsx theme check
+# Needs a Nerd Font (for the U+E0B0 / U+E0B2 caps) and a truecolor terminal.
+# Reload is live: save the file and the bars update within a second.
+
+[palette]
+nord0    = "#2e3440"
+nord1    = "#3b4252"
+nord2    = "#434c5e"
+nord3    = "#4c566a"
+nord4    = "#d8dee9"
+nord5    = "#e5e9f0"
+nord6    = "#eceff4"
+nord7    = "#8fbcbb"
+nord8    = "#88c0d0"
+nord9    = "#81a1c1"
+nord10   = "#5e81ac"
+nord11   = "#bf616a"
+nord12   = "#d08770"
+nord13   = "#ebcb8b"
+nord14   = "#a3be8c"
+nord15   = "#b48ead"
+
+[dashboard_header]
+format       = "[ $brand ](bg:nord8 fg:nord1)[](fg:nord8 bg:nord2)[ $group ](bg:nord2 fg:nord4)[](fg:nord2 bg:nord1)[( $sort )](bg:nord1 fg:nord4)[](fg:nord1)(  $filter)"
+right_format = "[](fg:nord2)[ $counts ](bg:nord2 fg:nord4)"
+fill         = " "
+
+[dashboard_footer]
+format       = "[ $keys ](bg:nord8 fg:nord1)[](fg:nord8)"
+right_format = "[](fg:nord2)[( $version )](bg:nord2 fg:nord4)[](fg:nord10 bg:nord2)[ $usage ](bg:nord10 fg:nord6)"
+fill         = " "
+
+[attached_top]
+format       = "[($agent_bar )$workspace ](bg:nord8 fg:nord1 bold)[](fg:nord8 bg:nord2)[( $attention )](bg:nord2 fg:nord4)[](fg:nord2)"
+fill         = " "
+
+[attached_bottom]
+format       = "[ $keys ](bg:nord8 fg:nord1)[](fg:nord8 bg:nord2)[( $pins )](bg:nord2 fg:nord4)[](fg:nord2)"
+right_format = "[](fg:nord1)[( $agents )( $model_tokens )](bg:nord1 fg:nord4)[](fg:nord2 bg:nord1)[( $procs )( $diff )](bg:nord2 fg:nord4)[](fg:nord10 bg:nord2)[( $pr )](bg:nord10 fg:nord6)"
+fill         = " "
+
+# --- segments (unset fields keep the bundled defaults) -------------------
+
+[brand]
+format = "[$symbol](fg:nord9) [$name](bold)[ $mark](fg:nord9 bold)[ · $view]()"
+
+[group]
+format = "[$label ]()$tabs"
+
+[sort]
+format = "[$label ]()$tabs"
+
+[filter]
+format = "[/$needle](fg:nord13 bold)"
+
+[counts]
+format = "[$repos repos · $workspaces workspaces]()"
+
+# Inherit the block's text colour; the bundled formats use fg:path, which
+# would override the block on a coloured background.
+[version]
+format = "[$version]()"
+
+[usage]
+format = "[$label $spark]()"
+
+[keys]
+format    = "[$key](fg:nord0 bold) [$label]()"
+separator = "  "
+
+[pins]
+format    = "[$index](fg:nord13 bold) [$label]()"
+separator = "  "
+
+# Agent identity as a right-pointing chevron in the agent's colour (the
+# bundled default is a thin vertical bar).
+[agent_bar]
+symbol = ""
+
+[workspace]
+# Inherit the block's text colour (bold) instead of the base theme's header
+# colour, which the engine would otherwise supply as $style.
+format = "[($repo/)$name](bold)"
+
+[agents]
+format    = "[$symbol]($style)$label ([$key](fg:nord13 bold))"
+separator = "   "
+
+[model_tokens]
+format = "([$model](fg:nord7) )[$tokens]($style)"
+
+[diff]
+format = "[+$added](fg:nord14 bold) [−$removed](fg:nord11)"
+
+[pr]
+format = "[$symbol #$number $label](bold)( [$mark]($mark_style))"

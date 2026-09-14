@@ -1,0 +1,104 @@
+# Rosé Pine Moon in an airline layout (the darker, more muted dark variant)
+# Palette: https://rosepinetheme.com/palette
+# No built-in base palette matches; the default `wsx config set theme wsx` works.
+#
+# Airline layout: a bright "mode" block at each outer edge (sections a / z),
+# a mid block beside it (b / y), and a base-toned block toward the middle
+# (c / x). Left chains point right; right chains point left.
+#
+# Install:  cp docs/examples/theme-rose-pine-moon.toml ~/.config/wsx/theme.toml
+#           wsx config set bar_theme on
+#           wsx theme check
+# Needs a Nerd Font (for the U+E0B0 / U+E0B2 caps) and a truecolor terminal.
+# Reload is live: save the file and the bars update within a second.
+
+[palette]
+base     = "#232136"
+surface  = "#2a273f"
+overlay  = "#393552"
+muted    = "#6e6a86"
+subtle   = "#908caa"
+text     = "#e0def4"
+love     = "#eb6f92"
+gold     = "#f6c177"
+rose     = "#ea9a97"
+pine     = "#3e8fb0"
+foam     = "#9ccfd8"
+iris     = "#c4a7e7"
+hl_med   = "#44415a"
+hl_high  = "#56526e"
+
+[dashboard_header]
+format       = "[ $brand ](bg:rose fg:base)[](fg:rose bg:hl_med)[ $group ](bg:hl_med fg:text)[](fg:hl_med bg:surface)[( $sort )](bg:surface fg:subtle)[](fg:surface)(  $filter)"
+right_format = "[](fg:hl_high)[ $counts ](bg:hl_high fg:text)"
+fill         = " "
+
+[dashboard_footer]
+format       = "[ $keys ](bg:rose fg:base)[](fg:rose)"
+right_format = "[](fg:hl_high)[( $version )](bg:hl_high fg:text)[](fg:pine bg:hl_high)[ $usage ](bg:pine fg:text)"
+fill         = " "
+
+[attached_top]
+format       = "[($agent_bar )$workspace ](bg:rose fg:base bold)[](fg:rose bg:hl_med)[( $attention )](bg:hl_med fg:text)[](fg:hl_med)"
+fill         = " "
+
+[attached_bottom]
+format       = "[ $keys ](bg:rose fg:base)[](fg:rose bg:hl_med)[( $pins )](bg:hl_med fg:text)[](fg:hl_med)"
+right_format = "[](fg:surface)[( $agents )( $model_tokens )](bg:surface fg:subtle)[](fg:hl_high bg:surface)[( $procs )( $diff )](bg:hl_high fg:text)[](fg:pine bg:hl_high)[( $pr )](bg:pine fg:text)"
+fill         = " "
+
+# --- segments (unset fields keep the bundled defaults) -------------------
+
+[brand]
+format = "[$symbol](fg:iris) [$name](bold)[ $mark](fg:iris bold)[ · $view]()"
+
+[group]
+format = "[$label ]()$tabs"
+
+[sort]
+format = "[$label ]()$tabs"
+
+[filter]
+format = "[/$needle](fg:gold bold)"
+
+[counts]
+format = "[$repos repos · $workspaces workspaces]()"
+
+# Inherit the block's text colour; the bundled formats use fg:path, which
+# would override the block on a coloured background.
+[version]
+format = "[$version]()"
+
+[usage]
+format = "[$label $spark]()"
+
+[keys]
+format    = "[$key](fg:base bold) [$label]()"
+separator = "  "
+
+[pins]
+format    = "[$index](fg:gold bold) [$label]()"
+separator = "  "
+
+# Agent identity as a right-pointing chevron in the agent's colour (the
+# bundled default is a thin vertical bar).
+[agent_bar]
+symbol = ""
+
+[workspace]
+# Inherit the block's text colour (bold) instead of the base theme's header
+# colour, which the engine would otherwise supply as $style.
+format = "[($repo/)$name](bold)"
+
+[agents]
+format    = "[$symbol]($style)$label ([$key](fg:gold bold))"
+separator = "   "
+
+[model_tokens]
+format = "([$model](fg:foam) )[$tokens]($style)"
+
+[diff]
+format = "[+$added](fg:foam bold) [−$removed](fg:love)"
+
+[pr]
+format = "[$symbol #$number $label](bold)( [$mark]($mark_style))"

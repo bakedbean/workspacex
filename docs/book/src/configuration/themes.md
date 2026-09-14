@@ -33,7 +33,7 @@ Ready-to-use examples live in the repo under `docs/examples/`:
 | `theme-nord.toml` | Nord, same layout. |
 | `theme-nord0.toml` | Nord one step darker: base blocks on nord0, so the middle of each bar melts into a nord terminal background. |
 | `theme-jellybeans.toml` | Jellybeans, same layout. |
-| `theme-orange.toml` | Dark orange, converted from a vim-airline theme: a bright orange block at each edge, then ash, then black toward the middle. |
+| `theme-orange.toml` | Dark orange, converted from a vim-airline theme: an orange block at each edge, then the greys stepping up from near-black toward the middle. |
 
 The airline files share one arrangement and differ only by palette: a
 bright "mode" block at each outer edge, a mid-toned block beside it, and a

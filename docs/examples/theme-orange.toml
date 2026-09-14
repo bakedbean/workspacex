@@ -2,17 +2,16 @@
 # (~/dotfiles/orange.vim: "originally based on Jellybeans, modified to
 # resemble the orclord colorscheme").
 # Pair with `wsx config set theme jellybeans` so the rest of the UI matches;
-# the base-toned blocks sit on that palette's background and melt into it.
+# the greys here come from the same jellybeans-derived palette.
 #
 # The airline file carries GUI and cterm colours side by side and they
 # disagree: the GUI columns still hold the jellybeans greens and greys, the
 # cterm columns are the orange ones vim actually renders (no termguicolors).
-# This file translates the cterm indices of Normal mode through the
-# xterm-256 table: 166 -> #d75f00, 234 -> #1c1c1c, 223 -> #ffd7af, and ANSI
-# black -> the jellybeans background. Section a is the bright orange block
-# with black text, b is orange text on ash, c is orange text on black, so
-# each chain steps from orange through the darker tones; the right side
-# mirrors it (x = c, y = b, z = a).
+# The orange is cterm 166 -> #d75f00 and the edge-block text is black; the
+# rest of each chain steps away from the orange through the file's own dark
+# tones, darkest first: ash (cterm 234), charcoal (gui01), slate (gui02),
+# grey (gui03). Left chains run orange -> ash -> charcoal; the right chain
+# of the attached bottom bar shows the whole ramp, orange at the edge.
 #
 # Airline layout: a "mode" block at each outer edge (sections a / z), a
 # mid block beside it (b / y), and a base-toned block toward the middle
@@ -26,16 +25,18 @@
 
 [palette]
 black    = "#151515"   # ctermBlack, as the jellybeans base background
-ash      = "#1c1c1c"   # ctermAsh 234
 orange   = "#d75f00"   # ctermOrange 166
+ash      = "#1c1c1c"   # ctermAsh 234
+charcoal = "#262626"   # gui01
+slate    = "#4f5b66"   # gui02
+grey     = "#65737e"   # gui03
 cream    = "#ffd7af"   # ctermBrightYellow 223
-blood    = "#870000"   # ctermBlood 88 (Insert mode block)
 green    = "#008700"   # cterm0B 28
-cyan     = "#5fb3b3"   # gui0C
+blood    = "#870000"   # ctermBlood 88
 
 [dashboard_header]
-format       = "[ $brand ](bg:orange fg:black)[](fg:orange bg:ash)[ $group ](bg:ash fg:orange)[](fg:ash bg:black)[( $sort )](bg:black fg:orange)[](fg:black)(  $filter)"
-right_format = "[](fg:ash)[ $counts ](bg:ash fg:orange)"
+format       = "[ $brand ](bg:orange fg:black)[](fg:orange bg:ash)[ $group ](bg:ash fg:orange)[](fg:ash bg:charcoal)[( $sort )](bg:charcoal fg:orange)[](fg:charcoal)(  $filter)"
+right_format = "[](fg:orange)[ $counts ](bg:orange fg:black)"
 fill         = " "
 
 [dashboard_footer]
@@ -47,9 +48,13 @@ fill         = " "
 format       = "[($agent_bar )$workspace ](bg:orange fg:black bold)[](fg:orange bg:ash)[( $attention )](bg:ash fg:orange)[](fg:ash)"
 fill         = " "
 
+# Right chain, orange at the edge then the greys lightening toward the
+# middle: pr on orange, diff on ash, procs on charcoal, model + tokens on
+# slate, agents on grey. Optional segments get their own block so every
+# step shows; a missing one collapses to its wedge.
 [attached_bottom]
 format       = "[ $keys ](bg:orange fg:black)[](fg:orange bg:ash)[( $pins )](bg:ash fg:orange)[](fg:ash)"
-right_format = "[](fg:black)[( $agents )( $model_tokens )](bg:black fg:orange)[](fg:ash bg:black)[( $procs )( $diff )](bg:ash fg:orange)[](fg:orange bg:ash)[( $pr )](bg:orange fg:black)"
+right_format = "[](fg:grey)[( $agents )](bg:grey fg:cream)[](fg:slate bg:grey)[( $model_tokens )](bg:slate fg:cream)[](fg:charcoal bg:slate)[( $procs )](bg:charcoal fg:orange)[](fg:ash bg:charcoal)[( $diff )](bg:ash fg:orange)[](fg:orange bg:ash)[( $pr )](bg:orange fg:black)"
 fill         = " "
 
 # --- segments (unset fields keep the bundled defaults) -------------------
@@ -96,11 +101,11 @@ symbol = ""
 format = "[($repo/)$name](bold)"
 
 [agents]
-format    = "[$symbol]($style)$label ([$key](fg:cream bold))"
+format    = "[$symbol]($style)$label ([$key](bold))"
 separator = "   "
 
 [model_tokens]
-format = "([$model](fg:cyan) )[$tokens]($style)"
+format = "([$model](bold) )[$tokens]($style)"
 
 [diff]
 format = "[+$added](fg:green bold) [−$removed](fg:blood)"

@@ -26,6 +26,36 @@ const STYLE: &[&str] = &["style"];
 
 pub const SEGMENTS: &[SegmentDef] = &[
     SegmentDef {
+        name: "brand",
+        vars: &["symbol", "name", "mark", "view"],
+        style_vars: STYLE,
+        singleton: false,
+    },
+    SegmentDef {
+        name: "group",
+        vars: &["label", "tabs"],
+        style_vars: STYLE,
+        singleton: false,
+    },
+    SegmentDef {
+        name: "sort",
+        vars: &["label", "tabs"],
+        style_vars: STYLE,
+        singleton: false,
+    },
+    SegmentDef {
+        name: "filter",
+        vars: &["needle"],
+        style_vars: STYLE,
+        singleton: false,
+    },
+    SegmentDef {
+        name: "counts",
+        vars: &["repos", "workspaces"],
+        style_vars: STYLE,
+        singleton: false,
+    },
+    SegmentDef {
         name: "keys",
         vars: &["key", "label"],
         style_vars: STYLE,

@@ -24,12 +24,17 @@ pub struct ThemeFile {
     pub palette: BTreeMap<String, String>,
     #[serde(default)]
     pub dashboard_footer: BarTable,
+    /// The dashboard's top line: wordmark, group/sort tabs, filter echo,
+    /// and counts. A named field, not part of the flattened `segments`
+    /// map, like the other bars.
+    #[serde(default)]
+    pub dashboard_header: BarTable,
     #[serde(default)]
     pub attached_top: BarTable,
     #[serde(default)]
     pub attached_bottom: BarTable,
     /// The dashboard detail pane's pinned-command row. A named field, not
-    /// part of the flattened `segments` map, like the other three bars.
+    /// part of the flattened `segments` map, like the other bars.
     #[serde(default)]
     pub dashboard_detail: BarTable,
     /// Every other top-level table is a `[segment]`.
@@ -115,6 +120,7 @@ impl ThemeFile {
             self.palette.entry(k).or_insert(v);
         }
         self.dashboard_footer = self.dashboard_footer.merge_over(base.dashboard_footer);
+        self.dashboard_header = self.dashboard_header.merge_over(base.dashboard_header);
         self.attached_top = self.attached_top.merge_over(base.attached_top);
         self.attached_bottom = self.attached_bottom.merge_over(base.attached_bottom);
         self.dashboard_detail = self.dashboard_detail.merge_over(base.dashboard_detail);
@@ -131,6 +137,7 @@ impl ThemeFile {
 pub struct BarSpecs {
     pub palette: HashMap<String, Color>,
     pub dashboard_footer: BarSpec,
+    pub dashboard_header: BarSpec,
     pub attached_top: BarSpec,
     pub attached_bottom: BarSpec,
     pub dashboard_detail: BarSpec,
@@ -343,13 +350,14 @@ fn check_singleton_scope(loc: &str, nodes: &[&[Node]], verb: &str, errors: &mut 
 }
 
 /// Reject a singleton segment placed more than once among the bars that
-/// would each try to route its one click target. Three independent
+/// would each try to route its one click target. Four independent
 /// scopes: the attached pair together, the dashboard footer's own two
-/// sides, and the dashboard detail pane's pinned-chip row on its own (a
-/// singleton may appear once there without conflicting with the other
-/// scopes).
+/// sides, the dashboard header's own two sides, and the dashboard detail
+/// pane's pinned-chip row on its own (a singleton may appear once in each
+/// without conflicting with the other scopes).
 fn check_singletons(
     dashboard: &BarSpec,
+    header: &BarSpec,
     top: &BarSpec,
     bottom: &BarSpec,
     detail: &BarSpec,
@@ -372,6 +380,13 @@ fn check_singletons(
         "[dashboard_footer]",
         &footer_nodes,
         "in the dashboard footer",
+        errors,
+    );
+    let header_nodes: [&[Node]; 2] = [&header.format, &header.right_format];
+    check_singleton_scope(
+        "[dashboard_header]",
+        &header_nodes,
+        "in the dashboard header",
         errors,
     );
     let detail_nodes: [&[Node]; 2] = [&detail.format, &detail.right_format];
@@ -408,6 +423,13 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         &resolver,
         &mut errors,
     );
+    let dashboard_header = resolve_bar(
+        "dashboard_header",
+        &file.dashboard_header,
+        &segment_names,
+        &resolver,
+        &mut errors,
+    );
     let attached_top = resolve_bar(
         "attached_top",
         &file.attached_top,
@@ -432,6 +454,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
 
     check_singletons(
         &dashboard_footer,
+        &dashboard_header,
         &attached_top,
         &attached_bottom,
         &dashboard_detail,
@@ -442,6 +465,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         Ok(BarSpecs {
             palette,
             dashboard_footer,
+            dashboard_header,
             attached_top,
             attached_bottom,
             dashboard_detail,
@@ -494,7 +518,15 @@ mod tests {
             specs.dashboard_detail.format,
             format::parse("($pins  )").unwrap()
         );
+        assert_eq!(
+            specs.dashboard_header.format,
+            format::parse("$brand      $group(   $sort)(  $filter)").unwrap()
+        );
         assert_eq!(specs.segments["pr"].priority, 50);
+        assert_eq!(specs.segments["sort"].priority, 30);
+        assert_eq!(specs.segments["counts"].priority, 50);
+        assert_eq!(specs.segments["usage"].priority, 60);
+        assert_eq!(specs.segments["brand"].symbol.as_deref(), Some("▌"));
         assert_eq!(specs.segments["keys"].separator, "  ");
         assert_eq!(specs.segments["procs"].symbol.as_deref(), Some("●"));
         for def in SEGMENTS {
@@ -521,6 +553,20 @@ mod tests {
         assert_eq!(
             specs.segments["pr"].format,
             format::parse("[$symbol #$number $label]($style)( [$mark]($mark_style))").unwrap(),
+            "unset fields keep the default"
+        );
+    }
+
+    #[test]
+    fn partial_dashboard_header_table_merges_over_the_default() {
+        let specs = ok("[dashboard_header]\nformat = \"$brand\"\n");
+        assert_eq!(
+            specs.dashboard_header.format,
+            format::parse("$brand").unwrap()
+        );
+        assert_eq!(
+            specs.dashboard_header.right_format,
+            format::parse("$counts").unwrap(),
             "unset fields keep the default"
         );
     }
@@ -633,6 +679,26 @@ mod tests {
         );
     }
 
+    /// The dashboard header is its own singleton scope: `$usage` placed
+    /// once there does not collide with the footer's own placement, but
+    /// twice within the header does.
+    #[test]
+    fn the_dashboard_header_is_its_own_singleton_scope() {
+        assert!(
+            ok("[dashboard_header]\nright_format = \"$counts $usage\"\n")
+                .dashboard_header
+                .right_format
+                .len()
+                > 1
+        );
+        let e = errs("[dashboard_header]\nformat = \"$usage\"\nright_format = \"$usage\"\n");
+        assert!(
+            e.iter()
+                .any(|e| e.location == "[dashboard_header]" && e.message.contains("usage")),
+            "{e:?}"
+        );
+    }
+
     /// `$usage` twice within the dashboard footer's own two format strings
     /// is also a duplicate placement, even though only one bar is involved.
     #[test]
@@ -677,6 +743,8 @@ mod tests {
         let e = ThemeFile::parse("[attached_top]\nfromat = \"x\"\n").unwrap_err();
         assert!(e.message.contains("fromat"), "{}", e.message);
         let e = ThemeFile::parse("[dashboard_detail]\nfromat = \"x\"\n").unwrap_err();
+        assert!(e.message.contains("fromat"), "{}", e.message);
+        let e = ThemeFile::parse("[dashboard_header]\nfromat = \"x\"\n").unwrap_err();
         assert!(e.message.contains("fromat"), "{}", e.message);
     }
 

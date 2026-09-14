@@ -12,8 +12,11 @@ use crate::git::DiffStats;
 use crate::pty::session::AgentKind;
 use crate::ui::attached::ChipPr;
 use crate::ui::attached::chip_row::CHIP_LABEL_COLS;
+use crate::ui::dashboard::layout::GroupMode;
+use crate::ui::dashboard::sort::SortMode;
 use crate::ui::dashboard::status::Status;
 use crate::ui::detail_modules::session_summary::ChipModelTokens;
+use crate::ui::text::{FILTER_ECHO_MAX, truncate};
 use crate::ui::theme::Theme;
 use crate::ui::updates_bar::AttentionLine;
 use ratatui::style::Modifier;
@@ -84,6 +87,141 @@ pub fn eval_items(
         }
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// The dashboard header's wordmark: the brand cursor block (the site's
+/// blinking caret) marks the line as the app rather than a repo name, and
+/// the two-tone wordmark keeps it distinct from `header_style`, which repo
+/// headers also use. `$view` names the view the header belongs to.
+pub fn brand(cfg: &SegmentConfig, view: &str, resolver: &Resolver) -> Option<Segment> {
+    let symbol = cfg.symbol.clone().unwrap_or_else(|| "▌".to_string());
+    eval_segment(
+        cfg,
+        &vars(vec![
+            ("symbol", var(symbol)),
+            ("name", var("workspace")),
+            ("mark", var("x")),
+            ("view", var(view)),
+        ]),
+        Style::default(),
+        &[],
+        resolver,
+    )
+}
+
+/// One `group:`/`sort:` mode tab. The active tab is the one painted on the
+/// selection background — that highlight is the only thing distinguishing
+/// it, since every mode's label is always drawn.
+fn tab_span(label: &str, active: bool, theme: &Theme) -> Span<'static> {
+    if active {
+        Span::styled(
+            label.to_string(),
+            Style::default()
+                .fg(theme.selected_fg)
+                .bg(theme.selected_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(label.to_string(), Style::default().fg(theme.path))
+    }
+}
+
+/// `$tabs`: an opaque run of mode labels joined by one space. Opaque
+/// because the highlight is positional — a theme can restyle the `$label`
+/// around it, but which tab is lit is state, not theming.
+fn tabs(labels: &[(&str, bool)], theme: &Theme) -> Segment {
+    let mut out = Segment::default();
+    for (i, (label, active)) in labels.iter().enumerate() {
+        if i > 0 {
+            out.push(Span::raw(" "));
+        }
+        out.push(tab_span(label, *active, theme));
+    }
+    out
+}
+
+/// The dashboard's grouping tabs. Variables: `$label` `$tabs`.
+pub fn group(
+    cfg: &SegmentConfig,
+    mode: GroupMode,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let tabs = tabs(
+        &[
+            ("repo", mode == GroupMode::Repo),
+            ("attention", mode == GroupMode::Attention),
+        ],
+        theme,
+    );
+    eval_segment(
+        cfg,
+        &vars(vec![("label", var("group:")), ("tabs", tabs)]),
+        Style::default(),
+        &[],
+        resolver,
+    )
+}
+
+/// The dashboard's ordering tabs. Variables: `$label` `$tabs`.
+pub fn sort(
+    cfg: &SegmentConfig,
+    mode: SortMode,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let tabs = tabs(
+        &[
+            ("recency", mode == SortMode::Recency),
+            ("status", mode == SortMode::Status),
+        ],
+        theme,
+    );
+    eval_segment(
+        cfg,
+        &vars(vec![("label", var("sort:")), ("tabs", tabs)]),
+        Style::default(),
+        &[],
+        resolver,
+    )
+}
+
+/// The live filter echo. Absent when no filter is active — without the
+/// echo, `/` looks inert and rows vanishing from the list have no visible
+/// cause, so an active-but-empty needle still renders the bare `/`.
+pub fn filter(
+    cfg: &SegmentConfig,
+    needle: Option<&str>,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let needle = needle?;
+    eval_segment(
+        cfg,
+        &vars(vec![("needle", var(truncate(needle, FILTER_ECHO_MAX)))]),
+        Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
+        &[],
+        resolver,
+    )
+}
+
+/// Registered repos and workspaces. Variables: `$repos` `$workspaces`.
+pub fn counts(
+    cfg: &SegmentConfig,
+    repos: usize,
+    workspaces: usize,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    eval_segment(
+        cfg,
+        &vars(vec![
+            ("repos", var(repos.to_string())),
+            ("workspaces", var(workspaces.to_string())),
+        ]),
+        Style::default(),
+        &[],
+        resolver,
+    )
 }
 
 /// `(key glyph, label, hit)` per pill.

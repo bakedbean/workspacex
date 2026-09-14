@@ -912,12 +912,21 @@ mod segment_registry_drift_tests {
 
         let segments = attached_segments(&specs, &theme, inputs, &resolver);
         let got: BTreeSet<&str> = segments.keys().map(String::as_str).collect();
-        let expected: BTreeSet<&str> = SEGMENTS.iter().map(|d| d.name).collect();
+        let expected: BTreeSet<&str> = SEGMENTS
+            .iter()
+            .map(|d| d.name)
+            .filter(|name| !DASHBOARD_HEADER_ONLY.contains(name))
+            .collect();
         assert_eq!(
             got, expected,
-            "attached_segments's output must cover every registered segment name"
+            "attached_segments's output must cover every registered segment name \
+             that isn't dashboard-header-only"
         );
     }
+
+    /// The dashboard header's five segments: registered like any other, but
+    /// carrying dashboard-only state, so the attached bars never build them.
+    const DASHBOARD_HEADER_ONLY: [&str; 5] = ["brand", "group", "sort", "filter", "counts"];
 
     /// The dashboard footer's three segments (`keys`, `version`, `usage`)
     /// must all be registered names, not private to `dashboard_footer`.
@@ -929,5 +938,238 @@ mod segment_registry_drift_tests {
                 "dashboard_footer's `{name}` segment must be in registry::SEGMENTS"
             );
         }
+    }
+
+    /// Likewise the dashboard header's five.
+    #[test]
+    fn dashboard_header_segments_are_all_registered_names() {
+        for name in DASHBOARD_HEADER_ONLY {
+            assert!(
+                SEGMENTS.iter().any(|d| d.name == name),
+                "dashboard_header's `{name}` segment must be in registry::SEGMENTS"
+            );
+        }
+    }
+}
+
+/// The dashboard header, and its parity with the deleted
+/// `layout::top_chrome` painter. The three `LEGACY_*` strings below were
+/// captured from a live `assert_lines_match` run against `top_chrome`
+/// (cell-for-cell: symbol and background everywhere, foreground and
+/// modifiers on every non-blank cell) while the legacy painter still
+/// existed, in the commit that introduced this module. Pinning them as
+/// literals keeps them guarding the engine now that it is gone.
+#[cfg(test)]
+mod dashboard_header_tests {
+    use super::*;
+    use crate::config::theme_file::bundled_default;
+    use crate::ui::bar::test_util::{plain, render_line};
+    use crate::ui::dashboard::layout::GroupMode;
+    use crate::ui::dashboard::sort::SortMode;
+
+    /// (group Repo, sort Recency, no filter) at width 120.
+    const LEGACY_PLAIN: &str = "▌ workspace x · dashboard      group: repo attention   sort: recency status                      9 repos · 14 workspaces";
+    /// (group Attention, sort Status, filter "auth") at width 120.
+    const LEGACY_FILTERED: &str = "▌ workspace x · dashboard      group: repo attention   sort: recency status  /auth               9 repos · 14 workspaces";
+    /// (group Repo, sort Recency, a filter of 80 `x`s) at width 120. Both
+    /// the legacy painter and the engine cap the needle at
+    /// `FILTER_ECHO_MAX`, and both shed the sort tabs to make room for it.
+    const LEGACY_LONG_FILTER: &str = "▌ workspace x · dashboard      group: repo attention  /xxxxxxxxxxxxxxxxxxxxxxx…                  9 repos · 14 workspaces";
+
+    fn header(group: GroupMode, sort: SortMode, filter: Option<&str>, width: u16) -> Rendered {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        dashboard_header(
+            &specs,
+            &theme,
+            &DashboardHeaderInputs {
+                group,
+                sort,
+                repos: 9,
+                workspaces: 14,
+                filter,
+                view: "dashboard",
+            },
+            width,
+        )
+    }
+
+    /// The column a label starts at. Every char on this line is one cell
+    /// wide, so a char offset is a column.
+    fn col_of(text: &str, needle: &str) -> u16 {
+        let byte = text.find(needle).expect("label is on the line");
+        u16::try_from(text[..byte].chars().count()).unwrap()
+    }
+
+    #[test]
+    fn engine_header_matches_the_legacy_top_chrome() {
+        let needle = "x".repeat(80);
+        let cases: [(GroupMode, SortMode, Option<&str>, &str); 3] = [
+            (GroupMode::Repo, SortMode::Recency, None, LEGACY_PLAIN),
+            (
+                GroupMode::Attention,
+                SortMode::Status,
+                Some("auth"),
+                LEGACY_FILTERED,
+            ),
+            (
+                GroupMode::Repo,
+                SortMode::Recency,
+                Some(&needle),
+                LEGACY_LONG_FILTER,
+            ),
+        ];
+        for (group, sort, filter, expected) in cases {
+            let out = header(group, sort, filter, 120);
+            assert_eq!(plain(&out.line), expected, "filter={filter:?}");
+            assert_eq!(out.line.width(), 120);
+        }
+    }
+
+    #[test]
+    fn header_shows_app_name_and_counts() {
+        let t = plain(&header(GroupMode::Repo, SortMode::Recency, None, 100).line);
+        assert!(t.starts_with("▌ workspace x · dashboard"), "{t:?}");
+        assert!(t.contains("group: "), "{t:?}");
+        assert!(t.contains("repo"), "{t:?}");
+        assert!(t.contains("attention"), "{t:?}");
+        assert!(t.trim_end().ends_with("9 repos · 14 workspaces"), "{t:?}");
+    }
+
+    #[test]
+    fn header_names_both_sort_modes() {
+        let t = plain(&header(GroupMode::Repo, SortMode::Recency, None, 120).line);
+        assert!(t.contains("sort: "), "{t:?}");
+        assert!(t.contains("recency"), "{t:?}");
+        assert!(t.contains("status"), "{t:?}");
+    }
+
+    /// Without the echo, `/` gives no feedback and rows disappearing from
+    /// the list have no visible cause.
+    #[test]
+    fn header_echoes_the_active_filter() {
+        let t = plain(&header(GroupMode::Repo, SortMode::Recency, Some("auth"), 100).line);
+        assert!(t.contains("/auth"), "{t:?}");
+        // The echo's own prefix, not a bare `/`, so the assertion tracks
+        // the echo and not some other span that grows a slash later.
+        let bare = plain(&header(GroupMode::Repo, SortMode::Recency, None, 100).line);
+        assert!(!bare.contains("  /"), "{bare:?}");
+    }
+
+    /// `/` with an empty buffer still echoes, so the keypress registers
+    /// before the first character is typed.
+    #[test]
+    fn header_echoes_an_empty_filter() {
+        let t = plain(&header(GroupMode::Repo, SortMode::Recency, Some(""), 100).line);
+        assert!(t.contains("  /"), "{t:?}");
+    }
+
+    /// A long needle is capped at `FILTER_ECHO_MAX`; with room to spare
+    /// the counts still fit beside it.
+    #[test]
+    fn header_truncates_a_long_filter_and_keeps_counts() {
+        let needle = "x".repeat(80);
+        let width = 120u16;
+        let out = header(GroupMode::Repo, SortMode::Recency, Some(&needle), width);
+        let t = plain(&out.line);
+        assert!(
+            out.line.width() <= usize::from(width),
+            "width {width}: {t:?}"
+        );
+        assert!(t.contains("  /"), "echo present: {t:?}");
+        assert!(t.contains('…'), "needle truncates: {t:?}");
+        assert!(
+            t.trim_end().ends_with("9 repos · 14 workspaces"),
+            "counts kept: {t:?}"
+        );
+    }
+
+    /// Where the engine deliberately parts from the legacy painter. Legacy
+    /// budgeted the needle against the room actually left on the line, so a
+    /// long needle shrank and the counts always survived. The engine caps
+    /// the needle at `FILTER_ECHO_MAX` and, since `[filter]` sits at the
+    /// default priority and never drops, pays for it out of `[counts]`
+    /// (50) instead — and below about 80 columns the line runs long and is
+    /// clipped by whatever renders it. The rationale is unchanged: a needle
+    /// with no visible cause is worse than a truncated one.
+    #[test]
+    fn a_long_filter_costs_the_counts_rather_than_being_shortened_further() {
+        let needle = "x".repeat(80);
+        let out = header(GroupMode::Repo, SortMode::Recency, Some(&needle), 100);
+        let t = plain(&out.line);
+        assert!(t.contains('…'), "{t:?}");
+        assert!(!t.contains("9 repos"), "the counts pay for the echo: {t:?}");
+        assert_eq!(out.line.width(), 100);
+
+        // Narrower still: nothing droppable is left and the echo itself is
+        // load-bearing, so the line overflows and the caller clips it.
+        let out = header(GroupMode::Repo, SortMode::Recency, Some(&needle), 60);
+        assert!(out.line.width() > 60, "{:?}", plain(&out.line));
+    }
+
+    /// `[sort]`'s priority 30 beats `[counts]`'s 50, so the sort tabs go
+    /// first: the order stays reachable via `o` and the footer hint,
+    /// whereas the counts have no other home on this line. 120 holds
+    /// everything; 80 holds the counts but not the tabs on top of them.
+    #[test]
+    fn header_sheds_the_sort_tabs_before_the_counts() {
+        let at = |w| plain(&header(GroupMode::Repo, SortMode::Recency, None, w).line);
+        assert!(at(120).contains("sort: "), "{:?}", at(120));
+        assert!(at(120).contains("9 repos · 14 workspaces"), "{:?}", at(120));
+        assert!(!at(80).contains("sort: "), "{:?}", at(80));
+        assert!(at(80).contains("9 repos · 14 workspaces"), "{:?}", at(80));
+        // The brand and group tabs are load-bearing and survive both.
+        assert!(at(80).starts_with("▌ workspace x"), "{:?}", at(80));
+        assert!(at(80).contains("group: "), "{:?}", at(80));
+    }
+
+    /// Anything past `width` would be clipped off-screen by ratatui, so
+    /// the rendered width — not the concatenated text — is the property
+    /// that matters.
+    #[test]
+    fn header_never_overflows_a_narrow_terminal() {
+        for width in [100u16, 90, 80, 60] {
+            for filter in [None, Some("auth")] {
+                let out = header(GroupMode::Repo, SortMode::Recency, filter, width);
+                assert!(
+                    out.line.width() <= usize::from(width),
+                    "width {width} filter {filter:?} overflowed to {}: {:?}",
+                    out.line.width(),
+                    plain(&out.line)
+                );
+            }
+        }
+    }
+
+    /// The active tab is the one painted on the selection background —
+    /// reading the cells is what distinguishes it, since every mode's
+    /// label is always drawn.
+    #[test]
+    fn header_highlights_the_active_group_and_sort_modes() {
+        let theme = Theme::wsx();
+        let check = |group: GroupMode, sort: SortMode, active: &str, inactive: &str| {
+            let out = header(group, sort, None, 120);
+            let t = plain(&out.line);
+            let buf = render_line(&out.line, 120);
+            assert_eq!(
+                buf[(col_of(&t, active), 0)].bg,
+                theme.selected_bg,
+                "{active} is active in {t:?}"
+            );
+            assert_ne!(
+                buf[(col_of(&t, inactive), 0)].bg,
+                theme.selected_bg,
+                "{inactive} is inactive in {t:?}"
+            );
+        };
+        check(GroupMode::Repo, SortMode::Recency, "recency", "status");
+        check(GroupMode::Attention, SortMode::Status, "status", "recency");
+        check(
+            GroupMode::Repo,
+            SortMode::Recency,
+            "repo attention",
+            "attention",
+        );
+        check(GroupMode::Attention, SortMode::Recency, "attention", "repo");
     }
 }

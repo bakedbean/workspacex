@@ -1,5 +1,6 @@
-//! The bar composers: build each concrete bar (dashboard footer, attached
-//! top/bottom) from its segment map, plus the shared inputs types they take.
+//! The bar composers: build each concrete bar (dashboard header/footer,
+//! attached top/bottom, detail pane) from its segment map, plus the shared
+//! inputs types they take.
 
 use super::format;
 use super::providers;
@@ -7,6 +8,8 @@ use super::render::{Rendered, eval, render_bar};
 use super::segment::{Hit, Segment, SegmentConfig, SegmentMap};
 use super::style;
 use crate::config::theme_file::BarSpecs;
+use crate::ui::dashboard::layout::GroupMode;
+use crate::ui::dashboard::sort::SortMode;
 use crate::ui::theme::Theme;
 
 /// The segment config by name. Every name in `SEGMENTS` is present because
@@ -75,6 +78,68 @@ pub fn dashboard_footer(
     );
     render_bar(
         &specs.dashboard_footer,
+        &segments,
+        &specs.segments,
+        width,
+        &resolver,
+    )
+}
+
+pub struct DashboardHeaderInputs<'a> {
+    pub group: GroupMode,
+    pub sort: SortMode,
+    pub repos: usize,
+    pub workspaces: usize,
+    /// The live filter needle, or `None` when no filter is active. `Some("")`
+    /// is an armed-but-empty filter and still echoes a bare `/`.
+    pub filter: Option<&'a str>,
+    /// `$brand`'s `$view`: which view this header belongs to ("dashboard").
+    pub view: &'a str,
+}
+
+/// The dashboard's top line: wordmark, group and sort tabs, the live
+/// filter echo, and the repo/workspace counts flush right. Display only —
+/// none of its segments carry a click hit.
+pub fn dashboard_header(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: &DashboardHeaderInputs<'_>,
+    width: u16,
+) -> Rendered {
+    let resolver = specs.resolver(theme);
+    let mut segments = SegmentMap::new();
+    put(
+        &mut segments,
+        "brand",
+        providers::brand(cfg(specs, "brand"), inputs.view, &resolver),
+    );
+    put(
+        &mut segments,
+        "group",
+        providers::group(cfg(specs, "group"), inputs.group, theme, &resolver),
+    );
+    put(
+        &mut segments,
+        "sort",
+        providers::sort(cfg(specs, "sort"), inputs.sort, theme, &resolver),
+    );
+    put(
+        &mut segments,
+        "filter",
+        providers::filter(cfg(specs, "filter"), inputs.filter, theme, &resolver),
+    );
+    put(
+        &mut segments,
+        "counts",
+        providers::counts(
+            cfg(specs, "counts"),
+            inputs.repos,
+            inputs.workspaces,
+            &resolver,
+        ),
+    );
+    render_bar(
+        &specs.dashboard_header,
         &segments,
         &specs.segments,
         width,

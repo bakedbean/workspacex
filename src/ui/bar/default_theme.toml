@@ -12,7 +12,7 @@
 #                     [palette] names, theme tokens: dim path code bg_alt bg_soft
 #                     ok warn err attention merged header_fg selected_fg
 #                     selected_bg question stalled waiting thinking complete
-#                     idle brand
+#                     idle brand wordmark
 #
 # Bars take `format`, `right_format` (flush right), `style`, `fill`,
 # `fill_style`. When a bar is too narrow, segments given a `priority` below
@@ -35,6 +35,13 @@ format = "$keys"
 # left as an orphaned gap) when the terminal is too narrow for both.
 right_format = "($version  )$usage"
 fill = " "
+
+# The dashboard's top line: wordmark, group and sort tabs, the live filter
+# echo, and the repo/workspace counts flush right.
+[dashboard_header]
+format       = "$brand      $group(   $sort)(  $filter)"
+right_format = "$counts"
+fill         = " "
 
 [attached_top]
 format = "($agent_bar )$workspace(   $attention)"
@@ -60,6 +67,33 @@ fill       = "─"
 fill_style = "fg:dim"
 
 # --- segments ---------------------------------------------------------
+
+# The wordmark on the dashboard's top line. Variables: $symbol $name $mark $view
+[brand]
+symbol = "▌"
+format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold)[ · $view](fg:dim)"
+
+# Variables: $label $tabs (the active tab is highlighted)
+[group]
+format = "[$label ](fg:path)$tabs"
+
+# Variables: $label $tabs (the active tab is highlighted)
+[sort]
+format   = "[$label ](fg:path)$tabs"
+# First to go on a narrow header: the order stays discoverable from `o` and
+# the footer hint, whereas the counts have no other home on that line.
+priority = 30
+
+# The live filter echo. Variables: $needle (absent when no filter is active)
+# Never dropped, only truncated: a needle with no visible cause is worse
+# than a shortened one, since rows are missing and nothing says why.
+[filter]
+format = "[/$needle]($style)"
+
+# Variables: $repos $workspaces
+[counts]
+format   = "[$repos repos · $workspaces workspaces](fg:path)"
+priority = 50
 
 # Key hints: one pill per binding. Variables: $key $label
 [keys]

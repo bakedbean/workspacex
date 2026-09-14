@@ -106,6 +106,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         &mut app.dashboard,
         app.tick,
         &app.theme,
+        &app.bar_specs,
     );
     app.dashboard_pr_rects = click_targets.pr_chips;
     app.dashboard_repo_pr_rects = click_targets.repo_pr_links;

@@ -113,7 +113,8 @@ pub struct SegmentConfig {
     pub symbol: Option<String>,
     pub format: Vec<Node>,
     pub disabled: bool,
-    /// Lower values are dropped first from the right side on overflow.
+    /// Below 100 the segment is droppable on overflow, lowest first and
+    /// from either side; 100 (the default) never drops. See `render_bar`.
     pub priority: u32,
     /// Separator between items of a multi-item segment.
     pub separator: String,

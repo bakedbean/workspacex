@@ -160,7 +160,7 @@ pub fn render(
             Constraint::Length(1), // footer
         ])
         .split(area);
-    let _ = render_without_footer(f, chunks[0], inputs, state, tick, theme);
+    let _ = render_without_footer(f, chunks[0], inputs, state, tick, theme, specs);
     let _ = render_footer(
         f,
         chunks[1],
@@ -236,6 +236,7 @@ pub fn render_without_footer(
     state: &mut DashboardState,
     tick: u32,
     theme: &Theme,
+    specs: &crate::config::theme_file::BarSpecs,
 ) -> ListClickTargets {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -251,15 +252,22 @@ pub fn render_without_footer(
     let global_counts = StatusCounts::from_iter(inputs.workspaces.iter().map(|w| w.status));
 
     f.render_widget(
-        Paragraph::new(layout::top_chrome(
-            state.group_mode,
-            state.sort_mode,
-            inputs.repos.len(),
-            inputs.workspaces.len(),
-            state.filter.as_deref(),
-            chunks[0].width as usize,
-            theme,
-        )),
+        Paragraph::new(
+            crate::ui::bar::dashboard_header(
+                specs,
+                theme,
+                &crate::ui::bar::DashboardHeaderInputs {
+                    group: state.group_mode,
+                    sort: state.sort_mode,
+                    repos: inputs.repos.len(),
+                    workspaces: inputs.workspaces.len(),
+                    filter: state.filter.as_deref(),
+                    view: "dashboard",
+                },
+                chunks[0].width,
+            )
+            .line,
+        ),
         chunks[0],
     );
     f.render_widget(

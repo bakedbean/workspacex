@@ -281,6 +281,7 @@ impl Theme {
             "complete" => self.complete,
             "idle" => self.idle,
             "brand" => BRAND_ACCENT,
+            "wordmark" => BRAND_WORDMARK,
             _ => return None,
         })
     }

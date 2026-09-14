@@ -6,6 +6,7 @@
 
 pub mod detail_bar_config;
 pub mod name_color;
+pub mod theme_file;
 pub mod usage_window;
 
 use std::path::PathBuf;

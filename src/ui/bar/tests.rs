@@ -718,3 +718,109 @@ mod bottom_tests {
         assert!(t.ends_with("X #42 open"), "{t:?}");
     }
 }
+
+/// Guards the three places a segment must agree: `registry::SEGMENTS`
+/// (its declaration), `providers.rs` (the function that renders it), and
+/// `bars.rs` (the composer that wires the provider into a segment map).
+/// Add a segment to `providers.rs`/`bars.rs` without registering it — or
+/// register it without wiring it in — and this fails.
+#[cfg(test)]
+mod segment_registry_drift_tests {
+    use super::*;
+    use crate::commands::pinned::PinnedCommand;
+    use crate::config::theme_file::bundled_default;
+    use crate::data::store::AgentInstanceId;
+    use crate::git::DiffStats;
+    use crate::git::forge::{BranchLifecycle, ReviewDecision};
+    use crate::pty::session::AgentKind;
+    use crate::ui::attached::ChipPr;
+    use crate::ui::bar::registry::SEGMENTS;
+    use crate::ui::detail_modules::session_summary::ChipModelTokens;
+    use crate::ui::updates_bar::AttentionLine;
+    use std::collections::BTreeSet;
+
+    /// Every input present at once: two agents, a PR with a review
+    /// verdict, a diff, running procs, model/tokens, pins, an attention
+    /// line, an agent bar, and a version/usage graph — so every segment's
+    /// provider has what it needs to produce output.
+    #[test]
+    fn attached_segments_cover_every_registered_segment() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let resolver = specs.resolver(&theme);
+
+        let pinned = vec![PinnedCommand {
+            label: "PR".into(),
+            command: "/pr".into(),
+        }];
+        let agents = vec![
+            (
+                AgentInstanceId(1),
+                AgentKind::Claude,
+                "claude".into(),
+                Some('q'),
+            ),
+            (
+                AgentInstanceId(2),
+                AgentKind::Codex,
+                "codex".into(),
+                Some('w'),
+            ),
+        ];
+        let activity: Vec<u32> = (0..24).collect();
+        let attention = Some(AttentionLine {
+            line: ratatui::text::Line::from("x"),
+            segments: Vec::new(),
+            more: None,
+        });
+
+        let inputs = AttachedInputs {
+            repo: "wsx",
+            name: "foo",
+            version: "0.1.0",
+            window_label: "24h",
+            activity: &activity,
+            agent: Some(AgentKind::Claude),
+            attention,
+            pinned: &pinned,
+            procs: 3,
+            diff: Some(DiffStats {
+                added: 12,
+                removed: 3,
+            }),
+            pr: Some(ChipPr {
+                lifecycle: BranchLifecycle::PrOpen,
+                number: 42,
+                review: Some(ReviewDecision::Approved),
+                unresolved: Some(1),
+            }),
+            model_tokens: Some(ChipModelTokens {
+                model: Some("opus".into()),
+                tokens: "45k/200k".into(),
+                warn: false,
+            }),
+            agents: &agents,
+            active_agent: Some(AgentInstanceId(1)),
+        };
+
+        let segments = attached_segments(&specs, &theme, inputs, &resolver);
+        let got: BTreeSet<&str> = segments.keys().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = SEGMENTS.iter().map(|d| d.name).collect();
+        assert_eq!(
+            got, expected,
+            "attached_segments's output must cover every registered segment name"
+        );
+    }
+
+    /// The dashboard footer's three segments (`keys`, `version`, `usage`)
+    /// must all be registered names, not private to `dashboard_footer`.
+    #[test]
+    fn dashboard_footer_segments_are_all_registered_names() {
+        for name in ["keys", "version", "usage"] {
+            assert!(
+                SEGMENTS.iter().any(|d| d.name == name),
+                "dashboard_footer's `{name}` segment must be in registry::SEGMENTS"
+            );
+        }
+    }
+}

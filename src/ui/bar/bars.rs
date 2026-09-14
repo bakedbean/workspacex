@@ -113,7 +113,9 @@ pub(crate) struct AttachedInputs<'a> {
 
 /// Build every attached segment once, so a segment that appears in both
 /// bars (or moves between them) renders identically and keeps its hit.
-fn attached_segments(
+/// `pub(super)`, not private: `tests.rs`'s registry-drift test calls it
+/// directly to confirm its output covers every `registry::SEGMENTS` name.
+pub(super) fn attached_segments(
     specs: &BarSpecs,
     theme: &Theme,
     inputs: AttachedInputs<'_>,

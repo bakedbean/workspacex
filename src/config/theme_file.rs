@@ -6,6 +6,7 @@
 //! See `docs/superpowers/specs/2026-09-13-bar-theming-design.md`.
 
 use crate::ui::bar::format::{self, Node};
+use crate::ui::bar::registry::{SEGMENTS, segment_def, singleton_names};
 use crate::ui::bar::render::BarSpec;
 use crate::ui::bar::segment::SegmentConfig;
 use crate::ui::bar::style::{self, ColorRef, Resolver, StyleSpec};
@@ -16,89 +17,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 pub const DEFAULT_TOML: &str = include_str!("../ui/bar/default_theme.toml");
-
-/// What a segment's own `format` may reference.
-pub struct SegmentDef {
-    pub name: &'static str,
-    pub vars: &'static [&'static str],
-    pub style_vars: &'static [&'static str],
-}
-
-const STYLE: &[&str] = &["style"];
-
-pub const SEGMENTS: &[SegmentDef] = &[
-    SegmentDef {
-        name: "keys",
-        vars: &["key", "label"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "version",
-        vars: &["version"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "usage",
-        vars: &["label", "spark"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "agent_bar",
-        vars: &["symbol"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "workspace",
-        vars: &["repo", "name"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "attention",
-        vars: &["items"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "pins",
-        vars: &["index", "label"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "agents",
-        vars: &["symbol", "label", "key"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "model_tokens",
-        vars: &["model", "tokens"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "procs",
-        vars: &["symbol", "count"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "diff",
-        vars: &["added", "removed"],
-        style_vars: STYLE,
-    },
-    SegmentDef {
-        name: "pr",
-        vars: &["symbol", "number", "label", "mark"],
-        style_vars: &["style", "mark_style"],
-    },
-];
-
-pub fn segment_def(name: &str) -> Option<&'static SegmentDef> {
-    SEGMENTS.iter().find(|d| d.name == name)
-}
-
-/// Segments whose hit carries exactly one click target that isn't indexed
-/// by item (unlike `pins`/`agents`/`keys`, which record a hit per item and
-/// so tolerate repeats): placing one of these in two formats at once means
-/// the theme draws two chips but only the last-routed one is clickable.
-/// `resolve` rejects a theme that does this.
-pub const SINGLETON_SEGMENTS: &[&str] = &["pr", "procs", "usage", "attention"];
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ThemeFile {
@@ -391,9 +309,10 @@ fn resolve_bar(
     }
 }
 
-/// Reject a `SINGLETON_SEGMENTS` name placed more than once among the bars
-/// that would each try to route its one click target — the attached pair
-/// together, and the dashboard footer's own two sides.
+/// Reject a singleton segment (see [`crate::ui::bar::registry::SegmentDef::singleton`])
+/// placed more than once among the bars that would each try to route its
+/// one click target — the attached pair together, and the dashboard
+/// footer's own two sides.
 fn check_singletons(
     dashboard: &BarSpec,
     top: &BarSpec,
@@ -413,7 +332,7 @@ fn check_singletons(
         &bottom.format,
         &bottom.right_format,
     ];
-    for name in SINGLETON_SEGMENTS {
+    for name in singleton_names() {
         let count = count_var(&attached_nodes, name);
         if count > 1 {
             errors.push(error(
@@ -425,7 +344,7 @@ fn check_singletons(
         }
     }
     let footer_nodes: [&[Node]; 2] = [&dashboard.format, &dashboard.right_format];
-    for name in SINGLETON_SEGMENTS {
+    for name in singleton_names() {
         let count = count_var(&footer_nodes, name);
         if count > 1 {
             errors.push(error(

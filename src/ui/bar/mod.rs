@@ -7,6 +7,7 @@
 pub mod bars;
 pub mod format;
 pub mod providers;
+pub mod registry;
 pub mod render;
 pub mod segment;
 pub mod style;

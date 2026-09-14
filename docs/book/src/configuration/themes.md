@@ -23,6 +23,19 @@ change the base palette or the appearance of other UI elements.
 
 ## Bar theme file
 
+A complete, ready-to-use example lives in the repo at
+`docs/examples/theme-starship.toml`: powerline blocks in five stepped greys
+with orange accents, in the style of a starship prompt. Copy it to
+`~/.config/wsx/theme.toml`, turn the feature on, and validate:
+
+```
+cp docs/examples/theme-starship.toml ~/.config/wsx/theme.toml
+wsx config set bar_theme on
+wsx theme check
+```
+
+It needs a Nerd Font (for the `` / `` caps) and a truecolor terminal.
+
 The bar theme is opt-in. Turn it on with
 
 ```

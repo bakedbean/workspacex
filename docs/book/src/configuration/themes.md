@@ -31,12 +31,13 @@ Ready-to-use examples live in the repo under `docs/examples/`:
 | `theme-rose-pine.toml` | Rosé Pine (main) in an airline layout. |
 | `theme-rose-pine-moon.toml` | Rosé Pine Moon, the darker and more muted variant, same layout. |
 | `theme-nord.toml` | Nord, same layout. |
+| `theme-nord0.toml` | Nord one step darker: base blocks on nord0, so the middle of each bar melts into a nord terminal background. |
 | `theme-jellybeans.toml` | Jellybeans, same layout. |
 
-The four airline files share one arrangement and differ only by palette: a
+The airline files share one arrangement and differ only by palette: a
 bright "mode" block at each outer edge, a mid-toned block beside it, and a
 base-toned block toward the middle, so the eye lands on the edges first.
-Nord and Jellybeans pair with `wsx config set theme nord` or
+The two Nord files and Jellybeans pair with `wsx config set theme nord` or
 `wsx config set theme jellybeans` so the rest of the UI matches; Rosé Pine
 has no built-in base palette, so leave the default `wsx`.
 

@@ -35,6 +35,10 @@ wsx theme check
 ```
 
 It needs a Nerd Font (for the `` / `` caps) and a truecolor terminal.
+Those caps are private-use characters (U+E0B0 and U+E0B2), so copy the file
+as bytes (`cp`, `scp`, a dotfiles repo) rather than pasting it through a
+chat or editor that strips unknown glyphs; if they go missing, `wsx theme
+check` still passes but the blocks render with flat edges.
 
 The bar theme is opt-in. Turn it on with
 

@@ -50,12 +50,13 @@ fill         = " "
 format       = "[($agent_bar )$workspace ](bg:orange fg:black bold)[](fg:orange bg:ash)[( $attention )](bg:ash fg:orange)[](fg:ash)"
 fill         = " "
 
-# Right chain, orange at the edge then the greys lightening toward the
-# middle: pr on orange, diff on ash, procs on charcoal, model + tokens on
+# Left chain as in the footer: orange stub, key hints on ash, then pinned
+# commands on charcoal. Right chain, orange at the edge then the greys
+# lightening toward the middle: pr on orange, diff on ash, procs on charcoal, model + tokens on
 # slate, agents on grey. Optional segments get their own block so every
 # step shows; a missing one collapses to its wedge.
 [attached_bottom]
-format       = "[ $keys ](bg:orange fg:black)[](fg:orange bg:ash)[( $pins )](bg:ash fg:orange)[](fg:ash)"
+format       = "[  ](bg:orange)[](fg:orange bg:ash)[ $keys ](bg:ash fg:orange)[](fg:ash bg:charcoal)[( $pins )](bg:charcoal fg:orange)[](fg:charcoal)"
 right_format = "[](fg:grey)[( $agents )](bg:grey fg:cream)[](fg:slate bg:grey)[( $model_tokens )](bg:slate fg:cream)[](fg:charcoal bg:slate)[( $procs )](bg:charcoal fg:orange)[](fg:ash bg:charcoal)[( $diff )](bg:ash fg:orange)[](fg:orange bg:ash)[( $pr )](bg:orange fg:black)"
 fill         = " "
 
@@ -85,7 +86,7 @@ format = "[$version]()"
 format = "[$label $spark]()"
 
 [keys]
-format    = "[$key](bold) [$label]()"
+format    = "[$key](fg:cream bold) [$label]()"
 separator = "  "
 
 [pins]

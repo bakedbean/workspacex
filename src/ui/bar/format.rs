@@ -282,7 +282,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs style grammar (Task 3)"]
     fn bad_style_string_is_a_parse_error_at_the_style() {
         let err = parse("[x](fg:)").unwrap_err();
         assert_eq!(err.offset, 4);

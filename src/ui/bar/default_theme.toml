@@ -14,11 +14,14 @@
 #                     selected_bg question stalled waiting thinking complete
 #                     idle brand
 #
-# Bars take `format`, `right_format` (flush right; segments are dropped by
-# `priority`, lowest first, when the bar is too narrow), `style`, `fill`,
-# `fill_style`. Segments take `format`, `style` (merged over the segment's
-# own state color, available as $style), `symbol`, `disabled`, `priority`,
-# and `separator` (between items of keys/pins/agents).
+# Bars take `format`, `right_format` (flush right), `style`, `fill`,
+# `fill_style`. When a bar is too narrow, segments given a `priority` below
+# the default 100 drop — lowest first, from either side — until it fits;
+# segments at the default never drop, so the left side is clipped and the
+# right omitted if nothing droppable is left. Segments take `format`,
+# `style` (merged over the segment's own state color, available as $style),
+# `symbol`, `disabled`, `priority`, and `separator` (between items of
+# keys/pins/agents).
 #
 # The evaluator always keeps one blank cell between a nonempty `format` and
 # a nonempty `right_format`, so `right_format` groups need only one leading
@@ -73,6 +76,10 @@ priority = 50
 # Usage sparkline. Variables: $label $spark
 [usage]
 format = "[$label $spark](fg:path)"
+# Droppable, but only after $version: on a narrow dashboard footer the
+# version string goes first and the graph is the last right-side element
+# standing.
+priority = 60
 
 # Agent identity bar; $style carries the agent's color. Variables: $symbol
 [agent_bar]

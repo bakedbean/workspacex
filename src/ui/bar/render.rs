@@ -113,10 +113,30 @@ fn fill_run(fill: &str, cells: u16, trailing_blank: bool) -> String {
     out
 }
 
-/// Keep the left side intact and align the right side flush right. Nonempty
-/// sides require a blank cell at the right edge of the intervening fill.
-/// Drop lower-priority right variables first, reevaluating conditional groups.
-/// If only overflowing literals remain, omit the right side altogether.
+/// A segment's effective priority: the default is [`DEFAULT_PRIORITY`], and
+/// only something explicitly ranked below it may be dropped on overflow.
+fn priority(configs: &HashMap<String, SegmentConfig>, name: &str) -> u32 {
+    configs.get(name).map_or(DEFAULT_PRIORITY, |c| c.priority)
+}
+
+/// The priority a segment has when its `[segment]` table sets none. Segments
+/// at this rank never drop; only an explicitly lower number is droppable.
+pub const DEFAULT_PRIORITY: u32 = 100;
+
+/// Align the right side flush right, keeping a blank cell at the right edge
+/// of the intervening fill whenever both sides are nonempty.
+///
+/// When the two sides don't fit, drop the lowest-priority DROPPABLE segment
+/// — one whose effective `priority` is below [`DEFAULT_PRIORITY`] — from
+/// whichever side it sits on, then reevaluate BOTH sides so conditional
+/// groups shed their separators along with it, and repeat until the sides
+/// fit or nothing droppable is left. Ties go to the lowest priority first
+/// and then to the first occurrence, scanning `format` before
+/// `right_format`, depth-first.
+///
+/// If the sides still don't fit after that (default-priority segments and
+/// bare literals can't be thinned), the right side is omitted altogether
+/// and the left side is left overlong for the caller to clip.
 pub fn render_bar(
     spec: &BarSpec,
     segments: &SegmentMap,
@@ -125,34 +145,38 @@ pub fn render_bar(
     resolver: &Resolver,
 ) -> Rendered {
     let base = resolver.resolve(&spec.style).unwrap_or_default();
-    let (left, _) = eval(&spec.format, segments, resolver, base);
+    let (mut left, _) = eval(&spec.format, segments, resolver, base);
     let (mut right, _) = eval(&spec.right_format, segments, resolver, base);
-    let fits = |right: &Segment| {
+    let fits = |left: &Segment, right: &Segment| {
         usize::from(left.width)
             + usize::from(right.width)
             + usize::from(!left.is_empty() && !right.is_empty())
             <= usize::from(width)
     };
-    if !right.is_empty() && !fits(&right) {
-        let names = format::vars(&spec.right_format);
-        let mut excluded = Vec::new();
-        while !right.is_empty() && !fits(&right) {
+    if !fits(&left, &right) {
+        // `format` before `right_format` — the tie-break order.
+        let mut names = format::vars(&spec.format);
+        names.extend(format::vars(&spec.right_format));
+        let mut excluded: Vec<&str> = Vec::new();
+        while !fits(&left, &right) {
             let victim = names
                 .iter()
                 .copied()
                 .filter(|name| {
                     !excluded.contains(name)
+                        && priority(configs, name) < DEFAULT_PRIORITY
                         && segments
                             .get(*name)
                             .is_some_and(|segment| !segment.is_empty())
                 })
-                .min_by_key(|name| configs.get(*name).map_or(100, |config| config.priority));
-            let Some(victim) = victim else {
-                right = Segment::default();
-                break;
-            };
+                .min_by_key(|name| priority(configs, name));
+            let Some(victim) = victim else { break };
             excluded.push(victim);
+            left = eval_excluding(&spec.format, segments, resolver, base, &excluded).0;
             right = eval_excluding(&spec.right_format, segments, resolver, base, &excluded).0;
+        }
+        if !right.is_empty() && !fits(&left, &right) {
+            right = Segment::default();
         }
     }
 
@@ -456,53 +480,106 @@ mod tests {
         );
     }
 
+    /// Dropping a segment removes every occurrence of it, on either side.
     #[test]
-    fn suppression_is_right_only_and_removes_all_repeated_occurrences() {
+    fn suppression_removes_all_repeated_occurrences() {
         let theme = Theme::wsx();
         let palette = HashMap::new();
         let resolver = Resolver::new(&palette, &theme);
+        let configs = HashMap::from([("a".to_string(), cfg(10))]);
         let vars = map(&[
             ("a", hit_seg("A", Hit::Pr)),
             ("b", hit_seg("B", Hit::Procs)),
         ]);
         let out = render_bar(
-            &spec("$a", "($a )($a )$b", " "),
+            &spec("x", "($a )($a )$b", " "),
             &vars,
-            &HashMap::new(),
+            &configs,
             5,
             &resolver,
         );
-        assert_eq!(text(&out.line), "A   B");
+        assert_eq!(text(&out.line), "x   B");
         assert_eq!(
             out.hits,
-            vec![
-                HitSpan {
-                    start_col: 0,
-                    width: 1,
-                    hit: Hit::Pr
-                },
-                HitSpan {
-                    start_col: 4,
-                    width: 1,
-                    hit: Hit::Procs
-                }
-            ]
+            vec![HitSpan {
+                start_col: 4,
+                width: 1,
+                hit: Hit::Procs
+            }]
         );
     }
 
+    /// The default priority is 100, and 100 never drops: `$b` has no config
+    /// at all, so it stays even though it is what overflows; the explicitly
+    /// lower-priority `$a` goes instead.
     #[test]
-    fn unspecified_priority_is_one_hundred() {
+    fn unspecified_priority_is_one_hundred_and_never_drops() {
         let theme = Theme::wsx();
         let palette = HashMap::new();
         let resolver = Resolver::new(&palette, &theme);
         let vars = map(&[("a", seg("A")), ("b", seg("B"))]);
-        let configs = HashMap::from([("a".to_string(), cfg(101))]);
+        let configs = HashMap::from([("a".to_string(), cfg(99))]);
         let out = render_bar(&spec("x", "$a$b", " "), &vars, &configs, 3, &resolver);
-        assert_eq!(text(&out.line), "x A");
+        assert_eq!(text(&out.line), "x B");
+        // At the default priority neither may drop, so the whole right side
+        // is omitted rather than thinned.
+        let configs = HashMap::from([("a".to_string(), cfg(100))]);
+        let out = render_bar(&spec("x", "$a$b", " "), &vars, &configs, 3, &resolver);
+        assert_eq!(text(&out.line), "x  ");
     }
 
+    /// A droppable segment drops from the `format` side too, and does so
+    /// before a right-side segment that ranks above it.
     #[test]
-    fn left_is_never_dropped_even_at_zero_width() {
+    fn a_droppable_left_segment_drops_before_a_higher_priority_right_one() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let configs = HashMap::from([("a".to_string(), cfg(10)), ("b".to_string(), cfg(20))]);
+        let vars = map(&[("a", seg("AAAA")), ("b", hit_seg("BB", Hit::Pr))]);
+        let out = render_bar(&spec("L($a)", "$b", " "), &vars, &configs, 5, &resolver);
+        assert_eq!(text(&out.line), "L  BB");
+        assert_eq!(
+            out.hits,
+            vec![HitSpan {
+                start_col: 3,
+                width: 2,
+                hit: Hit::Pr
+            }]
+        );
+    }
+
+    /// A left segment at the default priority overflows the bar (the caller
+    /// clips it) rather than dropping, even after the droppable right-side
+    /// segment that could have made room has already gone.
+    #[test]
+    fn a_default_priority_left_segment_is_clipped_not_dropped() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let configs = HashMap::from([("b".to_string(), cfg(20))]);
+        let vars = map(&[("a", seg("llllllll")), ("b", seg("BB"))]);
+        let out = render_bar(&spec("$a", "$b", " "), &vars, &configs, 4, &resolver);
+        assert_eq!(text(&out.line), "llllllll");
+        assert_eq!(out.line.width(), 8, "wider than the bar; the caller clips");
+    }
+
+    /// Equal priorities break toward the first occurrence, and `format`
+    /// comes before `right_format`.
+    #[test]
+    fn equal_priorities_drop_the_left_occurrence_first() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let configs = HashMap::from([("a".to_string(), cfg(30)), ("b".to_string(), cfg(30))]);
+        let vars = map(&[("a", seg("AA")), ("b", seg("BB"))]);
+        let out = render_bar(&spec("L($a)", "$b", " "), &vars, &configs, 5, &resolver);
+        assert_eq!(text(&out.line), "L  BB");
+    }
+
+    /// Default-priority left segments are never dropped, only clipped.
+    #[test]
+    fn default_priority_left_segments_are_never_dropped() {
         let theme = Theme::wsx();
         let palette = HashMap::new();
         let resolver = Resolver::new(&palette, &theme);

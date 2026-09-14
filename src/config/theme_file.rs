@@ -274,7 +274,9 @@ fn resolve_segment(
         symbol: tbl.symbol.clone(),
         format: nodes,
         disabled: tbl.disabled.unwrap_or(false),
-        priority: tbl.priority.unwrap_or(100),
+        priority: tbl
+            .priority
+            .unwrap_or(crate::ui::bar::render::DEFAULT_PRIORITY),
         separator: tbl.separator.clone().unwrap_or_else(|| "  ".to_string()),
     })
 }

@@ -14,6 +14,13 @@ Activity column for running sessions:
 - `off` — no current session
 - `resumable` — prior session exists, not currently running
 
+### Multiple agents
+
+A running non-primary agent that has produced terminal output within the last
+2 seconds keeps the dashboard workspace in `thinking`, with an animated spinner,
+even when the primary is idle or complete. Quiet or exited peers do not keep it
+spinning. A primary question or stalled state still takes precedence.
+
 ### Activity sub-line
 
 Below each workspace row, wsx shows the most recent event from claude's

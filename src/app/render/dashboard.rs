@@ -727,6 +727,90 @@ mod build_row_inputs_tests {
         build_row_inputs(app, workspace, crate::util::time::now_ms(), true)
     }
 
+    #[test]
+    fn row_animates_while_a_peer_works_after_the_primary_finishes() {
+        use crate::activity::events::{StopReason, WorkspaceEvents};
+        use crate::ui::dashboard::{row, status::Status};
+        use std::sync::atomic::Ordering;
+
+        let mut app = test_app();
+        let ws = app.test_workspace("peer-activity");
+        let primary = app
+            .store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        // Same-kind peers must be distinguished by instance, not agent kind.
+        let peer = app
+            .store
+            .add_workspace_agent(ws, AgentKind::Claude)
+            .unwrap();
+        app.refresh().unwrap();
+        app.test_spawn_session(primary.id, SessionStatus::Running { pid: 1 });
+        app.test_spawn_session(peer.id, SessionStatus::Running { pid: 2 });
+        app.workspace_events.insert(
+            ws,
+            WorkspaceEvents {
+                last_stop_reason: Some(StopReason::EndTurn),
+                ..Default::default()
+            },
+        );
+        let session = app.sessions.get(peer.id).unwrap();
+        assert_eq!(row_inputs(&app, ws).status, Status::Complete);
+
+        session
+            .activity_ms
+            .store(crate::util::time::now_ms_u64(), Ordering::Relaxed);
+        let inputs = row_inputs(&app, ws);
+        assert_eq!(inputs.status, Status::Thinking);
+        let theme = crate::ui::theme::Theme::wsx();
+        for (tick, glyph) in [(0, '⠋'), (1, '⠙')] {
+            let line = row::render(&inputs, row::ColumnWidths::default(), tick, &theme, 120);
+            assert!(line.spans.iter().any(|span| span.content.contains(glyph)));
+        }
+
+        // Quiet peers must not turn a completed workspace into perpetual work.
+        session
+            .activity_ms
+            .store(crate::util::time::now_ms_u64() - 30_000, Ordering::Relaxed);
+        assert_eq!(row_inputs(&app, ws).status, Status::Complete);
+
+        // Recent output cannot keep an exited peer active.
+        session
+            .activity_ms
+            .store(crate::util::time::now_ms_u64(), Ordering::Relaxed);
+        *session.status.write().unwrap() = SessionStatus::Exited { code: 0 };
+        assert_eq!(row_inputs(&app, ws).status, Status::Complete);
+    }
+
+    #[test]
+    fn peer_activity_does_not_hide_a_primary_question() {
+        use crate::activity::events::{StopReason, WorkspaceEvents};
+        use crate::ui::dashboard::status::Status;
+
+        let mut app = test_app();
+        let ws = app.test_workspace("peer-question");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        let peer = app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        app.refresh().unwrap();
+        app.test_spawn_session(peer.id, SessionStatus::Running { pid: 2 });
+        app.sessions.get(peer.id).unwrap().activity_ms.store(
+            crate::util::time::now_ms_u64(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        assert_eq!(row_inputs(&app, ws).status, Status::Thinking);
+        app.workspace_events.insert(
+            ws,
+            WorkspaceEvents {
+                last_stop_reason: Some(StopReason::EndTurn),
+                last_assistant_text: Some("Which approach?".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(row_inputs(&app, ws).status, Status::Question);
+    }
+
     /// A workspace with no live PTY — detached, or every workspace right
     /// after a wsx restart — still has a real last-activity time recorded in
     /// its event log. The row must report it: `ago_secs` is the dashboard's

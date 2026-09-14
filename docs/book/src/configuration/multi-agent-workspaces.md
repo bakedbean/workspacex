@@ -56,6 +56,8 @@ Press `Ctrl-x` then the key (`q`, `w`, `r`, …) to point the focused pane at th
 
 Because agents share the worktree, switching focus is just changing which session your keystrokes go to — there's no branch-swapping or checkout involved.
 
+The model and context-token usage follow the agent in the **focused pane**, including when focus moves between split panes. Each agent's recorded session is tracked independently. If its transcript or usage is unavailable—or an unrecorded session cannot be distinguished from another agent of the same kind—the usage chip is omitted rather than showing another agent's numbers.
+
 ### Inter-agent messaging
 
 Agents can send each other messages — a peer in the same workspace by default, or any agent in another workspace with `--workspace`:

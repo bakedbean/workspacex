@@ -115,12 +115,16 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         .map(|v| v.len() as u32)
         .unwrap_or(0);
 
-    // Model + token usage for the chip row's flush-right block, sourced
-    // from the same events the dashboard SESSION SUMMARY reads, so the
-    // chat-view chip and the detail bar stay in lockstep.
-    let model_tokens = app
-        .workspace_events
-        .get(&focused_id)
+    // Usage belongs to the focused agent, not its workspace. Only the primary
+    // shares the dashboard's event cache; an untracked peer must not borrow it.
+    let focused_events = if app.store.primary_instance_id(focused_id).ok().flatten()
+        == Some(focused_target.instance)
+    {
+        app.workspace_events.get(&focused_id)
+    } else {
+        app.agent_events.get(&focused_target.instance)
+    };
+    let model_tokens = focused_events
         .and_then(crate::ui::detail_modules::session_summary::format_chip_model_tokens);
 
     // Build the agent pill list for the chip row's flush-right block. Only
@@ -402,4 +406,121 @@ pub(super) fn draw_attached_nav_overlay(
         pinned_hint,
         &app.theme,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::activity::events::WorkspaceEvents;
+    use crate::data::store::Store;
+    use crate::pty::session::{AgentKind, SessionStatus};
+    use crate::ui::split::AttachTarget;
+    use crate::ui::{AttachedState, View};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn footer(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(200, 24)).unwrap();
+        terminal.draw(|f| draw_attached(f, app, f.area())).unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, buffer.area.height - 1)].symbol())
+            .collect()
+    }
+
+    #[test]
+    fn attached_footer_tracks_agent_switches_and_split_focus() {
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            std::path::PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
+        let workspace_id = app.test_workspace("footer-untracked");
+        let primary = app
+            .store
+            .add_primary_agent(workspace_id, AgentKind::Claude, 1)
+            .unwrap()
+            .id;
+        let peer = app
+            .store
+            .add_workspace_agent(workspace_id, AgentKind::Claude)
+            .unwrap();
+        app.test_spawn_session(primary, SessionStatus::Running { pid: 1 });
+        app.test_spawn_session(peer.id, SessionStatus::Running { pid: 2 });
+        app.workspace_events.insert(
+            workspace_id,
+            WorkspaceEvents {
+                model_id: Some("claude-opus-4-8".into()),
+                context_tokens: Some(45_000),
+                ..Default::default()
+            },
+        );
+        app.view = View::Attached(AttachedState::single(AttachTarget {
+            workspace_id,
+            instance: primary,
+        }));
+        let primary_footer = footer(&mut app);
+        assert!(primary_footer.contains("opus 4.8"), "{primary_footer}");
+        assert!(primary_footer.contains("45k/200k"), "{primary_footer}");
+
+        app.switch_focused_pane_to(peer.id).unwrap();
+        let peer_footer = footer(&mut app);
+        assert!(!peer_footer.contains("opus 4.8"), "{peer_footer}");
+        assert!(!peer_footer.contains("45k/200k"), "{peer_footer}");
+
+        app.agent_events.insert(
+            peer.id,
+            WorkspaceEvents {
+                model_id: Some("claude-sonnet-4-5".into()),
+                context_tokens: Some(90_000),
+                ..Default::default()
+            },
+        );
+        let peer_footer = footer(&mut app);
+        assert!(peer_footer.contains("sonnet 4.5"), "{peer_footer}");
+        assert!(peer_footer.contains("90k/200k"), "{peer_footer}");
+        assert!(!peer_footer.contains("opus 4.8"), "{peer_footer}");
+
+        // Splitting focuses the new pane. Both agents remain visible, but the
+        // shared footer must follow focus rather than the workspace or first leaf.
+        let View::Attached(state) = &mut app.view else {
+            panic!("expected attached view");
+        };
+        state.split(
+            crate::ui::split::SplitDirection::Horizontal,
+            AttachTarget {
+                workspace_id,
+                instance: primary,
+            },
+        );
+        let primary_footer = footer(&mut app);
+        assert!(primary_footer.contains("opus 4.8"), "{primary_footer}");
+        assert!(primary_footer.contains("45k/200k"), "{primary_footer}");
+        assert!(!primary_footer.contains("sonnet 4.5"), "{primary_footer}");
+
+        app.switch_focused_pane_to(peer.id).unwrap();
+        let peer_footer = footer(&mut app);
+        assert!(peer_footer.contains("sonnet 4.5"), "{peer_footer}");
+        assert!(peer_footer.contains("90k/200k"), "{peer_footer}");
+        assert!(!peer_footer.contains("45k/200k"), "{peer_footer}");
+
+        let codex = app
+            .store
+            .add_workspace_agent(workspace_id, AgentKind::Codex)
+            .unwrap();
+        app.test_spawn_session(codex.id, SessionStatus::Running { pid: 3 });
+        app.agent_events.insert(
+            codex.id,
+            WorkspaceEvents {
+                model_id: Some("gpt-5-codex".into()),
+                context_tokens: Some(77_000),
+                ..Default::default()
+            },
+        );
+        app.switch_focused_pane_to(codex.id).unwrap();
+        let codex_footer = footer(&mut app);
+        assert!(codex_footer.contains("gpt-5-codex"), "{codex_footer}");
+        assert!(codex_footer.contains("77k"), "{codex_footer}");
+        assert!(!codex_footer.contains("90k/200k"), "{codex_footer}");
+    }
 }

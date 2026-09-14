@@ -593,8 +593,9 @@ pub struct App {
     /// Whether `bar_specs` currently comes from the file (the `bar_theme`
     /// setting was on at the last check). False means the bundled default.
     pub theme_active: bool,
-    /// `(mtime, len)` of the theme file at the last check; `None` when absent.
-    pub theme_fingerprint: Option<(std::time::SystemTime, u64)>,
+    /// `(mtime, len, permission mode)` of the theme file at the last check
+    /// (mode is `0` on non-unix); `None` when absent.
+    pub theme_fingerprint: Option<(std::time::SystemTime, u64, u32)>,
     /// `(message, expires_at_ms)` for the footer after a failed reload.
     pub theme_notice: Option<(String, u64)>,
     pub pm_visible: bool,

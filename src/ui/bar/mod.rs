@@ -14,7 +14,7 @@ pub mod test_util;
 
 use crate::config::theme_file::BarSpecs;
 use crate::ui::theme::Theme;
-use render::{Rendered, render_bar};
+use render::{Rendered, eval, render_bar};
 use segment::{Hit, Segment, SegmentConfig, SegmentMap};
 
 /// The segment config by name. Every name in `SEGMENTS` is present because
@@ -241,27 +241,31 @@ pub(crate) fn attached_bars(
     )
 }
 
-/// How many columns the attention line's items may occupy in the top bar.
+/// How many columns the attention line's items may occupy in whichever
+/// attached bar actually places `$attention`.
 ///
-/// Measured from the REAL `attached_top` format, not from an assumed
+/// Measured from the REAL format that places it, not from an assumed
 /// `▎ label   ` prefix: under a custom format (the powerline example, say)
 /// a hardcoded prefix is wrong, and the items then overrun the bar and are
-/// clipped along with their click rects.
+/// clipped along with their click rects. The loader guarantees `$attention`
+/// appears at most once across the two attached bars' four format strings
+/// (`[attached_top]`/`[attached_bottom]` `format`/`right_format`), so
+/// there's exactly one placement to measure — or none, in which case
+/// nothing constrains the items and the full width is returned.
 ///
-/// The measurement renders the bar once with a ONE-cell probe standing in
-/// for the attention line — one cell rather than none, so the enclosing
-/// `( … $attention)` group and all of its literals survive — and subtracts
-/// everything the bar drew apart from the probe's own cell. `inputs` must
-/// carry every other segment's real data (they share the bar) but need not
-/// set `attention`; whatever it holds is replaced by the probe.
+/// The measurement builds the shared segment map once with a ONE-cell
+/// probe standing in for the attention line — one cell rather than none,
+/// so the enclosing `( … $attention)` group and all of its literals
+/// survive — then evaluates both sides of the bar that places it directly
+/// (bypassing `render_bar`'s width-based overflow, which would otherwise
+/// drop right-side content at a narrow probe width). `inputs` must carry
+/// every other segment's real data (they share the bar) but need not set
+/// `attention`; whatever it holds is replaced by the probe.
 ///
-/// Rendered at width 0 so `render_bar` adds no fill: the left `format` is
-/// never dropped, so its full content is what comes back. The one blind
-/// spot is a theme that puts `$attention` in `attached_top.right_format`,
-/// which a zero-width render drops — an unusual shape (both the bundled
-/// default and the documented powerline example put it in `format`), and
-/// the result is then the old, un-measured behavior rather than anything
-/// worse.
+/// The chrome subtracted is: the probe's own side minus its one probe
+/// cell, plus — when the OTHER side of that same bar is nonempty — that
+/// side's full width plus the mandatory blank column between them (mirrors
+/// `render_bar`'s own accounting for a nonempty pair of sides).
 pub(crate) fn attention_width_budget(
     specs: &BarSpecs,
     theme: &Theme,
@@ -277,8 +281,45 @@ pub(crate) fn attention_width_budget(
         attention: Some(probe),
         ..inputs
     };
-    let (probe_top, _) = attached_bars(specs, theme, inputs, 0, 0);
-    let chrome = probe_top.line.width().saturating_sub(1);
+    let resolver = specs.resolver(theme);
+    let segments = attached_segments(specs, theme, inputs, &resolver);
+
+    let has_attention = |nodes: &[format::Node]| format::vars(nodes).contains(&"attention");
+    let placement = if has_attention(&specs.attached_top.format) {
+        Some((&specs.attached_top, true))
+    } else if has_attention(&specs.attached_top.right_format) {
+        Some((&specs.attached_top, false))
+    } else if has_attention(&specs.attached_bottom.format) {
+        Some((&specs.attached_bottom, true))
+    } else if has_attention(&specs.attached_bottom.right_format) {
+        Some((&specs.attached_bottom, false))
+    } else {
+        None
+    };
+    let Some((spec, in_format)) = placement else {
+        return usize::from(width);
+    };
+
+    let base = resolver.resolve(&spec.style).unwrap_or_default();
+    let (left, _) = eval(&spec.format, &segments, &resolver, base);
+    let (right, _) = eval(&spec.right_format, &segments, &resolver, base);
+
+    let chrome = if in_format {
+        usize::from(left.width).saturating_sub(1)
+            + if right.is_empty() {
+                0
+            } else {
+                usize::from(right.width) + 1
+            }
+    } else {
+        usize::from(right.width).saturating_sub(1)
+            + if left.is_empty() {
+                0
+            } else {
+                usize::from(left.width) + 1
+            }
+    };
+
     usize::from(width).saturating_sub(chrome)
 }
 
@@ -386,6 +427,97 @@ mod attention_budget_tests {
             attention_width_budget(&specs, &theme, inputs("wsx", "foo", None), 4),
             0
         );
+    }
+
+    /// `$attention` in `attached_top.right_format`, with a nonempty left
+    /// side (`$workspace`): the chrome is the probe side's own width minus
+    /// its one probe cell, plus the OTHER (left) side's full width plus the
+    /// mandatory blank between them — mirroring `render_bar`'s accounting
+    /// for a nonempty pair of sides, just on the right-side probe instead
+    /// of the left.
+    #[test]
+    fn attention_in_a_right_format_accounts_for_the_other_sides_width_too() {
+        let theme = Theme::wsx();
+        let mut specs = bundled_default(&theme);
+        specs.attached_top.format = format::parse("$workspace").unwrap();
+        specs.attached_top.right_format = format::parse("( $attention)").unwrap();
+        let label_width = "wsx/foo".len();
+        let budget = attention_width_budget(
+            &specs,
+            &theme,
+            inputs("wsx", "foo", Some(AgentKind::Claude)),
+            80,
+        );
+        // Probe side (right): "( $attention)" -> " x", 2 cells, minus the
+        // 1 probe cell = 1. Other side (left): "wsx/foo" (label_width) + 1
+        // mandatory blank.
+        assert_eq!(budget, 80 - 1 - (label_width + 1));
+    }
+
+    /// `$attention` placed in `attached_bottom.format` (not the top bar)
+    /// measures the BOTTOM bar's own right side — here the stock
+    /// `right_format`, rendering a real PR chip — proving the budget
+    /// follows placement across bars, not just within `attached_top`.
+    #[test]
+    fn attention_in_the_bottom_bars_format_uses_the_bottom_bars_own_right_side() {
+        use crate::git::forge::BranchLifecycle;
+        use crate::ui::attached::ChipPr;
+
+        fn pr_input(base: AttachedInputs<'_>) -> AttachedInputs<'_> {
+            AttachedInputs {
+                pr: Some(ChipPr {
+                    lifecycle: BranchLifecycle::PrOpen,
+                    number: 42,
+                    review: None,
+                    unresolved: None,
+                }),
+                ..base
+            }
+        }
+
+        let theme = Theme::wsx();
+        let mut specs = bundled_default(&theme);
+        // No placement in the top bar at all.
+        specs.attached_top.format = format::parse("$workspace").unwrap();
+        // Attention lives in the bottom bar's `format`; `right_format`
+        // stays the stock one, which draws a PR chip when `pr` is set.
+        specs.attached_bottom.format = format::parse("( $attention)").unwrap();
+
+        // Measure the PR chip's own rendered width independently, via a
+        // wide, non-dropping render of the bottom bar's hits.
+        let (_, bottom) = attached_bars(
+            &specs,
+            &theme,
+            pr_input(inputs("wsx", "foo", None)),
+            200,
+            200,
+        );
+        let pr_hit = bottom
+            .hits
+            .iter()
+            .find(|h| h.hit == Hit::Pr)
+            .expect("pr chip rendered");
+        let pr_width = usize::from(pr_hit.width);
+
+        let budget =
+            attention_width_budget(&specs, &theme, pr_input(inputs("wsx", "foo", None)), 80);
+
+        // Probe side (left, `format`): "( $attention)" -> " x", 2 cells,
+        // minus the 1 probe cell = 1. Other side (right): the stock
+        // `right_format`'s leading literal space plus the PR chip's own
+        // width, plus 1 mandatory blank.
+        assert_eq!(budget, 80 - 1 - (1 + pr_width + 1));
+    }
+
+    /// `$attention` absent from all four attached-bar format strings:
+    /// nothing constrains the items, so the full width is available.
+    #[test]
+    fn attention_absent_everywhere_leaves_the_full_width() {
+        let theme = Theme::wsx();
+        let mut specs = bundled_default(&theme);
+        specs.attached_top.format = format::parse("$workspace").unwrap();
+        let budget = attention_width_budget(&specs, &theme, inputs("wsx", "foo", None), 80);
+        assert_eq!(budget, 80);
     }
 }
 

@@ -57,7 +57,10 @@ pub fn eval_segment(
 
 /// Multi-item segments (`keys`, `pins`, `agents`): `cfg.format` describes
 /// one item; items are joined by `cfg.separator` and each gets `hit` over
-/// its own cells.
+/// its own cells. An item whose `format` renders empty (an empty `format`,
+/// or one whose variables are all absent) contributes neither text nor a
+/// separator — it's as if it were never in the list — so it can't leave a
+/// dangling separator behind, or in front of, the items that did render.
 pub fn eval_items(
     cfg: &SegmentConfig,
     items: &[(SegmentMap, Style, Option<Hit>)],
@@ -67,18 +70,17 @@ pub fn eval_items(
         return None;
     }
     let mut out = Segment::default();
-    for (i, (vars, default_style, hit)) in items.iter().enumerate() {
-        if i > 0 {
+    for (vars, default_style, hit) in items {
+        let Some(seg) = eval_segment(cfg, vars, *default_style, &[], resolver) else {
+            continue;
+        };
+        if !out.is_empty() {
             out.push(Span::raw(cfg.separator.clone()));
         }
         let start = out.width;
-        if let Some(seg) = eval_segment(cfg, vars, *default_style, &[], resolver) {
-            out.append(seg);
-        }
+        out.append(seg);
         if let Some(h) = hit {
-            if out.width > start {
-                out.hit_from(start, *h);
-            }
+            out.hit_from(start, *h);
         }
     }
     (!out.is_empty()).then_some(out)
@@ -355,4 +357,70 @@ pub(crate) fn pr(
     let mut seg = eval_segment(cfg, &v, style, &[("mark_style", mark_style)], resolver)?;
     seg.hit_from(0, Hit::Pr);
     Some(seg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item_cfg(format_src: &str, separator: &str) -> SegmentConfig {
+        SegmentConfig {
+            style: crate::ui::bar::style::StyleSpec::default(),
+            symbol: None,
+            format: crate::ui::bar::format::parse(format_src).unwrap(),
+            disabled: false,
+            priority: 100,
+            separator: separator.to_string(),
+        }
+    }
+
+    #[test]
+    fn all_items_rendering_empty_yields_none() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        // An empty `format` never produces anything, whatever the vars.
+        let cfg = item_cfg("", "  ");
+        let items: Vec<(SegmentMap, Style, Option<Hit>)> = vec![
+            (vars(vec![("label", var("a"))]), Style::default(), None),
+            (vars(vec![("label", var("b"))]), Style::default(), None),
+        ];
+        assert!(eval_items(&cfg, &items, &resolver).is_none());
+    }
+
+    #[test]
+    fn a_leading_empty_item_leaves_no_leading_separator_and_keeps_the_survivors_hit() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let cfg = item_cfg("$label", "  ");
+        let items: Vec<(SegmentMap, Style, Option<Hit>)> = vec![
+            // No `label` var at all, so `$label` produces nothing.
+            (vars(vec![]), Style::default(), Some(Hit::Procs)),
+            (
+                vars(vec![("label", var("b"))]),
+                Style::default(),
+                Some(Hit::Pr),
+            ),
+        ];
+        let out = eval_items(&cfg, &items, &resolver).unwrap();
+        assert_eq!(out.plain_text(), "b");
+        assert_eq!(out.hits.len(), 1, "the empty item emits no hit");
+        assert_eq!(out.hits[0].hit, Hit::Pr);
+        assert_eq!(out.hits[0].start_col, 0);
+    }
+
+    #[test]
+    fn two_non_empty_items_get_exactly_one_separator_between_them() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let cfg = item_cfg("$label", "-");
+        let items: Vec<(SegmentMap, Style, Option<Hit>)> = vec![
+            (vars(vec![("label", var("a"))]), Style::default(), None),
+            (vars(vec![("label", var("b"))]), Style::default(), None),
+        ];
+        let out = eval_items(&cfg, &items, &resolver).unwrap();
+        assert_eq!(out.plain_text(), "a-b");
+    }
 }

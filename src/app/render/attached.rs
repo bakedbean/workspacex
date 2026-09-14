@@ -195,13 +195,15 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     // both places draws one graph, not two.
     let (usage_window, usage_activity) = super::dashboard::usage_sparkline(app);
 
-    // The attention items share the top bar with everything else the
-    // theme's `attached_top` format draws, so measure that chrome from the
-    // real format (a probe render) rather than assuming the stock
-    // `▎ label   ` prefix — under a custom format the items would
+    // The attention items share whichever attached bar the theme actually
+    // places `$attention` in, so measure that bar's chrome from its real
+    // format (a probe render) rather than assuming the stock
+    // `▎ label   ` prefix — under a custom format, or a theme that moves
+    // `$attention` to the bottom bar or a `right_format`, the items would
     // otherwise overrun the bar and be clipped along with their clicks.
     // Built last because the probe needs the same segment data the real
-    // render gets: any of them can appear in `attached_top`.
+    // render gets: any of them can appear in either bar. Both bars share
+    // one width, so `area.width` below is correct for whichever bar wins.
     let attention = if matches!(
         app.modal,
         Some(crate::ui::modal::Modal::UpdatesPanel { .. })

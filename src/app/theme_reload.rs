@@ -1,6 +1,7 @@
-//! Reload `theme.toml` while wsx runs: a fingerprint (mtime + length)
-//! check once a second on the housekeeping tick, last-good specs kept on
-//! error, and a short footer notice naming the first problem.
+//! Reload `theme.toml` while wsx runs: a fingerprint (mtime + length +
+//! permission mode) check once a second on the housekeeping tick,
+//! last-good specs kept on error, and a short footer notice naming the
+//! first problem.
 
 use super::App;
 use crate::data::store::Store;
@@ -12,9 +13,22 @@ const CHECK_EVERY_TICKS: u32 = 8;
 /// How long the footer shows a theme error.
 const NOTICE_MS: u64 = 5_000;
 
-fn fingerprint(path: &Path) -> Option<(SystemTime, u64)> {
+/// `(mtime, length, permission mode)`. The mode is included so a file made
+/// unreadable (`chmod 000`) and then readable again (`chmod 644`) is
+/// retried: mtime and length alone are unchanged by a permission edit, so
+/// without the mode the fixed file would never be picked back up. `0` on
+/// non-unix platforms, where there's nothing analogous to probe.
+#[cfg(unix)]
+fn fingerprint(path: &Path) -> Option<(SystemTime, u64, u32)> {
+    use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::metadata(path).ok()?;
-    Some((meta.modified().ok()?, meta.len()))
+    Some((meta.modified().ok()?, meta.len(), meta.permissions().mode()))
+}
+
+#[cfg(not(unix))]
+fn fingerprint(path: &Path) -> Option<(SystemTime, u64, u32)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len(), 0))
 }
 
 /// The `bar_theme` setting: the opt-in for `theme.toml`. Default OFF, so a
@@ -193,7 +207,14 @@ mod tests {
         assert!(app.theme_notice(2_000).is_none(), "notice cleared when off");
 
         // Back on: reloaded even though the fingerprint never changed while off.
-        std::fs::write(&path, "[dashboard_footer]\nformat = \"$usage\"\n").unwrap();
+        // `right_format` is cleared too: the bundled default's own
+        // `right_format` already carries `$usage`, and the loader now
+        // rejects a theme that places that singleton segment twice.
+        std::fs::write(
+            &path,
+            "[dashboard_footer]\nformat = \"$usage\"\nright_format = \"\"\n",
+        )
+        .unwrap();
         app.store.set_setting("bar_theme", "on").unwrap();
         app.tick = 32;
         app.maybe_reload_theme(3_000);
@@ -243,7 +264,13 @@ mod tests {
         assert!(app.theme_notice(5_999).is_some());
         assert!(app.theme_notice(6_000).is_none(), "expires after 5 s");
 
-        std::fs::write(&path, "[dashboard_footer]\nformat = \"$usage\"\n").unwrap();
+        // `right_format` cleared too, same reason as above: the default
+        // `right_format` already carries the singleton `$usage`.
+        std::fs::write(
+            &path,
+            "[dashboard_footer]\nformat = \"$usage\"\nright_format = \"\"\n",
+        )
+        .unwrap();
         app.reload_theme(7_000);
         assert_eq!(
             app.bar_specs.dashboard_footer.format,
@@ -252,6 +279,60 @@ mod tests {
         assert!(
             app.theme_notice(7_000).is_none(),
             "fixed file clears the notice"
+        );
+    }
+
+    /// A file made unreadable and then readable again has the same mtime
+    /// and length, so without the permission mode in the fingerprint it
+    /// would never be retried. Skipped when running as root, where
+    /// `chmod 000` doesn't actually block reads.
+    #[cfg(unix)]
+    #[test]
+    fn permission_change_alone_is_retried_on_the_next_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("theme.toml");
+        std::fs::write(&path, "[dashboard_footer]\nformat = \"$version\"\n").unwrap();
+
+        // Root ignores chmod 000, so this test can't observe an unreadable
+        // file; skip gracefully rather than fail under a root-run suite.
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+            .unwrap();
+        let running_as_root = std::fs::read(&path).is_ok();
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+            .unwrap();
+        if running_as_root {
+            return;
+        }
+
+        let mut app = app();
+        app.set_theme_path(path.clone(), 0);
+        assert_eq!(
+            app.bar_specs.dashboard_footer.format,
+            format::parse("$version").unwrap(),
+            "loaded while readable"
+        );
+
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+            .unwrap();
+        app.tick = 8;
+        app.maybe_reload_theme(0);
+        assert!(
+            app.theme_notice(0).is_some(),
+            "unreadable file is an error; last good kept"
+        );
+        assert_eq!(
+            app.bar_specs.dashboard_footer.format,
+            format::parse("$version").unwrap(),
+            "last good specs kept"
+        );
+
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+            .unwrap();
+        app.tick = 16;
+        app.maybe_reload_theme(1_000);
+        assert!(
+            app.theme_notice(1_000).is_none(),
+            "readable again clears the notice on the next check"
         );
     }
 
@@ -264,8 +345,14 @@ mod tests {
         app.set_theme_path(path.clone(), 0);
 
         // Different length guarantees a different fingerprint even within
-        // the same mtime granularity.
-        std::fs::write(&path, "[dashboard_footer]\nformat = \"$version  $usage\"\n").unwrap();
+        // the same mtime granularity. `right_format` is cleared: the
+        // default `right_format` already carries the singleton `$usage`,
+        // which the loader now rejects a second placement of.
+        std::fs::write(
+            &path,
+            "[dashboard_footer]\nformat = \"$version  $usage\"\nright_format = \"\"\n",
+        )
+        .unwrap();
         app.tick = 3;
         app.maybe_reload_theme(0);
         assert_eq!(

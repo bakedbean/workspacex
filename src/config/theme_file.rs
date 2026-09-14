@@ -93,6 +93,13 @@ pub fn segment_def(name: &str) -> Option<&'static SegmentDef> {
     SEGMENTS.iter().find(|d| d.name == name)
 }
 
+/// Segments whose hit carries exactly one click target that isn't indexed
+/// by item (unlike `pins`/`agents`/`keys`, which record a hit per item and
+/// so tolerate repeats): placing one of these in two formats at once means
+/// the theme draws two chips but only the last-routed one is clickable.
+/// `resolve` rejects a theme that does this.
+pub const SINGLETON_SEGMENTS: &[&str] = &["pr", "procs", "usage", "attention"];
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ThemeFile {
     #[serde(default)]
@@ -375,6 +382,43 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
     let attached_top = bar("attached_top", &file.attached_top);
     let attached_bottom = bar("attached_bottom", &file.attached_bottom);
 
+    let count_var = |groups: &[&[Node]], name: &str| -> usize {
+        groups
+            .iter()
+            .flat_map(|nodes| format::vars(nodes))
+            .filter(|v| *v == name)
+            .count()
+    };
+    let attached_nodes: [&[Node]; 4] = [
+        &attached_top.format,
+        &attached_top.right_format,
+        &attached_bottom.format,
+        &attached_bottom.right_format,
+    ];
+    for name in SINGLETON_SEGMENTS {
+        let count = count_var(&attached_nodes, name);
+        if count > 1 {
+            errors.push(error(
+                "[attached_top]/[attached_bottom]",
+                format!(
+                    "segment `${name}` carries one click target and may appear only once across the attached bars (found {count})"
+                ),
+            ));
+        }
+    }
+    let footer_nodes: [&[Node]; 2] = [&dashboard_footer.format, &dashboard_footer.right_format];
+    for name in SINGLETON_SEGMENTS {
+        let count = count_var(&footer_nodes, name);
+        if count > 1 {
+            errors.push(error(
+                "[dashboard_footer]",
+                format!(
+                    "segment `${name}` carries one click target and may appear only once in the dashboard footer (found {count})"
+                ),
+            ));
+        }
+    }
+
     if errors.is_empty() {
         Ok(BarSpecs {
             palette,
@@ -535,6 +579,52 @@ mod tests {
         assert!(!errs("[pr]\nstyle = \"fg:nope\"\n").is_empty());
         assert!(!errs("[attached_top]\nstyle = \"bg:\"\n").is_empty());
         assert!(!errs("[attached_top]\nfill_style = \"fg:zzz\"\n").is_empty());
+    }
+
+    /// `$pr` in `attached_top.format` plus the default bottom bar's own
+    /// `$pr` (in `right_format`) is two placements, so `resolve` rejects it
+    /// naming `pr`.
+    #[test]
+    fn a_singleton_segment_placed_in_both_attached_bars_is_an_error() {
+        let e = errs("[attached_top]\nformat = \"$pr\"\n");
+        assert!(
+            e.iter()
+                .any(|e| e.location == "[attached_top]/[attached_bottom]"
+                    && e.message.contains('`')
+                    && e.message.contains("pr")),
+            "{e:?}"
+        );
+    }
+
+    /// `$usage` twice within the dashboard footer's own two format strings
+    /// is also a duplicate placement, even though only one bar is involved.
+    #[test]
+    fn a_singleton_segment_placed_twice_in_the_dashboard_footer_is_an_error() {
+        let e = errs("[dashboard_footer]\nformat = \"$usage\"\nright_format = \"$usage\"\n");
+        assert!(
+            e.iter()
+                .any(|e| e.location == "[dashboard_footer]" && e.message.contains("usage")),
+            "{e:?}"
+        );
+    }
+
+    /// Moving `$pr` to the top bar while removing it from the bottom bar's
+    /// `right_format` leaves exactly one placement, which is fine.
+    #[test]
+    fn moving_a_singleton_segment_between_bars_is_fine() {
+        let specs = ok(concat!(
+            "[attached_top]\nformat = \"$pr\"\n",
+            "[attached_bottom]\nright_format = \"( ($agents   )($model_tokens )($procs )($diff ))\"\n",
+        ));
+        assert_eq!(specs.attached_top.format, format::parse("$pr").unwrap());
+    }
+
+    /// Multi-item segments (`pins`, `agents`, `keys`) record one hit per
+    /// item, so placing `$pins` in both attached bars is still allowed.
+    #[test]
+    fn multi_item_segments_may_still_appear_in_both_bars() {
+        let specs = ok("[attached_top]\nformat = \"$pins\"\n");
+        assert_eq!(specs.attached_top.format, format::parse("$pins").unwrap());
     }
 
     #[test]

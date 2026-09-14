@@ -78,7 +78,7 @@ Restore the default segment styles and the attached bottom formats:
 ```toml
 [attached_bottom]
 format       = "$keys  ($pins  )"
-right_format = "(  ($agents   )($model_tokens )($procs )($diff )$pr)"
+right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
 ```
@@ -115,7 +115,8 @@ unknown `$nope` variable; do not depend on exact punctuation.
 
 Run `wsx theme check`: expected exit status 1 and the same underlying error.
 Introduce a second independent validation error, such as an unknown color,
-and check that CLI output and the log include both. Fix the file: the bars
+and check that CLI output and the log include both, and that the footer
+notice appends `(+1 more)` to the first error. Fix the file: the bars
 update and the notice clears. Also try an invalid file at startup: wsx must
 use the bundled default instead of failing to start.
 

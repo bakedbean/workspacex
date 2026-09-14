@@ -36,9 +36,10 @@ The file is optional. Anything you leave out keeps the bundled default,
 which preserves wsx's stock bar content and styling, so `wsx theme init`
 gives you a commented starting point. wsx checks for changes once a second
 and reloads edits while running. If a save has an error, the bars keep their
-last good look, the dashboard footer shows the first error in red for five
-seconds, and the full list goes to the log. An invalid file at startup falls
-back to the bundled default.
+last good look; in its place, the dashboard footer shows the first error in
+red for five seconds (`(+N more)` when there is more than one), and the
+full list goes to the log. An invalid file at startup falls back to the
+bundled default.
 
 ### Bars
 
@@ -52,7 +53,7 @@ format = "($agent_bar )$workspace(   $attention)"
 
 [attached_bottom]
 format       = "$keys  ($pins  )"
-right_format = "(  ($agents   )($model_tokens )($procs )($diff )$pr)"
+right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
 ```
@@ -129,6 +130,9 @@ state-derived foreground, while `style = "fg:rust"` replaces it. Use
 `[$name]($style)` in a custom segment format to apply that resolved style:
 
 ```toml
+[palette]
+rust = "#d75f00"
+
 [workspace]
 format = "[($repo/)$name]($style)"
 style = "fg:rust bold"

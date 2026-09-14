@@ -28,7 +28,9 @@ per-segment tables, and a named palette.
 - Per-repo overrides. The file is global. Layering a per-repo override
   the way `detail_bar_config` does can come later.
 - Theming the split-pane title bars, the separator rule under the top
-  bar, the detail bar header, modals, or markdown.
+  bar, the detail bar header, modals, or markdown. This includes the
+  dashboard DETAIL pane's own pinned-chip row: it stays a small legacy
+  painter (`render_pinned_chip_row`), not `[pins]`.
 - Replacing the built-in `Theme` structs (`wsx`, `ansi`, `dracula`,
   `jellybeans`, `nord`). The `theme` setting still selects the base
   palette; the file layers bar formats and extra colors on top.
@@ -68,7 +70,7 @@ format = "($agent_bar )$workspace(   $attention)"
 
 [attached_bottom]
 format       = "$keys  ($pins  )"
-right_format = "(  ($agents   )($model_tokens )($procs )($diff )$pr)"
+right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
 
@@ -87,8 +89,10 @@ format = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 
 ### Grammar
 
-- `$name` inserts a segment. `$$` is a literal dollar sign. An
-  unknown name is a load-time error.
+- `$name` or `${name}` inserts a segment; the braced form disambiguates
+  a name from following text. `$$` is a literal dollar sign; `\x`
+  escapes any single character (`\[`, `\(`, `\$`, …). An unknown name
+  is a load-time error.
 - `[text](style)` styles a literal run. `$name` inside is allowed and
   inherits the group's style as its base.
 - `( … )` is a conditional group: rendered only if at least one
@@ -157,14 +161,16 @@ separate verdict style is exposed as `$mark_style`, used by
 
 ### Overflow
 
-Each segment has an integer `priority`; higher survives longer. The
-bundled defaults reproduce the chip row's current drop order:
-`model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50; every
-other segment 100. When `right_format` does not fit beside `format`
-and the required one-column blank gap,
-the renderer removes the lowest-priority segment present in
-`right_format`, re-evaluates the AST (so conditional groups drop their
-separators), and repeats until it fits or the right side is empty.
+Each segment has an integer `priority` (unset defaults to 100); higher
+survives longer. The bundled defaults reproduce the chip row's current
+drop order: `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr`
+50; every other segment 100. When `right_format` does not fit beside
+`format` and the required one-column blank gap, the renderer removes
+the lowest-priority segment present in `right_format`, re-evaluates the
+AST (so conditional groups drop their separators), and repeats. If
+every variable is removed and the remaining literal text still doesn't
+fit, the right side is omitted entirely rather than partially rendered.
+`format` is never dropped this way, only clipped at the right edge.
 
 ## Architecture
 
@@ -208,7 +214,8 @@ pub enum Hit {
     Procs,
     Agent(AgentInstanceId),
     UsageGraph,
-    Attention(usize),
+    Attention(WorkspaceId),
+    AttentionMore,
 }
 pub struct HitSpan { pub start_col: u16, pub width: u16, pub hit: Hit }
 pub struct Segment {
@@ -217,7 +224,8 @@ pub struct Segment {
     pub hits: Vec<HitSpan>,  // columns relative to the segment start
 }
 pub struct SegmentConfig {
-    pub style: Style,        // resolved
+    pub style: StyleSpec,    // unresolved; merged over the provider's
+                              // state-derived style and resolved as $style
     pub symbol: Option<String>,
     pub format: Vec<Node>,   // parsed
     pub disabled: bool,
@@ -237,9 +245,14 @@ builders: `pr_chip_parts`, `diff_chip_parts`, `procs_chip_parts`,
 
 `Hit` replaces the three differently shaped output bundles
 (`FooterHintAction`, `ChipRowOutput`, the attention click list) at the
-segment layer. The existing output structs the input handlers consume
-are kept and filled from the hit list, so `src/app/input` is untouched
-in this change.
+segment layer. Most of the existing output structs the input handlers
+consume are kept and filled from the hit list, but `src/app/input` is
+not fully untouched: since a pinned chip's position is no longer fixed
+to its command index (a theme can reorder, hide, or move `$pins`),
+`App.chip_rects` changes shape from `Vec<Rect>` to `Vec<(usize, Rect)>`,
+carrying the pinned-command index alongside each rect, and the mouse
+handler (`src/app/input/mouse.rs`) fires the chip at the carried index
+instead of a positional one.
 
 ### `src/ui/bar/render.rs` — evaluator
 
@@ -293,11 +306,12 @@ providers or go away.
   re-stat the file; reparse only when the mtime changes. No file
   watcher dependency.
 - **Parse or validation error** (bad TOML, unknown segment, unknown
-  color, unbalanced brackets): keep the last good `BarSpecs`, log each
-  error with location, and show a one-line `err`-styled notice in the
-  dashboard footer for five seconds ("theme.toml: line 12: unknown
-  color `rusty`"). At startup with no last-good spec, fall back to the
-  bundled default.
+  color, unbalanced brackets): keep the last good `BarSpecs`, log every
+  error (each carrying a `[table].field` location), and show a one-line
+  `err`-styled notice in place of the dashboard footer for five seconds
+  — the first error, plus `(+N more)` when there is more than one
+  (e.g. `theme.toml: [attached_top].format: unknown color \`rusty\``).
+  At startup with no last-good spec, fall back to the bundled default.
 - **Runtime emptiness** (every referenced segment is empty right now)
   is not an error; the bar renders blank.
 - **CLI.** `wsx theme check [path]` validates and prints every error,
@@ -324,9 +338,20 @@ Unit tests per module:
   merges per key over default; invalid file returns all errors and no
   spec; unknown `$name` is an error.
 - **Parity snapshots** (the gate for deleting old code): for each bar,
-  render with the bundled default and the same fixture inputs the
-  existing tests use, and assert the `Line` text and styles and the
-  produced hit rects equal the current renderer's output.
+  a one-off test rendered the bundled default through the engine and
+  the same fixture inputs through the still-live legacy builder and
+  asserted the `Line` cells (symbol, foreground, background) and the
+  produced hit rects matched, at more than one width. Once that parity
+  run passed and the legacy builder was deleted, the comparison was
+  replaced by literal snapshot assertions (the engine's own output,
+  pinned) so the suite has no ongoing comparison target. Two
+  differences from the legacy bars were accepted rather than matched
+  exactly: a workspace with no PR (so `$pr` renders bare, with no
+  trailing separator of its own) leaves one blank cell at the right
+  edge of the chip row instead of hugging it; and on a terminal too
+  narrow for the dashboard footer's right side, `version` (priority 50)
+  drops before `usage` (default priority 100), so the version string
+  disappears first rather than both overflowing off-screen together.
 - Reload: mtime change reparses; unchanged mtime does not; invalid
   edit keeps last good and sets the notice.
 
@@ -341,26 +366,38 @@ the file location, grammar, segment table, and the three CLI commands.
 
 ## Delivery
 
-Seven commits on this branch, each green (`cargo test`, clippy,
-`cargo fmt --check` under the CI toolchain):
+Eleven tasks on this branch (`docs/superpowers/plans/2026-09-13-bar-theming.md`),
+each landed as one or more green commits (`cargo test`, clippy,
+`cargo fmt --check` under the CI toolchain) plus any review fix rounds:
 
-1. `toml` dependency; `Dirs::config_dir`/`theme_path`;
-   `theme_file.rs` with the bundled default; `wsx theme
-   check|path|init`. No rendering change.
-2. `format.rs` and `style.rs` with tests.
-3. `segment.rs` (`Hit`, `Segment`, `SegmentConfig`) and `render.rs`
-   with tests.
-4. Dashboard footer on the engine; parity snapshot; old `footer`
-   builder deleted.
-5. Attached top bar on the engine; parity snapshot; `info_line`
+1. `toml` dependency; `Dirs::config_dir`/`theme_path`. No rendering
+   change.
+2. `format.rs`: the format-string parser, with tests.
+3. `style.rs`: the style grammar and resolver, with tests.
+4. `segment.rs` (`Hit`, `Segment`, `SegmentConfig`) and `render.rs`
+   (the evaluator, overflow, and hit geometry), with tests.
+5. `theme_file.rs`: the bundled default and the file loader/merger,
+   with tests; unknown keys in `[bar]`/`[segment]` tables rejected.
+6. `wsx theme check|path|init`.
+7. Dashboard footer on the engine; parity proven against the legacy
+   builder, then pinned as literal snapshots; old `footer` builder
    deleted.
-6. Attached bottom bar on the engine; priority overflow replaces
-   `DROP_ORDER`; parity snapshot; old chip-row builder deleted.
-7. mtime reload, error notice, docs page, manual test doc.
+8. Attached top bar on the engine; `info_line` deleted.
+9. Attached bottom bar on the engine; priority overflow replaces
+   `DROP_ORDER`; parity proven, then pinned; old chip-row builder
+   deleted. Pinned-chip clicks needed to carry their command index
+   (see Architecture) since a themed `$pins` no longer sits at a fixed
+   position.
+10. mtime reload and the error notice.
+11. This documentation, the manual test, and this spec sync.
 
-Commits 1–3 are additive (~1200 lines with tests). Commits 4–6 are
-net-negative refactors of the three bars. No feature flag: the bundled
-default preserves today's content and styling. At narrow boundaries, the
-required blank column can cause earlier right-side overflow; a partially
-clipped pinned chip keeps its visible portion clickable instead of being
-dropped in full.
+Tasks 1–6 are additive (parsers, loader, CLI; no rendering change).
+Tasks 7–9 are net-negative refactors that delete the three legacy span
+builders once each is proven equivalent. No feature flag: the bundled
+default reproduces today's bar content and styling exactly, with two
+accepted, narrow exceptions — at the right edge of the chip row for a
+workspace with no PR, and in the drop order at the narrow-terminal
+boundary — enumerated in Testing above, plus: the required blank column
+can cause earlier right-side overflow than the legacy fixed-width
+layout did, and a pinned chip clipped by the right edge keeps its
+visible portion clickable instead of being dropped in full.

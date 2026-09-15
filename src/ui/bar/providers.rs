@@ -19,8 +19,7 @@ use crate::ui::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::text::{FILTER_ECHO_MAX, truncate};
 use crate::ui::theme::Theme;
 use crate::ui::updates_bar::{AttentionItems, format_age};
-use ratatui::style::Modifier;
-use ratatui::style::Style;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use std::collections::HashMap;
 
@@ -36,6 +35,63 @@ pub fn vars(entries: Vec<(&str, Segment)>) -> SegmentMap {
         .collect()
 }
 
+/// `$style` for a whole segment: the provider's state-derived
+/// `default_style` with the user's `cfg.style` patched over it.
+fn segment_style(cfg: &SegmentConfig, default_style: Style, resolver: &Resolver) -> Style {
+    default_style.patch(resolver.resolve(&cfg.style).unwrap_or_default())
+}
+
+/// `$style` for the item at rendered position `i` of a multi-item
+/// segment: the segment style patched by `cfg.styles[i]`, clamped to the
+/// last grade once the list runs out. No grades: the segment style.
+fn item_style(cfg: &SegmentConfig, i: usize, default_style: Style, resolver: &Resolver) -> Style {
+    let base = segment_style(cfg, default_style, resolver);
+    match cfg.styles.get(i).or(cfg.styles.last()) {
+        Some(spec) => base.patch(resolver.resolve(spec).unwrap_or_default()),
+        None => base,
+    }
+}
+
+/// The neighbour colours (`registry::ITEM_COLORS`) for one evaluation:
+/// the item's own final `$style` plus its rendered neighbours'. `None`
+/// for an absent neighbour, or a style with that colour unset, carries no
+/// colour, so the token drops and the run inherits.
+fn item_colors(
+    prev: Option<Style>,
+    item: Option<Style>,
+    next: Option<Style>,
+) -> HashMap<String, Option<Color>> {
+    let mut colors = HashMap::new();
+    for (name, style) in [("item", item), ("prev", prev), ("next", next)] {
+        colors.insert(format!("{name}_fg"), style.and_then(|s| s.fg));
+        colors.insert(format!("{name}_bg"), style.and_then(|s| s.bg));
+    }
+    colors
+}
+
+/// Evaluate `cfg.format` against `vars` with `$style` bound to `style`,
+/// `extra` adding more named styles (`$mark_style`), and `colors` the
+/// per-evaluation colour names. `None` when the segment is disabled or
+/// renders empty.
+fn eval_format(
+    cfg: &SegmentConfig,
+    vars: &SegmentMap,
+    style: Style,
+    extra: &[(&str, Style)],
+    colors: HashMap<String, Option<Color>>,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    if cfg.disabled {
+        return None;
+    }
+    let mut styles: HashMap<String, Style> =
+        extra.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+    styles.insert("style".to_string(), style);
+    let r = resolver.with_colors(colors).with_styles(styles);
+    let (seg, _) = eval(&cfg.format, vars, &r, Style::default());
+    (!seg.is_empty()).then_some(seg)
+}
+
 /// Evaluate `cfg.format` against `vars`. `$style` is `default_style` with
 /// the user's `cfg.style` patched over it; `extra` adds more named styles
 /// (`$mark_style`). `None` when the segment is disabled or renders empty.
@@ -46,24 +102,21 @@ pub fn eval_segment(
     extra: &[(&str, Style)],
     resolver: &Resolver,
 ) -> Option<Segment> {
-    if cfg.disabled {
-        return None;
-    }
-    let user = resolver.resolve(&cfg.style).unwrap_or_default();
-    let mut styles: HashMap<String, Style> =
-        extra.iter().map(|(k, v)| (k.to_string(), *v)).collect();
-    styles.insert("style".to_string(), default_style.patch(user));
-    let r = resolver.with_styles(styles);
-    let (seg, _) = eval(&cfg.format, vars, &r, Style::default());
-    (!seg.is_empty()).then_some(seg)
+    let style = segment_style(cfg, default_style, resolver);
+    eval_format(cfg, vars, style, extra, HashMap::new(), resolver)
 }
 
 /// Multi-item segments (`keys`, `pins`, `agents`): `cfg.format` describes
-/// one item; items are joined by `cfg.separator` and each gets `hit` over
-/// its own cells. An item whose `format` renders empty (an empty `format`,
-/// or one whose variables are all absent) contributes neither text nor a
-/// separator — it's as if it were never in the list — so it can't leave a
-/// dangling separator behind, or in front of, the items that did render.
+/// one item; items are joined by `cfg.separator`, graded by `cfg.styles`,
+/// and each gets `hit` over its own cells. An item whose `format` renders
+/// empty (an empty `format`, or one whose variables are all absent)
+/// contributes neither text nor a separator nor a grade — it's as if it
+/// were never in the list — so it can't leave a dangling separator
+/// behind, or in front of, the items that did render.
+///
+/// Two passes: a measure pass with no neighbour colours learns which
+/// items render (colours never change that), then a paint pass gives each
+/// survivor its position's grade and its RENDERED neighbours' colours.
 pub fn eval_items(
     cfg: &SegmentConfig,
     items: &[(SegmentMap, Style, Option<Hit>)],
@@ -72,20 +125,31 @@ pub fn eval_items(
     if cfg.disabled || items.is_empty() {
         return None;
     }
+    let rendered: Vec<usize> = (0..items.len())
+        .filter(|&i| {
+            let (vars, default_style, _) = &items[i];
+            let none = item_colors(None, None, None);
+            eval_format(cfg, vars, *default_style, &[], none, resolver).is_some()
+        })
+        .collect();
+    let styles: Vec<Style> = rendered
+        .iter()
+        .enumerate()
+        .map(|(n, &i)| item_style(cfg, n, items[i].1, resolver))
+        .collect();
     let mut out = Segment::default();
-    let (separator, _) = eval(
-        &cfg.separator,
-        &SegmentMap::new(),
-        resolver,
-        Style::default(),
-    );
-    for (vars, default_style, hit) in items {
-        let Some(seg) = eval_segment(cfg, vars, *default_style, &[], resolver) else {
+    for (n, &i) in rendered.iter().enumerate() {
+        let (vars, _, hit) = &items[i];
+        let prev = (n > 0).then(|| styles[n - 1]);
+        let next = styles.get(n + 1).copied();
+        if n > 0 {
+            let r = resolver.with_colors(item_colors(prev, None, Some(styles[n])));
+            out.append(eval(&cfg.separator, &SegmentMap::new(), &r, Style::default()).0);
+        }
+        let colors = item_colors(prev, Some(styles[n]), next);
+        let Some(seg) = eval_format(cfg, vars, styles[n], &[], colors, resolver) else {
             continue;
         };
-        if !out.is_empty() {
-            out.append(separator.clone());
-        }
         let start = out.width;
         out.append(seg);
         if let Some(h) = hit {
@@ -296,13 +360,20 @@ pub fn workspace(
 /// to `items.max_width` using the theme's own item, separator, and tail
 /// widths. `$glyph` arrives pre-styled in the entry's status color;
 /// `$style` is the name's PR-lifecycle tint, or the muted `path` hue when
-/// the lifecycle has no color. Entries that don't fit fold into
-/// `cfg.more_format` (`$count`); entries then give way from the tail end
-/// until that tail fits too, since a clipped tail is both unreadable and,
-/// as a click target, unreachable. The first entry always renders; when
-/// it alone crowds out the tail its `$name` is shortened with an
-/// ellipsis, and a lone entry with nothing behind it just clips. Each
-/// rendered entry gets `Hit::Attention`, the tail `Hit::AttentionMore`.
+/// the lifecycle has no color, graded by `cfg.styles` per rendered
+/// position. Entries that don't fit fold into `cfg.more_format`
+/// (`$count`); entries then give way from the tail end until that tail
+/// fits too, since a clipped tail is both unreadable and, as a click
+/// target, unreachable. The first entry always renders; when it alone
+/// crowds out the tail its `$name` is shortened with an ellipsis, and a
+/// lone entry with nothing behind it just clips. Each rendered entry gets
+/// `Hit::Attention`, the tail `Hit::AttentionMore`.
+///
+/// Like `eval_items`, two passes: measure (no neighbour colours, ungraded
+/// style — neither changes a width) to drop empty items and fit, then
+/// paint with each survivor's grade and rendered neighbours. The last
+/// rendered entry's `next` is absent even when a tail follows; the tail's
+/// `prev` is that entry.
 pub fn attention(
     cfg: &SegmentConfig,
     items: Option<&AttentionItems>,
@@ -319,7 +390,12 @@ pub fn attention(
         .iter()
         .map(|e| format_age(items.now_ms.saturating_sub(e.age_anchor_ms)))
         .collect();
-    let item = |i: usize, name: &str| -> Segment {
+    let name_style = |i: usize| {
+        theme
+            .lifecycle_style(entries[i].lifecycle)
+            .unwrap_or_else(|| Style::default().fg(theme.path))
+    };
+    let item_vars = |i: usize, name: &str| -> SegmentMap {
         let e = &entries[i];
         let mut v = vars(vec![
             ("repo", var(e.repo_name.clone())),
@@ -330,39 +406,42 @@ pub fn attention(
             "glyph".to_string(),
             Segment::text(e.status.glyph().to_string(), theme.status_style(e.status)),
         );
-        let name_style = theme
-            .lifecycle_style(e.lifecycle)
-            .unwrap_or_else(|| Style::default().fg(theme.path));
-        eval_segment(cfg, &v, name_style, &[], resolver).unwrap_or_default()
+        v
     };
-    let (separator, _) = eval(
-        &cfg.separator,
-        &SegmentMap::new(),
-        resolver,
-        Style::default(),
-    );
-    let sep_w = usize::from(separator.width);
-    let tail = |remaining: usize| -> Segment {
+    let measure = |i: usize, name: &str| -> Segment {
+        let none = item_colors(None, None, None);
+        eval_format(cfg, &item_vars(i, name), name_style(i), &[], none, resolver)
+            .unwrap_or_default()
+    };
+    let separator = |colors: HashMap<String, Option<Color>>| -> Segment {
+        let r = resolver.with_colors(colors);
+        eval(&cfg.separator, &SegmentMap::new(), &r, Style::default()).0
+    };
+    let tail = |remaining: usize, colors: HashMap<String, Option<Color>>| -> Segment {
         let v = vars(vec![("count", var(remaining.to_string()))]);
-        eval(&cfg.more_format, &v, resolver, Style::default()).0
+        let r = resolver.with_colors(colors);
+        eval(&cfg.more_format, &v, &r, Style::default()).0
     };
+    let none = || item_colors(None, None, None);
     let width = |seg: &Segment| usize::from(seg.width);
 
-    // An entry whose item renders empty is dropped as if it were never in
-    // the list — no separator, no hit, not counted in the tail — exactly
-    // as `eval_items` treats empty items. `rendered` pairs each surviving
-    // item with its entry index.
-    let mut rendered: Vec<(usize, Segment)> = (0..entries.len())
-        .map(|i| (i, item(i, &entries[i].name)))
-        .filter(|(_, seg)| !seg.is_empty())
+    // Measure pass. An entry whose item renders empty is dropped as if it
+    // were never in the list — no separator, no hit, not counted in the
+    // tail — exactly as `eval_items` treats empty items. `rendered` pairs
+    // each surviving entry index with its (possibly shortened) name and
+    // its measured item.
+    let mut rendered: Vec<(usize, String, Segment)> = (0..entries.len())
+        .map(|i| (i, entries[i].name.clone(), measure(i, &entries[i].name)))
+        .filter(|(_, _, seg)| !seg.is_empty())
         .collect();
     if rendered.is_empty() {
         return None;
     }
+    let sep_w = width(&separator(none()));
     let max_width = items.max_width;
     let mut included = 0usize;
     let mut total = 0usize;
-    for (n, (_, seg)) in rendered.iter().enumerate() {
+    for (n, (_, _, seg)) in rendered.iter().enumerate() {
         let s = if n == 0 { 0 } else { sep_w };
         if total + s + width(seg) > max_width {
             break;
@@ -371,40 +450,55 @@ pub fn attention(
         included += 1;
     }
     while included > 1 && included < rendered.len() {
-        if total + width(&tail(rendered.len() - included)) <= max_width {
+        if total + width(&tail(rendered.len() - included, none())) <= max_width {
             break;
         }
         included -= 1;
-        total -= width(&rendered[included].1) + sep_w;
+        total -= width(&rendered[included].2) + sep_w;
     }
     included = included.max(1);
     if included < rendered.len() {
-        let budget = max_width.saturating_sub(width(&tail(rendered.len() - included)));
-        let (first, seg) = &rendered[0];
+        let budget = max_width.saturating_sub(width(&tail(rendered.len() - included, none())));
+        let (first, name, seg) = &rendered[0];
         if width(seg) > budget {
-            let name = &entries[*first].name;
             let fixed = width(seg).saturating_sub(cell_width(name));
             let name_budget = budget.saturating_sub(fixed);
             let mut kept = name.clone();
             while cell_width(&kept) + 1 > name_budget && kept.pop().is_some() {}
             kept.push('…');
-            rendered[0].1 = item(*first, &kept);
+            rendered[0].2 = measure(*first, &kept);
+            rendered[0].1 = kept;
         }
     }
 
+    // Paint pass.
     let remaining = rendered.len() - included;
+    let styles: Vec<Style> = rendered
+        .iter()
+        .take(included)
+        .enumerate()
+        .map(|(n, (i, _, _))| item_style(cfg, n, name_style(*i), resolver))
+        .collect();
     let mut out = Segment::default();
-    for (n, (i, seg)) in rendered.into_iter().take(included).enumerate() {
+    for (n, (i, name, _)) in rendered.into_iter().take(included).enumerate() {
+        let prev = (n > 0).then(|| styles[n - 1]);
+        let next = styles.get(n + 1).copied();
         if n > 0 {
-            out.append(separator.clone());
+            out.append(separator(item_colors(prev, None, Some(styles[n]))));
         }
+        let colors = item_colors(prev, Some(styles[n]), next);
+        let seg = eval_format(cfg, &item_vars(i, &name), styles[n], &[], colors, resolver)
+            .unwrap_or_default();
         let start = out.width;
         out.append(seg);
         out.hit_from(start, Hit::Attention(entries[i].workspace_id));
     }
     if remaining > 0 {
         let start = out.width;
-        out.append(tail(remaining));
+        out.append(tail(
+            remaining,
+            item_colors(styles.last().copied(), None, None),
+        ));
         out.hit_from(start, Hit::AttentionMore);
     }
     (!out.is_empty()).then_some(out)
@@ -601,6 +695,108 @@ mod tests {
             more_format: Vec::new(),
             styles: Vec::new(),
         }
+    }
+
+    fn graded_cfg(format_src: &str, separator: &str, styles: &[&str]) -> SegmentConfig {
+        let mut cfg = item_cfg(format_src, separator);
+        cfg.styles = styles
+            .iter()
+            .map(|s| crate::ui::bar::style::StyleSpec::parse(s).unwrap())
+            .collect();
+        cfg
+    }
+
+    fn labelled(labels: &[&str]) -> Vec<(SegmentMap, Style, Option<Hit>)> {
+        labels
+            .iter()
+            .map(|l| {
+                let v = if l.is_empty() {
+                    vars(vec![])
+                } else {
+                    vars(vec![("label", var(*l))])
+                };
+                (v, Style::default(), None)
+            })
+            .collect()
+    }
+
+    fn span_style(out: &Segment, text: &str) -> Style {
+        out.spans
+            .iter()
+            .find(|s| s.content.as_ref() == text)
+            .unwrap_or_else(|| panic!("span {text:?} in {:?}", out.plain_text()))
+            .style
+    }
+
+    /// `styles` grades by RENDERED position — an empty item takes no
+    /// grade with it — and clamps to the last entry past the end.
+    #[test]
+    fn styles_grade_items_by_rendered_position_and_clamp() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let cfg = graded_cfg("[$label]($style)", "-", &["bg:red", "bg:blue bold"]);
+        let out = eval_items(&cfg, &labelled(&["a", "", "b", "c"]), &resolver).unwrap();
+        assert_eq!(out.plain_text(), "a-b-c");
+        assert_eq!(span_style(&out, "a").bg, Some(ratatui::style::Color::Red));
+        assert_eq!(span_style(&out, "b").bg, Some(ratatui::style::Color::Blue));
+        assert_eq!(span_style(&out, "c").bg, Some(ratatui::style::Color::Blue));
+        assert!(span_style(&out, "c").add_modifier.contains(Modifier::BOLD));
+    }
+
+    /// The grade patches over the provider's default and the user's
+    /// `style`, so a bg-only grade keeps the state colour in the fg.
+    #[test]
+    fn a_grade_patches_over_the_default_and_user_style() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let mut cfg = graded_cfg("[$label]($style)", "-", &["bg:red"]);
+        cfg.style = crate::ui::bar::style::StyleSpec::parse("bold").unwrap();
+        let items = vec![(
+            vars(vec![("label", var("a"))]),
+            Style::default().fg(ratatui::style::Color::Green),
+            None,
+        )];
+        let out = eval_items(&cfg, &items, &resolver).unwrap();
+        let s = span_style(&out, "a");
+        assert_eq!(s.fg, Some(ratatui::style::Color::Green));
+        assert_eq!(s.bg, Some(ratatui::style::Color::Red));
+        assert!(s.add_modifier.contains(Modifier::BOLD));
+    }
+
+    /// Neighbour colours follow the RENDERED neighbours (an empty item is
+    /// skipped over), and an absent neighbour at either end carries no
+    /// colour, so the token drops and the run inherits.
+    #[test]
+    fn neighbour_colours_follow_rendered_neighbours_and_drop_at_the_ends() {
+        use ratatui::style::Color;
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        // The whole item is a conditional group, so an item with no
+        // `$label` renders nothing at all — including its wedges.
+        let cfg = graded_cfg(
+            "([<](fg:prev_bg bg:item_bg)[$label]($style)[>](fg:item_bg bg:next_bg))",
+            "[|](fg:prev_bg bg:next_bg)",
+            &["bg:red", "bg:blue", "bg:green"],
+        );
+        let out = eval_items(&cfg, &labelled(&["a", "", "b"]), &resolver).unwrap();
+        assert_eq!(out.plain_text(), "<a>|<b>");
+        let styles: Vec<(Option<Color>, Option<Color>)> =
+            out.spans.iter().map(|s| (s.style.fg, s.style.bg)).collect();
+        assert_eq!(
+            styles,
+            vec![
+                (None, Some(Color::Red)),              // "<": no prev, so no fg
+                (None, Some(Color::Red)),              // "a"
+                (Some(Color::Red), Some(Color::Blue)), // ">": item -> next
+                (Some(Color::Red), Some(Color::Blue)), // "|": prev -> next
+                (Some(Color::Red), Some(Color::Blue)), // "<": prev (a) -> item
+                (None, Some(Color::Blue)),             // "b"
+                (Some(Color::Blue), None),             // ">": no next, so no bg
+            ]
+        );
     }
 
     #[test]

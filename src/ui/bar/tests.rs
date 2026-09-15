@@ -1530,6 +1530,73 @@ mod attention_tests {
         assert_eq!(fg("nopr"), Some(theme.path));
     }
 
+    /// Graded attention blocks: `styles` sets each rendered entry's block
+    /// colour, wedges chain through `item_bg`/`next_bg`, the last RENDERED
+    /// entry's `next` is absent even when a tail follows (so its wedge
+    /// blends into the bar), and the tail's `prev` is that entry.
+    #[test]
+    fn graded_attention_blocks_chain_their_wedges_and_stop_at_the_fold() {
+        use ratatui::style::Color;
+        let theme = Theme::wsx();
+        let specs = specs_with(
+            concat!(
+                "[attention]\nstyles = [\"bg:red\", \"bg:blue\", \"bg:green\"]\n",
+                "format = '[ $name ]($style)[>](fg:item_bg bg:next_bg)'\n",
+                "separator = \"\"\n",
+                "more_format = \"[<](fg:prev_bg)+$count\"\n",
+            ),
+            &theme,
+        );
+        let all = render_attention(&specs, &theme, &three_entries(), 200).unwrap();
+        assert_eq!(all.plain_text(), " q > ss > ss >");
+        let wedges: Vec<(Option<Color>, Option<Color>)> = all
+            .spans
+            .iter()
+            .filter(|s| s.content.as_ref() == ">")
+            .map(|s| (s.style.fg, s.style.bg))
+            .collect();
+        assert_eq!(
+            wedges,
+            vec![
+                (Some(Color::Red), Some(Color::Blue)),
+                (Some(Color::Blue), Some(Color::Green)),
+                (Some(Color::Green), None),
+            ]
+        );
+        // The PR-open name keeps its lifecycle fg under a bg-only grade.
+        let q = all
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "q")
+            .unwrap();
+        assert_eq!((q.style.fg, q.style.bg), (Some(theme.ok), Some(Color::Red)));
+
+        // Width 9: " q >" (4) + " ss >" (5) = 9 fits, but not with the
+        // "<+1" tail, so the second entry folds; the survivor's wedge has
+        // no next, and the tail's `<` takes the survivor's bg.
+        let folded = render_attention(&specs, &theme, &three_entries(), 9).unwrap();
+        assert_eq!(folded.plain_text(), " q ><+2");
+        let wedge = folded
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == ">")
+            .unwrap();
+        assert_eq!((wedge.style.fg, wedge.style.bg), (Some(Color::Red), None));
+        let tail = folded
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "<")
+            .unwrap();
+        assert_eq!(tail.style.fg, Some(Color::Red));
+        assert_eq!(
+            hits(&folded),
+            vec![
+                (0, 4, Hit::Attention(WorkspaceId(1))),
+                (4, 3, Hit::AttentionMore)
+            ]
+        );
+    }
+
     #[test]
     fn no_entries_renders_nothing() {
         let theme = Theme::wsx();

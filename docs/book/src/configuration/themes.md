@@ -29,15 +29,19 @@ Ready-to-use examples live in the repo under `docs/examples/`:
 |---|---|
 | `theme-starship.toml` | Powerline blocks in six stepped greys with orange accents, in the style of a starship prompt. |
 | `theme-rose-pine.toml` | Rosé Pine (main) in an airline layout. |
-| `theme-rose-pine-moon.toml` | Rosé Pine Moon, the darker and more muted variant, same layout. |
+| `theme-rose-pine-moon.toml` | Rosé Pine Moon, the softer, slightly lighter dark variant, same layout. |
 | `theme-nord.toml` | Nord, same layout. |
 | `theme-nord0.toml` | Nord one step darker: base blocks on nord0, so the middle of each bar melts into a nord terminal background. |
 | `theme-jellybeans.toml` | Jellybeans, same layout. |
 | `theme-orange.toml` | Dark orange, converted from a vim-airline theme: an orange block at each edge, then the greys stepping up from near-black toward the middle. |
 
-The airline files share one arrangement and differ only by palette: a
-bright "mode" block at each outer edge, a mid-toned block beside it, and a
-base-toned block toward the middle, so the eye lands on the edges first.
+The Rosé Pine, Nord, and Jellybeans files share one arrangement and differ
+only by palette: a bright "mode" block at each outer edge, a mid-toned
+block beside it, and a base-toned block toward the middle, so the eye lands
+on the edges first. Orange keeps that idea but splits more pieces into
+their own blocks (title and view, repos and workspaces, each item on the
+attached bottom bar's right side) and leads the key hints with a blank
+orange stub.
 The two Nord files pair with `wsx config set theme nord`, and Jellybeans and
 Orange with `wsx config set theme jellybeans`, so the rest of the UI
 matches; Rosé Pine has no built-in base palette, so leave the default `wsx`.
@@ -53,8 +57,10 @@ wsx theme check
 
 To keep several on hand and switch between them, copy the files somewhere
 stable and make `theme.toml` a symlink you re-point. wsx fingerprints the
-file the link resolves to, so re-pointing it reloads the bars within a
-second in the running app:
+file the link resolves to by its modification time, size, and permission
+bits, so re-pointing it reloads the bars within a second in the running
+app. Two targets with identical metadata would not be told apart; if a
+switch ever fails to show, `touch` the file the link now points at.
 
 ```
 mkdir -p ~/.config/wsx/themes

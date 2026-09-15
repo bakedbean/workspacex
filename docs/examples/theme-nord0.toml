@@ -3,10 +3,11 @@
 # Pair with `wsx config set theme nord` so the rest of the UI matches.
 #
 # Same layout as theme-nord.toml, with every Polar Night block shifted one
-# step darker: mid blocks on nord1, base blocks on nord0. nord0 is also the
-# background of the built-in nord palette, so the middle of each bar melts
-# into the terminal and only the bright edge blocks and the accent chips
-# stand out.
+# step darker: mid blocks on nord1, base blocks on nord0. If your terminal
+# background is nord0 (#2e3440), the middle of each bar melts into it and
+# only the bright edge blocks and the accent chips stand out. wsx itself
+# leaves the background to the terminal, so `theme nord` alone does not
+# supply it.
 #
 # Airline layout: a bright "mode" block at each outer edge (sections a / z),
 # a mid block beside it (b / y), and a base-toned block toward the middle

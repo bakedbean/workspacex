@@ -61,7 +61,7 @@ priority = 60        # optional; default 100 (never drops)
 disabled = false     # optional
 
 [dashboard_footer]
-right_format = "($version  )$funnel"
+right_format = "$version(  $funnel)"
 ```
 
 `ModuleTable` accepts exactly `format`, `style`, `priority`, `disabled`
@@ -97,7 +97,7 @@ the same in-memory maps the dashboard rows read.
 
 | Variable | Source | Meaning |
 |---|---|---|
-| `working` `waiting` `blocked` `done` `busy` | `app.pushed_status[ws].state` (`ReportedState`) | workspaces whose last `wsx status set` (or Stop-hook inference, for `busy`) is that state |
+| `working` `waiting` `blocked` `done` `busy` | `app.fresh_reported_status(ws)` — the same freshness-gated view the rows use | workspaces whose last `wsx status set` (or Stop-hook inference, for `busy`) is that state |
 | `unreported` | absence of `pushed_status` entry | workspaces with no reported status |
 | `alerts` | `app.workspace_needs_attention` | unacknowledged attention alerts (named `alerts`, not `attention`, because `attention` is a segment) |
 | `awaiting` `stalled` `active` `idle` | `app.workspace_activity[ws]` (`ActivityState`) | live transcript classification; `awaiting` = `AwaitingAnswer` |
@@ -183,7 +183,7 @@ the frame and pass it to each composer's inputs.
 **`src/ui/bar/default_theme.toml`** — add `[module.funnel]` (format above,
 `priority = 60` — the same slot `$usage` had, so `$version` (50) still
 drops first on a narrow footer) and change `[dashboard_footer].right_format` to
-`"($version  )$funnel"`. Comment block documents the `[module.*]` grammar
+`"$version(  $funnel)"`. Comment block documents the `[module.*]` grammar
 and lists `FLEET_VARS` by name.
 
 **`docs/examples/theme-*.toml`** (7 files) — each currently places

@@ -123,25 +123,18 @@ impl FleetStats {
 
     /// Walk every workspace the dashboard lists, once per frame.
     pub fn collect(app: &App) -> Self {
-        let rows = app.workspaces.iter().map(|(_, ws)| {
-            let status = app.classify_status(ws);
-            FleetRow {
-                reported: app.pushed_status.get(&ws.id).map(|r| r.state),
-                activity: app.workspace_activity.get(&ws.id).copied(),
-                alert: app.workspace_needs_attention.contains(&ws.id),
-                live: matches!(
-                    status,
-                    crate::ui::dashboard::status::Status::Thinking
-                        | crate::ui::dashboard::status::Status::Waiting
-                ),
-                lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
-                review: app.pr_review.get(&ws.id).copied(),
-                unresolved: app.pr_unresolved.get(&ws.id).copied().unwrap_or(0),
-                dirty: app
-                    .workspace_status
-                    .get(&ws.id)
-                    .is_some_and(|g| g.modified + g.untracked > 0),
-            }
+        let rows = app.workspaces.iter().map(|(_, ws)| FleetRow {
+            reported: app.fresh_reported_status(ws.id).map(|r| r.state),
+            activity: app.workspace_activity.get(&ws.id).copied(),
+            alert: app.workspace_needs_attention.contains(&ws.id),
+            live: app.is_live(ws),
+            lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
+            review: app.pr_review.get(&ws.id).copied(),
+            unresolved: app.pr_unresolved.get(&ws.id).copied().unwrap_or(0),
+            dirty: app
+                .workspace_status
+                .get(&ws.id)
+                .is_some_and(|g| g.modified + g.untracked > 0),
         });
         Self::from_rows(rows, app.repos.len() as u32, app.msgs_queued)
     }
@@ -266,6 +259,12 @@ mod tests {
                 unresolved: 2,
                 ..row()
             },
+            FleetRow {
+                reported: Some(ReportedState::Done),
+                lifecycle: Some(BranchLifecycle::PrConflicted),
+                review: Some(ReviewDecision::ReviewRequired),
+                ..row()
+            },
         ];
         let vars = FleetStats::from_rows(rows, 2, 5).to_vars();
         assert_eq!(text(&vars, "working"), "1");
@@ -293,8 +292,11 @@ mod tests {
         );
         assert_eq!(text(&vars, "dirty"), "1");
         assert_eq!(text(&vars, "msgs_queued"), "5");
-        assert_eq!(text(&vars, "workspaces"), "4");
+        assert_eq!(text(&vars, "workspaces"), "5");
         assert_eq!(text(&vars, "repos"), "2");
+        assert_eq!(text(&vars, "done"), "1");
+        assert_eq!(text(&vars, "pr_conflicted"), "1");
+        assert_eq!(text(&vars, "review_required"), "1");
     }
 
     #[test]
@@ -336,5 +338,50 @@ mod tests {
         assert_eq!(text(&vars, "alerts"), "1");
         assert_eq!(text(&vars, "msgs_queued"), "2");
         assert_eq!(text(&vars, "live_agents"), "", "no session → not live");
+    }
+
+    #[test]
+    fn collect_ignores_a_stale_reported_status() {
+        use crate::activity::events::WorkspaceEvents;
+        use crate::data::store::{NewWorkspace, ReportedStatus, Store};
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let mut app =
+            crate::app::App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        // Pushed status is old (reported_at = 0); the transcript has grown
+        // past it (last_log_activity_ms = 1000), so `fresh_reported_status`
+        // drops it — unlike `Busy`, `Working` is gated on freshness.
+        app.pushed_status.insert(
+            ws,
+            ReportedStatus {
+                state: ReportedState::Working,
+                message: None,
+                source: "test".into(),
+                reported_at: 0,
+            },
+        );
+        app.workspace_events.insert(
+            ws,
+            WorkspaceEvents {
+                last_log_activity_ms: 1000,
+                ..Default::default()
+            },
+        );
+        let vars = FleetStats::collect(&app).to_vars();
+        assert_eq!(text(&vars, "working"), "");
+        assert_eq!(text(&vars, "unreported"), "1");
     }
 }

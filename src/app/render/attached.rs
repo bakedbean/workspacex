@@ -228,6 +228,8 @@ fn gather_remote(app: &App, label: &str) -> AttachedData {
         active_agent: None,
         version: env!("CARGO_PKG_VERSION"),
         window_label: usage_window.label(),
+        // Same precedent as `activity` above: these are the local fleet's
+        // stats — the remote attach carries no visibility into its own side.
         activity: usage_activity,
         fleet: crate::ui::bar::fleet::FleetStats::collect(app).to_vars(),
     }

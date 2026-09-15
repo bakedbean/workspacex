@@ -233,6 +233,17 @@ fn resolve_palette(
     let mut palette = HashMap::new();
     for (name, value) in &file.palette {
         let loc = format!("[palette].{name}");
+        // Inside a multi-item segment these names resolve per item, ahead
+        // of the palette, so a palette entry by one of them would be
+        // silently shadowed there (and by nothing at all for an absent
+        // neighbour). Reserve them.
+        if crate::ui::bar::registry::ITEM_COLORS.contains(&name.as_str()) {
+            errors.push(error(
+                loc,
+                format!("`{name}` is reserved for a multi-item segment's per-item colours"),
+            ));
+            continue;
+        }
         match style::color_ref(value) {
             Ok(ColorRef::Literal(c)) => {
                 palette.insert(name.clone(), c);
@@ -764,6 +775,7 @@ mod tests {
         for src in [
             "[pins]\nmore_format = \"$count\"\n",
             "[pins]\nmore_format = \"x\"\n",
+            "[pins]\nmore_format = \"\"\n",
         ] {
             let e = errs(src);
             assert_eq!(e.len(), 1, "{e:?}");
@@ -812,6 +824,30 @@ mod tests {
         assert_eq!(e[0].location, "[pins].styles[1]");
 
         assert!(!errs("[pins]\nstyles = [\"bg:next_bg\"]\n").is_empty());
+    }
+
+    /// The six per-item colour names resolve ahead of the palette inside a
+    /// multi-item segment's formats, so a palette entry by one of those
+    /// names would be silently shadowed there (and, for an absent
+    /// neighbour, shadowed by nothing at all). Reserve them instead.
+    #[test]
+    fn palette_may_not_define_the_per_item_colour_names() {
+        for name in crate::ui::bar::registry::ITEM_COLORS {
+            let e = errs(&format!("[palette]\n{name} = \"red\"\n"));
+            assert_eq!(e.len(), 1, "{name}: {e:?}");
+            assert_eq!(e[0].location, format!("[palette].{name}"));
+            assert!(
+                e[0].message.contains("reserved"),
+                "{name}: {}",
+                e[0].message
+            );
+        }
+        // A near miss is still an ordinary palette entry.
+        assert!(
+            ok("[palette]\nnext_bgx = \"red\"\n")
+                .palette
+                .contains_key("next_bgx")
+        );
     }
 
     #[test]

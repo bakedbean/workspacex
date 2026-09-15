@@ -37,8 +37,10 @@ const NO_TAIL: &[&str] = &[];
 /// Colour names a multi-item segment's `format`, `separator`, and
 /// `more_format` may use, resolved per item from the final `$style` of the
 /// item and its rendered neighbours. An absent neighbour (the first item's
-/// `prev`, the last's `next`) or an unset colour carries no colour, so the
-/// token drops out and the run inherits the bar's style.
+/// `prev`, the last's `next`) or an unset colour carries no colour: the
+/// token sets nothing, so `$style` or an enclosing run keeps what it set
+/// and otherwise the bar's style shows through. Reserved: the loader
+/// rejects a `[palette]` entry by any of these names.
 pub const ITEM_COLORS: &[&str] = &[
     "item_fg", "item_bg", "prev_fg", "prev_bg", "next_fg", "next_bg",
 ];

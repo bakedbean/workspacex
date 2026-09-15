@@ -1769,8 +1769,8 @@ mod example_theme_tests {
         let theme = Theme::jellybeans();
         let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
         let orange = Color::Rgb(0xd7, 0x5f, 0x00);
-        let green = Color::Rgb(0x00, 0x87, 0x00);
-        let plum = Color::Rgb(0x87, 0x00, 0x87);
+        let forest = Color::Rgb(0x00, 0x5f, 0x00);
+        let grape = Color::Rgb(0x5f, 0x00, 0x5f);
         // `header_fg = "black"` is the file's own palette black, not ANSI's.
         let black = Color::Rgb(0x15, 0x15, 0x15);
         let render = |pr: Option<ChipPr>| {
@@ -1813,12 +1813,12 @@ mod example_theme_tests {
 
         let (top, bottom) = render(Some(chip(BranchLifecycle::PrOpen)));
         let (name, pr) = (name_cell(&top), pr_cell(&bottom));
-        assert_eq!((name.fg, name.bg), (green, orange), "open name");
-        assert_eq!((pr.fg, pr.bg), (green, orange), "open pr");
+        assert_eq!((name.fg, name.bg), (forest, orange), "open name");
+        assert_eq!((pr.fg, pr.bg), (forest, orange), "open pr");
 
         let (top, bottom) = render(Some(chip(BranchLifecycle::PrMerged)));
-        assert_eq!(name_cell(&top).fg, plum, "merged name");
-        assert_eq!(pr_cell(&bottom).fg, plum, "merged pr");
+        assert_eq!(name_cell(&top).fg, grape, "merged name");
+        assert_eq!(pr_cell(&bottom).fg, grape, "merged pr");
 
         let (top, _) = render(None);
         let name = name_cell(&top);

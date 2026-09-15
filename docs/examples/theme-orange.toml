@@ -35,6 +35,8 @@ cream    = "#ffd7af"   # ctermBrightYellow 223
 green    = "#008700"   # cterm0B 28
 blood    = "#870000"   # ctermBlood 88
 plum     = "#870087"   # cterm 90
+forest   = "#005f00"   # cterm 22, a step below green
+grape    = "#5f005f"   # cterm 53, a step below plum
 olive    = "#878700"   # cterm 100
 
 # The wordmark keeps the app's branding (brand-blue bar and "x", cream
@@ -119,14 +121,15 @@ symbol = ""
 # The name carries the branch's PR-lifecycle tint like the pr block does.
 # The base theme's tints are picked for the dark background and wash out
 # on orange, so this block takes darker ones from the same xterm cube:
-# green 28, plum 90, blood 88, olive 100. Without a PR the tint falls back
-# to header_fg, shadowed here to the block's black.
+# forest 22, grape 53, blood 88, olive 100 (the diff block keeps green 28,
+# which reads fine on smoke). Without a PR the tint falls back to
+# header_fg, shadowed here to the block's black.
 [workspace]
 format = "[($repo/)$name]($style bold)"
 
 [workspace.palette]
-ok        = "green"
-merged    = "plum"
+ok        = "forest"
+merged    = "grape"
 err       = "blood"
 warn      = "olive"
 header_fg = "black"
@@ -157,7 +160,7 @@ format = "([$model](bold) )[$tokens]($style)"
 [diff]
 format = "[+$added](fg:green bold) [−$removed](fg:blood)"
 
-# Keep the lifecycle tint ($style: green open, plum merged, blood closed)
+# Keep the lifecycle tint ($style: forest open, grape merged, blood closed)
 # on top of the block's orange, instead of the block's black text — the
 # same darker variants as the workspace block, since both sit on orange.
 # A draft PR has no tint and falls back to dim, shadowed to black here.
@@ -165,8 +168,8 @@ format = "[+$added](fg:green bold) [−$removed](fg:blood)"
 format = "[$symbol #$number $label]($style bold)( [$mark]($mark_style))"
 
 [pr.palette]
-ok     = "green"
-merged = "plum"
+ok     = "forest"
+merged = "grape"
 err    = "blood"
 warn   = "olive"
 dim    = "black"

@@ -35,11 +35,13 @@ cream    = "#ffd7af"   # ctermBrightYellow 223
 green    = "#008700"   # cterm0B 28
 blood    = "#870000"   # ctermBlood 88
 
-# The brand segment draws its own wedge so the wordmark and the view name
-# are two blocks: title on orange, view on smoke, then group on soot and
-# sort on charcoal. The counts segment does the same on the right.
+# The wordmark keeps the app's branding (brand-blue bar and "x", cream
+# name) flat on the bar background, so the header's left edge is the app
+# rather than an orange mode block; the brand segment then caps its own
+# view block on smoke, and the chain steps on to group on soot and sort on
+# charcoal. The counts segment splits the same way on the right.
 [dashboard_header]
-format       = "[ $brand](bg:orange fg:black)[](fg:smoke bg:soot)[ $group ](bg:soot fg:orange)[](fg:soot bg:charcoal)[( $sort )](bg:charcoal fg:cream)[](fg:charcoal)(  $filter)"
+format       = "$brand[](fg:smoke bg:soot)[ $group ](bg:soot fg:orange)[](fg:soot bg:charcoal)[( $sort )](bg:charcoal fg:cream)[](fg:charcoal)(  $filter)"
 right_format = "[](fg:smoke)[$counts ](bg:orange fg:black)"
 fill         = " "
 
@@ -71,8 +73,11 @@ fill         = " "
 
 # --- segments (unset fields keep the bundled defaults) -------------------
 
+# Brand colours are theme tokens (`brand`, `wordmark`), same as the bundled
+# default. The view block opens with a left cap since there is no block
+# before it to wedge out of.
 [brand]
-format = "[$symbol]() [$name](bold)[ $mark](bold) [](fg:orange bg:smoke)[ $view ](bg:smoke fg:orange)"
+format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold) [](fg:smoke)[ $view ](bg:smoke fg:orange)"
 
 [group]
 format = "[$label ]()$tabs"

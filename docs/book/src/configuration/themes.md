@@ -23,10 +23,31 @@ change the base palette or the appearance of other UI elements.
 
 ## Bar theme file
 
-A complete, ready-to-use example lives in the repo at
-`docs/examples/theme-starship.toml`: powerline blocks in five stepped greys
-with orange accents, in the style of a starship prompt. Copy it to
-`~/.config/wsx/theme.toml`, turn the feature on, and validate:
+Ready-to-use examples live in the repo under `docs/examples/`:
+
+| File | Look |
+|---|---|
+| `theme-starship.toml` | Powerline blocks in six stepped greys with orange accents, in the style of a starship prompt. |
+| `theme-rose-pine.toml` | Rosé Pine (main) in an airline layout. |
+| `theme-rose-pine-moon.toml` | Rosé Pine Moon, the softer, slightly lighter dark variant, same layout. |
+| `theme-nord.toml` | Nord, same layout. |
+| `theme-nord0.toml` | Nord one step darker: base blocks on nord0, so the middle of each bar melts into a nord terminal background. |
+| `theme-jellybeans.toml` | Jellybeans, same layout. |
+| `theme-orange.toml` | Dark orange, converted from a vim-airline theme: an orange block at each edge, then the greys stepping up from near-black toward the middle. |
+
+The Rosé Pine, Nord, and Jellybeans files share one arrangement and differ
+only by palette: a bright "mode" block at each outer edge, a mid-toned
+block beside it, and a base-toned block toward the middle, so the eye lands
+on the edges first. Orange keeps that idea but splits more pieces into
+their own blocks (title and view, repos and workspaces, each item on the
+attached bottom bar's right side) and leads the key hints with a blank
+orange stub.
+The two Nord files pair with `wsx config set theme nord`, and Jellybeans and
+Orange with `wsx config set theme jellybeans`, so the rest of the UI
+matches; Rosé Pine has no built-in base palette, so leave the default `wsx`.
+
+To use one, copy it to `~/.config/wsx/theme.toml`, turn the feature on, and
+validate:
 
 ```
 cp docs/examples/theme-starship.toml ~/.config/wsx/theme.toml
@@ -34,9 +55,23 @@ wsx config set bar_theme on
 wsx theme check
 ```
 
-It needs a Nerd Font (for the `` / `` caps) and a truecolor terminal.
-Those caps are private-use characters (U+E0B0 and U+E0B2), so copy the file
-as bytes (`cp`, `scp`, a dotfiles repo) rather than pasting it through a
+To keep several on hand and switch between them, copy the files somewhere
+stable and make `theme.toml` a symlink you re-point. wsx fingerprints the
+file the link resolves to by its modification time, size, and permission
+bits, so re-pointing it reloads the bars within a second in the running
+app. Two targets with identical metadata would not be told apart; if a
+switch ever fails to show, `touch` the file the link now points at.
+
+```
+mkdir -p ~/.config/wsx/themes
+cp docs/examples/theme-*.toml ~/.config/wsx/themes/
+ln -sfn themes/theme-nord.toml ~/.config/wsx/theme.toml      # switch
+ln -sfn themes/theme-rose-pine.toml ~/.config/wsx/theme.toml # switch again
+```
+
+They need a Nerd Font (for the `` / `` caps) and a truecolor terminal.
+Those caps are private-use characters (U+E0B0 and U+E0B2), so copy the files
+as bytes (`cp`, `scp`, a dotfiles repo) rather than pasting them through a
 chat or editor that strips unknown glyphs; if they go missing, `wsx theme
 check` still passes but the blocks render with flat edges.
 

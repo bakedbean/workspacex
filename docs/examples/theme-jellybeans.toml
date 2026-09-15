@@ -1,0 +1,103 @@
+# Jellybeans in an airline layout
+# Palette: https://github.com/nanotech/jellybeans.vim
+# Pair with `wsx config set theme jellybeans` so the rest of the UI matches.
+#
+# Airline layout: a bright "mode" block at each outer edge (sections a / z),
+# a mid block beside it (b / y), and a base-toned block toward the middle
+# (c / x). Left chains point right; right chains point left.
+#
+# Install:  cp docs/examples/theme-jellybeans.toml ~/.config/wsx/theme.toml
+#           wsx config set bar_theme on
+#           wsx theme check
+# Needs a Nerd Font (for the U+E0B0 / U+E0B2 caps) and a truecolor terminal.
+# Reload is live: save the file and the bars update within a second.
+
+[palette]
+bg       = "#151515"
+fg       = "#e8e8d3"
+grey     = "#888888"
+dark     = "#1c1c1c"
+mid      = "#3a3a3a"
+plum     = "#403c41"
+blue     = "#8197bf"
+yellow   = "#fad07a"
+orange   = "#ffb964"
+red      = "#cf6a4c"
+green    = "#99ad6a"
+purple   = "#c6b6ee"
+cyan     = "#8fbfdc"
+
+[dashboard_header]
+format       = "[ $brand ](bg:blue fg:bg)[](fg:blue bg:plum)[ $group ](bg:plum fg:fg)[](fg:plum bg:dark)[( $sort )](bg:dark fg:grey)[](fg:dark)(  $filter)"
+right_format = "[](fg:mid)[ $counts ](bg:mid fg:fg)"
+fill         = " "
+
+[dashboard_footer]
+format       = "[ $keys ](bg:blue fg:bg)[](fg:blue)"
+right_format = "[](fg:mid)[( $version )](bg:mid fg:fg)[](fg:green bg:mid)[ $usage ](bg:green fg:bg)"
+fill         = " "
+
+[attached_top]
+format       = "[($agent_bar )$workspace ](bg:blue fg:bg bold)[](fg:blue bg:plum)[( $attention )](bg:plum fg:fg)[](fg:plum)"
+fill         = " "
+
+[attached_bottom]
+format       = "[ $keys ](bg:blue fg:bg)[](fg:blue bg:plum)[( $pins )](bg:plum fg:fg)[](fg:plum)"
+right_format = "[](fg:dark)[( $agents )( $model_tokens )](bg:dark fg:grey)[](fg:mid bg:dark)[( $procs )( $diff )](bg:mid fg:fg)[](fg:green bg:mid)[( $pr )](bg:green fg:bg)"
+fill         = " "
+
+# --- segments (unset fields keep the bundled defaults) -------------------
+
+[brand]
+format = "[$symbol](fg:orange) [$name](bold)[ $mark](fg:orange bold)[ · $view]()"
+
+[group]
+format = "[$label ]()$tabs"
+
+[sort]
+format = "[$label ]()$tabs"
+
+[filter]
+format = "[/$needle](fg:yellow bold)"
+
+[counts]
+format = "[$repos repos · $workspaces workspaces]()"
+
+# Inherit the block's text colour; the bundled formats use fg:path, which
+# would override the block on a coloured background.
+[version]
+format = "[$version]()"
+
+[usage]
+format = "[$label $spark]()"
+
+[keys]
+format    = "[$key](fg:bg bold) [$label]()"
+separator = "  "
+
+[pins]
+format    = "[$index](fg:yellow bold) [$label]()"
+separator = "  "
+
+# Agent identity as a right-pointing chevron in the agent's colour (the
+# bundled default is a thin vertical bar).
+[agent_bar]
+symbol = ""
+
+[workspace]
+# Inherit the block's text colour (bold) instead of the base theme's header
+# colour, which the engine would otherwise supply as $style.
+format = "[($repo/)$name](bold)"
+
+[agents]
+format    = "[$symbol]($style)$label ([$key](fg:yellow bold))"
+separator = "   "
+
+[model_tokens]
+format = "([$model](fg:cyan) )[$tokens]($style)"
+
+[diff]
+format = "[+$added](fg:green bold) [−$removed](fg:red)"
+
+[pr]
+format = "[$symbol #$number $label](bold)( [$mark]($mark_style))"

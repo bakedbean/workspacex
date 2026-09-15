@@ -1,5 +1,6 @@
 # Example wsx bar theme: powerline blocks in the style of a starship prompt
-# (five stepped greys, orange accents, `` transitions).
+# (palette "elsa": six stepped greys, orange accents, U+E0B2 opens a block,
+# U+E0B0 closes it).
 #
 # Install:  cp docs/examples/theme-starship.toml ~/.config/wsx/theme.toml
 #           wsx config set bar_theme on
@@ -9,6 +10,7 @@
 
 [palette]
 # elsa, lifted ~30 points per step so the blocks read on a dark terminal
+zero     = "#1c1c1c"   # one step below `first`, for the darkest right-edge block
 first    = "#303030"
 second   = "#444444"
 third    = "#585858"
@@ -24,10 +26,10 @@ deleted  = "#FFA7A4"   # git_metrics deleted_style
 # ---------------------------------------------------------------- dashboard
 
 # One chain per side. Left: key hints on `first`. Right: version then the
-# usage graph, `fourth` blending into the darker `third` at the edge.
+# usage graph, `second` blending into the darker `first` at the edge.
 [dashboard_footer]
 format       = "[ $keys ](bg:first)[](fg:first)"
-right_format = "[](fg:fourth)[( $version )](bg:fourth fg:label)[](fg:third bg:fourth)[ $usage ](bg:third fg:amber)"
+right_format = "[](fg:second)[( $version )](bg:second fg:label)[](fg:first bg:second)[ $usage ](bg:first fg:amber)"
 fill         = " "
 
 # ----------------------------------------------------------------- header
@@ -46,22 +48,22 @@ fill         = " "
 # blends into the attention block on `second` (which stays as a thin wedge
 # when there is nothing to report).
 [attached_top]
-format       = "[ ($agent_bar )$workspace ](bg:first fg:orange bold)[](fg:first bg:second)[( $attention )](bg:second)[](fg:second)"
+format       = "[($agent_bar )$workspace ](bg:first fg:orange bold)[](fg:first bg:second)[( $attention )](bg:second)[](fg:second)"
 fill         = " "
 
 # --------------------------------------------------------- attached: bottom
 
 # Left chain: `^x menu` on `first` blends into pinned commands on `second`.
 # Right chain, greys DARKENING toward the edge (mirror of the left side, so
-# the diff and PR colours sit on dark blocks): agent pills on `fifth`,
-# model + tokens on `fourth`, procs + diff on `third`, the PR chip on `second`. Optional
+# the diff and PR colours sit on dark blocks): agent pills on `third`,
+# model + tokens on `second`, procs + diff on `first`, the PR chip on `zero`. Optional
 # segments share a block, as starship does with its language modules, so a
 # missing one collapses to its transition wedge instead of breaking the chain.
 # Right-side transitions point left: fg is the block to the right, bg the block
 # to the left.
 [attached_bottom]
 format       = "[ $keys ](bg:first)[](fg:first bg:second)[( $pins )](bg:second)[](fg:second)"
-right_format = "[](fg:fifth)[( $agents )](bg:fifth)[](fg:fourth bg:fifth)[( $model_tokens )](bg:fourth)[](fg:third bg:fourth)[( $procs )( $diff )](bg:third)[](fg:second bg:third)[( $pr )](bg:second)"
+right_format = "[](fg:third)[( $agents )](bg:third)[](fg:second bg:third)[( $model_tokens )](bg:second)[](fg:first bg:second)[( $procs )( $diff )](bg:first)[](fg:zero bg:first)[( $pr )](bg:zero)"
 fill         = " "
 
 # ---------------------------------------------------------------- segments
@@ -77,6 +79,14 @@ format = "[$label ](fg:label)$tabs"
 [counts]
 format = "[$repos repos · $workspaces workspaces](fg:label)"
 
+# Inherit the block's text colour; the bundled formats use fg:path, which
+# would override the block on a coloured background.
+[version]
+format = "[$version]()"
+
+[usage]
+format = "[$label $spark]()"
+
 [keys]
 # Key in amber like starship's `code` colour, label muted; no per-pill
 # background since the whole block already has one.
@@ -87,8 +97,15 @@ separator = "  "
 format    = "[$index](fg:amber bold) [$label](fg:label)"
 separator = "  "
 
+# Agent identity as a right-pointing chevron in the agent's colour (the
+# bundled default is a thin vertical bar).
+[agent_bar]
+symbol = ""
+
 [workspace]
-format = "[($repo/)$name]($style)"
+# Inherit the block's text colour (bold) instead of the base theme's header
+# colour, which the engine would otherwise supply as $style.
+format = "[($repo/)$name](bold)"
 
 [agents]
 # `● claude q   ○ codex w` — keys in amber, no pill background.

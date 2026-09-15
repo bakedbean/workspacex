@@ -26,7 +26,7 @@ deleted  = "#FFA7A4"   # git_metrics deleted_style
 # ---------------------------------------------------------------- dashboard
 
 # One chain per side. Left: key hints on `first`. Right: version then the
-# usage graph, `second` blending into the darker `first` at the edge.
+# funnel module, `second` blending into the darker `first` at the edge.
 [dashboard_footer]
 format       = "[ $keys ](bg:first)[](fg:first)"
 right_format = "[](fg:second)[( $version )](bg:second fg:label)[](fg:first bg:second)[ $funnel ](bg:first fg:amber)"

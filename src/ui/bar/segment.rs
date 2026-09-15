@@ -124,6 +124,10 @@ pub struct SegmentConfig {
     /// fit (`attention`'s ` … +N more`). Its variables are the segment's
     /// `SegmentDef::more_vars`; empty on segments without a tail.
     pub more_format: Vec<Node>,
+    /// Per-position item styles for a multi-item segment: item `i` gets
+    /// `styles[i]`, or the last entry once the list runs out, patched over
+    /// the provider's default and `style`. Empty grades nothing.
+    pub styles: Vec<StyleSpec>,
 }
 
 pub type SegmentMap = HashMap<String, Segment>;

@@ -18,6 +18,10 @@ pub struct SegmentDef {
     /// use. Empty for segments without a tail, where setting `more_format`
     /// at all is a theme error.
     pub more_vars: &'static [&'static str],
+    /// A multi-item segment: `format` describes one item, joined by
+    /// `separator`, graded by `styles`, with the neighbour colours
+    /// [`ITEM_COLORS`] available in its formats.
+    pub items: bool,
     /// Carries one click target that isn't indexed by item (unlike
     /// `pins`/`agents`/`keys`, which record a hit per item and so tolerate
     /// repeats): placing one of these in two formats at once means the
@@ -30,12 +34,22 @@ pub struct SegmentDef {
 const STYLE: &[&str] = &["style"];
 const NO_TAIL: &[&str] = &[];
 
+/// Colour names a multi-item segment's `format`, `separator`, and
+/// `more_format` may use, resolved per item from the final `$style` of the
+/// item and its rendered neighbours. An absent neighbour (the first item's
+/// `prev`, the last's `next`) or an unset colour carries no colour, so the
+/// token drops out and the run inherits the bar's style.
+pub const ITEM_COLORS: &[&str] = &[
+    "item_fg", "item_bg", "prev_fg", "prev_bg", "next_fg", "next_bg",
+];
+
 pub const SEGMENTS: &[SegmentDef] = &[
     SegmentDef {
         name: "brand",
         vars: &["symbol", "name", "mark", "view"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -43,6 +57,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["label", "tabs"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -50,6 +65,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["label", "tabs"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -57,6 +73,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["needle"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -64,6 +81,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["repos", "workspaces"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -71,6 +89,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["key", "label"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: true,
         singleton: false,
     },
     SegmentDef {
@@ -78,6 +97,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["version"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -85,6 +105,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["label", "spark"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: true,
     },
     SegmentDef {
@@ -92,6 +113,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["symbol"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -99,6 +121,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["repo", "name"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -106,6 +129,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["glyph", "repo", "name", "age"],
         style_vars: STYLE,
         more_vars: &["count"],
+        items: true,
         singleton: true,
     },
     SegmentDef {
@@ -113,6 +137,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["index", "label"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: true,
         singleton: false,
     },
     SegmentDef {
@@ -120,6 +145,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["symbol", "label", "key"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: true,
         singleton: false,
     },
     SegmentDef {
@@ -127,6 +153,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["model", "tokens"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -134,6 +161,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["symbol", "count"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: true,
     },
     SegmentDef {
@@ -141,6 +169,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["added", "removed"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
+        items: false,
         singleton: false,
     },
     SegmentDef {
@@ -148,6 +177,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         vars: &["symbol", "number", "label", "mark"],
         style_vars: &["style", "mark_style"],
         more_vars: NO_TAIL,
+        items: false,
         singleton: true,
     },
 ];

@@ -6,7 +6,7 @@
 //! See `docs/superpowers/specs/2026-09-13-bar-theming-design.md`.
 
 use crate::ui::bar::format::{self, Node};
-use crate::ui::bar::registry::{SEGMENTS, segment_def, singleton_names};
+use crate::ui::bar::registry::{ITEM_COLORS, SEGMENTS, segment_def, singleton_names};
 use crate::ui::bar::render::BarSpec;
 use crate::ui::bar::segment::SegmentConfig;
 use crate::ui::bar::style::{self, ColorRef, Resolver, StyleSpec};
@@ -62,6 +62,7 @@ pub struct SegmentTable {
     pub priority: Option<u32>,
     pub separator: Option<String>,
     pub more_format: Option<String>,
+    pub styles: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +107,7 @@ impl SegmentTable {
             priority: self.priority.or(base.priority),
             separator: self.separator.or(base.separator),
             more_format: self.more_format.or(base.more_format),
+            styles: self.styles.or(base.styles),
         }
     }
 }
@@ -253,9 +255,10 @@ fn resolve_palette(
 fn resolve_segment(
     name: &str,
     tbl: &SegmentTable,
-    resolver: &Resolver,
+    base_resolver: &Resolver,
     errors: &mut Vec<ThemeError>,
 ) -> Option<SegmentConfig> {
+    let resolver = base_resolver;
     let Some(def) = segment_def(name) else {
         errors.push(error(
             format!("[{name}]"),
@@ -270,6 +273,17 @@ fn resolve_segment(
         ));
         return None;
     };
+    // A multi-item segment's formats may name the item and neighbour
+    // colours; nothing else may.
+    let item_colors: HashMap<String, Option<Color>> = if def.items {
+        ITEM_COLORS
+            .iter()
+            .map(|n| (n.to_string(), Some(Color::Reset)))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    let resolver = &resolver.with_colors(item_colors);
     let loc = format!("[{name}].format");
     let nodes = parse_format(&loc, tbl.format.as_deref().unwrap_or(""), errors);
     let seg_resolver = resolver.with_styles(placeholder_styles(def.style_vars));
@@ -279,6 +293,32 @@ fn resolve_segment(
     let sep_loc = format!("[{name}].separator");
     let separator = parse_format(&sep_loc, tbl.separator.as_deref().unwrap_or("  "), errors);
     validate(&sep_loc, &separator, &[], resolver, errors);
+    // Per-position grades: only a multi-item segment has positions, and a
+    // grade can't depend on its neighbours (they depend on it), so entries
+    // resolve against the bare resolver.
+    let styles_loc = format!("[{name}].styles");
+    let styles: Vec<StyleSpec> = match tbl.styles.as_deref() {
+        Some(_) if !def.items => {
+            errors.push(error(
+                &styles_loc,
+                "this segment has no items (only keys, pins, agents, attention take `styles`)",
+            ));
+            Vec::new()
+        }
+        Some(list) => list
+            .iter()
+            .enumerate()
+            .map(|(i, src)| {
+                styled(
+                    &format!("{styles_loc}[{i}]"),
+                    Some(src),
+                    base_resolver,
+                    errors,
+                )
+            })
+            .collect(),
+        None => Vec::new(),
+    };
     // Likewise the overflow tail: no item, so no item `$style`. Only a
     // segment that folds entries has one at all; a tail on any other is
     // rejected outright rather than silently ignored.
@@ -301,7 +341,7 @@ fn resolve_segment(
     let style = styled(
         &format!("[{name}].style"),
         tbl.style.as_deref(),
-        resolver,
+        base_resolver,
         errors,
     );
     Some(SegmentConfig {
@@ -314,6 +354,7 @@ fn resolve_segment(
             .unwrap_or(crate::ui::bar::render::DEFAULT_PRIORITY),
         separator,
         more_format,
+        styles,
     })
 }
 
@@ -733,6 +774,44 @@ mod tests {
                 e[0].message
             );
         }
+    }
+
+    /// `styles` grades a multi-item segment's items by position, and the
+    /// six neighbour colours (`item_*`, `prev_*`, `next_*`) are legal only
+    /// in a multi-item segment's `format`, `separator`, and `more_format`
+    /// — never in `styles` itself (a grade can't depend on its neighbours)
+    /// and never on a single-item segment.
+    #[test]
+    fn styles_grade_items_and_neighbour_colours_are_item_only() {
+        let specs = ok(concat!(
+            "[pins]\nstyles = [\"bg:red\", \"bg:blue bold\"]\n",
+            "format = \"[$label]($style)[>](fg:item_bg bg:next_bg)\"\n",
+            "separator = \"[ ](fg:prev_bg bg:next_bg)\"\n",
+            "[attention]\nmore_format = \"[x](fg:prev_bg)\"\n",
+        ));
+        assert_eq!(
+            specs.segments["pins"].styles,
+            vec![
+                StyleSpec::parse("bg:red").unwrap(),
+                StyleSpec::parse("bg:blue bold").unwrap()
+            ]
+        );
+        assert!(specs.segments["pr"].styles.is_empty());
+
+        let e = errs("[pr]\nstyles = [\"bg:red\"]\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].location, "[pr].styles");
+        assert!(e[0].message.contains("no items"), "{}", e[0].message);
+
+        let e = errs("[pr]\nformat = \"[$number](fg:next_bg)\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].message.contains("next_bg"), "{}", e[0].message);
+
+        let e = errs("[pins]\nstyles = [\"bg:red\", \"fg:nope\"]\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].location, "[pins].styles[1]");
+
+        assert!(!errs("[pins]\nstyles = [\"bg:next_bg\"]\n").is_empty());
     }
 
     #[test]

@@ -60,6 +60,7 @@ impl App {
             workspace_diff: std::collections::HashMap::new(),
             workspace_diff_per_file: std::collections::HashMap::new(),
             activity_history: std::collections::VecDeque::new(),
+            msgs_queued: 0,
             last_proc_scan_ms: 0,
             pending_workspace_refresh: std::collections::HashSet::new(),
             delivering: std::collections::HashMap::new(),
@@ -582,6 +583,9 @@ pub struct App {
     /// the dashboard footer sparkline. Hydrated from `store.recent_activity_buckets`
     /// at startup; updated each tick. Newest bucket at the back.
     pub activity_history: std::collections::VecDeque<(u64, u32)>,
+    /// Undelivered agent-to-agent messages, refreshed each time the mail
+    /// drain runs. Read by `ui::bar::fleet` for `$msgs_queued`.
+    pub msgs_queued: u32,
     /// Epoch-ms of last completed `proc::scan` — throttle source.
     pub last_proc_scan_ms: i64,
     /// Set by the repo-settings modal when the user presses Enter on a

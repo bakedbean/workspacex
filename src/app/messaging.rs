@@ -318,6 +318,7 @@ impl crate::app::App {
                 return;
             }
         };
+        self.msgs_queued = pending.len() as u32;
         // Recomputed before the dispatch filter, because the messages being
         // flagged are exactly the ones `deliverable` is about to drop.
         self.stuck_mail = stuck_workspaces(&pending, &self.delivery_attempts);

@@ -35,10 +35,11 @@ fill         = " "
 # ----------------------------------------------------------------- header
 
 [dashboard_header]
-# Wordmark on `first`, group tabs on `second`, sort tabs on `third` (dropped
-# first when narrow), the filter echo after the chain; counts on `fourth`
-# flush right, pointing left.
-format       = "[ $brand ](bg:first)[](fg:first bg:second)[ $group ](bg:second)[](fg:second bg:third)[( $sort )](bg:third)[](fg:third)(  $filter)"
+# Wordmark flat on the bar in the app's brand colours (the bundled default),
+# then group tabs on `second` (opening with a left cap, since there is no
+# block before it), sort tabs on `third` (dropped first when narrow), the
+# filter echo after the chain; counts on `fourth` flush right, pointing left.
+format       = "$brand [](fg:second)[ $group ](bg:second)[](fg:second bg:third)[( $sort )](bg:third)[](fg:third)(  $filter)"
 right_format = "[](fg:fourth)[ $counts ](bg:fourth fg:label)"
 fill         = " "
 

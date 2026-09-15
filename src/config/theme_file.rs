@@ -235,11 +235,14 @@ fn styled(
 
 /// Resolve every entry of a palette table (`[palette]`, or a segment's
 /// `[<segment>.palette]`, named by `table`) to a concrete color: a literal
-/// parses directly, a named reference resolves against the theme's tokens,
-/// then ANSI names; anything else is an error.
+/// parses directly, a named reference resolves against `base` (the global
+/// palette, for a segment's table; empty for the global one, whose entries
+/// can't reference each other), then the theme's tokens, then ANSI names;
+/// anything else is an error.
 fn resolve_palette(
     table: &str,
     entries: &BTreeMap<String, String>,
+    base: &HashMap<String, Color>,
     theme: &Theme,
     errors: &mut Vec<ThemeError>,
 ) -> HashMap<String, Color> {
@@ -261,7 +264,12 @@ fn resolve_palette(
             Ok(ColorRef::Literal(c)) => {
                 palette.insert(name.clone(), c);
             }
-            Ok(ColorRef::Named(n)) => match theme.token(&n).or_else(|| style::ansi(&n)) {
+            Ok(ColorRef::Named(n)) => match base
+                .get(&n)
+                .copied()
+                .or_else(|| theme.token(&n))
+                .or_else(|| style::ansi(&n))
+            {
                 Some(c) => {
                     palette.insert(name.clone(), c);
                 }
@@ -285,6 +293,7 @@ fn resolve_segment(
     let palette = resolve_palette(
         &format!("{name}.palette"),
         &tbl.palette,
+        base_resolver.palette,
         base_resolver.theme,
         errors,
     );
@@ -508,7 +517,13 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
     let file = file.merge_over(base);
     let mut errors = Vec::new();
 
-    let palette = resolve_palette("palette", &file.palette, theme, &mut errors);
+    let palette = resolve_palette(
+        "palette",
+        &file.palette,
+        &HashMap::new(),
+        theme,
+        &mut errors,
+    );
     let resolver = Resolver::new(&palette, theme);
 
     let mut segments = HashMap::new();
@@ -715,6 +730,21 @@ mod tests {
         assert!(!specs.palette.contains_key("ok"));
         assert!(specs.segments["workspace"].palette.is_empty());
         assert_eq!(specs.palette["global"], Color::Rgb(0x12, 0x34, 0x56));
+    }
+
+    /// A segment palette value may name a global `[palette]` entry — the
+    /// natural way to reuse a theme's own colours — ahead of theme tokens
+    /// and ANSI names, so `ok = "green"` is the theme's green, not ANSI's.
+    #[test]
+    fn segment_palette_values_resolve_against_the_global_palette_first() {
+        let specs = ok(concat!(
+            "[palette]\ngreen = \"#008700\"\nplum = \"#870087\"\n",
+            "[pr.palette]\nok = \"green\"\nmerged = \"plum\"\nerr = \"red\"\n",
+        ));
+        let pal = &specs.segments["pr"].palette;
+        assert_eq!(pal["ok"], Color::Rgb(0x00, 0x87, 0x00));
+        assert_eq!(pal["merged"], Color::Rgb(0x87, 0x00, 0x87));
+        assert_eq!(pal["err"], Color::Red);
     }
 
     /// A segment palette entry validates the segment's own format: a name

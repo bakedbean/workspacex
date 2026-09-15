@@ -393,9 +393,10 @@ applying the lifecycle style to it.
 #### Recolouring one segment
 
 `[palette]` names shadow theme tokens everywhere in the file. A segment
-can carry its own `[<segment>.palette]` too, with the same value grammar,
-that shadows both the global palette and the theme tokens **inside that
-segment only** — for colour names in its `format`, `style`, `styles`,
+can carry its own `[<segment>.palette]` too, with the same value grammar
+(plus: a value may name a global `[palette]` entry, so `ok = "green"` is
+the theme's own green rather than ANSI's), that shadows both the global
+palette and the theme tokens **inside that segment only** — for colour names in its `format`, `style`, `styles`,
 `separator`, and `more_format`, and for the tokens behind its
 state-derived `$style`. This is how a theme darkens the lifecycle tints
 on a light block without changing them on a dark one: the same `ok` that

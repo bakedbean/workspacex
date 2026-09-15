@@ -34,6 +34,8 @@ smoke    = "#3a3a3a"   # cterm 237, one step above soot
 cream    = "#ffd7af"   # ctermBrightYellow 223
 green    = "#008700"   # cterm0B 28
 blood    = "#870000"   # ctermBlood 88
+plum     = "#870087"   # cterm 90
+olive    = "#878700"   # cterm 100
 
 # The wordmark keeps the app's branding (brand-blue bar and "x", cream
 # name) flat on the bar background, so the header's left edge is the app
@@ -114,10 +116,20 @@ separator = "  "
 [agent_bar]
 symbol = ""
 
+# The name carries the branch's PR-lifecycle tint like the pr block does.
+# The base theme's tints are picked for the dark background and wash out
+# on orange, so this block takes darker ones from the same xterm cube:
+# green 28, plum 90, blood 88, olive 100. Without a PR the tint falls back
+# to header_fg, shadowed here to the block's black.
 [workspace]
-# Inherit the block's text colour (bold) instead of the base theme's header
-# colour, which the engine would otherwise supply as $style.
-format = "[($repo/)$name](bold)"
+format = "[($repo/)$name]($style bold)"
+
+[workspace.palette]
+ok        = "green"
+merged    = "plum"
+err       = "blood"
+warn      = "olive"
+header_fg = "black"
 
 # Attention entries as graded airline blocks: the first on the run's own
 # ash, every one after on black, the base background (styles clamp to the
@@ -145,7 +157,16 @@ format = "([$model](bold) )[$tokens]($style)"
 [diff]
 format = "[+$added](fg:green bold) [−$removed](fg:blood)"
 
+# Keep the lifecycle tint ($style: green open, plum merged, blood closed)
+# on top of the block's orange, instead of the block's black text — the
+# same darker variants as the workspace block, since both sit on orange.
+# A draft PR has no tint and falls back to dim, shadowed to black here.
 [pr]
-# Keep the lifecycle tint ($style: green open, purple merged, red closed)
-# on top of the block's orange, instead of the block's black text.
 format = "[$symbol #$number $label]($style bold)( [$mark]($mark_style))"
+
+[pr.palette]
+ok     = "green"
+merged = "plum"
+err    = "blood"
+warn   = "olive"
+dim    = "black"
